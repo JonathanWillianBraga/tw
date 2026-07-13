@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.16.1
+// @version      9.17.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -40,7 +40,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.16.1';
+  const VERSION = '9.17.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -62,7 +62,8 @@
   function genId() { return 'g' + Date.now().toString(36) + (_idc++).toString(36) + Math.random().toString(36).slice(2, 5); }
 
   const defScav = () => ({ running: false, nextAt: 0, units: { spear: true, sword: true, axe: true, light: true, heavy: true, knight: false } });
-  const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, delay: 500, sentReports: {}, ramMode: 'off', ramFixed: 20, ramWall6: 24, axeCount: 80 });
+  const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, delay: 500, sentReports: {} });
+  const defWall = () => ({ running: false, nextAt: 0, interval: 600, wallMin: 1, wallMax: 6, ramMode: 'auto', ramFixed: 20, ramWall6: 24, axeCount: 80, spyCount: 1, sentDemo: {} });
   const defRecruit = () => ({
     running: false, nextAt: 0, interval: 600, targetHours: 2, refillBelowMin: 30,
     groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
@@ -87,14 +88,21 @@
     if (c.farm.maxDist == null) c.farm.maxDist = 13;
     if (c.farm.maxWall == null) c.farm.maxWall = 20;
     if (c.farm.delay == null) c.farm.delay = 500;
-    if (!c.farm.ramMode) c.farm.ramMode = 'off';
-    if (c.farm.ramFixed == null) c.farm.ramFixed = 20;
-    if (c.farm.ramWall6 == null) c.farm.ramWall6 = 24;
-    if (c.farm.axeCount == null) c.farm.axeCount = 80;
+    // limpa campos de aríete que ficaram no farm em versões antigas (migraram pro Quebra-muralha)
+    delete c.farm.ramMode; delete c.farm.ramFixed; delete c.farm.ramWall6; delete c.farm.axeCount;
     const oldMin = c.farm.min != null ? c.farm.min : 1000;
     if (c.farm.minWood == null) c.farm.minWood = oldMin;
     if (c.farm.minStone == null) c.farm.minStone = oldMin;
     if (c.farm.minIron == null) c.farm.minIron = oldMin;
+    if (!c.wall) c.wall = defWall();
+    if (!c.wall.sentDemo) c.wall.sentDemo = {};
+    if (c.wall.wallMin == null) c.wall.wallMin = 1;
+    if (c.wall.wallMax == null) c.wall.wallMax = 6;
+    if (!c.wall.ramMode) c.wall.ramMode = 'auto';
+    if (c.wall.ramFixed == null) c.wall.ramFixed = 20;
+    if (c.wall.ramWall6 == null) c.wall.ramWall6 = 24;
+    if (c.wall.axeCount == null) c.wall.axeCount = 80;
+    if (c.wall.interval == null) c.wall.interval = 600;
     if (!c.recruit) c.recruit = defRecruit();
     if (!c.recruit.profiles) c.recruit.profiles = { atk: { targets: {} }, def: { targets: {} } };
     if (!c.recruit.profiles.atk) c.recruit.profiles.atk = { targets: {} };
@@ -137,8 +145,8 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, uiTimer = null;
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running); }
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, uiTimer = null;
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running); }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
@@ -485,19 +493,14 @@
     const maxWall = config.farm.maxWall != null ? config.farm.maxWall : 20;
     const delay = Math.max(0, config.farm.delay != null ? config.farm.delay : 500);
     const sent = config.farm.sentReports || {};
-    const useRam = config.farm.ramMode && config.farm.ramMode !== 'off';
-    const axeN = Math.max(1, config.farm.axeCount || 80);
     let count = 0;
     for (const v of villages) {
       let targets;
       try { targets = await getFarmTargets(v.vid); }
       catch (e) { pushLog('Saque ' + v.name + ': erro ao ler alvos: ' + (e.message || e), 'err'); continue; }
-      let avail = null;
-      if (useRam) { try { avail = (await getVillageState(v.vid)).avail; } catch (e) { avail = {}; } }
       const eligible = []; const skip = { cbloq: 0, rec: 0, dist: 0, mur: 0, jasaq: 0 };
       targets.forEach((t) => {
-        if (!t.reportId) { skip.cbloq++; return; }
-        if (!useRam && !t.cEnabled) { skip.cbloq++; return; }
+        if (!t.cEnabled || !t.reportId) { skip.cbloq++; return; }
         if (t.wood < minW || t.stone < minS || t.iron < minI) { skip.rec++; return; }
         if (t.dist != null && t.dist > maxDist) { skip.dist++; return; }
         if (t.wall != null && t.wall > maxWall) { skip.mur++; return; }
@@ -508,26 +511,11 @@
       for (let i = 0; i < eligible.length; i++) {
         const t = eligible[i];
         try {
-          if (useRam) {
-            const cm = (t.coord || '').match(/(\d+)\|(\d+)/);
-            if (!cm) continue;
-            let rams;
-            if (config.farm.ramMode === 'fixo') rams = Math.max(0, config.farm.ramFixed || 0);
-            else { if (t.wall == null) continue; rams = ramsForWall(t.wall, config.farm.ramWall6 || 24); }
-            if ((avail.axe || 0) < axeN || (avail.ram || 0) < rams) { exhausted = true; pushLog('Saque ' + v.name + ': tropa insuficiente (bárbaro/aríete) → próxima aldeia.'); break; }
-            const spies = Math.min(1, avail.spy || 0);   // 1 explorador p/ re-escanear e manter o report/mapa fresco
-            const amounts = { axe: axeN }; if (rams > 0) amounts.ram = rams; if (spies > 0) amounts.spy = spies;
-            await sendAttack(v.vid, cm[1], cm[2], amounts);
-            avail.axe -= axeN; avail.ram = (avail.ram || 0) - rams; avail.spy = (avail.spy || 0) - spies;
-            sent[t.reportId] = now; count++; vSent++;
-            pushLog('Farm+aríete · ' + v.name + ' → ' + t.coord + ' [bb ' + axeN + (rams ? ', ar ' + rams : '') + (spies ? ', ex ' + spies : '') + ' · muro ' + (t.wall != null ? t.wall : '?') + ']', 'ok');
-          } else {
-            await sendFarmC(v.vid, t.reportId);
-            sent[t.reportId] = now; count++; vSent++;
-            pushLog('Saque C · ' + v.name + ' → ' + t.coord + ' [' + t.wood + '/' + t.stone + '/' + t.iron + ']' + (t.dist != null ? ' · ' + t.dist : '') + (t.wall != null ? ' · m' + t.wall : ''), 'ok');
-          }
+          await sendFarmC(v.vid, t.reportId);
+          sent[t.reportId] = now; count++; vSent++;
+          pushLog('Saque C · ' + v.name + ' → ' + t.coord + ' [' + t.wood + '/' + t.stone + '/' + t.iron + ']' + (t.dist != null ? ' · ' + t.dist : '') + (t.wall != null ? ' · m' + t.wall : ''), 'ok');
           if (i < eligible.length - 1) await sleep(delay + Math.floor(Math.random() * 250));
-        } catch (e) { exhausted = true; pushLog('Saque ' + v.name + ': envio falhou/esgotou (' + (eligible.length - i) + ' restante(s)) → próxima aldeia.'); break; }
+        } catch (e) { exhausted = true; pushLog('Saque ' + v.name + ': tropas esgotadas (' + (eligible.length - i) + ' alvo(s) restante(s)) → próxima aldeia.'); break; }
       }
       const parts = ['✓' + vSent];
       if (exhausted) parts.push('esgotou');
@@ -546,6 +534,72 @@
     scheduleFarm();
   }
   function scheduleFarm() { clearTimeout(farmTimer); if (!config.farm.running) return; farmTimer = setTimeout(farmTick, Math.min(Math.max((config.farm.nextAt || 0) - Date.now(), 1000), 60000)); }
+  async function wallTick() {
+    clearTimeout(wallTimer);
+    if (!config.wall.running) return;
+    if (lockOther()) { wallTimer = setTimeout(wallTick, 5000); return; }
+    claimLock();
+    const now = Date.now();
+    if ((config.wall.nextAt || 0) > now) { scheduleWall(); return; }
+    let villages;
+    try { villages = await getAllScavengeState(); }
+    catch (e) { pushLog('Quebra-muralha: erro ao listar aldeias: ' + (e.message || e), 'err'); config.wall.nextAt = now + 120000; save(); scheduleWall(); return; }
+    const wMin = config.wall.wallMin != null ? config.wall.wallMin : 1;
+    const wMax = config.wall.wallMax != null ? config.wall.wallMax : 6;
+    const axeN = Math.max(1, config.wall.axeCount || 80);
+    const delay = Math.max(0, config.farm.delay != null ? config.farm.delay : 500);
+    const demo = config.wall.sentDemo || {};
+    const COOLDOWN = 6 * 3600 * 1000;   // não re-manda no mesmo report por 6h
+    let count = 0;
+    for (const v of villages) {
+      let targets;
+      try { targets = await getFarmTargets(v.vid); }
+      catch (e) { pushLog('Quebra ' + v.name + ': erro ao ler alvos: ' + (e.message || e), 'err'); continue; }
+      let avail; try { avail = (await getVillageState(v.vid)).avail; } catch (e) { avail = {}; }
+      const eligible = []; const skip = { semmuro: 0, fora: 0, jaenv: 0 };
+      targets.forEach((t) => {
+        if (!t.reportId) return;
+        if (t.wall == null) { skip.semmuro++; return; }                 // sem info de muralha -> deixa pro C ou próximo scan
+        if (t.wall < wMin || t.wall > wMax) { skip.fora++; return; }      // fora da faixa de muro do quebra
+        if (demo[t.reportId] && (now - demo[t.reportId] < COOLDOWN)) { skip.jaenv++; return; }
+        eligible.push(t);
+      });
+      eligible.sort((a, b) => (b.wall || 0) - (a.wall || 0));             // muralhas maiores primeiro
+      let vSent = 0, semRam = 0, semBB = false;
+      for (let i = 0; i < eligible.length; i++) {
+        const t = eligible[i];
+        const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
+        let rams;
+        if (config.wall.ramMode === 'fixo') rams = Math.max(1, config.wall.ramFixed || 20);
+        else rams = ramsForWall(t.wall, config.wall.ramWall6 || 24);
+        if ((avail.axe || 0) < axeN) { semBB = true; break; }             // sem bárbaro nesta aldeia -> próxima
+        if ((avail.ram || 0) < rams) { semRam++; continue; }              // sem aríete p/ esse muro -> tenta outro alvo
+        const spies = Math.min(config.wall.spyCount || 1, avail.spy || 0);
+        const amounts = { axe: axeN, ram: rams }; if (spies > 0) amounts.spy = spies;
+        try {
+          await sendAttack(v.vid, cm[1], cm[2], amounts);
+          avail.axe -= axeN; avail.ram -= rams; avail.spy = (avail.spy || 0) - spies;
+          demo[t.reportId] = now; count++; vSent++;
+          pushLog('Quebra-muralha · ' + v.name + ' → ' + t.coord + ' [bb ' + axeN + ', ar ' + rams + (spies ? ', ex ' + spies : '') + ' · muro ' + t.wall + ']', 'ok');
+          if (i < eligible.length - 1) await sleep(delay + Math.floor(Math.random() * 250));
+        } catch (e) { pushLog('Quebra ' + v.name + ' → ' + t.coord + ': ' + (e.message || e), 'err'); }
+      }
+      const parts = ['✓' + vSent];
+      if (semBB) parts.push('s/bárbaro');
+      if (semRam) parts.push('s/aríete ' + semRam);
+      if (skip.fora) parts.push('fora-faixa ' + skip.fora);
+      if (skip.semmuro) parts.push('s/info-muro ' + skip.semmuro);
+      if (skip.jaenv) parts.push('já enviado ' + skip.jaenv);
+      pushLog('  ' + v.name + ': ' + parts.join(' · '));
+    }
+    Object.keys(demo).forEach((r) => { if (now - demo[r] > 12 * 3600 * 1000) delete demo[r]; });
+    config.wall.sentDemo = demo;
+    config.wall.nextAt = now + Math.max(60, config.wall.interval || 600) * 1000;
+    save();
+    pushLog('Quebra-muralha: ciclo concluído · ' + count + ' ataque(s). Próximo em ' + Math.round((config.wall.interval || 600) / 60) + ' min.', 'ok');
+    scheduleWall();
+  }
+  function scheduleWall() { clearTimeout(wallTimer); if (!config.wall.running) return; wallTimer = setTimeout(wallTick, Math.min(Math.max((config.wall.nextAt || 0) - Date.now(), 1000), 60000)); }
 
   // ==================== RECRUTAR ====================
   async function getGroups() {
@@ -1255,6 +1309,7 @@
     const g = document.getElementById('twmgr-global'); if (g) { g.textContent = !config.running ? '' : (lockOther() ? '⏸ inativa (outra aba está enviando)' : '● rodando'); g.style.color = lockOther() ? '#ff7568' : '#8fe39a'; }
     const sc = document.getElementById('twmgr-scav-status'); if (sc) { if (!config.scav.running) { sc.textContent = ''; } else if (lockOther()) { sc.textContent = '⏸ outra aba está ativa'; sc.style.color = '#ff7568'; } else { sc.style.color = '#8fe39a'; sc.textContent = (config.scav.nextAt || 0) > now ? '● próx. verificação: ' + fmt(config.scav.nextAt - now) : '● verificando…'; } }
     const fs = document.getElementById('twmgr-farm-status'); if (fs) { if (!config.farm.running) { fs.textContent = ''; } else if (lockOther()) { fs.textContent = '⏸ outra aba está ativa'; fs.style.color = '#ff7568'; } else { fs.style.color = '#8fe39a'; fs.textContent = (config.farm.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.farm.nextAt - now) : '● saqueando…'; } }
+    const ws = document.getElementById('twmgr-wall-status'); if (ws) { if (!config.wall.running) { ws.textContent = ''; } else if (lockOther()) { ws.textContent = '⏸ outra aba está ativa'; ws.style.color = '#ff7568'; } else { ws.style.color = '#8fe39a'; ws.textContent = (config.wall.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.wall.nextAt - now) : '● quebrando…'; } }
     const rs = document.getElementById('twmgr-recruit-status'); if (rs) { if (!config.recruit.running) { rs.textContent = ''; } else if (lockOther()) { rs.textContent = '⏸ outra aba está ativa'; rs.style.color = '#ff7568'; } else { rs.style.color = '#8fe39a'; rs.textContent = (config.recruit.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.recruit.nextAt - now) : '● recrutando…'; } }
     const clk = document.getElementById('twmgr-srvclock'); if (clk) { try { clk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
     const fks = document.getElementById('twmgr-fk-status');
@@ -1354,15 +1409,24 @@
     const dt = document.getElementById('twmgr-farm-dist'); if (dt) config.farm.maxDist = parseFloat((dt.value || '').replace(',', '.')) || 13;
     const wl = document.getElementById('twmgr-farm-wall'); if (wl) { config.farm.maxWall = parseInt(wl.value, 10); if (isNaN(config.farm.maxWall)) config.farm.maxWall = 20; }
     const dl = document.getElementById('twmgr-farm-delay'); if (dl) { config.farm.delay = parseInt(dl.value, 10); if (isNaN(config.farm.delay) || config.farm.delay < 0) config.farm.delay = 500; }
-    const rm = document.getElementById('twmgr-farm-rammode'); if (rm) config.farm.ramMode = rm.value || 'off';
-    const ax = document.getElementById('twmgr-farm-axe'); if (ax) config.farm.axeCount = Math.max(1, parseInt(ax.value, 10) || 80);
-    const rw = document.getElementById('twmgr-farm-ramw6'); if (rw) config.farm.ramWall6 = Math.max(1, parseInt(rw.value, 10) || 24);
-    const rf = document.getElementById('twmgr-farm-ramfix'); if (rf) config.farm.ramFixed = Math.max(0, parseInt(rf.value, 10) || 0);
     save();
   }
   function farmStart() { readFarmCfg(); config.farm.running = true; config.farm.nextAt = 0; save(); setFarmStatus(true); pushLog('Saque iniciado · C · mín ' + config.farm.minWood + '/' + config.farm.minStone + '/' + config.farm.minIron + ' · ≤' + config.farm.maxDist + ' campos · muralha ≤' + config.farm.maxWall + ' · delay ' + config.farm.delay + 'ms', 'ok'); farmTick(); }
   function farmStop() { readFarmCfg(); config.farm.running = false; save(); clearTimeout(farmTimer); setFarmStatus(false); pushLog('Saque parado.'); }
   function setFarmStatus(on) { setBtnState('twmgr-farm-start', 'twmgr-farm-stop', on, '● Saqueando', '▶ Saquear'); }
+  function readWallCfg() {
+    const wn = document.getElementById('twmgr-wall-min'); if (wn) { config.wall.wallMin = parseInt(wn.value, 10); if (isNaN(config.wall.wallMin)) config.wall.wallMin = 1; }
+    const wx = document.getElementById('twmgr-wall-max'); if (wx) { config.wall.wallMax = parseInt(wx.value, 10); if (isNaN(config.wall.wallMax)) config.wall.wallMax = 6; }
+    const wm = document.getElementById('twmgr-wall-mode'); if (wm) config.wall.ramMode = wm.value || 'auto';
+    const wa = document.getElementById('twmgr-wall-axe'); if (wa) config.wall.axeCount = Math.max(1, parseInt(wa.value, 10) || 80);
+    const w6 = document.getElementById('twmgr-wall-ramw6'); if (w6) config.wall.ramWall6 = Math.max(1, parseInt(w6.value, 10) || 24);
+    const wf = document.getElementById('twmgr-wall-ramfix'); if (wf) config.wall.ramFixed = Math.max(1, parseInt(wf.value, 10) || 20);
+    const wi = document.getElementById('twmgr-wall-int'); if (wi) config.wall.interval = Math.max(1, parseInt(wi.value, 10) || 10) * 60;
+    save();
+  }
+  function wallStart() { readWallCfg(); config.wall.running = true; config.wall.nextAt = 0; save(); setWallStatus(true); pushLog('Quebra-muralha iniciado · muro ' + config.wall.wallMin + '–' + config.wall.wallMax + ' · bb ' + config.wall.axeCount + ' · aríete ' + config.wall.ramMode + (config.wall.ramMode === 'fixo' ? ' ' + config.wall.ramFixed : ' (m6=' + config.wall.ramWall6 + ')') + ' · a cada ' + Math.round(config.wall.interval / 60) + ' min', 'ok'); wallTick(); }
+  function wallStop() { readWallCfg(); config.wall.running = false; save(); clearTimeout(wallTimer); setWallStatus(false); pushLog('Quebra-muralha parado.'); }
+  function setWallStatus(on) { setBtnState('twmgr-wall-start', 'twmgr-wall-stop', on, '● Quebrando', '▶ Quebrar'); }
   async function runDiagnostics() {
     pushLog('Diagnóstico: lendo estado da aldeia…');
     try {
@@ -1454,7 +1518,7 @@
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-alvos"><div class="twmgr-hint">Cada alvo é enviado da aldeia onde foi criado (veja "de:"). Aldeia atual: <b>' + CUR_NAME + '</b></div><div id="twmgr-targets"></div><button id="twmgr-add" class="twmgr-add">+ Adicionar alvo</button><div class="twmgr-actions"><button id="twmgr-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div><div id="twmgr-global" class="twmgr-cstatus"></div></div>' +
       '<div id="twmgr-tab-scav" style="display:none"><div class="twmgr-hint">Coleta em <b>todas as suas aldeias</b>: distribui as tropas marcadas entre as opções livres e reenvia no retorno.</div><div class="twmgr-units">' + SCAV_UNITS.map(([u, n]) => '<label><input id="twmgr-su-' + u + '" type="checkbox"> ' + unitIcon(u, n) + ' ' + n + '</label>').join('') + '</div><div class="twmgr-actions"><button id="twmgr-scav-start" class="twmgr-btn twmgr-go">▶ Coletar</button><button id="twmgr-scav-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div><div id="twmgr-scav-status" class="twmgr-cstatus"></div></div>' +
-      '<div id="twmgr-tab-farm" style="display:none"><div class="twmgr-hint">Assistente de Saque (<b>C</b>) em <b>todas as aldeias</b>. Só ataca com o C liberado e recursos acima do mínimo.</div><div class="twmgr-lbl" style="margin-bottom:3px">Mínimo por recurso</div><div class="twmgr-res"><label><span class="icon header wood"></span><input id="twmgr-farm-wood" class="twmgr-inp" type="number" min="0" value="1000"></label><label><span class="icon header stone"></span><input id="twmgr-farm-stone" class="twmgr-inp" type="number" min="0" value="1000"></label><label><span class="icon header iron"></span><input id="twmgr-farm-iron" class="twmgr-inp" type="number" min="0" value="1000"></label></div><div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-farm-dist" class="twmgr-inp" type="number" min="0" step="0.1" value="13" style="width:66px"></div><div class="twmgr-row"><span class="twmgr-lbl">Muralha máx. (nível)</span><input id="twmgr-farm-wall" class="twmgr-inp" type="number" min="0" max="20" value="20" style="width:66px"></div><div class="twmgr-row"><span class="twmgr-lbl">Intervalo (min)</span><input id="twmgr-farm-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div><div class="twmgr-row"><span class="twmgr-lbl">Delay entre envios (ms)</span><input id="twmgr-farm-delay" class="twmgr-inp" type="number" min="0" step="100" value="500" style="width:66px"></div><div style="font-size:11px;color:#e8d29a;margin:6px 0 2px">🐏 Aríete (quebra-muralha)</div><div class="twmgr-row"><span class="twmgr-lbl">Modo aríete</span><select id="twmgr-farm-rammode" class="twmgr-inp" style="width:130px"><option value="off">desligado (só C)</option><option value="auto">auto (pela muralha)</option><option value="fixo">fixo</option></select></div><div class="twmgr-row"><span class="twmgr-lbl">Bárbaro por farm</span><input id="twmgr-farm-axe" class="twmgr-inp" type="number" min="1" value="80" style="width:66px"></div><div id="twmgr-farm-ram-auto"><div class="twmgr-row"><span class="twmgr-lbl">Aríetes p/ muralha 6</span><input id="twmgr-farm-ramw6" class="twmgr-inp" type="number" min="1" value="24" style="width:66px"></div><div style="font-size:9px;color:#8f7d57;margin-bottom:6px">calibra o resto: muro5≈18 · 4≈13 · 3≈9 · 2≈5 · 1≈3</div></div><div id="twmgr-farm-ram-fixo" style="display:none"><div class="twmgr-row"><span class="twmgr-lbl">Aríetes por farm (fixo)</span><input id="twmgr-farm-ramfix" class="twmgr-inp" type="number" min="0" value="20" style="width:66px"></div></div><div class="twmgr-actions"><button id="twmgr-farm-start" class="twmgr-btn twmgr-go">▶ Saquear</button><button id="twmgr-farm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div><div id="twmgr-farm-status" class="twmgr-cstatus"></div></div>' +
+      '<div id="twmgr-tab-farm" style="display:none"><div class="twmgr-hint">Assistente de Saque (<b>C</b>) em <b>todas as aldeias</b>. Só ataca com o C liberado e recursos acima do mínimo.</div><div class="twmgr-lbl" style="margin-bottom:3px">Mínimo por recurso</div><div class="twmgr-res"><label><span class="icon header wood"></span><input id="twmgr-farm-wood" class="twmgr-inp" type="number" min="0" value="1000"></label><label><span class="icon header stone"></span><input id="twmgr-farm-stone" class="twmgr-inp" type="number" min="0" value="1000"></label><label><span class="icon header iron"></span><input id="twmgr-farm-iron" class="twmgr-inp" type="number" min="0" value="1000"></label></div><div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-farm-dist" class="twmgr-inp" type="number" min="0" step="0.1" value="13" style="width:66px"></div><div class="twmgr-row"><span class="twmgr-lbl">Muralha máx. (nível)</span><input id="twmgr-farm-wall" class="twmgr-inp" type="number" min="0" max="20" value="20" style="width:66px"></div><div class="twmgr-row"><span class="twmgr-lbl">Intervalo (min)</span><input id="twmgr-farm-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div><div class="twmgr-row"><span class="twmgr-lbl">Delay entre envios (ms)</span><input id="twmgr-farm-delay" class="twmgr-inp" type="number" min="0" step="100" value="500" style="width:66px"></div><div class="twmgr-actions"><button id="twmgr-farm-start" class="twmgr-btn twmgr-go">▶ Saquear</button><button id="twmgr-farm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div><div id="twmgr-farm-status" class="twmgr-cstatus"></div><div style="border-top:1px solid #4a3b28;margin:12px 0 6px;padding-top:8px;font-size:12px;color:#e8d29a">🐏 Quebra-muralha <span style="font-size:9px;color:#8f7d57">(paralelo ao Saque)</span></div><div class="twmgr-hint">Manda bárbaro + aríete + 1 explorador nas aldeias <b>com muralha</b> (do assistente de saque) pra derrubar o muro. O explorador re-escaneia e mantém o relatório fresco. Roda separado do farm C — liga/desliga aqui.</div><div class="twmgr-row"><span class="twmgr-lbl">Muralha de/até (nível)</span><span><input id="twmgr-wall-min" class="twmgr-inp" type="number" min="1" max="20" value="1" style="width:44px"> a <input id="twmgr-wall-max" class="twmgr-inp" type="number" min="1" max="20" value="6" style="width:44px"></span></div><div class="twmgr-row"><span class="twmgr-lbl">Bárbaro por ataque</span><input id="twmgr-wall-axe" class="twmgr-inp" type="number" min="1" value="80" style="width:66px"></div><div class="twmgr-row"><span class="twmgr-lbl">Aríete</span><select id="twmgr-wall-mode" class="twmgr-inp" style="width:130px"><option value="auto">auto (pela muralha)</option><option value="fixo">fixo</option></select></div><div id="twmgr-wall-auto"><div class="twmgr-row"><span class="twmgr-lbl">Aríetes p/ muralha 6</span><input id="twmgr-wall-ramw6" class="twmgr-inp" type="number" min="1" value="24" style="width:66px"></div><div style="font-size:9px;color:#8f7d57;margin-bottom:6px">calibra o resto: muro5≈18 · 4≈13 · 3≈9 · 2≈5 · 1≈3</div></div><div id="twmgr-wall-fixo" style="display:none"><div class="twmgr-row"><span class="twmgr-lbl">Aríetes por ataque (fixo)</span><input id="twmgr-wall-ramfix" class="twmgr-inp" type="number" min="1" value="20" style="width:66px"></div></div><div class="twmgr-row"><span class="twmgr-lbl">Intervalo (min)</span><input id="twmgr-wall-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div><div class="twmgr-actions"><button id="twmgr-wall-start" class="twmgr-btn twmgr-go">▶ Quebrar</button><button id="twmgr-wall-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div><div id="twmgr-wall-status" class="twmgr-cstatus"></div></div>' +
       '<div id="twmgr-tab-recruit" style="display:none"><div class="twmgr-hint">Recruta por <b>grupo</b> (ATK/DEF): mantém ~<b>fila alvo</b> por edifício e para no <b>alvo</b> de tropas. Vazio = contínuo.</div><div class="twmgr-row"><span class="twmgr-lbl">Grupo ATK</span><select id="twmgr-r-gatk" class="twmgr-inp" style="width:150px"></select></div><div class="twmgr-row"><span class="twmgr-lbl">Grupo DEF</span><select id="twmgr-r-gdef" class="twmgr-inp" style="width:150px"></select></div><div style="text-align:right;margin-bottom:2px"><button id="twmgr-r-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button></div>' + recruitProfileHTML('atk', '⚔️ Perfil ATK') + recruitProfileHTML('def', '🛡️ Perfil DEF') + '<div class="twmgr-row" style="margin-top:8px"><span class="twmgr-lbl">Fila alvo (h)</span><input id="twmgr-r-hours" class="twmgr-inp" type="number" min="0.5" step="0.5" value="2" style="width:66px"></div><div class="twmgr-row"><span class="twmgr-lbl">Repor quando faltar (min)</span><input id="twmgr-r-refill" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div><div class="twmgr-actions"><button id="twmgr-r-start" class="twmgr-btn twmgr-go">▶ Recrutar</button><button id="twmgr-r-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div><button id="twmgr-r-diag" class="twmgr-btn twmgr-ghost" style="width:100%;margin-bottom:6px">🔍 Diagnóstico (Recrutar)</button><div id="twmgr-recruit-status" class="twmgr-cstatus"></div></div>' +
       '<div id="twmgr-tab-fakes" style="display:none">' +
       '<div class="twmgr-hint">Fakes com <b>chegada</b> em horário marcado. Cole vários alvos, escolha as origens e a estratégia (1 isca + explorador — neutro, não revela off/def).</div>' +
@@ -1529,18 +1593,25 @@
     document.getElementById('twmgr-farm-wall').value = config.farm.maxWall != null ? config.farm.maxWall : 20;
     document.getElementById('twmgr-farm-int').value = Math.round((config.farm.interval || 600) / 60);
     document.getElementById('twmgr-farm-delay').value = config.farm.delay != null ? config.farm.delay : 500;
-    document.getElementById('twmgr-farm-rammode').value = config.farm.ramMode || 'off';
-    document.getElementById('twmgr-farm-axe').value = config.farm.axeCount != null ? config.farm.axeCount : 80;
-    document.getElementById('twmgr-farm-ramw6').value = config.farm.ramWall6 != null ? config.farm.ramWall6 : 24;
-    document.getElementById('twmgr-farm-ramfix').value = config.farm.ramFixed != null ? config.farm.ramFixed : 20;
-    const applyRamMode = () => { const m = document.getElementById('twmgr-farm-rammode').value; document.getElementById('twmgr-farm-ram-auto').style.display = m === 'auto' ? 'block' : 'none'; document.getElementById('twmgr-farm-ram-fixo').style.display = m === 'fixo' ? 'block' : 'none'; };
-    ['twmgr-farm-rammode', 'twmgr-farm-axe', 'twmgr-farm-ramw6', 'twmgr-farm-ramfix'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
-    document.getElementById('twmgr-farm-rammode').addEventListener('change', applyRamMode);
-    applyRamMode();
     document.getElementById('twmgr-farm-start').addEventListener('click', farmStart);
     document.getElementById('twmgr-farm-stop').addEventListener('click', farmStop);
     ['twmgr-farm-wood', 'twmgr-farm-stone', 'twmgr-farm-iron', 'twmgr-farm-dist', 'twmgr-farm-wall', 'twmgr-farm-int', 'twmgr-farm-delay'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
     setFarmStatus(config.farm.running);
+
+    document.getElementById('twmgr-wall-min').value = config.wall.wallMin != null ? config.wall.wallMin : 1;
+    document.getElementById('twmgr-wall-max').value = config.wall.wallMax != null ? config.wall.wallMax : 6;
+    document.getElementById('twmgr-wall-axe').value = config.wall.axeCount != null ? config.wall.axeCount : 80;
+    document.getElementById('twmgr-wall-mode').value = config.wall.ramMode || 'auto';
+    document.getElementById('twmgr-wall-ramw6').value = config.wall.ramWall6 != null ? config.wall.ramWall6 : 24;
+    document.getElementById('twmgr-wall-ramfix').value = config.wall.ramFixed != null ? config.wall.ramFixed : 20;
+    document.getElementById('twmgr-wall-int').value = Math.round((config.wall.interval || 600) / 60);
+    const applyWallMode = () => { const m = document.getElementById('twmgr-wall-mode').value; document.getElementById('twmgr-wall-auto').style.display = m === 'auto' ? 'block' : 'none'; document.getElementById('twmgr-wall-fixo').style.display = m === 'fixo' ? 'block' : 'none'; };
+    document.getElementById('twmgr-wall-mode').addEventListener('change', () => { applyWallMode(); readWallCfg(); });
+    applyWallMode();
+    document.getElementById('twmgr-wall-start').addEventListener('click', wallStart);
+    document.getElementById('twmgr-wall-stop').addEventListener('click', wallStop);
+    ['twmgr-wall-min', 'twmgr-wall-max', 'twmgr-wall-axe', 'twmgr-wall-ramw6', 'twmgr-wall-ramfix', 'twmgr-wall-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readWallCfg); });
+    setWallStatus(config.wall.running);
 
     document.getElementById('twmgr-r-hours').value = config.recruit.targetHours != null ? config.recruit.targetHours : 2;
     document.getElementById('twmgr-r-refill').value = config.recruit.refillBelowMin != null ? config.recruit.refillBelowMin : 30;
@@ -1620,6 +1691,7 @@
     if (config.running) { if (!lockOther()) pushLog('Auto-ATK retomado.', 'ok'); processDue(); }
     if (config.scav.running) { if (!lockOther()) pushLog('Coleta retomada.', 'ok'); scheduleScav(); }
     if (config.farm.running) { if (!lockOther()) pushLog('Saque retomado.', 'ok'); scheduleFarm(); }
+    if (config.wall.running) { if (!lockOther()) pushLog('Quebra-muralha retomado.', 'ok'); scheduleWall(); }
     if (config.recruit.running) { if (!lockOther()) pushLog('Recrutar retomado.', 'ok'); scheduleRecruit(); }
     if (config.fakes.running) { config.fakes.gen.forEach((f) => { if (f.state === 'scheduled') f.state = 'armed'; }); if (!lockOther()) pushLog('Fakes rearmados.', 'ok'); fakeTick(); }
     if (config.market.running) { if (!lockOther()) pushLog('Cunhagem retomada.', 'ok'); scheduleMarket(); }

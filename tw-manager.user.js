@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.13
+// @version      9.14
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -40,7 +40,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.13';
+  const VERSION = '9.14';
   const WORLD = window.game_data.world || 'w';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
@@ -66,7 +66,7 @@
     groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
   });
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
-  const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, thresholdPct: 50, maxDist: 15 });
+  const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, thresholdPct: 50, maxDist: 15, inflight: {} });
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, atkTpl: ATK_TPL, defTpl: DEF_TPL, demand: {} });
   const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild() });
   function load() {
@@ -117,6 +117,7 @@
     if (c.market.destCoord == null) c.market.destCoord = '';
     if (c.market.thresholdPct == null) c.market.thresholdPct = 50;
     if (c.market.maxDist == null) c.market.maxDist = 15;
+    if (!c.market.inflight) c.market.inflight = {};
     if (!c.recruit.demand) c.recruit.demand = {};
     if (!c.build) c.build = defBuild();
     if (!c.build.atkTpl) c.build.atkTpl = ATK_TPL;
@@ -920,11 +921,15 @@
     p1.set('x', x); p1.set('y', y); p1.set('input', x + '|' + y);
     p1.set('target_type', 'coord'); p1.set('h', CSRF);
     const r1 = await fetch('/game.php?village=' + vid + '&screen=market&mode=send&try=confirm_send', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p1.toString() });
-    const doc = new DOMParser().parseFromString(await r1.text(), 'text/html');
+    const t1 = await r1.text();
+    const doc = new DOMParser().parseFromString(t1, 'text/html');
     const errBox = doc.querySelector('.error_box .content');
     if (errBox) throw new Error(errBox.textContent.trim().replace(/\s+/g, ' '));
     const form = doc.querySelector('form');
     if (!form) throw new Error('confirmação não encontrada');
+    let dur = null;
+    const dd = doc.querySelector('[data-duration]'); if (dd) dur = parseInt(dd.getAttribute('data-duration'), 10);
+    if (!dur) { const m = t1.match(/dura[çc][aã]o[^0-9]{0,12}(\d{1,2}):([0-5]\d):([0-5]\d)/i); if (m) dur = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]); }
     const p2 = new URLSearchParams();
     form.querySelectorAll('input, select').forEach((el) => { if (el.name) p2.set(el.name, el.value); });
     if (!p2.has('h')) p2.set('h', CSRF);
@@ -932,7 +937,7 @@
     const r2 = await fetch(absUrl(action), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p2.toString() });
     const t2 = await r2.text();
     if (/alvo v[aá]lido/i.test(t2)) throw new Error('alvo inválido (confira a coordenada)');
-    return true;
+    return dur && dur > 0 ? dur : null;
   }
   async function marketTick() {
     clearTimeout(marketTimer);
@@ -984,17 +989,26 @@
     vils = vils.filter((v) => v.coord);
     const pct = (config.market.thresholdPct != null ? config.market.thresholdPct : 50) / 100;
     const maxDist = config.market.maxDist != null ? config.market.maxDist : 15;
+    const now = Date.now();
+    // recursos em trânsito (que eu já mandei e ainda não chegaram)
+    config.market.inflight = config.market.inflight || {};
+    Object.keys(config.market.inflight).forEach((vid) => {
+      config.market.inflight[vid] = (config.market.inflight[vid] || []).filter((e) => e.arriveAt > now);
+      if (!config.market.inflight[vid].length) delete config.market.inflight[vid];
+    });
+    const inSum = (vid, r) => (config.market.inflight[vid] || []).reduce((s, e) => s + (e.r === r ? e.amt : 0), 0);
     const st = [];
     for (const v of vils) {
       let m; try { m = await getMarketState(v.vid); } catch (e) { continue; }
       if (!m.storage) continue;                 // sem armazém lido -> pula
-      const thr = m.storage * pct;               // limiar por recurso = %  do armazém
-      st.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, thr: thr });
+      st.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, thr: m.storage * pct });
       await sleep(120);
     }
     let sent = 0;
     for (const r of ['wood', 'stone', 'iron']) {
-      const receivers = st.filter((s) => s.cur[r] < s.thr).map((s) => ({ s: s, def: s.thr - s.cur[r] })).sort((a, b) => b.def - a.def);
+      // carente = (atual + o que já vem chegando) abaixo do limiar
+      const receivers = st.map((s) => ({ s: s, eff: s.cur[r] + inSum(s.vid, r) }))
+        .filter((x) => x.eff < x.s.thr).map((x) => ({ s: x.s, def: x.s.thr - x.eff })).sort((a, b) => b.def - a.def);
       for (const rec of receivers) {
         if (rec.def <= 0) continue;
         const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] > s.thr)
@@ -1007,16 +1021,19 @@
           if (amount < 500) continue;            // ignora transferência trivial
           try {
             const pkg = { wood: 0, stone: 0, iron: 0 }; pkg[r] = amount;
-            await sendMarketResources(don.s.vid, rec.s.coord, pkg);
+            const dur = await sendMarketResources(don.s.vid, rec.s.coord, pkg);
             sent++;
-            don.s.cur[r] -= amount; don.s.cap -= amount; rec.s.cur[r] += amount; rec.def -= amount; don.exc -= amount;
+            don.s.cur[r] -= amount; don.s.cap -= amount; rec.def -= amount; don.exc -= amount;
+            config.market.inflight[rec.s.vid] = config.market.inflight[rec.s.vid] || [];
+            config.market.inflight[rec.s.vid].push({ r: r, amt: amount, arriveAt: now + ((dur && dur > 0 ? dur : 3600) * 1000) });
             pushLog('Equilíbrio · ' + don.s.name + ' → ' + rec.s.coord + ' [' + r + ' ' + amount + ']', 'ok');
             await sleep(400 + Math.floor(Math.random() * 300));
           } catch (e) { pushLog('Equilíbrio ' + don.s.name + ': ' + (e.message || e), 'err'); }
         }
       }
     }
-    pushLog('Equilíbrio: ciclo ok · ' + sent + ' transferência(s) (limiar ' + Math.round(pct * 100) + '% do armazém).', 'ok');
+    save();
+    pushLog('Equilíbrio: ciclo ok · ' + sent + ' transferência(s) (limiar ' + Math.round(pct * 100) + '%; desconta o que já vem chegando).', 'ok');
   }
   async function renderMarketSources() {
     const cont = document.getElementById('twmgr-mk-sources'); if (!cont) return;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.19.0
+// @version      9.19.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -40,7 +40,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.19.0';
+  const VERSION = '9.19.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1449,6 +1449,71 @@
   }
   function bbStop() { readBBCfg(); config.bb.running = false; save(); clearTimeout(bbTimer); setBBStatus(false); pushLog('Módulo BB parado.'); }
 
+  // ==================== ASSISTENTE DE SAQUE: TEMPLATE B ====================
+  // Descobre o template_id do B (e as unidades) direto do am_farm; envia via o endpoint
+  // oficial do assistente pra manter o alvo listado com relatório fresco.
+  let _farmTplCache = null, _farmTplCacheAt = 0;
+  async function getFarmTemplates(vid, force) {
+    const now = Date.now();
+    if (!force && _farmTplCache && (now - _farmTplCacheAt < 30 * 60 * 1000)) return _farmTplCache;
+    const res = await fetch('/game.php?village=' + vid + '&screen=am_farm', { credentials: 'include' });
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const out = { a: null, b: null, unitsA: {}, unitsB: {} };
+    // Ordem estável dos IDs conforme aparecem na tela de "configurações dos modelos"
+    const orderedIds = [];
+    doc.querySelectorAll('input[name="template_id"]').forEach((inp) => {
+      const v = (inp.value || '').trim();
+      if (/^\d+$/.test(v) && orderedIds.indexOf(v) === -1) orderedIds.push(v);
+    });
+    // Também pega dos onclick dos ícones A/B (fonte alternativa)
+    const iconId = (cls) => {
+      const el = doc.querySelector('.' + cls);
+      if (!el) return null;
+      const d = el.getAttribute('data-template-id') || (el.dataset && el.dataset.templateId);
+      if (d && /^\d+$/.test(d)) return d;
+      const oc = el.getAttribute('onclick') || '';
+      const m = oc.match(/sendUnits\s*\(\s*(?:this|\d+)\s*,\s*(\d+)/);
+      return m ? m[1] : null;
+    };
+    out.a = iconId('farm_icon_a') || orderedIds[0] || null;
+    out.b = iconId('farm_icon_b') || orderedIds[1] || null;
+    // Lê as unidades dos formulários de configuração de cada template
+    doc.querySelectorAll('form').forEach((form) => {
+      const tplInp = form.querySelector('input[name="template_id"]');
+      if (!tplInp) return;
+      const id = (tplInp.value || '').trim();
+      if (!/^\d+$/.test(id)) return;
+      const bucket = id === out.a ? out.unitsA : id === out.b ? out.unitsB : null;
+      if (!bucket) return;
+      UNITS.forEach((p) => {
+        const inp = form.querySelector('input[name="' + p[0] + '"]');
+        if (!inp) return;
+        const n = parseInt(inp.value, 10);
+        if (n > 0) bucket[p[0]] = n;
+      });
+    });
+    _farmTplCache = out; _farmTplCacheAt = now;
+    return out;
+  }
+  async function sendFarmB(srcVid, tgtVid, tplBId) {
+    const b = new URLSearchParams();
+    b.set('target', String(tgtVid));
+    b.set('template_id', String(tplBId));
+    b.set('source_village', String(srcVid));
+    b.set('h', CSRF);
+    const res = await fetch('/game.php?village=' + srcVid + '&screen=am_farm&mode=farm&ajaxaction=farm&h=' + CSRF, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'TribalWars-Ajax': '1', 'X-Requested-With': 'XMLHttpRequest' },
+      body: b.toString(),
+    });
+    const txt = await res.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (j && j.error) throw new Error(Array.isArray(j.error) ? j.error.join('; ') : String(j.error));
+    // Sem 'error' explícito assumimos sucesso (o assistente responde com dados de troops/report)
+    return true;
+  }
+
   // ==================== BÁRBAROS DO MAPA (BM) ====================
   // Varre /map/village.txt, detecta bárbaros no range (padrão 20 campos), envia "ataque B"
   // (composição configurável) pra alvos NUNCA atacados ou há mais de N dias.
@@ -1526,16 +1591,25 @@
     const now = Date.now();
     if ((config.map.nextAt || 0) > now) { scheduleMap(); return; }
     const cfg = config.map;
-    if (mapUnitsTotal(cfg.units) === 0) { pushLog('BM: template B vazio (configure ao menos 1 tropa).', 'err'); cfg.nextAt = now + 300000; save(); scheduleMap(); return; }
+    // Descobre template B do assistente (id + unidades)
+    let tpls;
+    try { tpls = await getFarmTemplates(CUR_VID); }
+    catch (e) { pushLog('BM: falha ao ler assistente de saque: ' + (e.message || e), 'err'); cfg.nextAt = now + 300000; save(); scheduleMap(); return; }
+    if (!tpls.b) { pushLog('BM: não achei o Template B no assistente — configure o B em qualquer aldeia primeiro.', 'err'); cfg.nextAt = now + 600000; save(); scheduleMap(); return; }
+    // Unidades a enviar: prioriza o que veio do assistente; se vier vazio, usa o fallback manual do UI
+    const tplBUnits = (tpls.unitsB && Object.keys(tpls.unitsB).length) ? tpls.unitsB : (cfg.units || {});
+    if (mapUnitsTotal(tplBUnits) === 0) { pushLog('BM: Template B do assistente está sem tropas (e nenhum fallback configurado).', 'err'); cfg.nextAt = now + 600000; save(); scheduleMap(); return; }
+    // Guarda o snapshot detectado no config pra UI mostrar
+    cfg.units = tplBUnits; cfg.tplBId = tpls.b;
     const plan = await mapPlanTargets();
     if (!plan) { cfg.nextAt = now + 120000; save(); scheduleMap(); return; }
     cfg.lastPreview = plan.plan.flatMap((p) => p.targets.map((t) => ({ src: p.src.coord, srcName: p.src.name, coord: t.coord, dist: Math.round(t.dist * 10) / 10, pts: t.points, name: t.name, lastAt: t.lastAt }))).slice(0, 500);
     save(); renderMapPreview();
     const totalPlanned = plan.plan.reduce((a, p) => a + p.targets.length, 0);
-    pushLog('BM: ' + plan.myV.length + ' aldeia(s) minha(s) · ' + plan.barbCount + ' bárbaro(s) no mundo · ' + totalPlanned + ' planejado(s) neste ciclo.', 'ok');
+    pushLog('BM: ' + plan.myV.length + ' aldeia(s) minha(s) · ' + plan.barbCount + ' bárbaro(s) no mundo · ' + totalPlanned + ' planejado(s) · B=' + mapUnitsDesc(tplBUnits) + ' (tpl ' + tpls.b + ')', 'ok');
     if (totalPlanned === 0) { cfg.nextAt = now + Math.max(60, cfg.interval || 1800) * 1000; save(); scheduleMap(); return; }
     const delay = Math.max(0, cfg.delay != null ? cfg.delay : 500);
-    let sentTotal = 0;
+    let sentTotal = 0, sentB = 0, sentPlace = 0;
     for (const p of plan.plan) {
       if (!p.targets.length) continue;
       let state;
@@ -1544,40 +1618,55 @@
       const avail = state.avail;
       const busy = {};
       (state.commands || []).forEach((c) => { if (c.coord && (c.kind === 'attack' || c.kind === 'return')) busy[c.coord] = 1; });
-      let vSent = 0, semTropa = 0, ocup = 0;
+      let vSent = 0, semTropa = 0, ocup = 0, semFall = 0;
       for (const t of p.targets) {
         if (busy[t.coord]) { ocup++; continue; }
+        // Checa disponibilidade contra as unidades do Template B
         const amounts = {}; let ok = true;
         for (const [u] of UNITS) {
-          const need = cfg.units[u] || 0;
+          const need = tplBUnits[u] || 0;
           if (need <= 0) continue;
           if ((avail[u] || 0) < need) { ok = false; break; }
           amounts[u] = need;
         }
         if (!ok || !Object.keys(amounts).length) { semTropa++; continue; }
+        // Caminho 1: assistente de saque B (mantém alvo listado + relatório fresco)
+        let usedPath = null, lastErr = null;
         try {
-          await sendAttack(p.src.vid, String(t.x), String(t.y), amounts);
-          Object.entries(amounts).forEach((e) => { avail[e[0]] = Math.max(0, (avail[e[0]] || 0) - e[1]); });
-          cfg.sentAt[t.vid] = Date.now();
-          vSent++; sentTotal++;
-          pushLog('BM · ' + p.src.name + ' → ' + t.coord + ' [' + Object.entries(amounts).map((e) => e[0] + '=' + e[1]).join(',') + '] · d ' + (Math.round(t.dist * 10) / 10) + (t.points ? (' · ' + t.points + 'pts') : ''), 'ok');
-          if (delay) await sleep(delay + Math.floor(Math.random() * 200));
-        } catch (e) {
-          pushLog('BM ' + p.src.name + ' → ' + t.coord + ': ' + (e.message || e), 'err');
-          semTropa++;
-          if (/tropas insuficientes|not enough/i.test(String(e.message || ''))) break;
+          await sendFarmB(p.src.vid, t.vid, tpls.b);
+          usedPath = 'B';
+        } catch (e) { lastErr = e; }
+        // Caminho 2: fallback Place (quando o alvo ainda não está listado no assistente)
+        if (!usedPath) {
+          try {
+            await sendAttack(p.src.vid, String(t.x), String(t.y), amounts);
+            usedPath = 'P';
+          } catch (e2) {
+            lastErr = e2;
+            pushLog('BM ' + p.src.name + ' → ' + t.coord + ': B falhou (' + (lastErr && lastErr.message || lastErr) + ') e Place também.', 'err');
+            semFall++;
+            if (/tropas insuficientes|not enough/i.test(String(lastErr && lastErr.message || ''))) break;
+            continue;
+          }
         }
+        Object.entries(amounts).forEach((e) => { avail[e[0]] = Math.max(0, (avail[e[0]] || 0) - e[1]); });
+        cfg.sentAt[t.vid] = Date.now();
+        vSent++; sentTotal++;
+        if (usedPath === 'B') sentB++; else sentPlace++;
+        pushLog('BM · ' + p.src.name + ' → ' + t.coord + ' [' + usedPath + ' ' + Object.entries(amounts).map((e) => e[0] + '=' + e[1]).join(',') + '] · d ' + (Math.round(t.dist * 10) / 10) + (t.points ? (' · ' + t.points + 'pts') : ''), 'ok');
+        if (delay) await sleep(delay + Math.floor(Math.random() * 200));
       }
       const parts = ['✓' + vSent];
       if (semTropa) parts.push('s/tropa ' + semTropa);
       if (ocup) parts.push('c/ataque ' + ocup);
+      if (semFall) parts.push('falhou ' + semFall);
       pushLog('  ' + p.src.name + ' (' + p.src.coord + '): ' + parts.join(' · '));
     }
     // Purga cache antigo (30d)
     Object.keys(cfg.sentAt).forEach((k) => { if (now - cfg.sentAt[k] > 30 * 86400000) delete cfg.sentAt[k]; });
     cfg.nextAt = now + Math.max(60, cfg.interval || 1800) * 1000;
     save();
-    pushLog('BM: ciclo ok · ' + sentTotal + ' envio(s). Próximo em ' + Math.round((cfg.interval || 1800) / 60) + ' min.', 'ok');
+    pushLog('BM: ciclo ok · ' + sentTotal + ' envio(s) [B=' + sentB + ' · Place=' + sentPlace + ']. Próximo em ' + Math.round((cfg.interval || 1800) / 60) + ' min.', 'ok');
     scheduleMap();
   }
   function scheduleMap() { clearTimeout(mapTimer); if (!config.map.running) return; mapTimer = setTimeout(mapTick, Math.min(Math.max((config.map.nextAt || 0) - Date.now(), 1000), 60000)); }
@@ -1631,6 +1720,16 @@
   }
   function mapStop() { readMapCfg(); config.map.running = false; save(); clearTimeout(mapTimer); setMapStatus(false); pushLog('Bárbaros Mapa parado.'); }
   async function mapRefreshCache() { _mapVillagesCache = null; try { const v = await getMapVillages(true); pushLog('BM: mapa recarregado — ' + v.length + ' aldeias no mundo (' + v.filter((x) => x.player === '0').length + ' bárbaras).', 'ok'); } catch (e) { pushLog('BM: recarregar falhou: ' + (e.message || e), 'err'); } }
+  async function mapSyncTemplateB() {
+    try {
+      const tpls = await getFarmTemplates(CUR_VID, true);
+      if (!tpls.b) { pushLog('BM: Template B não encontrado no assistente. Configure o B em uma aldeia primeiro.', 'err'); return; }
+      const units = tpls.unitsB || {};
+      config.map.units = units; config.map.tplBId = tpls.b; save();
+      document.querySelectorAll('.twmgr-bm-u').forEach((inp) => { const u = inp.getAttribute('data-unit'); inp.value = units[u] || 0; });
+      pushLog('BM: Template B sincronizado do assistente (tpl ' + tpls.b + ') → ' + mapUnitsDesc(units), 'ok');
+    } catch (e) { pushLog('BM: sync do B falhou: ' + (e.message || e), 'err'); }
+  }
 
   function tickUI() {
     if (anyRunning() && !lockOther()) claimLock();
@@ -1933,7 +2032,7 @@
       '<div id="twmgr-bb-status" class="twmgr-cstatus"></div>' +
       '</div>' +
       '<div id="twmgr-tab-map" style="display:none">' +
-      '<div class="twmgr-hint">🗺️ Varre o mapa e ataca <b>bárbaros</b> nunca atacados (ou há mais de N dias). Cada aldeia sua ataca os mais <b>próximos</b> dentro do range, evitando repetir alvo onde já tem ataque em curso.</div>' +
+      '<div class="twmgr-hint">🗺️ Varre o mapa e ataca <b>bárbaros</b> nunca atacados (ou há mais de N dias) via <b>ataque B do assistente de saque</b> — mantém o alvo listado com relatório fresco. Se o alvo ainda não estiver na lista do assistente, cai automaticamente pro envio pela praça com as mesmas tropas do Template B.</div>' +
       '<div class="twmgr-row"><span class="twmgr-lbl">Grupo origem (vazio = todas)</span><select id="twmgr-bm-group" class="twmgr-inp" style="width:130px"></select></div>' +
       '<div style="text-align:right;margin-bottom:2px"><button id="twmgr-bm-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button> <button id="twmgr-bm-refmap" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="recarrega /map/village.txt">↻ mapa</button></div>' +
       '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-bm-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:66px"></div>' +
@@ -1942,7 +2041,8 @@
       '<div class="twmgr-row"><span class="twmgr-lbl">Máx alvos por aldeia/ciclo</span><input id="twmgr-bm-maxper" class="twmgr-inp" type="number" min="1" value="20" style="width:66px"></div>' +
       '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo (min)</span><input id="twmgr-bm-int" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>' +
       '<div class="twmgr-row"><span class="twmgr-lbl">Delay entre envios (ms)</span><input id="twmgr-bm-delay" class="twmgr-inp" type="number" min="0" step="100" value="500" style="width:66px"></div>' +
-      '<div style="font-size:11px;color:#e8d29a;margin:6px 0 2px">Template B (unidades por ataque)</div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 2px"><span style="font-size:11px;color:#e8d29a">Template B (auto-sync do assistente)</span><button id="twmgr-bm-syncb" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="lê o Template B configurado no assistente de saque">↻ sync B</button></div>' +
+      '<div style="font-size:9px;color:#8f7d57;margin-bottom:4px">O envio usa o B do assistente. Este grid é preenchido automaticamente e serve de <b>fallback</b> pra alvos ainda não listados (envio pela praça).</div>' +
       '<div id="twmgr-bm-units" style="display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;margin-bottom:8px">' +
         UNITS.map((p) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#cdbb92">' + unitIcon(p[0], p[1]) + '<span style="flex:1">' + p[1] + '</span><input class="twmgr-bm-u twmgr-inp" data-unit="' + p[0] + '" type="number" min="0" value="0" style="width:52px"></label>').join('') +
       '</div>' +
@@ -2080,6 +2180,7 @@
     document.querySelectorAll('.twmgr-bm-u').forEach((inp) => inp.addEventListener('change', readMapCfg));
     document.getElementById('twmgr-bm-reload').addEventListener('click', fillGroupSelects);
     document.getElementById('twmgr-bm-refmap').addEventListener('click', mapRefreshCache);
+    document.getElementById('twmgr-bm-syncb').addEventListener('click', mapSyncTemplateB);
     document.getElementById('twmgr-bm-preview').addEventListener('click', mapPreview);
     document.getElementById('twmgr-bm-start').addEventListener('click', mapStart);
     document.getElementById('twmgr-bm-stop').addEventListener('click', mapStop);

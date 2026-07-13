@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.14
+// @version      9.15
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -40,7 +40,9 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.14';
+  const VERSION = '9.15';
+  const UPDATE_URL = 'https://gist.githubusercontent.com/JonathanWillianBraga/56b93244bd049689dddd489270fac59e/raw/tw-manager.user.js';
+  let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
@@ -153,6 +155,40 @@
       const c = l.k === 'err' ? '#ff7568' : l.k === 'ok' ? '#8fe39a' : '#cbb98f';
       return '<div style="color:' + c + ';border-bottom:1px solid rgba(255,255,255,.05);padding:2px 0">[' + esc(l.t) + '] ' + esc(l.m) + '</div>';
     }).join('');
+  }
+
+  function renderUpdateBadge() {
+    const b = document.getElementById('twmgr-upd-badge');
+    const btn = document.getElementById('twmgr-upd-btn');
+    if (b) b.style.display = updateInfo.hasUpdate ? 'inline-block' : 'none';
+    if (btn) btn.title = updateInfo.hasUpdate ? ('Nova versão v' + updateInfo.remoteVersion + ' disponível — clique para atualizar') : 'Verificar / instalar atualização';
+  }
+
+  async function checkForUpdate(manual) {
+    try {
+      const res = await fetch(UPDATE_URL + (UPDATE_URL.indexOf('?') >= 0 ? '&' : '?') + '_=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const text = await res.text();
+      const m = text.match(/@version\s+([\w.\-]+)/);
+      const remote = m ? m[1] : null;
+      updateInfo.checked = true;
+      updateInfo.remoteVersion = remote || '?';
+      updateInfo.hasUpdate = !!remote && remote !== VERSION;
+      localStorage.setItem(KEY + '_lastUpdCheck', String(Date.now()));
+      if (manual) {
+        pushLog(updateInfo.hasUpdate ? ('Nova versão disponível: v' + remote + ' (atual v' + VERSION + '). Clique em 🔄 para instalar.') : ('Você já está na versão mais recente (v' + VERSION + ').'), updateInfo.hasUpdate ? 'ok' : '');
+      } else if (updateInfo.hasUpdate) {
+        pushLog('Nova versão disponível: v' + remote + '. Clique no botão 🔄 no topo do painel para instalar.', 'ok');
+      }
+      renderUpdateBadge();
+    } catch (e) {
+      if (manual) pushLog('Falha ao verificar atualização: ' + (e.message || e), 'err');
+    }
+  }
+
+  function doUpdate() {
+    pushLog('Abrindo instalador do Tampermonkey em nova aba (confirme a atualização por lá)...', 'ok');
+    window.open(UPDATE_URL + (UPDATE_URL.indexOf('?') >= 0 ? '&' : '?') + '_=' + Date.now(), '_blank');
   }
 
   function fmt(ms) {
@@ -1316,6 +1352,8 @@
       "#twmgr-head .twmgr-title{font-weight:700;font-size:12px;letter-spacing:.3px;display:flex;align-items:center;gap:6px}",
       "#twmgr-head .twmgr-ver{font-weight:400;font-size:8px;opacity:.75}",
       "#twmgr-min{cursor:pointer;font-size:17px;line-height:1;padding:0 4px;opacity:.85}#twmgr-min:hover{opacity:1}",
+      "#twmgr-upd-btn{cursor:pointer;font-size:13px;line-height:1;padding:0 4px;opacity:.85;position:relative}#twmgr-upd-btn:hover{opacity:1}",
+      "#twmgr-upd-badge{position:absolute;top:-3px;right:-2px;color:#ff5a5a;font-size:9px}",
       ".twmgr-tabs{display:flex;flex-wrap:wrap;background:#1a140d;border-bottom:1px solid #3a2e1b}",
       ".twmgr-tab{flex:1;min-width:44px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 2px;cursor:pointer;color:#a2926c;border-bottom:2px solid transparent;transition:.15s}",
       ".twmgr-tab:hover{color:#e8d29a;background:rgba(212,175,55,.06)}",
@@ -1378,7 +1416,7 @@
     const p = document.createElement('div'); p.id = 'twmgr-panel';
     const tabBtn = (n, ico, label) => '<div id="twmgr-btab-' + n + '" class="twmgr-tab" data-tab="' + n + '"><span class="twmgr-tab-ico">' + ico + '</span><span class="twmgr-tab-lbl">' + label + '</span></div>';
     p.innerHTML =
-      '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div>' +
+      '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div>' +
       '<div class="twmgr-tabs">' + tabBtn('alvos', '⚔️', 'Alvos') + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('config', '⚙️', 'Config') + tabBtn('log', '📜', 'Log') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-alvos"><div class="twmgr-hint">Cada alvo é enviado da aldeia onde foi criado (veja "de:"). Aldeia atual: <b>' + CUR_NAME + '</b></div><div id="twmgr-targets"></div><button id="twmgr-add" class="twmgr-add">+ Adicionar alvo</button><div class="twmgr-actions"><button id="twmgr-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div><div id="twmgr-global" class="twmgr-cstatus"></div></div>' +
@@ -1525,6 +1563,10 @@
     document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.getAttribute('data-tab'))));
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
     document.getElementById('twmgr-min').addEventListener('click', (e) => { e.stopPropagation(); config.uiMin = !config.uiMin; save(); applyCollapsed(); });
+    document.getElementById('twmgr-upd-btn').addEventListener('click', (e) => { e.stopPropagation(); if (updateInfo.hasUpdate) doUpdate(); else checkForUpdate(true); });
+    const lastCheck = Number(localStorage.getItem(KEY + '_lastUpdCheck') || 0);
+    if (Date.now() - lastCheck > 3600000) checkForUpdate(false);
+    setInterval(() => checkForUpdate(false), 3600000);
     applyCollapsed();
     makeDraggable(p, document.getElementById('twmgr-head'));
 

@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.12.2
+// @version      9.13
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
 // @grant        none
-// @updateURL    https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js
-// @downloadURL  https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js
+// @updateURL    https://gist.githubusercontent.com/JonathanWillianBraga/56b93244bd049689dddd489270fac59e/raw/tw-manager.user.js
+// @downloadURL  https://gist.githubusercontent.com/JonathanWillianBraga/56b93244bd049689dddd489270fac59e/raw/tw-manager.user.js
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -40,7 +40,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.12.2';
+  const VERSION = '9.13';
   const WORLD = window.game_data.world || 'w';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
@@ -66,7 +66,7 @@
     groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
   });
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
-  const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, folgaPct: 20, maxDist: 15 });
+  const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, thresholdPct: 50, maxDist: 15 });
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, atkTpl: ATK_TPL, defTpl: DEF_TPL, demand: {} });
   const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild() });
   function load() {
@@ -115,7 +115,7 @@
     if (c.market.reserve == null) c.market.reserve = 0;
     if (!c.market.sources) c.market.sources = {};
     if (c.market.destCoord == null) c.market.destCoord = '';
-    if (c.market.folgaPct == null) c.market.folgaPct = 20;
+    if (c.market.thresholdPct == null) c.market.thresholdPct = 50;
     if (c.market.maxDist == null) c.market.maxDist = 15;
     if (!c.recruit.demand) c.recruit.demand = {};
     if (!c.build) c.build = defBuild();
@@ -893,7 +893,7 @@
     const res = await fetch('/game.php?village=' + vid + '&screen=market&mode=send', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const numOf = (id) => { const el = doc.getElementById(id); return el ? (parseInt((el.textContent || '').replace(/\D/g, ''), 10) || 0) : 0; };
-    return { wood: numOf('wood'), stone: numOf('stone'), iron: numOf('iron'), capacity: numOf('market_merchant_max_transport') };
+    return { wood: numOf('wood'), stone: numOf('stone'), iron: numOf('iron'), storage: numOf('storage'), capacity: numOf('market_merchant_max_transport') };
   }
   function balancedSplit(totalCapacity, avail, reserve) {
     const keys = ['wood', 'stone', 'iron'];
@@ -982,30 +982,29 @@
     let vils = [];
     try { vils = await getAllVillages(); } catch (e) { pushLog('Equilíbrio: erro ao listar aldeias: ' + (e.message || e), 'err'); return; }
     vils = vils.filter((v) => v.coord);
-    const folga = 1 + (config.market.folgaPct != null ? config.market.folgaPct : 20) / 100;
+    const pct = (config.market.thresholdPct != null ? config.market.thresholdPct : 50) / 100;
     const maxDist = config.market.maxDist != null ? config.market.maxDist : 15;
     const st = [];
     for (const v of vils) {
       let m; try { m = await getMarketState(v.vid); } catch (e) { continue; }
-      const rd = (config.recruit.demand && config.recruit.demand[v.vid]) || { wood: 0, stone: 0, iron: 0 };
-      const bdo = (config.build.demand && config.build.demand[v.vid] && config.build.demand[v.vid].cost) || { wood: 0, stone: 0, iron: 0 };
-      const need = { wood: (rd.wood || 0) + (bdo.wood || 0), stone: (rd.stone || 0) + (bdo.stone || 0), iron: (rd.iron || 0) + (bdo.iron || 0) };
-      st.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, need: need });
+      if (!m.storage) continue;                 // sem armazém lido -> pula
+      const thr = m.storage * pct;               // limiar por recurso = %  do armazém
+      st.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, thr: thr });
       await sleep(120);
     }
     let sent = 0;
     for (const r of ['wood', 'stone', 'iron']) {
-      const receivers = st.filter((s) => s.cur[r] < s.need[r]).map((s) => ({ s: s, def: s.need[r] - s.cur[r] })).sort((a, b) => b.def - a.def);
+      const receivers = st.filter((s) => s.cur[r] < s.thr).map((s) => ({ s: s, def: s.thr - s.cur[r] })).sort((a, b) => b.def - a.def);
       for (const rec of receivers) {
         if (rec.def <= 0) continue;
-        const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] > Math.ceil(s.need[r] * folga))
-          .map((s) => ({ s: s, exc: s.cur[r] - Math.ceil(s.need[r] * folga), d: coordDist(s.coord, rec.s.coord) }))
+        const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] > s.thr)
+          .map((s) => ({ s: s, exc: s.cur[r] - s.thr, d: coordDist(s.coord, rec.s.coord) }))
           .filter((x) => x.d <= maxDist)
           .sort((a, b) => a.d - b.d);
         for (const don of donors) {
           if (rec.def <= 0) break;
-          const amount = Math.min(don.exc, rec.def, don.s.cap);
-          if (amount < 500) continue;
+          const amount = Math.floor(Math.min(don.exc, rec.def, don.s.cap));
+          if (amount < 500) continue;            // ignora transferência trivial
           try {
             const pkg = { wood: 0, stone: 0, iron: 0 }; pkg[r] = amount;
             await sendMarketResources(don.s.vid, rec.s.coord, pkg);
@@ -1017,7 +1016,7 @@
         }
       }
     }
-    pushLog('Equilíbrio: ciclo ok · ' + sent + ' transferência(s).', 'ok');
+    pushLog('Equilíbrio: ciclo ok · ' + sent + ' transferência(s) (limiar ' + Math.round(pct * 100) + '% do armazém).', 'ok');
   }
   async function renderMarketSources() {
     const cont = document.getElementById('twmgr-mk-sources'); if (!cont) return;
@@ -1032,7 +1031,7 @@
     if (g('twmgr-mk-coord')) c.destCoord = g('twmgr-mk-coord').value.trim();
     if (g('twmgr-mk-reserve')) c.reserve = Math.max(0, parseInt(g('twmgr-mk-reserve').value, 10) || 0);
     if (g('twmgr-mk-int')) c.interval = Math.max(1, parseInt(g('twmgr-mk-int').value, 10) || 10) * 60;
-    if (g('twmgr-mk-folga')) c.folgaPct = Math.max(0, parseInt(g('twmgr-mk-folga').value, 10) || 20);
+    if (g('twmgr-mk-thr')) c.thresholdPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-thr').value, 10) || 50));
     if (g('twmgr-mk-dist')) c.maxDist = Math.max(1, parseFloat((g('twmgr-mk-dist').value || '').replace(',', '.')) || 15);
     const src = {}; document.querySelectorAll('.twmgr-mk-src').forEach((cb) => { if (cb.checked) src[cb.getAttribute('data-vid')] = true; }); c.sources = src;
     save();
@@ -1047,7 +1046,7 @@
     config.market.running = true; config.market.nextAt = 0; save();
     setMarketStatus(true);
     pushLog(config.market.mode === 'equilibrio'
-      ? 'Equilíbrio iniciado · folga ' + config.market.folgaPct + '% · dist ≤' + config.market.maxDist + ' (usa demanda do Recrutar+Edifícios)'
+      ? 'Equilíbrio iniciado · limiar ' + config.market.thresholdPct + '% do armazém · dist ≤' + config.market.maxDist
       : 'Cunhagem iniciada · destino ' + config.market.destCoord + ' · deixa ' + config.market.reserve + '/rec', 'ok');
     marketTick();
   }
@@ -1397,8 +1396,8 @@
       '<div id="twmgr-mk-sources" style="max-height:120px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px;margin-bottom:6px"></div>' +
       '</div>' +
       '<div id="twmgr-mk-equilibrio" style="display:none">' +
-      '<div class="twmgr-hint">⚖️ Equilíbrio <b>por recurso</b>: mantém toda aldeia com recurso pra recrutar + manter obra. Tira das que sobram (folga) e manda pras que faltam, da mais perto. Usa a demanda do <b>Recrutar</b> + <b>Edifícios</b> (deixe os dois rodando).</div>' +
-      '<div class="twmgr-row"><span class="twmgr-lbl">Folga da doadora (%)</span><input id="twmgr-mk-folga" class="twmgr-inp" type="number" min="0" value="20" style="width:56px"></div>' +
+      '<div class="twmgr-hint">⚖️ Equilíbrio pelo <b>% do armazém</b>, por recurso (madeira/argila/ferro separados): aldeia <b>acima</b> do limiar doa o excedente pras que estão <b>abaixo</b> — todas convergem pro limiar. Da aldeia mais perto primeiro.</div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Encher armazém até (%)</span><input id="twmgr-mk-thr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
       '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="15" style="width:56px"></div>' +
       '</div>' +
       '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo (min)</span><input id="twmgr-mk-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>' +
@@ -1479,7 +1478,7 @@
     document.getElementById('twmgr-mk-coord').value = config.market.destCoord || '';
     document.getElementById('twmgr-mk-reserve').value = config.market.reserve || 0;
     document.getElementById('twmgr-mk-int').value = Math.round((config.market.interval || 600) / 60);
-    document.getElementById('twmgr-mk-folga').value = config.market.folgaPct != null ? config.market.folgaPct : 20;
+    document.getElementById('twmgr-mk-thr').value = config.market.thresholdPct != null ? config.market.thresholdPct : 50;
     document.getElementById('twmgr-mk-dist').value = config.market.maxDist != null ? config.market.maxDist : 15;
     const mkModeR = document.querySelector('input[name="twmgr-mk-mode"][value="' + (config.market.mode || 'cunhagem') + '"]'); if (mkModeR) mkModeR.checked = true;
     const applyMkMode = () => {
@@ -1490,7 +1489,7 @@
     renderMarketSources();
     document.getElementById('twmgr-mk-all').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.checked = true); readMarketCfg(); });
     document.getElementById('twmgr-mk-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.checked = false); readMarketCfg(); });
-    ['twmgr-mk-coord', 'twmgr-mk-reserve', 'twmgr-mk-int', 'twmgr-mk-folga', 'twmgr-mk-dist'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
+    ['twmgr-mk-coord', 'twmgr-mk-reserve', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
     document.querySelectorAll('input[name="twmgr-mk-mode"]').forEach((r) => r.addEventListener('change', () => { readMarketCfg(); applyMkMode(); }));
     applyMkMode();
     document.getElementById('twmgr-mk-start').addEventListener('click', marketStart);

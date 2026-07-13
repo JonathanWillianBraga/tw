@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.18.0
-// @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes (multi-alvo/origem, chegada em horário marcado).
+// @version      9.19.0
+// @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
 // @grant        none
@@ -40,7 +40,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.18.0';
+  const VERSION = '9.19.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -73,7 +73,18 @@
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, atkTpl: ATK_TPL, defTpl: DEF_TPL, demand: {} });
   const BB_TPL = 'main 20\nstorage 20\nfarm 22\nstable 15\nbarracks 15\nsmith 10\ngarage 5\nfarm 24\nstorage 25\nbarracks 20\nstable 20\ngarage 10\nwood 30\nstone 30\niron 30\nstorage 30\nfarm 27\nmarket 15';
   const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, gradMain: 20, gradStable: 15 });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB() });
+  const defMap = () => ({
+    running: false, nextAt: 0, interval: 1800,
+    maxDist: 20, minDaysSinceAttack: 2,
+    group: null,                          // grupo com aldeias de origem (vazio = todas)
+    units: { axe: 80, light: 15 },        // template "B" enviado
+    minPoints: 26, maxPoints: 5000,
+    maxPerVillage: 20, delay: 500,
+    onlyBarbarians: true,
+    sentAt: {},                           // vid do bárbaro -> timestamp do último envio nosso
+    lastPreview: [],                      // lista mostrada na tabela
+  });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap() });
   function load() {
     let c = def();
     try {
@@ -150,14 +161,26 @@
     if (c.bb.interval == null) c.bb.interval = 600;
     if (c.bb.gradMain == null) c.bb.gradMain = 20;
     if (c.bb.gradStable == null) c.bb.gradStable = 15;
+    if (!c.map) c.map = defMap();
+    if (!c.map.units) c.map.units = defMap().units;
+    if (!c.map.sentAt) c.map.sentAt = {};
+    if (!c.map.lastPreview) c.map.lastPreview = [];
+    if (c.map.maxDist == null) c.map.maxDist = 20;
+    if (c.map.minDaysSinceAttack == null) c.map.minDaysSinceAttack = 2;
+    if (c.map.interval == null) c.map.interval = 1800;
+    if (c.map.minPoints == null) c.map.minPoints = 26;
+    if (c.map.maxPoints == null) c.map.maxPoints = 5000;
+    if (c.map.maxPerVillage == null) c.map.maxPerVillage = 20;
+    if (c.map.delay == null) c.map.delay = 500;
+    if (c.map.onlyBarbarians == null) c.map.onlyBarbarians = true;
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, uiTimer = null;
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running); }
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, uiTimer = null;
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running); }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
@@ -803,7 +826,7 @@
   async function fillGroupSelects() {
     let groups = [];
     try { groups = await getGroups(); } catch (e) { pushLog('Recrutar: erro ao listar grupos: ' + (e.message || e), 'err'); return; }
-    [['twmgr-r-gatk', config.recruit.groupAtk], ['twmgr-r-gdef', config.recruit.groupDef], ['twmgr-bb-group', config.bb.group]].forEach(([id, cur]) => {
+    [['twmgr-r-gatk', config.recruit.groupAtk], ['twmgr-r-gdef', config.recruit.groupDef], ['twmgr-bb-group', config.bb.group], ['twmgr-bm-group', config.map && config.map.group]].forEach(([id, cur]) => {
       const sel = document.getElementById(id); if (!sel) return;
       sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((g) => '<option value="' + g.id + '"' + (String(cur) === String(g.id) ? ' selected' : '') + '>' + esc(g.name) + '</option>').join('');
     });
@@ -1426,6 +1449,189 @@
   }
   function bbStop() { readBBCfg(); config.bb.running = false; save(); clearTimeout(bbTimer); setBBStatus(false); pushLog('Módulo BB parado.'); }
 
+  // ==================== BÁRBAROS DO MAPA (BM) ====================
+  // Varre /map/village.txt, detecta bárbaros no range (padrão 20 campos), envia "ataque B"
+  // (composição configurável) pra alvos NUNCA atacados ou há mais de N dias.
+  let _mapVillagesCache = null, _mapVillagesCacheAt = 0;
+  async function getMapVillages(forceRefresh) {
+    const now = Date.now();
+    if (!forceRefresh && _mapVillagesCache && (now - _mapVillagesCacheAt < 6 * 3600 * 1000)) return _mapVillagesCache;
+    const res = await fetch('/map/village.txt', { credentials: 'include' });
+    const txt = await res.text();
+    const arr = [];
+    txt.split('\n').forEach((line) => {
+      const f = line.split(',');
+      if (f.length < 7) return;
+      const vid = f[0], x = parseInt(f[2], 10), y = parseInt(f[3], 10);
+      const pts = parseInt(f[5], 10);
+      if (!vid || isNaN(x) || isNaN(y)) return;
+      let name = ''; try { name = decodeURIComponent((f[1] || '').replace(/\+/g, ' ')); } catch (e) { name = f[1] || ''; }
+      arr.push({ vid: vid, x: x, y: y, player: f[4] || '0', points: isNaN(pts) ? 0 : pts, name: name });
+    });
+    _mapVillagesCache = arr; _mapVillagesCacheAt = now;
+    return arr;
+  }
+  function fieldDist(x1, y1, x2, y2) { return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2)); }
+  function mapUnitsTotal(units) { let t = 0; UNITS.forEach((p) => { t += (units[p[0]] || 0); }); return t; }
+  function mapUnitsDesc(units) { return UNITS.filter((p) => (units[p[0]] || 0) > 0).map((p) => p[0] + '=' + units[p[0]]).join(', ') || '(vazio)'; }
+
+  async function mapPlanTargets() {
+    const cfg = config.map;
+    let allV;
+    try { allV = await getMapVillages(); }
+    catch (e) { pushLog('BM: erro ao ler village.txt: ' + (e.message || e), 'err'); return null; }
+    const barb = allV.filter((v) => (!cfg.onlyBarbarians || v.player === '0') && v.points >= (cfg.minPoints || 0) && v.points <= (cfg.maxPoints || 99999));
+    let mine;
+    try {
+      if (cfg.group) { const list = await getVillagesInGroup(cfg.group); mine = list.map((v) => ({ vid: v.vid, coord: v.coord, name: v.coord })); }
+      else { const list = await getAllVillages(); mine = list.map((v) => ({ vid: v.vid, coord: v.coord, name: v.name })); }
+    } catch (e) { pushLog('BM: erro ao ler minhas aldeias: ' + (e.message || e), 'err'); return null; }
+    if (cfg.group) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
+    const myV = [];
+    mine.forEach((v) => { const cm = (v.coord || '').match(/(\d+)\|(\d+)/); if (cm) myV.push({ vid: v.vid, name: v.name || v.coord, coord: v.coord, x: +cm[1], y: +cm[2] }); });
+    const now = Date.now();
+    const staleMs = Math.max(0, (cfg.minDaysSinceAttack || 0)) * 86400000;
+    const sentAt = cfg.sentAt || {};
+    // Claim: cada bárbaro é atribuído à aldeia MINHA mais próxima que ainda tem cota (maxPerVillage).
+    // Assim evitamos que a mesma aldeia minha sature os N primeiros bárbaros e sobre 0 pras outras.
+    const candByOrigin = {}; myV.forEach((s) => candByOrigin[s.vid] = []);
+    const pairs = [];
+    for (const b of barb) {
+      const last = sentAt[b.vid] || 0;
+      if (last && staleMs > 0 && (now - last) < staleMs) continue;
+      let best = null;
+      for (const s of myV) {
+        const d = fieldDist(s.x, s.y, b.x, b.y);
+        if (d > (cfg.maxDist || 20)) continue;
+        if (!best || d < best.dist) best = { src: s, dist: d };
+      }
+      if (best) pairs.push({ src: best.src, dist: best.dist, target: { vid: b.vid, x: b.x, y: b.y, coord: b.x + '|' + b.y, points: b.points, name: b.name, lastAt: last } });
+    }
+    pairs.sort((a, b) => a.dist - b.dist);
+    const limit = Math.max(1, cfg.maxPerVillage || 20);
+    for (const p of pairs) {
+      const arr = candByOrigin[p.src.vid];
+      if (arr.length >= limit) continue;
+      arr.push({ vid: p.target.vid, x: p.target.x, y: p.target.y, coord: p.target.coord, points: p.target.points, name: p.target.name, lastAt: p.target.lastAt, dist: p.dist });
+    }
+    const plan = myV.map((s) => ({ src: s, targets: candByOrigin[s.vid] || [] }));
+    return { myV: myV, plan: plan, barbCount: barb.length, totalCandidates: pairs.length };
+  }
+
+  async function mapTick() {
+    clearTimeout(mapTimer);
+    if (!config.map.running) return;
+    if (lockOther()) { mapTimer = setTimeout(mapTick, 5000); return; }
+    claimLock();
+    const now = Date.now();
+    if ((config.map.nextAt || 0) > now) { scheduleMap(); return; }
+    const cfg = config.map;
+    if (mapUnitsTotal(cfg.units) === 0) { pushLog('BM: template B vazio (configure ao menos 1 tropa).', 'err'); cfg.nextAt = now + 300000; save(); scheduleMap(); return; }
+    const plan = await mapPlanTargets();
+    if (!plan) { cfg.nextAt = now + 120000; save(); scheduleMap(); return; }
+    cfg.lastPreview = plan.plan.flatMap((p) => p.targets.map((t) => ({ src: p.src.coord, srcName: p.src.name, coord: t.coord, dist: Math.round(t.dist * 10) / 10, pts: t.points, name: t.name, lastAt: t.lastAt }))).slice(0, 500);
+    save(); renderMapPreview();
+    const totalPlanned = plan.plan.reduce((a, p) => a + p.targets.length, 0);
+    pushLog('BM: ' + plan.myV.length + ' aldeia(s) minha(s) · ' + plan.barbCount + ' bárbaro(s) no mundo · ' + totalPlanned + ' planejado(s) neste ciclo.', 'ok');
+    if (totalPlanned === 0) { cfg.nextAt = now + Math.max(60, cfg.interval || 1800) * 1000; save(); scheduleMap(); return; }
+    const delay = Math.max(0, cfg.delay != null ? cfg.delay : 500);
+    let sentTotal = 0;
+    for (const p of plan.plan) {
+      if (!p.targets.length) continue;
+      let state;
+      try { state = await getVillageState(p.src.vid); }
+      catch (e) { pushLog('BM: erro estado ' + p.src.name + ': ' + (e.message || e), 'err'); continue; }
+      const avail = state.avail;
+      const busy = {};
+      (state.commands || []).forEach((c) => { if (c.coord && (c.kind === 'attack' || c.kind === 'return')) busy[c.coord] = 1; });
+      let vSent = 0, semTropa = 0, ocup = 0;
+      for (const t of p.targets) {
+        if (busy[t.coord]) { ocup++; continue; }
+        const amounts = {}; let ok = true;
+        for (const [u] of UNITS) {
+          const need = cfg.units[u] || 0;
+          if (need <= 0) continue;
+          if ((avail[u] || 0) < need) { ok = false; break; }
+          amounts[u] = need;
+        }
+        if (!ok || !Object.keys(amounts).length) { semTropa++; continue; }
+        try {
+          await sendAttack(p.src.vid, String(t.x), String(t.y), amounts);
+          Object.entries(amounts).forEach((e) => { avail[e[0]] = Math.max(0, (avail[e[0]] || 0) - e[1]); });
+          cfg.sentAt[t.vid] = Date.now();
+          vSent++; sentTotal++;
+          pushLog('BM · ' + p.src.name + ' → ' + t.coord + ' [' + Object.entries(amounts).map((e) => e[0] + '=' + e[1]).join(',') + '] · d ' + (Math.round(t.dist * 10) / 10) + (t.points ? (' · ' + t.points + 'pts') : ''), 'ok');
+          if (delay) await sleep(delay + Math.floor(Math.random() * 200));
+        } catch (e) {
+          pushLog('BM ' + p.src.name + ' → ' + t.coord + ': ' + (e.message || e), 'err');
+          semTropa++;
+          if (/tropas insuficientes|not enough/i.test(String(e.message || ''))) break;
+        }
+      }
+      const parts = ['✓' + vSent];
+      if (semTropa) parts.push('s/tropa ' + semTropa);
+      if (ocup) parts.push('c/ataque ' + ocup);
+      pushLog('  ' + p.src.name + ' (' + p.src.coord + '): ' + parts.join(' · '));
+    }
+    // Purga cache antigo (30d)
+    Object.keys(cfg.sentAt).forEach((k) => { if (now - cfg.sentAt[k] > 30 * 86400000) delete cfg.sentAt[k]; });
+    cfg.nextAt = now + Math.max(60, cfg.interval || 1800) * 1000;
+    save();
+    pushLog('BM: ciclo ok · ' + sentTotal + ' envio(s). Próximo em ' + Math.round((cfg.interval || 1800) / 60) + ' min.', 'ok');
+    scheduleMap();
+  }
+  function scheduleMap() { clearTimeout(mapTimer); if (!config.map.running) return; mapTimer = setTimeout(mapTick, Math.min(Math.max((config.map.nextAt || 0) - Date.now(), 1000), 60000)); }
+
+  async function mapPreview() {
+    readMapCfg();
+    if (mapUnitsTotal(config.map.units) === 0) { pushLog('BM prévia: template B vazio.', 'err'); return; }
+    pushLog('BM: gerando prévia (sem enviar)…');
+    const plan = await mapPlanTargets();
+    if (!plan) return;
+    config.map.lastPreview = plan.plan.flatMap((p) => p.targets.map((t) => ({ src: p.src.coord, srcName: p.src.name, coord: t.coord, dist: Math.round(t.dist * 10) / 10, pts: t.points, name: t.name, lastAt: t.lastAt })));
+    save(); renderMapPreview();
+    const tot = plan.plan.reduce((a, p) => a + p.targets.length, 0);
+    pushLog('BM prévia · ' + plan.myV.length + ' aldeia(s) minha(s) · ' + plan.barbCount + ' bárbaro(s) mundo · ' + tot + ' alvo(s) elegível(is).', 'ok');
+    showTab('map');
+  }
+  function renderMapPreview() {
+    const box = document.getElementById('twmgr-bm-list'); if (!box) return;
+    const list = config.map.lastPreview || [];
+    const cnt = document.getElementById('twmgr-bm-count'); if (cnt) cnt.textContent = list.length;
+    if (!list.length) { box.innerHTML = '<div style="color:#8f7d57;text-align:center;padding:8px;font-size:10px">— nenhum alvo detectado —</div>'; return; }
+    const now = Date.now();
+    box.innerHTML =
+      '<div style="display:grid;grid-template-columns:60px 34px 44px 1fr 44px;gap:4px;padding:3px 4px;border-bottom:1px solid #4a3b28;font-size:9px;color:#e8d29a;font-weight:600"><span>alvo</span><span style="text-align:right">d</span><span style="text-align:right">pts</span><span>de</span><span style="text-align:right">últ.</span></div>' +
+      list.slice(0, 200).map((t) => {
+        const last = t.lastAt ? (Math.round((now - t.lastAt) / 86400000) + 'd') : 'novo';
+        return '<div style="display:grid;grid-template-columns:60px 34px 44px 1fr 44px;gap:4px;padding:2px 4px;border-bottom:1px solid rgba(255,255,255,.04);font-size:10px;color:#cdbb92"><span style="color:#ffd76a">' + esc(t.coord) + '</span><span style="text-align:right">' + t.dist + '</span><span style="text-align:right">' + (t.pts || 0) + '</span><span style="color:#8f7d57;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="de ' + esc(t.srcName || '') + '">' + esc(t.src) + '</span><span style="text-align:right;color:' + (t.lastAt ? '#8f7d57' : '#8fe39a') + '">' + last + '</span></div>';
+      }).join('');
+  }
+  function readMapCfg() {
+    const c = config.map, g = (id) => document.getElementById(id);
+    if (g('twmgr-bm-group')) c.group = g('twmgr-bm-group').value || null;
+    if (g('twmgr-bm-dist')) c.maxDist = Math.max(1, parseFloat((g('twmgr-bm-dist').value || '').replace(',', '.')) || 20);
+    if (g('twmgr-bm-days')) c.minDaysSinceAttack = Math.max(0, parseFloat((g('twmgr-bm-days').value || '').replace(',', '.')) || 2);
+    if (g('twmgr-bm-minpts')) c.minPoints = Math.max(0, parseInt(g('twmgr-bm-minpts').value, 10) || 0);
+    if (g('twmgr-bm-maxpts')) c.maxPoints = Math.max(1, parseInt(g('twmgr-bm-maxpts').value, 10) || 5000);
+    if (g('twmgr-bm-maxper')) c.maxPerVillage = Math.max(1, parseInt(g('twmgr-bm-maxper').value, 10) || 20);
+    if (g('twmgr-bm-int')) c.interval = Math.max(1, parseInt(g('twmgr-bm-int').value, 10) || 30) * 60;
+    if (g('twmgr-bm-delay')) { const v = parseInt(g('twmgr-bm-delay').value, 10); c.delay = (isNaN(v) || v < 0) ? 500 : v; }
+    const units = {};
+    document.querySelectorAll('.twmgr-bm-u').forEach((inp) => { const u = inp.getAttribute('data-unit'); const n = parseInt(inp.value, 10); if (n > 0) units[u] = n; });
+    c.units = units;
+    save();
+  }
+  function setMapStatus(on) { setBtnState('twmgr-bm-start', 'twmgr-bm-stop', on, '● Rastreando', '▶ Rastrear'); }
+  function mapStart() {
+    readMapCfg();
+    if (mapUnitsTotal(config.map.units) === 0) { pushLog('BM: configure o template B (nenhuma tropa marcada).', 'err'); return; }
+    config.map.running = true; config.map.nextAt = 0; save();
+    setMapStatus(true); pushLog('Bárbaros Mapa iniciado · dist ≤' + config.map.maxDist + ' · ≥' + config.map.minDaysSinceAttack + 'd sem atk · [' + mapUnitsDesc(config.map.units) + ']', 'ok'); mapTick();
+  }
+  function mapStop() { readMapCfg(); config.map.running = false; save(); clearTimeout(mapTimer); setMapStatus(false); pushLog('Bárbaros Mapa parado.'); }
+  async function mapRefreshCache() { _mapVillagesCache = null; try { const v = await getMapVillages(true); pushLog('BM: mapa recarregado — ' + v.length + ' aldeias no mundo (' + v.filter((x) => x.player === '0').length + ' bárbaras).', 'ok'); } catch (e) { pushLog('BM: recarregar falhou: ' + (e.message || e), 'err'); } }
+
   function tickUI() {
     if (anyRunning() && !lockOther()) claimLock();
     const now = Date.now();
@@ -1472,8 +1678,14 @@
       else if (lockOther()) { bb.textContent = '⏸ outra aba'; bb.style.color = '#ff7568'; }
       else { bb.style.color = '#8fe39a'; bb.textContent = (config.bb.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.bb.nextAt - now) : '● desenvolvendo…'; }
     }
+    const bm = document.getElementById('twmgr-bm-status'); if (bm) {
+      if (!config.map || !config.map.running) { bm.textContent = ''; }
+      else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#ff7568'; }
+      else { bm.style.color = '#8fe39a'; bm.textContent = (config.map.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.map.nextAt - now) : '● rastreando…'; }
+    }
     const ring = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('twmgr-run', !!on && !lockOther()); };
     ring('twmgr-btab-bb', config.bb && config.bb.running);
+    ring('twmgr-btab-map', config.map && config.map.running);
     ring('twmgr-btab-alvos', config.running);
     ring('twmgr-btab-scav', config.scav.running);
     ring('twmgr-btab-farm', config.farm.running);
@@ -1639,7 +1851,7 @@
   }
 
   function showTab(name) {
-    ['alvos', 'scav', 'farm', 'recruit', 'fakes', 'market', 'build', 'bb', 'config', 'log'].forEach((n) => {
+    ['alvos', 'scav', 'farm', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'config', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -1651,7 +1863,7 @@
     const tabBtn = (n, ico, label) => '<div id="twmgr-btab-' + n + '" class="twmgr-tab" data-tab="' + n + '"><span class="twmgr-tab-ico">' + ico + '</span><span class="twmgr-tab-lbl">' + label + '</span></div>';
     p.innerHTML =
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('alvos', '⚔️', 'Alvos') + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🐗', 'BB') + tabBtn('config', '⚙️', 'Config') + tabBtn('log', '📜', 'Log') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('alvos', '⚔️', 'Alvos') + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🐗', 'BB') + tabBtn('map', '🗺️', 'Bárb.Mapa') + tabBtn('config', '⚙️', 'Config') + tabBtn('log', '📜', 'Log') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-alvos"><div class="twmgr-hint">Cada alvo é enviado da aldeia onde foi criado (veja "de:"). Aldeia atual: <b>' + CUR_NAME + '</b></div><div id="twmgr-targets"></div><button id="twmgr-add" class="twmgr-add">+ Adicionar alvo</button><div class="twmgr-actions"><button id="twmgr-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div><div id="twmgr-global" class="twmgr-cstatus"></div></div>' +
       '<div id="twmgr-tab-scav" style="display:none"><div class="twmgr-hint">Coleta em <b>todas as suas aldeias</b>: distribui as tropas marcadas entre as opções livres e reenvia no retorno.</div><div class="twmgr-units">' + SCAV_UNITS.map(([u, n]) => '<label><input id="twmgr-su-' + u + '" type="checkbox"> ' + unitIcon(u, n) + ' ' + n + '</label>').join('') + '</div><div class="twmgr-actions"><button id="twmgr-scav-start" class="twmgr-btn twmgr-go">▶ Coletar</button><button id="twmgr-scav-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div><div id="twmgr-scav-status" class="twmgr-cstatus"></div></div>' +
@@ -1719,6 +1931,25 @@
       '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo (min)</span><input id="twmgr-bb-int" class="twmgr-inp" type="number" min="1" value="10" style="width:56px"></div>' +
       '<div class="twmgr-actions"><button id="twmgr-bb-start" class="twmgr-btn twmgr-go">▶ Iniciar BB</button><button id="twmgr-bb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
       '<div id="twmgr-bb-status" class="twmgr-cstatus"></div>' +
+      '</div>' +
+      '<div id="twmgr-tab-map" style="display:none">' +
+      '<div class="twmgr-hint">🗺️ Varre o mapa e ataca <b>bárbaros</b> nunca atacados (ou há mais de N dias). Cada aldeia sua ataca os mais <b>próximos</b> dentro do range, evitando repetir alvo onde já tem ataque em curso.</div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Grupo origem (vazio = todas)</span><select id="twmgr-bm-group" class="twmgr-inp" style="width:130px"></select></div>' +
+      '<div style="text-align:right;margin-bottom:2px"><button id="twmgr-bm-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button> <button id="twmgr-bm-refmap" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="recarrega /map/village.txt">↻ mapa</button></div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-bm-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:66px"></div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Sem atacar há (dias)</span><input id="twmgr-bm-days" class="twmgr-inp" type="number" min="0" step="0.5" value="2" style="width:66px"></div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Pontos de/até</span><span><input id="twmgr-bm-minpts" class="twmgr-inp" type="number" min="0" value="26" style="width:56px"> a <input id="twmgr-bm-maxpts" class="twmgr-inp" type="number" min="1" value="5000" style="width:56px"></span></div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Máx alvos por aldeia/ciclo</span><input id="twmgr-bm-maxper" class="twmgr-inp" type="number" min="1" value="20" style="width:66px"></div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo (min)</span><input id="twmgr-bm-int" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Delay entre envios (ms)</span><input id="twmgr-bm-delay" class="twmgr-inp" type="number" min="0" step="100" value="500" style="width:66px"></div>' +
+      '<div style="font-size:11px;color:#e8d29a;margin:6px 0 2px">Template B (unidades por ataque)</div>' +
+      '<div id="twmgr-bm-units" style="display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;margin-bottom:8px">' +
+        UNITS.map((p) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#cdbb92">' + unitIcon(p[0], p[1]) + '<span style="flex:1">' + p[1] + '</span><input class="twmgr-bm-u twmgr-inp" data-unit="' + p[0] + '" type="number" min="0" value="0" style="width:52px"></label>').join('') +
+      '</div>' +
+      '<div class="twmgr-actions"><button id="twmgr-bm-preview" class="twmgr-btn twmgr-ghost">💡 Prévia</button><button id="twmgr-bm-start" class="twmgr-btn twmgr-go">▶ Rastrear</button><button id="twmgr-bm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+      '<div id="twmgr-bm-status" class="twmgr-cstatus"></div>' +
+      '<div style="margin-top:8px;font-size:11px;color:#e8d29a">Alvos detectados: <b id="twmgr-bm-count">0</b></div>' +
+      '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:8px;margin-top:4px"></div>' +
       '</div>' +
       '<div id="twmgr-tab-config" style="display:none"><label class="twmgr-check"><input id="twmgr-reload" type="checkbox"> Recarregar (F5) após enviar ataque</label><button id="twmgr-diag" class="twmgr-btn twmgr-ghost" style="width:100%;margin-bottom:9px">🔍 Diagnóstico (Auto-ATK)</button><div class="twmgr-hint">O reenvio do Auto-ATK usa o <b>retorno real</b> das tropas. O F5 só acontece no momento do reenvio.</div></div>' +
       '<div id="twmgr-tab-log" style="display:none"><div id="twmgr-log" class="twmgr-log"></div></div>' +
@@ -1836,6 +2067,25 @@
     document.getElementById('twmgr-bb-stop').addEventListener('click', bbStop);
     setBBStatus(config.bb.running);
 
+    // Bárbaros do Mapa (BM)
+    document.getElementById('twmgr-bm-dist').value = config.map.maxDist != null ? config.map.maxDist : 20;
+    document.getElementById('twmgr-bm-days').value = config.map.minDaysSinceAttack != null ? config.map.minDaysSinceAttack : 2;
+    document.getElementById('twmgr-bm-minpts').value = config.map.minPoints != null ? config.map.minPoints : 26;
+    document.getElementById('twmgr-bm-maxpts').value = config.map.maxPoints != null ? config.map.maxPoints : 5000;
+    document.getElementById('twmgr-bm-maxper').value = config.map.maxPerVillage != null ? config.map.maxPerVillage : 20;
+    document.getElementById('twmgr-bm-int').value = Math.round((config.map.interval || 1800) / 60);
+    document.getElementById('twmgr-bm-delay').value = config.map.delay != null ? config.map.delay : 500;
+    document.querySelectorAll('.twmgr-bm-u').forEach((inp) => { const u = inp.getAttribute('data-unit'); inp.value = (config.map.units && config.map.units[u]) || 0; });
+    ['twmgr-bm-group', 'twmgr-bm-dist', 'twmgr-bm-days', 'twmgr-bm-minpts', 'twmgr-bm-maxpts', 'twmgr-bm-maxper', 'twmgr-bm-int', 'twmgr-bm-delay'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMapCfg); });
+    document.querySelectorAll('.twmgr-bm-u').forEach((inp) => inp.addEventListener('change', readMapCfg));
+    document.getElementById('twmgr-bm-reload').addEventListener('click', fillGroupSelects);
+    document.getElementById('twmgr-bm-refmap').addEventListener('click', mapRefreshCache);
+    document.getElementById('twmgr-bm-preview').addEventListener('click', mapPreview);
+    document.getElementById('twmgr-bm-start').addEventListener('click', mapStart);
+    document.getElementById('twmgr-bm-stop').addEventListener('click', mapStop);
+    setMapStatus(config.map.running);
+    renderMapPreview();
+
     document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.getAttribute('data-tab'))));
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
     document.getElementById('twmgr-min').addEventListener('click', (e) => { e.stopPropagation(); config.uiMin = !config.uiMin; save(); applyCollapsed(); });
@@ -1861,6 +2111,7 @@
     if (config.market.running) { if (!lockOther()) pushLog('Cunhagem retomada.', 'ok'); scheduleMarket(); }
     if (config.build.running) { if (!lockOther()) pushLog('Edifícios retomado.', 'ok'); scheduleBuild(); }
     if (config.bb && config.bb.running) { if (!lockOther()) pushLog('Módulo BB retomado.', 'ok'); scheduleBB(); }
+    if (config.map && config.map.running) { if (!lockOther()) pushLog('Bárbaros Mapa retomado.', 'ok'); scheduleMap(); }
   }
 
   function makeDraggable(panel, handle) {

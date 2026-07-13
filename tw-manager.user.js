@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.16
+// @version      9.16.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -40,7 +40,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.16';
+  const VERSION = '9.16.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -515,11 +515,12 @@
             if (config.farm.ramMode === 'fixo') rams = Math.max(0, config.farm.ramFixed || 0);
             else { if (t.wall == null) continue; rams = ramsForWall(t.wall, config.farm.ramWall6 || 24); }
             if ((avail.axe || 0) < axeN || (avail.ram || 0) < rams) { exhausted = true; pushLog('Saque ' + v.name + ': tropa insuficiente (bárbaro/aríete) → próxima aldeia.'); break; }
-            const amounts = { axe: axeN }; if (rams > 0) amounts.ram = rams;
+            const spies = Math.min(1, avail.spy || 0);   // 1 explorador p/ re-escanear e manter o report/mapa fresco
+            const amounts = { axe: axeN }; if (rams > 0) amounts.ram = rams; if (spies > 0) amounts.spy = spies;
             await sendAttack(v.vid, cm[1], cm[2], amounts);
-            avail.axe -= axeN; avail.ram = (avail.ram || 0) - rams;
+            avail.axe -= axeN; avail.ram = (avail.ram || 0) - rams; avail.spy = (avail.spy || 0) - spies;
             sent[t.reportId] = now; count++; vSent++;
-            pushLog('Farm+aríete · ' + v.name + ' → ' + t.coord + ' [bb ' + axeN + (rams ? ', ar ' + rams : '') + ' · muro ' + (t.wall != null ? t.wall : '?') + ']', 'ok');
+            pushLog('Farm+aríete · ' + v.name + ' → ' + t.coord + ' [bb ' + axeN + (rams ? ', ar ' + rams : '') + (spies ? ', ex ' + spies : '') + ' · muro ' + (t.wall != null ? t.wall : '?') + ']', 'ok');
           } else {
             await sendFarmC(v.vid, t.reportId);
             sent[t.reportId] = now; count++; vSent++;

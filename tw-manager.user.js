@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.17.1
+// @version      9.18.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -40,7 +40,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.17.1';
+  const VERSION = '9.18.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -71,7 +71,9 @@
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
   const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, thresholdPct: 50, maxDist: 15, inflight: {} });
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, atkTpl: ATK_TPL, defTpl: DEF_TPL, demand: {} });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild() });
+  const BB_TPL = 'main 20\nstorage 20\nfarm 22\nstable 15\nbarracks 15\nsmith 10\ngarage 5\nfarm 24\nstorage 25\nbarracks 20\nstable 20\ngarage 10\nwood 30\nstone 30\niron 30\nstorage 30\nfarm 27\nmarket 15';
+  const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, gradMain: 20, gradStable: 15 });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB() });
   function load() {
     let c = def();
     try {
@@ -139,14 +141,23 @@
     if (c.build.maxQueue == null) c.build.maxQueue = 5;
     if (c.build.interval == null) c.build.interval = 600;
     if (!c.build.demand) c.build.demand = {};
+    if (!c.bb) c.bb = defBB();
+    if (!c.bb.tpl) c.bb.tpl = BB_TPL;
+    if (c.bb.defCoords == null) c.bb.defCoords = '';
+    if (c.bb.feedReserve == null) c.bb.feedReserve = 40;
+    if (c.bb.feedMaxDist == null) c.bb.feedMaxDist = 15;
+    if (c.bb.maxQueue == null) c.bb.maxQueue = 5;
+    if (c.bb.interval == null) c.bb.interval = 600;
+    if (c.bb.gradMain == null) c.bb.gradMain = 20;
+    if (c.bb.gradStable == null) c.bb.gradStable = 15;
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, uiTimer = null;
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running); }
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, uiTimer = null;
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running); }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
@@ -792,7 +803,7 @@
   async function fillGroupSelects() {
     let groups = [];
     try { groups = await getGroups(); } catch (e) { pushLog('Recrutar: erro ao listar grupos: ' + (e.message || e), 'err'); return; }
-    [['twmgr-r-gatk', config.recruit.groupAtk], ['twmgr-r-gdef', config.recruit.groupDef]].forEach(([id, cur]) => {
+    [['twmgr-r-gatk', config.recruit.groupAtk], ['twmgr-r-gdef', config.recruit.groupDef], ['twmgr-bb-group', config.bb.group]].forEach(([id, cur]) => {
       const sel = document.getElementById(id); if (!sel) return;
       sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((g) => '<option value="' + g.id + '"' + (String(cur) === String(g.id) ? ' selected' : '') + '>' + esc(g.name) + '</option>').join('');
     });
@@ -1302,6 +1313,119 @@
   }
   function buildStop() { readBuildCfg(); config.build.running = false; save(); clearTimeout(buildTimer); setBuildStatus(false); pushLog('Edifícios parado.'); }
 
+  // ==================== MÓDULO BB (aldeias bárbaras conquistadas) ====================
+  // Constrói a ladder BB, abastece JIT das aldeias grandes próximas, e ao graduar (EP+estábulo) recruta CL sozinho.
+  async function feedBB(v, needCost, sources, srcState) {
+    let ms; try { ms = await getMarketState(v.vid); } catch (e) { return false; }
+    if (!ms.storage) return false;
+    const free = { wood: Math.max(0, ms.storage - ms.wood), stone: Math.max(0, ms.storage - ms.stone), iron: Math.max(0, ms.storage - ms.iron) };
+    const target = {
+      wood: Math.max(0, Math.min((needCost.wood || 0) - ms.wood, free.wood)),
+      stone: Math.max(0, Math.min((needCost.stone || 0) - ms.stone, free.stone)),
+      iron: Math.max(0, Math.min((needCost.iron || 0) - ms.iron, free.iron)),
+    };
+    if (target.wood + target.stone + target.iron <= 0) return false;
+    const cm = (v.coord || '').match(/(\d+)\|(\d+)/); if (!cm) return false;
+    const vx = +cm[1], vy = +cm[2];
+    const near = sources.map((s) => { const c = s.coord.match(/(\d+)\|(\d+)/); return c ? { s, d: Math.sqrt(Math.pow(+c[1] - vx, 2) + Math.pow(+c[2] - vy, 2)) } : null; })
+      .filter((o) => o && o.d <= (config.bb.feedMaxDist || 15)).sort((a, b) => a.d - b.d);
+    let sent = false;
+    for (const o of near) {
+      if (target.wood + target.stone + target.iron <= 0) break;
+      const s = o.s;
+      let ss = srcState[s.vid];
+      if (!ss) { try { ss = srcState[s.vid] = await getMarketState(s.vid); } catch (e) { srcState[s.vid] = { capacity: 0 }; continue; } }
+      if (!ss.capacity || !ss.storage) continue;
+      const reserve = (config.bb.feedReserve || 40) / 100 * ss.storage;
+      const avail = { wood: Math.max(0, ss.wood - reserve), stone: Math.max(0, ss.stone - reserve), iron: Math.max(0, ss.iron - reserve) };
+      let amt = { wood: Math.min(target.wood, avail.wood), stone: Math.min(target.stone, avail.stone), iron: Math.min(target.iron, avail.iron) };
+      let tot = amt.wood + amt.stone + amt.iron;
+      if (tot <= 0) continue;
+      if (tot > ss.capacity) { const f = ss.capacity / tot; amt = { wood: Math.floor(amt.wood * f), stone: Math.floor(amt.stone * f), iron: Math.floor(amt.iron * f) }; }
+      if (amt.wood + amt.stone + amt.iron <= 0) continue;
+      try {
+        await sendMarketResources(s.vid, v.coord, amt);
+        sent = true;
+        pushLog('BB abastece · ' + s.coord + ' → ' + v.coord + ' [' + amt.wood + '/' + amt.stone + '/' + amt.iron + ']', 'ok');
+        ss.wood -= amt.wood; ss.stone -= amt.stone; ss.iron -= amt.iron; ss.capacity -= (amt.wood + amt.stone + amt.iron);
+        target.wood -= amt.wood; target.stone -= amt.stone; target.iron -= amt.iron;
+      } catch (e) { /* alvo/erro -> tenta próxima fonte */ }
+      await sleep(250);
+    }
+    return sent;
+  }
+  async function bbTick() {
+    clearTimeout(bbTimer);
+    if (!config.bb.running) return;
+    if (lockOther()) { bbTimer = setTimeout(bbTick, 5000); return; }
+    claimLock();
+    const now = Date.now();
+    if ((config.bb.nextAt || 0) > now) { scheduleBB(); return; }
+    if (!config.bb.group) { pushLog('BB: selecione o grupo BB na aba.'); config.bb.nextAt = now + 300000; save(); scheduleBB(); return; }
+    let vils;
+    try { vils = await getVillagesInGroup(config.bb.group); }
+    catch (e) { pushLog('BB: erro ao ler grupo: ' + (e.message || e), 'err'); config.bb.nextAt = now + 120000; save(); scheduleBB(); return; }
+    try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {}
+    if (!vils.length) { pushLog('BB: grupo vazio (adicione as aldeias conquistadas ao grupo BB).'); config.bb.nextAt = now + 300000; save(); scheduleBB(); return; }
+    const tpl = parseTpl(config.bb.tpl);
+    const defSet = {}; ((config.bb.defCoords || '').match(/\d{1,3}\|\d{1,3}/g) || []).forEach((c) => defSet[c] = 1);
+    const bbSet = {}; vils.forEach((v) => bbSet[v.vid] = 1);
+    let allV = []; try { allV = await getAllVillages(); } catch (e) {}
+    const sources = allV.filter((v) => !bbSet[v.vid] && v.coord);
+    const srcState = {};
+    let built = 0, recruited = 0, fed = 0;
+    for (const v of vils) {
+      let st;
+      try { st = await getBuildState(v.vid); }
+      catch (e) { pushLog('BB ' + (v.coord || v.vid) + ': erro estado', 'err'); continue; }
+      const r = computeBuild(st, tpl);
+      if (r.build && st.queueLen < (config.bb.maxQueue || 5)) {
+        try { await enqueueBuild(v.vid, r.build.b); built++; pushLog('BB obra · ' + (v.coord || v.vid) + ' → ' + r.build.b + ' [' + r.build.cost.wood + '/' + r.build.cost.stone + '/' + r.build.cost.iron + ']', 'ok'); }
+        catch (e) { pushLog('BB obra ' + (v.coord || v.vid) + ': ' + (e.message || e), 'err'); }
+      }
+      const grad = (st.level.main || 0) >= (config.bb.gradMain || 20) && (st.level.stable || 0) >= (config.bb.gradStable || 15);
+      if (grad) {
+        const tag = defSet[v.coord] ? 'def' : 'atk';
+        try {
+          const rs = await getRecruitState(v.vid);
+          const rc = computeRecruit(rs, config.recruit.profiles[tag].targets, config.recruit, rs.queuedSec);
+          if (Object.keys(rc.amounts).length) {
+            await sendRecruit(v.vid, rc.amounts); recruited++;
+            pushLog('BB recruta · ' + (v.coord || v.vid) + ' [' + tag + '] ' + Object.entries(rc.amounts).map((e) => e[0] + ':' + e[1]).join(' '), 'ok');
+          } else if (rs.units.light && !rs.units.light.reqMet) {
+            pushLog('BB ' + (v.coord || v.vid) + ': cav.leve não pesquisada — pesquise no ferreiro.', 'err');
+          }
+        } catch (e) { pushLog('BB recruta ' + (v.coord || v.vid) + ': ' + (e.message || e), 'err'); }
+      }
+      if (r.demand) { try { if (await feedBB(v, r.demand.cost, sources, srcState)) fed++; } catch (e) {} }
+      await sleep(300);
+    }
+    config.bb.nextAt = now + Math.max(60, config.bb.interval || 600) * 1000; save();
+    pushLog('BB: ciclo ok · obra ' + built + ' · recruta ' + recruited + ' · abastec ' + fed + '. Próximo em ' + Math.round((config.bb.interval || 600) / 60) + ' min.', 'ok');
+    scheduleBB();
+  }
+  function scheduleBB() { clearTimeout(bbTimer); if (!config.bb.running) return; bbTimer = setTimeout(bbTick, Math.min(Math.max((config.bb.nextAt || 0) - Date.now(), 1000), 60000)); }
+  function readBBCfg() {
+    const c = config.bb, g = (id) => document.getElementById(id);
+    if (g('twmgr-bb-group')) c.group = g('twmgr-bb-group').value || null;
+    if (g('twmgr-bb-tpl')) c.tpl = g('twmgr-bb-tpl').value;
+    if (g('twmgr-bb-def')) c.defCoords = g('twmgr-bb-def').value;
+    if (g('twmgr-bb-reserve')) c.feedReserve = Math.max(0, Math.min(90, parseInt(g('twmgr-bb-reserve').value, 10) || 40));
+    if (g('twmgr-bb-dist')) c.feedMaxDist = Math.max(1, parseInt(g('twmgr-bb-dist').value, 10) || 15);
+    if (g('twmgr-bb-max')) c.maxQueue = Math.max(1, parseInt(g('twmgr-bb-max').value, 10) || 5);
+    if (g('twmgr-bb-int')) c.interval = Math.max(1, parseInt(g('twmgr-bb-int').value, 10) || 10) * 60;
+    save();
+  }
+  function setBBStatus(on) { setBtnState('twmgr-bb-start', 'twmgr-bb-stop', on, '● BB ativo', '▶ Iniciar BB'); }
+  function bbStart() {
+    readBBCfg();
+    if (!config.bb.group) { pushLog('BB: selecione o grupo BB primeiro.', 'err'); return; }
+    if (!config.recruit.profiles.atk.targets || !Object.keys(config.recruit.profiles.atk.targets).length) pushLog('BB: dica — configure os alvos ATK/DEF na aba Recrutar (o BB usa eles ao graduar).');
+    config.bb.running = true; config.bb.nextAt = 0; save();
+    setBBStatus(true); pushLog('Módulo BB iniciado · grupo ' + config.bb.group, 'ok'); bbTick();
+  }
+  function bbStop() { readBBCfg(); config.bb.running = false; save(); clearTimeout(bbTimer); setBBStatus(false); pushLog('Módulo BB parado.'); }
+
   function tickUI() {
     if (anyRunning() && !lockOther()) claimLock();
     const now = Date.now();
@@ -1343,7 +1467,13 @@
       else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#ff7568'; }
       else { bl.style.color = '#8fe39a'; bl.textContent = (config.build.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.build.nextAt - now) : '● construindo…'; }
     }
+    const bb = document.getElementById('twmgr-bb-status'); if (bb) {
+      if (!config.bb.running) { bb.textContent = ''; }
+      else if (lockOther()) { bb.textContent = '⏸ outra aba'; bb.style.color = '#ff7568'; }
+      else { bb.style.color = '#8fe39a'; bb.textContent = (config.bb.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.bb.nextAt - now) : '● desenvolvendo…'; }
+    }
     const ring = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('twmgr-run', !!on && !lockOther()); };
+    ring('twmgr-btab-bb', config.bb && config.bb.running);
     ring('twmgr-btab-alvos', config.running);
     ring('twmgr-btab-scav', config.scav.running);
     ring('twmgr-btab-farm', config.farm.running);
@@ -1509,7 +1639,7 @@
   }
 
   function showTab(name) {
-    ['alvos', 'scav', 'farm', 'recruit', 'fakes', 'market', 'build', 'config', 'log'].forEach((n) => {
+    ['alvos', 'scav', 'farm', 'recruit', 'fakes', 'market', 'build', 'bb', 'config', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -1521,7 +1651,7 @@
     const tabBtn = (n, ico, label) => '<div id="twmgr-btab-' + n + '" class="twmgr-tab" data-tab="' + n + '"><span class="twmgr-tab-ico">' + ico + '</span><span class="twmgr-tab-lbl">' + label + '</span></div>';
     p.innerHTML =
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('alvos', '⚔️', 'Alvos') + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('config', '⚙️', 'Config') + tabBtn('log', '📜', 'Log') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('alvos', '⚔️', 'Alvos') + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🐗', 'BB') + tabBtn('config', '⚙️', 'Config') + tabBtn('log', '📜', 'Log') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-alvos"><div class="twmgr-hint">Cada alvo é enviado da aldeia onde foi criado (veja "de:"). Aldeia atual: <b>' + CUR_NAME + '</b></div><div id="twmgr-targets"></div><button id="twmgr-add" class="twmgr-add">+ Adicionar alvo</button><div class="twmgr-actions"><button id="twmgr-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div><div id="twmgr-global" class="twmgr-cstatus"></div></div>' +
       '<div id="twmgr-tab-scav" style="display:none"><div class="twmgr-hint">Coleta em <b>todas as suas aldeias</b>: distribui as tropas marcadas entre as opções livres e reenvia no retorno.</div><div class="twmgr-units">' + SCAV_UNITS.map(([u, n]) => '<label><input id="twmgr-su-' + u + '" type="checkbox"> ' + unitIcon(u, n) + ' ' + n + '</label>').join('') + '</div><div class="twmgr-actions"><button id="twmgr-scav-start" class="twmgr-btn twmgr-go">▶ Coletar</button><button id="twmgr-scav-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div><div id="twmgr-scav-status" class="twmgr-cstatus"></div></div>' +
@@ -1574,6 +1704,21 @@
       '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo (min)</span><input id="twmgr-bld-int" class="twmgr-inp" type="number" min="1" value="10" style="width:56px"></div>' +
       '<div class="twmgr-actions"><button id="twmgr-bld-start" class="twmgr-btn twmgr-go">▶ Construir</button><button id="twmgr-bld-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
       '<div id="twmgr-bld-status" class="twmgr-cstatus"></div>' +
+      '</div>' +
+      '<div id="twmgr-tab-bb" style="display:none">' +
+      '<div class="twmgr-hint">🐗 Desenvolve aldeias de <b>bárbaro conquistadas</b>: constrói a ladder, <b>abastece</b> das aldeias grandes próximas (JIT, sem sobra) e ao <b>graduar</b> (EP≥20 + estábulo≥15) começa a recrutar CL sozinho.</div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Grupo BB</span><select id="twmgr-bb-group" class="twmgr-inp" style="width:150px"></select></div>' +
+      '<div style="text-align:right;margin-bottom:2px"><button id="twmgr-bb-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button></div>' +
+      '<div style="font-size:11px;color:#e8d29a;margin:2px 0">Ladder de obra (chave nível, em ordem)</div>' +
+      '<textarea id="twmgr-bb-tpl" class="twmgr-inp" style="width:100%;height:96px;font-family:monospace;font-size:10px"></textarea>' +
+      '<div style="font-size:11px;color:#e8d29a;margin:4px 0 2px">Aldeias DEF (coords, 1 por linha) — o resto vira ATK</div>' +
+      '<textarea id="twmgr-bb-def" class="twmgr-inp" style="width:100%;height:44px;font-family:monospace;font-size:10px" placeholder="ex: 470|592"></textarea>' +
+      '<div class="twmgr-row" style="margin-top:6px"><span class="twmgr-lbl">Reserva na fonte (%)</span><input id="twmgr-bb-reserve" class="twmgr-inp" type="number" min="0" max="90" value="40" style="width:56px"></div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Dist. máx. fonte (campos)</span><input id="twmgr-bb-dist" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Máx na fila</span><input id="twmgr-bb-max" class="twmgr-inp" type="number" min="1" value="5" style="width:56px"></div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo (min)</span><input id="twmgr-bb-int" class="twmgr-inp" type="number" min="1" value="10" style="width:56px"></div>' +
+      '<div class="twmgr-actions"><button id="twmgr-bb-start" class="twmgr-btn twmgr-go">▶ Iniciar BB</button><button id="twmgr-bb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+      '<div id="twmgr-bb-status" class="twmgr-cstatus"></div>' +
       '</div>' +
       '<div id="twmgr-tab-config" style="display:none"><label class="twmgr-check"><input id="twmgr-reload" type="checkbox"> Recarregar (F5) após enviar ataque</label><button id="twmgr-diag" class="twmgr-btn twmgr-ghost" style="width:100%;margin-bottom:9px">🔍 Diagnóstico (Auto-ATK)</button><div class="twmgr-hint">O reenvio do Auto-ATK usa o <b>retorno real</b> das tropas. O F5 só acontece no momento do reenvio.</div></div>' +
       '<div id="twmgr-tab-log" style="display:none"><div id="twmgr-log" class="twmgr-log"></div></div>' +
@@ -1679,6 +1824,18 @@
     document.getElementById('twmgr-bld-stop').addEventListener('click', buildStop);
     setBuildStatus(config.build.running);
 
+    document.getElementById('twmgr-bb-tpl').value = config.bb.tpl || BB_TPL;
+    document.getElementById('twmgr-bb-def').value = config.bb.defCoords || '';
+    document.getElementById('twmgr-bb-reserve').value = config.bb.feedReserve != null ? config.bb.feedReserve : 40;
+    document.getElementById('twmgr-bb-dist').value = config.bb.feedMaxDist != null ? config.bb.feedMaxDist : 15;
+    document.getElementById('twmgr-bb-max').value = config.bb.maxQueue || 5;
+    document.getElementById('twmgr-bb-int').value = Math.round((config.bb.interval || 600) / 60);
+    ['twmgr-bb-group', 'twmgr-bb-tpl', 'twmgr-bb-def', 'twmgr-bb-reserve', 'twmgr-bb-dist', 'twmgr-bb-max', 'twmgr-bb-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readBBCfg); });
+    document.getElementById('twmgr-bb-reload').addEventListener('click', fillGroupSelects);
+    document.getElementById('twmgr-bb-start').addEventListener('click', bbStart);
+    document.getElementById('twmgr-bb-stop').addEventListener('click', bbStop);
+    setBBStatus(config.bb.running);
+
     document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.getAttribute('data-tab'))));
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
     document.getElementById('twmgr-min').addEventListener('click', (e) => { e.stopPropagation(); config.uiMin = !config.uiMin; save(); applyCollapsed(); });
@@ -1703,6 +1860,7 @@
     if (config.fakes.running) { config.fakes.gen.forEach((f) => { if (f.state === 'scheduled') f.state = 'armed'; }); if (!lockOther()) pushLog('Fakes rearmados.', 'ok'); fakeTick(); }
     if (config.market.running) { if (!lockOther()) pushLog('Cunhagem retomada.', 'ok'); scheduleMarket(); }
     if (config.build.running) { if (!lockOther()) pushLog('Edifícios retomado.', 'ok'); scheduleBuild(); }
+    if (config.bb && config.bb.running) { if (!lockOther()) pushLog('Módulo BB retomado.', 'ok'); scheduleBB(); }
   }
 
   function makeDraggable(panel, handle) {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.25.4
+// @version      9.25.5
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.25.4';
+  const VERSION = '9.25.5';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -279,7 +279,7 @@
   function renderCards(mod, arr) {
     const box = document.getElementById('twmgr-cards-' + mod); if (!box) return;
     box.innerHTML = arr.map((c) =>
-      '<div class="twmgr-card-mini' + (c.wide ? ' twmgr-card-wide' : '') + '"><div class="twmgr-card-v">' + (c.v == null ? '—' : c.v) + '</div><div class="twmgr-card-l">' + c.l + '</div></div>'
+      '<div class="twmgr-card-mini' + (c.wide ? ' twmgr-card-wide' : '') + '"><div class="twmgr-card-v"' + (c.hl ? ' style="color:#5fd3e8"' : '') + '>' + (c.v == null ? '—' : c.v) + '</div><div class="twmgr-card-l">' + c.l + '</div></div>'
     ).join('');
   }
   // Monta e desenha os cards de um módulo a partir de config[...].stats (populado nos ticks).
@@ -289,29 +289,29 @@
     if (mod === 'farm') {
       const s = (config.farm.stats || {}), lt = s.loot || {};
       arr = [
-        { v: fmtN(s.active), l: 'aldeias saqueando' },
-        { v: fmtN(s.activeTotal), l: 'saques ativos agora' },
-        { v: fmtN(s.a), l: 'no A' }, { v: fmtN(s.b), l: 'no B' }, { v: fmtN(s.c), l: 'no C' },
+        { v: fmtN(s.active), l: 'aldeias' },
+        { v: fmtN(s.activeTotal), l: 'saques ativos', hl: true },
+        { v: fmtN(s.a), l: 'A' }, { v: fmtN(s.b), l: 'B' }, { v: fmtN(s.c), l: 'C' },
         { v: fmtN(lt.today), l: 'saqueado hoje' },
         { v: fmtN(lt.estimate), l: 'estimativa fim do dia', wide: true },
       ];
     } else if (mod === 'wall') {
       const s = (config.wall.stats || {});
       arr = [
-        { v: fmtN(s.pending), l: 'muros p/ derrubar' },
-        { v: fmtN(s.total), l: 'quebras enviadas (total)' },
-        { v: fmtN(s.last), l: 'quebras último ciclo', wide: true },
+        { v: fmtN(s.pending), l: 'muros p/ derrubar', hl: true },
+        { v: fmtN(s.total), l: 'quebras (total)' },
+        { v: fmtN(s.last), l: 'último ciclo' },
       ];
     } else if (mod === 'scav') {
       const s = (config.scav.stats || {}), ct = s.coleta || {};
       arr = [
-        { v: fmtN(s.active), l: 'aldeias coletando' },
-        { v: fmtN(ct.today), l: 'coletado hoje' },
+        { v: fmtN(s.active), l: 'aldeias' },
+        { v: fmtN(ct.today), l: 'coletado hoje', hl: true },
         { v: fmtN(ct.estimate), l: 'estimativa fim do dia', wide: true },
       ];
     } else if (mod === 'recruit') {
       const s = (config.recruit.stats || {});
-      arr = [{ v: fmtN(s.villages), l: 'aldeias recrutando', wide: true }];
+      arr = [{ v: fmtN(s.villages), l: 'aldeias recrutando', wide: true, hl: true }];
     } else if (mod === 'fakes') {
       const g = config.fakes.gen || [];
       const armed = g.filter((f) => f.state === 'armed' || f.state === 'scheduled').length;
@@ -319,33 +319,33 @@
       const sent = g.filter((f) => f.state === 'sent').length;
       const err = g.filter((f) => f.state === 'error').length;
       arr = [
-        { v: fmtN(armed), l: 'armados' }, { v: fmtN(pend), l: 'pendentes' },
+        { v: fmtN(armed), l: 'armados', hl: true }, { v: fmtN(pend), l: 'pendentes' },
         { v: fmtN(sent), l: 'enviados' }, { v: fmtN(err), l: 'erros' },
       ];
     } else if (mod === 'market') {
       const s = (config.market.stats || {});
       arr = [
-        { v: fmtN(s.sending), l: 'aldeias enviando' },
-        { v: fmtN(s.receiving), l: 'aldeias recebendo' },
-        { v: fmtN(s.wood), l: 'madeira enviada' }, { v: fmtN(s.stone), l: 'argila enviada' }, { v: fmtN(s.iron), l: 'ferro enviado' },
+        { v: fmtN(s.sending), l: 'enviando', hl: true },
+        { v: fmtN(s.receiving), l: 'recebendo' },
+        { v: fmtN(s.wood), l: 'madeira' }, { v: fmtN(s.stone), l: 'argila' }, { v: fmtN(s.iron), l: 'ferro' },
       ];
     } else if (mod === 'build') {
       const s = (config.build.stats || {});
-      arr = [{ v: fmtN(s.villages), l: 'aldeias construindo', wide: true }];
+      arr = [{ v: fmtN(s.villages), l: 'aldeias construindo', wide: true, hl: true }];
     } else if (mod === 'bb') {
       const s = (config.bb.stats || {});
       arr = [
-        { v: fmtN(s.total), l: 'aldeias no grupo' },
-        { v: fmtN(s.f1), l: 'fase 1 (economia)' },
-        { v: fmtN(s.f2), l: 'fase 2 (militar)' },
-        { v: fmtN(s.f3), l: 'fase 3 (recrutando)' },
+        { v: fmtN(s.total), l: 'no grupo', hl: true },
+        { v: fmtN(s.f1), l: 'fase 1' },
+        { v: fmtN(s.f2), l: 'fase 2' },
+        { v: fmtN(s.f3), l: 'fase 3' },
       ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});
       arr = [
-        { v: fmtN(s.mapped), l: 'bárbaros no alcance' },
-        { v: fmtN(s.sent), l: 'exploradores enviados' },
-        { v: fmtN(s.left), l: 'ficaram de fora', wide: true },
+        { v: fmtN(s.mapped), l: 'no alcance', hl: true },
+        { v: fmtN(s.sent), l: 'explorados' },
+        { v: fmtN(s.left), l: 'de fora' },
       ];
     }
     renderCards(mod, arr);
@@ -2392,11 +2392,11 @@
       ".twmgr-fmrow{border-bottom:1px solid rgba(255,255,255,.04)}",
       ".twmgr-fmrow:hover{background:rgba(212,175,55,.06)}",
       ".twmgr-fmck{width:16px;height:16px;cursor:pointer}",
-      ".twmgr-cards{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:10px}",
-      ".twmgr-card-mini{background:#191108;border:1px solid #3a2e1b;border-radius:8px;padding:6px 9px;min-width:0}",
-      ".twmgr-card-wide{grid-column:1 / -1}",
-      ".twmgr-card-v{font-size:17px;font-weight:700;color:#ffe08a;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
-      ".twmgr-card-l{font-size:9px;color:#a2926c;margin-top:1px;text-transform:uppercase;letter-spacing:.3px}",
+      ".twmgr-cards{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}",
+      ".twmgr-card-mini{flex:1 1 0;min-width:58px;background:linear-gradient(165deg,#241a0e,#181008);border:1px solid #45351d;border-radius:9px;padding:7px 6px 6px;text-align:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}",
+      ".twmgr-card-wide{flex-basis:100%}",
+      ".twmgr-card-v{font-size:19px;font-weight:800;color:#ffd76a;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      ".twmgr-card-l{font-size:8px;color:#9a8a63;margin-top:4px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
       ".twmgr-section{border:1px solid #3a2e1b;border-radius:9px;padding:8px 9px;margin-bottom:9px;background:rgba(0,0,0,.14)}",
       ".twmgr-sec-h{font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#c9a24a;margin:-2px 0 6px}",
       ".twmgr-modlog{margin-top:10px;border-top:1px solid #3a2e1b;padding-top:6px}",

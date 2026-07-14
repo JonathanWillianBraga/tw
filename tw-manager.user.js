@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.20.0
+// @version      9.21.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.20.0';
+  const VERSION = '9.21.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -94,6 +94,7 @@
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
   const BB_TPL = 'main 20\nstorage 20\nfarm 22\nstable 15\nbarracks 15\nsmith 10\ngarage 5\nfarm 24\nstorage 25\nbarracks 20\nstable 20\ngarage 10\nwood 30\nstone 30\niron 30\nstorage 30\nfarm 27\nmarket 15';
   const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, gradMain: 20, gradStable: 15 });
+  const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0 });
   const defMap = () => ({
     running: false, nextAt: 0, interval: 1800,
     maxDist: 20, minDaysSinceAttack: 2,
@@ -105,7 +106,7 @@
     sentAt: {},                           // vid do bárbaro -> timestamp do último envio nosso
     lastPreview: [],                      // lista mostrada na tabela
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap() });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha() });
   function load() {
     let c = def();
     try {
@@ -201,6 +202,12 @@
     if (c.map.maxPerVillage == null) c.map.maxPerVillage = 20;
     if (c.map.delay == null) c.map.delay = 500;
     if (c.map.onlyBarbarians == null) c.map.onlyBarbarians = true;
+    if (!c.captcha) c.captcha = defCaptcha();
+    if (c.captcha.enabled == null) c.captcha.enabled = true;
+    if (c.captcha.browserNotif == null) c.captcha.browserNotif = true;
+    if (c.captcha.ntfyTopic == null) c.captcha.ntfyTopic = '';
+    if (c.captcha.cooldownSec == null) c.captcha.cooldownSec = 300;
+    if (c.captcha.lastNotifiedAt == null) c.captcha.lastNotifiedAt = 0;
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -1901,6 +1908,97 @@
     } catch (e) { pushLog('BM: sync do B falhou: ' + (e.message || e), 'err'); }
   }
 
+  // ==================== DETECTOR DE CAPTCHA ====================
+  // Detecta popups de bot-check do TW e captchas hCaptcha/reCAPTCHA, dispara notificação
+  // do navegador + POST em ntfy.sh/{topico}. Cooldown pra não spammar.
+  const CAPTCHA_SELECTORS = [
+    '#popup_box_bot_protection',
+    '#bot_check',
+    '#botprotection_quest',
+    '#hcaptcha_container',
+    '.h-captcha',
+    'iframe[src*="hcaptcha.com"]',
+    'iframe[src*="recaptcha"]',
+    '.captcha_image',
+  ];
+  function isCaptchaVisible() {
+    for (const s of CAPTCHA_SELECTORS) {
+      const el = document.querySelector(s);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      if (r.width > 0 && r.height > 0 && style.display !== 'none' && style.visibility !== 'hidden') return s;
+    }
+    return null;
+  }
+  async function ensureNotifyPermission() {
+    if (!('Notification' in window)) return false;
+    if (Notification.permission === 'granted') return true;
+    if (Notification.permission === 'denied') return false;
+    try { const p = await Notification.requestPermission(); return p === 'granted'; } catch (e) { return false; }
+  }
+  async function fireCaptchaNotification(reasonSel, manual) {
+    const cfg = config.captcha;
+    const now = Date.now();
+    const cd = (cfg.cooldownSec || 300) * 1000;
+    if (!manual && (now - (cfg.lastNotifiedAt || 0)) < cd) return;
+    cfg.lastNotifiedAt = now; save();
+    const world = window.game_data && window.game_data.world || WORLD;
+    const msg = (manual ? '[TESTE] ' : '') + 'CAPTCHA detectado no TW · mundo ' + world + ' · aldeia ' + (CUR_NAME || CUR_VID) + (reasonSel ? (' [' + reasonSel + ']') : '');
+    pushLog('⚠ ' + msg, 'err');
+    // 1) Notificação do navegador
+    if (cfg.browserNotif) {
+      try {
+        const ok = await ensureNotifyPermission();
+        if (ok) {
+          const n = new Notification('TW Manager · CAPTCHA', { body: msg, tag: 'twmgr-captcha', requireInteraction: true, icon: (IMG_BASE || '') + 'graphic/dots/red.png' });
+          n.onclick = () => { try { window.focus(); n.close(); } catch (e) {} };
+        } else if (Notification.permission === 'denied') {
+          pushLog('Notif. do navegador está bloqueada — libere no cadeado do endereço.', 'err');
+        }
+      } catch (e) { pushLog('Notif. navegador falhou: ' + (e.message || e), 'err'); }
+    }
+    // 2) ntfy.sh
+    if (cfg.ntfyTopic) {
+      try {
+        await fetch('https://ntfy.sh/' + encodeURIComponent(cfg.ntfyTopic.trim()), {
+          method: 'POST',
+          headers: {
+            'Title': 'TW Manager · CAPTCHA',
+            'Priority': 'urgent',
+            'Tags': 'warning,robot,tribalwars',
+            'Click': location.href,
+          },
+          body: msg,
+        });
+        pushLog('  ntfy.sh enviado → tópico "' + cfg.ntfyTopic.trim() + '"', 'ok');
+      } catch (e) { pushLog('ntfy.sh falhou: ' + (e.message || e), 'err'); }
+    }
+  }
+  let _captchaCheckLast = 0;
+  function checkCaptchaOnce() {
+    if (!config.captcha || !config.captcha.enabled) return;
+    const now = Date.now();
+    if (now - _captchaCheckLast < 1000) return;   // debounce
+    _captchaCheckLast = now;
+    const hit = isCaptchaVisible();
+    if (hit) fireCaptchaNotification(hit, false);
+  }
+  function startCaptchaWatcher() {
+    // Poll leve
+    setInterval(checkCaptchaOnce, 5000);
+    // Reação imediata a mudanças no DOM
+    try {
+      if (window.MutationObserver && document.body) {
+        const obs = new MutationObserver(() => checkCaptchaOnce());
+        obs.observe(document.body, { childList: true, subtree: true });
+      }
+    } catch (e) {}
+    // Check inicial 1s após load (deixa TW montar overlays)
+    setTimeout(checkCaptchaOnce, 1200);
+  }
+  function testCaptchaNotif() { fireCaptchaNotification('teste-manual', true); }
+
   function tickUI() {
     if (anyRunning() && !lockOther()) claimLock();
     const now = Date.now();
@@ -2246,7 +2344,15 @@
       '<div style="margin-top:8px;font-size:11px;color:#e8d29a">Alvos detectados: <b id="twmgr-bm-count">0</b></div>' +
       '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:8px;margin-top:4px"></div>' +
       '</div>' +
-      '<div id="twmgr-tab-config" style="display:none"><label class="twmgr-check"><input id="twmgr-reload" type="checkbox"> Recarregar (F5) após enviar ataque</label><button id="twmgr-diag" class="twmgr-btn twmgr-ghost" style="width:100%;margin-bottom:9px">🔍 Diagnóstico (Auto-ATK)</button><div class="twmgr-hint">O reenvio do Auto-ATK usa o <b>retorno real</b> das tropas. O F5 só acontece no momento do reenvio.</div></div>' +
+      '<div id="twmgr-tab-config" style="display:none"><label class="twmgr-check"><input id="twmgr-reload" type="checkbox"> Recarregar (F5) após enviar ataque</label><button id="twmgr-diag" class="twmgr-btn twmgr-ghost" style="width:100%;margin-bottom:9px">🔍 Diagnóstico (Auto-ATK)</button><div class="twmgr-hint">O reenvio do Auto-ATK usa o <b>retorno real</b> das tropas. O F5 só acontece no momento do reenvio.</div>' +
+      '<div style="border-top:1px solid #4a3b28;margin:10px 0 6px;padding-top:8px;font-size:12px;color:#e8d29a">🚨 Notificação de CAPTCHA</div>' +
+      '<div class="twmgr-hint">Detecta bot-check do TW / hCaptcha / reCAPTCHA e te avisa. Cooldown de 5 min pra não spammar enquanto você resolve.</div>' +
+      '<label class="twmgr-check" style="margin-bottom:6px"><input id="twmgr-cap-en" type="checkbox"> Ativar detector</label>' +
+      '<label class="twmgr-check" style="margin-bottom:6px"><input id="twmgr-cap-brw" type="checkbox"> Notificação do navegador (Chrome/Firefox)</label>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Tópico ntfy.sh</span><input id="twmgr-cap-ntfy" class="twmgr-inp" type="text" placeholder="ex: patrick-tw-alerts" style="width:150px"></div>' +
+      '<div style="font-size:9px;color:#8f7d57;margin:-3px 0 6px">Escolha um nome difícil de adivinhar (é público). Instale o app ntfy.sh no celular e inscreva-se nesse tópico.</div>' +
+      '<div style="display:flex;gap:6px"><button id="twmgr-cap-test" class="twmgr-btn twmgr-ghost" style="flex:1;font-size:10px">🔔 testar notificação</button></div>' +
+      '</div>' +
       '<div id="twmgr-tab-log" style="display:none"><div id="twmgr-log" class="twmgr-log"></div></div>' +
       '</div>';
     document.body.appendChild(p);
@@ -2258,6 +2364,20 @@
     document.getElementById('twmgr-stop').addEventListener('click', stop);
     document.getElementById('twmgr-diag').addEventListener('click', runDiagnostics);
     document.getElementById('twmgr-reload').addEventListener('change', () => { config.reloadAfterSend = document.getElementById('twmgr-reload').checked; save(); });
+
+    // Notificação de CAPTCHA
+    document.getElementById('twmgr-cap-en').checked = !!config.captcha.enabled;
+    document.getElementById('twmgr-cap-brw').checked = !!config.captcha.browserNotif;
+    document.getElementById('twmgr-cap-ntfy').value = config.captcha.ntfyTopic || '';
+    const readCapCfg = () => {
+      config.captcha.enabled = document.getElementById('twmgr-cap-en').checked;
+      config.captcha.browserNotif = document.getElementById('twmgr-cap-brw').checked;
+      config.captcha.ntfyTopic = document.getElementById('twmgr-cap-ntfy').value.trim();
+      save();
+    };
+    ['twmgr-cap-en', 'twmgr-cap-brw', 'twmgr-cap-ntfy'].forEach((id) => document.getElementById(id).addEventListener('change', readCapCfg));
+    document.getElementById('twmgr-cap-brw').addEventListener('change', async () => { if (document.getElementById('twmgr-cap-brw').checked) await ensureNotifyPermission(); });
+    document.getElementById('twmgr-cap-test').addEventListener('click', testCaptchaNotif);
 
     SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) el.checked = !!(config.scav.units && config.scav.units[u]); });
     document.getElementById('twmgr-scav-start').addEventListener('click', scavStart);
@@ -2412,6 +2532,7 @@
     if (config.build.running) { if (!lockOther()) pushLog('Edifícios retomado.', 'ok'); scheduleBuild(); }
     if (config.bb && config.bb.running) { if (!lockOther()) pushLog('Módulo BB retomado.', 'ok'); scheduleBB(); }
     if (config.map && config.map.running) { if (!lockOther()) pushLog('Bárbaros Mapa retomado.', 'ok'); scheduleMap(); }
+    startCaptchaWatcher();
   }
 
   function makeDraggable(panel, handle) {

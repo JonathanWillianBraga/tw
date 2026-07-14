@@ -37,6 +37,27 @@
   const BUILDING_OF = { spear: 'barracks', sword: 'barracks', axe: 'barracks',
                         spy: 'stable', light: 'stable', heavy: 'stable', ram: 'garage', catapult: 'garage' };
   const BUILD_KEYS = ['main', 'barracks', 'stable', 'garage', 'watchtower', 'snob', 'smith', 'place', 'statue', 'market', 'wood', 'stone', 'iron', 'farm', 'storage', 'hide', 'wall'];
+  const BUILD_META = {
+    main:       { name: 'Ed. principal', ico: '🏛️', max: 30 },
+    barracks:   { name: 'Quartel',       ico: '⚔️', max: 25 },
+    stable:     { name: 'Estábulo',      ico: '🐴', max: 20 },
+    garage:     { name: 'Oficina',       ico: '⚙️', max: 15 },
+    watchtower: { name: 'Torre de vigia',ico: '🔭', max: 20 },
+    snob:       { name: 'Academia',      ico: '👑', max: 3  },
+    smith:      { name: 'Ferreiro',      ico: '⚒️', max: 20 },
+    place:      { name: 'Praça reunião', ico: '🚩', max: 1  },
+    statue:     { name: 'Estátua',       ico: '🗿', max: 1  },
+    market:     { name: 'Mercado',       ico: '🏪', max: 25 },
+    wood:       { name: 'Bosque',        ico: '🌲', max: 30 },
+    stone:      { name: 'Poço argila',   ico: '🪨', max: 30 },
+    iron:       { name: 'Mina ferro',    ico: '⛏️', max: 30 },
+    farm:       { name: 'Fazenda',       ico: '🌾', max: 30 },
+    storage:    { name: 'Armazém',       ico: '📦', max: 30 },
+    hide:       { name: 'Esconderijo',   ico: '🕳️', max: 10 },
+    wall:       { name: 'Muralha',       ico: '🧱', max: 20 },
+  };
+  const tplToPlan = (text) => (text || '').split('\n').map((l) => l.trim().match(/^([a-z_]+)\s+(\d+)$/i)).filter(Boolean).filter((m) => BUILD_META[m[1].toLowerCase()]).map((m) => ({ b: m[1].toLowerCase(), lvl: Math.max(1, Math.min(BUILD_META[m[1].toLowerCase()].max, +m[2])), en: true }));
+  const planToTpl = (plan) => (plan || []).map((it) => it.b + ' ' + it.lvl).join('\n');
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
@@ -71,9 +92,10 @@
   });
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
   const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, thresholdPct: 50, maxDist: 15, inflight: {} });
-  const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, atkTpl: ATK_TPL, defTpl: DEF_TPL, demand: {} });
+  const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
   const BB_TPL = 'main 20\nstorage 20\nfarm 22\nstable 15\nbarracks 15\nsmith 10\ngarage 5\nfarm 24\nstorage 25\nbarracks 20\nstable 20\ngarage 10\nwood 30\nstone 30\niron 30\nstorage 30\nfarm 27\nmarket 15';
   const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, gradMain: 20, gradStable: 15 });
+  const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0 });
   const defMap = () => ({
     running: false, nextAt: 0,
     maxDist: 20, minDaysSinceScout: 2,
@@ -85,7 +107,7 @@
     sentAt: {},                           // vid do bárbaro -> timestamp do último scout nosso
     lastPreview: [],                      // lista mostrada na tabela
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap() });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha() });
   function load() {
     let c = def();
     try {
@@ -157,11 +179,18 @@
     if (!c.market.inflight) c.market.inflight = {};
     if (!c.recruit.demand) c.recruit.demand = {};
     if (!c.build) c.build = defBuild();
-    if (!c.build.atkTpl) c.build.atkTpl = ATK_TPL;
-    if (!c.build.defTpl) c.build.defTpl = DEF_TPL;
     if (c.build.maxQueue == null) c.build.maxQueue = 5;
     if (c.build.interval == null) c.build.interval = 600;
     if (!c.build.demand) c.build.demand = {};
+    // Migração de textareas (atkTpl/defTpl) pra estrutura plans
+    if (!c.build.plans) c.build.plans = { atk: null, def: null };
+    if (!Array.isArray(c.build.plans.atk) || !c.build.plans.atk.length) c.build.plans.atk = tplToPlan(c.build.atkTpl || ATK_TPL);
+    if (!Array.isArray(c.build.plans.def) || !c.build.plans.def.length) c.build.plans.def = tplToPlan(c.build.defTpl || DEF_TPL);
+    // Sanitiza: mantém só chaves válidas, clampa nível, preserva 'en'
+    ['atk', 'def'].forEach((k) => {
+      c.build.plans[k] = (c.build.plans[k] || []).filter((it) => it && BUILD_META[it.b]).map((it) => ({ b: it.b, lvl: Math.max(1, Math.min(BUILD_META[it.b].max, parseInt(it.lvl, 10) || 1)), en: it.en !== false }));
+    });
+    delete c.build.atkTpl; delete c.build.defTpl;
     if (!c.bb) c.bb = defBB();
     if (!c.bb.tpl) c.bb.tpl = BB_TPL;
     if (c.bb.defCoords == null) c.bb.defCoords = '';
@@ -184,6 +213,12 @@
     if (c.map.maxPerVillage == null) c.map.maxPerVillage = 20;
     if (c.map.delay == null) c.map.delay = 500;
     if (c.map.onlyBarbarians == null) c.map.onlyBarbarians = true;
+    if (!c.captcha) c.captcha = defCaptcha();
+    if (c.captcha.enabled == null) c.captcha.enabled = true;
+    if (c.captcha.browserNotif == null) c.captcha.browserNotif = true;
+    if (c.captcha.ntfyTopic == null) c.captcha.ntfyTopic = '';
+    if (c.captcha.cooldownSec == null) c.captcha.cooldownSec = 300;
+    if (c.captcha.lastNotifiedAt == null) c.captcha.lastNotifiedAt = 0;
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -1335,9 +1370,10 @@
     const queueLen = doc.querySelectorAll('#buildqueue tr.sortable_row, #buildqueue tr.lit').length;
     return { level: level, cost: cost, buildable: buildable, hasBtn: hasBtn, queueLen: queueLen };
   }
-  function computeBuild(state, tpl) {
-    // ordem estrita: para no 1º item não atingido que dá pra upar; se não tem recurso, ESPERA (vira demanda)
-    for (const it of tpl) {
+  function computeBuild(state, plan) {
+    // ordem estrita: para no 1º item ativo/não atingido que dá pra upar; se não tem recurso, ESPERA (vira demanda)
+    for (const it of plan) {
+      if (it.en === false) continue;                                     // desabilitado pelo usuário
       if ((state.level[it.b] || 0) >= it.lvl) continue;
       if (!state.hasBtn[it.b]) continue;                                  // maxado / sem pré-requisito -> pula
       if (state.buildable[it.b]) return { build: { b: it.b, cost: state.cost[it.b] }, demand: null };
@@ -1362,25 +1398,28 @@
     catch (e) { pushLog('Edifícios: erro ao ler grupos: ' + (e.message || e), 'err'); config.build.nextAt = now + 120000; save(); scheduleBuild(); return; }
     const vids = Object.keys(pmap);
     if (!vids.length) { pushLog('Edifícios: mapeie os grupos ATK/DEF na aba Recrutar.'); config.build.nextAt = now + 300000; save(); scheduleBuild(); return; }
-    const atkTpl = parseTpl(config.build.atkTpl), defTpl = parseTpl(config.build.defTpl);
+    const atkPlan = (config.build.plans && config.build.plans.atk) || [];
+    const defPlan = (config.build.plans && config.build.plans.def) || [];
     config.build.demand = {};
     let built = 0;
     for (const vid of vids) {
       const prof = pmap[vid].profile;
-      const tpl = prof === 'atk' ? atkTpl : defTpl;
+      const plan = prof === 'atk' ? atkPlan : defPlan;
       let st;
       try { st = await getBuildState(vid); }
       catch (e) { pushLog('Edifícios ' + (pmap[vid].coord || vid) + ': erro estado: ' + (e.message || e), 'err'); continue; }
-      const r = computeBuild(st, tpl);
+      const r = computeBuild(st, plan);
       if (r.demand) config.build.demand[vid] = { b: r.demand.b, cost: r.demand.cost, coord: pmap[vid].coord };
       if (r.build && st.queueLen < (config.build.maxQueue || 5)) {
         try {
           await enqueueBuild(vid, r.build.b);
           built++;
-          pushLog('Obra · ' + (pmap[vid].coord || vid) + ' → ' + r.build.b + ' [' + r.build.cost.wood + '/' + r.build.cost.stone + '/' + r.build.cost.iron + '] · fila ' + (st.queueLen + 1), 'ok');
+          const bn = (BUILD_META[r.build.b] && BUILD_META[r.build.b].name) || r.build.b;
+          pushLog('Obra · ' + (pmap[vid].coord || vid) + ' → ' + bn + ' [' + r.build.cost.wood + '/' + r.build.cost.stone + '/' + r.build.cost.iron + '] · fila ' + (st.queueLen + 1), 'ok');
         } catch (e) { pushLog('Obra ' + (pmap[vid].coord || vid) + ': ' + (e.message || e), 'err'); }
       } else if (r.demand) {
-        pushLog('  ' + (pmap[vid].coord || vid) + ' · aguarda ' + r.demand.b + ' [' + r.demand.cost.wood + '/' + r.demand.cost.stone + '/' + r.demand.cost.iron + '] (sem recurso)');
+        const bn = (BUILD_META[r.demand.b] && BUILD_META[r.demand.b].name) || r.demand.b;
+        pushLog('  ' + (pmap[vid].coord || vid) + ' · aguarda ' + bn + ' [' + r.demand.cost.wood + '/' + r.demand.cost.stone + '/' + r.demand.cost.iron + '] (sem recurso)');
       }
       await sleep(300);
     }
@@ -1392,18 +1431,84 @@
   function scheduleBuild() { clearTimeout(buildTimer); if (!config.build.running) return; buildTimer = setTimeout(buildTick, Math.min(Math.max((config.build.nextAt || 0) - Date.now(), 1000), 60000)); }
   function readBuildCfg() {
     const c = config.build, g = (id) => document.getElementById(id);
-    if (g('twmgr-bld-atk')) c.atkTpl = g('twmgr-bld-atk').value;
-    if (g('twmgr-bld-def')) c.defTpl = g('twmgr-bld-def').value;
     if (g('twmgr-bld-max')) c.maxQueue = Math.max(1, parseInt(g('twmgr-bld-max').value, 10) || 5);
     if (g('twmgr-bld-int')) c.interval = Math.max(1, parseInt(g('twmgr-bld-int').value, 10) || 10) * 60;
     save();
+  }
+  let _bldActiveProf = 'atk';
+  function renderBuildPlan() {
+    const box = document.getElementById('twmgr-bld-plan'); if (!box) return;
+    const plan = (config.build.plans && config.build.plans[_bldActiveProf]) || [];
+    if (!plan.length) { box.innerHTML = '<div style="color:#8f7d57;text-align:center;padding:10px;font-size:10px">— lista vazia (use o + abaixo pra adicionar) —</div>'; return; }
+    box.innerHTML = plan.map((it, i) => {
+      const meta = BUILD_META[it.b] || { name: it.b, ico: '?', max: 30 };
+      const disabled = it.en === false ? ' twmgr-bld-off' : '';
+      return '<div class="twmgr-bld-item' + disabled + '" data-i="' + i + '">' +
+        '<span class="twmgr-bld-ord">' + (i + 1) + '.</span>' +
+        '<input type="checkbox" class="twmgr-bld-en" data-i="' + i + '"' + (it.en === false ? '' : ' checked') + ' title="ativar/desativar este item">' +
+        '<span class="twmgr-bld-ico">' + meta.ico + '</span>' +
+        '<span class="twmgr-bld-name" title="' + esc(meta.name) + ' (máx ' + meta.max + ')">' + esc(meta.name) + '</span>' +
+        '<input type="number" class="twmgr-bld-lvl twmgr-inp" data-i="' + i + '" min="1" max="' + meta.max + '" value="' + it.lvl + '" title="nível alvo">' +
+        '<span class="twmgr-bld-up" data-i="' + i + '" title="subir prioridade">▲</span>' +
+        '<span class="twmgr-bld-down" data-i="' + i + '" title="descer prioridade">▼</span>' +
+        '<span class="twmgr-bld-rm" data-i="' + i + '" title="remover">✕</span>' +
+        '</div>';
+    }).join('');
+  }
+  function bindBuildPlanHandlers() {
+    const box = document.getElementById('twmgr-bld-plan'); if (!box) return;
+    box.addEventListener('change', (e) => {
+      const el = e.target; const i = parseInt(el.getAttribute('data-i'), 10);
+      const plan = config.build.plans[_bldActiveProf]; if (!plan || isNaN(i) || !plan[i]) return;
+      if (el.classList.contains('twmgr-bld-en')) plan[i].en = !!el.checked;
+      else if (el.classList.contains('twmgr-bld-lvl')) {
+        const meta = BUILD_META[plan[i].b]; const max = meta ? meta.max : 30;
+        plan[i].lvl = Math.max(1, Math.min(max, parseInt(el.value, 10) || 1));
+        el.value = plan[i].lvl;
+      }
+      save(); renderBuildPlan();
+    });
+    box.addEventListener('click', (e) => {
+      const el = e.target; const i = parseInt(el.getAttribute('data-i'), 10);
+      const plan = config.build.plans[_bldActiveProf]; if (!plan || isNaN(i) || !plan[i]) return;
+      if (el.classList.contains('twmgr-bld-up') && i > 0) { const tmp = plan[i - 1]; plan[i - 1] = plan[i]; plan[i] = tmp; save(); renderBuildPlan(); }
+      else if (el.classList.contains('twmgr-bld-down') && i < plan.length - 1) { const tmp = plan[i + 1]; plan[i + 1] = plan[i]; plan[i] = tmp; save(); renderBuildPlan(); }
+      else if (el.classList.contains('twmgr-bld-rm')) { plan.splice(i, 1); save(); renderBuildPlan(); }
+    });
+  }
+  function bldAddItem() {
+    const b = document.getElementById('twmgr-bld-add-b').value;
+    const lvlInp = document.getElementById('twmgr-bld-add-lvl');
+    const meta = BUILD_META[b]; if (!meta) return;
+    const lvl = Math.max(1, Math.min(meta.max, parseInt(lvlInp.value, 10) || meta.max));
+    const plan = config.build.plans[_bldActiveProf] = config.build.plans[_bldActiveProf] || [];
+    plan.push({ b: b, lvl: lvl, en: true });
+    lvlInp.value = '';
+    save(); renderBuildPlan();
+  }
+  function bldSwitchProf(prof) {
+    _bldActiveProf = prof;
+    document.querySelectorAll('.twmgr-bld-sub').forEach((el) => el.classList.toggle('on', el.getAttribute('data-prof') === prof));
+    renderBuildPlan();
+  }
+  function bldResetDefault() {
+    if (!confirm('Reset do plano ' + _bldActiveProf.toUpperCase() + ' pro padrão?')) return;
+    config.build.plans[_bldActiveProf] = tplToPlan(_bldActiveProf === 'atk' ? ATK_TPL : DEF_TPL);
+    save(); renderBuildPlan();
+  }
+  function bldClearAll() {
+    if (!confirm('Limpar TODOS os itens do plano ' + _bldActiveProf.toUpperCase() + '?')) return;
+    config.build.plans[_bldActiveProf] = [];
+    save(); renderBuildPlan();
   }
   function setBuildStatus(on) { setBtnState('twmgr-bld-start', 'twmgr-bld-stop', on, '● Construindo', '▶ Construir'); }
   function buildStart() {
     readBuildCfg();
     if (!config.recruit.groupAtk && !config.recruit.groupDef) { pushLog('Edifícios: mapeie ATK/DEF na aba Recrutar primeiro.', 'err'); return; }
+    const atkN = (config.build.plans.atk || []).filter((x) => x.en !== false).length;
+    const defN = (config.build.plans.def || []).filter((x) => x.en !== false).length;
     config.build.running = true; config.build.nextAt = 0; save();
-    setBuildStatus(true); pushLog('Edifícios iniciado (templates ATK/DEF).', 'ok'); buildTick();
+    setBuildStatus(true); pushLog('Edifícios iniciado · plano ATK ' + atkN + ' item(ns) · DEF ' + defN + ' item(ns).', 'ok'); buildTick();
   }
   function buildStop() { readBuildCfg(); config.build.running = false; save(); clearTimeout(buildTimer); setBuildStatus(false); pushLog('Edifícios parado.'); }
 
@@ -1806,6 +1911,97 @@
   function mapStop() { readMapCfg(); config.map.running = false; save(); clearTimeout(mapTimer); setMapStatus(false); pushLog('Mapeamento parado.'); }
   async function mapRefreshCache() { _mapVillagesCache = null; try { const v = await getMapVillages(true); pushLog('Mapeamento: mapa recarregado — ' + v.length + ' aldeias no mundo (' + v.filter((x) => x.player === '0').length + ' bárbaras).', 'ok'); } catch (e) { pushLog('Mapeamento: recarregar falhou: ' + (e.message || e), 'err'); } }
 
+  // ==================== DETECTOR DE CAPTCHA ====================
+  // Detecta popups de bot-check do TW e captchas hCaptcha/reCAPTCHA, dispara notificação
+  // do navegador + POST em ntfy.sh/{topico}. Cooldown pra não spammar.
+  const CAPTCHA_SELECTORS = [
+    '#popup_box_bot_protection',
+    '#bot_check',
+    '#botprotection_quest',
+    '#hcaptcha_container',
+    '.h-captcha',
+    'iframe[src*="hcaptcha.com"]',
+    'iframe[src*="recaptcha"]',
+    '.captcha_image',
+  ];
+  function isCaptchaVisible() {
+    for (const s of CAPTCHA_SELECTORS) {
+      const el = document.querySelector(s);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      if (r.width > 0 && r.height > 0 && style.display !== 'none' && style.visibility !== 'hidden') return s;
+    }
+    return null;
+  }
+  async function ensureNotifyPermission() {
+    if (!('Notification' in window)) return false;
+    if (Notification.permission === 'granted') return true;
+    if (Notification.permission === 'denied') return false;
+    try { const p = await Notification.requestPermission(); return p === 'granted'; } catch (e) { return false; }
+  }
+  async function fireCaptchaNotification(reasonSel, manual) {
+    const cfg = config.captcha;
+    const now = Date.now();
+    const cd = (cfg.cooldownSec || 300) * 1000;
+    if (!manual && (now - (cfg.lastNotifiedAt || 0)) < cd) return;
+    cfg.lastNotifiedAt = now; save();
+    const world = window.game_data && window.game_data.world || WORLD;
+    const msg = (manual ? '[TESTE] ' : '') + 'CAPTCHA detectado no TW · mundo ' + world + ' · aldeia ' + (CUR_NAME || CUR_VID) + (reasonSel ? (' [' + reasonSel + ']') : '');
+    pushLog('⚠ ' + msg, 'err');
+    // 1) Notificação do navegador
+    if (cfg.browserNotif) {
+      try {
+        const ok = await ensureNotifyPermission();
+        if (ok) {
+          const n = new Notification('TW Manager · CAPTCHA', { body: msg, tag: 'twmgr-captcha', requireInteraction: true, icon: (IMG_BASE || '') + 'graphic/dots/red.png' });
+          n.onclick = () => { try { window.focus(); n.close(); } catch (e) {} };
+        } else if (Notification.permission === 'denied') {
+          pushLog('Notif. do navegador está bloqueada — libere no cadeado do endereço.', 'err');
+        }
+      } catch (e) { pushLog('Notif. navegador falhou: ' + (e.message || e), 'err'); }
+    }
+    // 2) ntfy.sh
+    if (cfg.ntfyTopic) {
+      try {
+        await fetch('https://ntfy.sh/' + encodeURIComponent(cfg.ntfyTopic.trim()), {
+          method: 'POST',
+          headers: {
+            'Title': 'TW Manager · CAPTCHA',
+            'Priority': 'urgent',
+            'Tags': 'warning,robot,tribalwars',
+            'Click': location.href,
+          },
+          body: msg,
+        });
+        pushLog('  ntfy.sh enviado → tópico "' + cfg.ntfyTopic.trim() + '"', 'ok');
+      } catch (e) { pushLog('ntfy.sh falhou: ' + (e.message || e), 'err'); }
+    }
+  }
+  let _captchaCheckLast = 0;
+  function checkCaptchaOnce() {
+    if (!config.captcha || !config.captcha.enabled) return;
+    const now = Date.now();
+    if (now - _captchaCheckLast < 1000) return;   // debounce
+    _captchaCheckLast = now;
+    const hit = isCaptchaVisible();
+    if (hit) fireCaptchaNotification(hit, false);
+  }
+  function startCaptchaWatcher() {
+    // Poll leve
+    setInterval(checkCaptchaOnce, 5000);
+    // Reação imediata a mudanças no DOM
+    try {
+      if (window.MutationObserver && document.body) {
+        const obs = new MutationObserver(() => checkCaptchaOnce());
+        obs.observe(document.body, { childList: true, subtree: true });
+      }
+    } catch (e) {}
+    // Check inicial 1s após load (deixa TW montar overlays)
+    setTimeout(checkCaptchaOnce, 1200);
+  }
+  function testCaptchaNotif() { fireCaptchaNotification('teste-manual', true); }
+
   function tickUI() {
     if (anyRunning() && !lockOther()) claimLock();
     const now = Date.now();
@@ -2033,6 +2229,20 @@
       "#twmgr-panel.twmgr-collapsed #twmgr-head{border-bottom:none}",
       ".twmgr-dot{width:9px;height:9px;border-radius:50%;background:#5a4a2e;transition:.2s;flex:0 0 auto}",
       ".twmgr-dot.on{background:#3fce54;box-shadow:0 0 8px #3fce54}",
+      ".twmgr-bld-plan{max-height:260px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:8px;padding:3px}",
+      ".twmgr-bld-plan::-webkit-scrollbar{width:8px}.twmgr-bld-plan::-webkit-scrollbar-thumb{background:#4a3a22;border-radius:4px}",
+      ".twmgr-bld-item{display:grid;grid-template-columns:22px 16px 18px 1fr 44px 18px 18px 18px;align-items:center;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:#e9dcc2}",
+      ".twmgr-bld-item:last-child{border-bottom:none}",
+      ".twmgr-bld-item.twmgr-bld-off{opacity:.42;filter:grayscale(.6)}",
+      ".twmgr-bld-ord{color:#8f7d57;font-size:9px;text-align:right}",
+      ".twmgr-bld-ico{font-size:14px;text-align:center}",
+      ".twmgr-bld-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".twmgr-bld-lvl{width:100% !important;text-align:center;padding:2px 4px !important;font-size:11px !important}",
+      ".twmgr-bld-up,.twmgr-bld-down,.twmgr-bld-rm{cursor:pointer;text-align:center;font-size:11px;color:#c9b88f;border-radius:4px;user-select:none;padding:1px 0}",
+      ".twmgr-bld-up:hover,.twmgr-bld-down:hover{background:rgba(212,175,55,.18);color:#ffe08a}",
+      ".twmgr-bld-rm{color:#e6a89d}.twmgr-bld-rm:hover{background:rgba(231,76,60,.22);color:#ff6f5e}",
+      ".twmgr-bld-sub{background:rgba(212,175,55,.08) !important;border:1px solid #5c4a29 !important;color:#c9b88f !important}",
+      ".twmgr-bld-sub.on{background:linear-gradient(180deg,#7a5a20,#5a4218) !important;color:#ffe08a !important;border-color:#d4af37 !important}",
     ].join('');
     document.head.appendChild(s);
   }
@@ -2094,13 +2304,24 @@
       '<div id="twmgr-mk-status" class="twmgr-cstatus"></div>' +
       '</div>' +
       '<div id="twmgr-tab-build" style="display:none">' +
-      '<div class="twmgr-hint">🏗️ Fila planejada por template <b>ATK/DEF</b> (usa os grupos do Recrutar). 1 linha = <code>chave nível</code>, em ordem de prioridade. Constrói o 1º item afordável; o item caro vira demanda pro Equilíbrio.</div>' +
-      '<div style="font-size:9px;color:#8f7d57;margin-bottom:4px">chaves: main wood stone iron farm storage barracks stable garage smith market wall snob watchtower place statue hide</div>' +
-      '<div style="font-size:11px;color:#e8d29a;margin:2px 0">⚔️ Template ATK</div>' +
-      '<textarea id="twmgr-bld-atk" class="twmgr-inp" style="width:100%;height:88px;font-family:monospace;font-size:10px"></textarea>' +
-      '<div style="font-size:11px;color:#e8d29a;margin:4px 0 2px">🛡️ Template DEF</div>' +
-      '<textarea id="twmgr-bld-def" class="twmgr-inp" style="width:100%;height:88px;font-family:monospace;font-size:10px"></textarea>' +
-      '<div class="twmgr-row" style="margin-top:6px"><span class="twmgr-lbl">Máx na fila</span><input id="twmgr-bld-max" class="twmgr-inp" type="number" min="1" value="5" style="width:56px"></div>' +
+      '<div class="twmgr-hint">🏗️ Plano de obras por perfil <b>ATK/DEF</b> (grupos do Recrutar). Ordem da lista = <b>prioridade</b>. Constrói o 1º item ativo que couber no recurso; o próximo caro vira demanda pro Equilíbrio.</div>' +
+      '<div class="twmgr-bld-subtabs" style="display:flex;gap:4px;margin-bottom:6px">' +
+        '<button class="twmgr-btn twmgr-bld-sub twmgr-bld-sub-atk on" data-prof="atk" style="flex:1;padding:4px 6px;font-size:11px">⚔️ ATK</button>' +
+        '<button class="twmgr-btn twmgr-bld-sub twmgr-bld-sub-def" data-prof="def" style="flex:1;padding:4px 6px;font-size:11px">🛡️ DEF</button>' +
+      '</div>' +
+      '<div id="twmgr-bld-plan" class="twmgr-bld-plan"></div>' +
+      '<div class="twmgr-row" style="gap:4px;margin-top:6px">' +
+        '<select id="twmgr-bld-add-b" class="twmgr-inp" style="flex:1">' +
+          Object.keys(BUILD_META).map((k) => '<option value="' + k + '">' + BUILD_META[k].ico + ' ' + BUILD_META[k].name + ' (máx ' + BUILD_META[k].max + ')</option>').join('') +
+        '</select>' +
+        '<input id="twmgr-bld-add-lvl" class="twmgr-inp" type="number" min="1" placeholder="nv" style="width:52px">' +
+        '<button id="twmgr-bld-add" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">+</button>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;margin-top:4px">' +
+        '<button id="twmgr-bld-reset" class="twmgr-btn twmgr-ghost" style="flex:1;font-size:10px">↺ reset padrão</button>' +
+        '<button id="twmgr-bld-clear" class="twmgr-btn twmgr-ghost" style="flex:1;font-size:10px">🗑 limpar tudo</button>' +
+      '</div>' +
+      '<div class="twmgr-row" style="margin-top:8px"><span class="twmgr-lbl">Máx na fila</span><input id="twmgr-bld-max" class="twmgr-inp" type="number" min="1" value="5" style="width:56px"></div>' +
       '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo (min)</span><input id="twmgr-bld-int" class="twmgr-inp" type="number" min="1" value="10" style="width:56px"></div>' +
       '<div class="twmgr-actions"><button id="twmgr-bld-start" class="twmgr-btn twmgr-go">▶ Construir</button><button id="twmgr-bld-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
       '<div id="twmgr-bld-status" class="twmgr-cstatus"></div>' +
@@ -2141,6 +2362,20 @@
     document.body.appendChild(p);
 
     document.getElementById('twmgr-logbtn').addEventListener('click', () => showTab('log'));
+
+    // Notificação de CAPTCHA
+    document.getElementById('twmgr-cap-en').checked = !!config.captcha.enabled;
+    document.getElementById('twmgr-cap-brw').checked = !!config.captcha.browserNotif;
+    document.getElementById('twmgr-cap-ntfy').value = config.captcha.ntfyTopic || '';
+    const readCapCfg = () => {
+      config.captcha.enabled = document.getElementById('twmgr-cap-en').checked;
+      config.captcha.browserNotif = document.getElementById('twmgr-cap-brw').checked;
+      config.captcha.ntfyTopic = document.getElementById('twmgr-cap-ntfy').value.trim();
+      save();
+    };
+    ['twmgr-cap-en', 'twmgr-cap-brw', 'twmgr-cap-ntfy'].forEach((id) => document.getElementById(id).addEventListener('change', readCapCfg));
+    document.getElementById('twmgr-cap-brw').addEventListener('change', async () => { if (document.getElementById('twmgr-cap-brw').checked) await ensureNotifyPermission(); });
+    document.getElementById('twmgr-cap-test').addEventListener('click', testCaptchaNotif);
 
     SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) el.checked = !!(config.scav.units && config.scav.units[u]); });
     document.getElementById('twmgr-scav-start').addEventListener('click', scavStart);
@@ -2230,11 +2465,15 @@
     document.getElementById('twmgr-mk-stop').addEventListener('click', marketStop);
     setMarketStatus(config.market.running);
 
-    document.getElementById('twmgr-bld-atk').value = config.build.atkTpl || ATK_TPL;
-    document.getElementById('twmgr-bld-def').value = config.build.defTpl || DEF_TPL;
     document.getElementById('twmgr-bld-max').value = config.build.maxQueue || 5;
     document.getElementById('twmgr-bld-int').value = Math.round((config.build.interval || 600) / 60);
-    ['twmgr-bld-atk', 'twmgr-bld-def', 'twmgr-bld-max', 'twmgr-bld-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readBuildCfg); });
+    ['twmgr-bld-max', 'twmgr-bld-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readBuildCfg); });
+    renderBuildPlan();
+    bindBuildPlanHandlers();
+    document.querySelectorAll('.twmgr-bld-sub').forEach((el) => el.addEventListener('click', () => bldSwitchProf(el.getAttribute('data-prof'))));
+    document.getElementById('twmgr-bld-add').addEventListener('click', bldAddItem);
+    document.getElementById('twmgr-bld-reset').addEventListener('click', bldResetDefault);
+    document.getElementById('twmgr-bld-clear').addEventListener('click', bldClearAll);
     document.getElementById('twmgr-bld-start').addEventListener('click', buildStart);
     document.getElementById('twmgr-bld-stop').addEventListener('click', buildStop);
     setBuildStatus(config.build.running);
@@ -2295,6 +2534,7 @@
     if (config.build.running) { if (!lockOther()) pushLog('Edifícios retomado.', 'ok'); scheduleBuild(); }
     if (config.bb && config.bb.running) { if (!lockOther()) pushLog('Módulo BB retomado.', 'ok'); scheduleBB(); }
     if (config.map && config.map.running) { if (!lockOther()) pushLog('Bárbaros Mapa retomado.', 'ok'); scheduleMap(); }
+    startCaptchaWatcher();
   }
 
   function makeDraggable(panel, handle) {

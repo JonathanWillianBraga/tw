@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.25.3
+// @version      9.25.4
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.25.3';
+  const VERSION = '9.25.4';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -664,16 +664,17 @@
     return rows;
   }
 
-  // Coordenadas (x|y) que JÁ têm um ataque nosso em rota (qualquer origem) — pra não empilhar farm em cima de comando ainda no ar.
-  async function getPendingAttackCoords() {
+  // Lê a tela de comandos (só ataques): coords com ataque nosso em rota (p/ não empilhar) + nº de ATAQUES DE SAQUE em rota (ícone de farm) p/ o card.
+  async function getPendingAttack() {
     const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=attack', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    const set = new Set();
-    doc.querySelectorAll('#commands_table .quickedit-label').forEach((el) => {
-      const m = (el.textContent || '').match(/\((\d+)\|(\d+)\)/);
-      if (m) set.add(m[1] + '|' + m[2]);
+    const coords = new Set(); let saques = 0;
+    doc.querySelectorAll('#commands_table tr').forEach((tr) => {
+      const label = tr.querySelector('.quickedit-label'); if (!label) return;
+      const m = (label.textContent || '').match(/\((\d+)\|(\d+)\)/); if (m) coords.add(m[1] + '|' + m[2]);
+      if (tr.querySelector('img[src*="command/farm"]')) saques++;   // ícone farm.webp = ataque de saque do assistente
     });
-    return set;
+    return { coords: coords, saques: saques };
   }
 
   // "Minha pontuação hoje" do ranking Em um dia (type: loot_res = saqueado, scavenge = coletado). Cache por type.
@@ -739,8 +740,9 @@
     try {
       if (cfg.group) { villages = (await getVillagesInGroup(cfg.group)).map((x) => ({ vid: x.vid, name: x.coord || x.vid })); try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
       else villages = await getAllScavengeState();
-    } catch (e) { pushLog('Saque: erro ao listar aldeias: ' + (e.message || e), 'err'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
-    let pendingCoords; try { pendingCoords = await getPendingAttackCoords(); } catch (e) { pendingCoords = new Set(); }
+    } catch (e) { pushLog('Saque: erro ao listar aldeias: ' + (e.message || e), 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
+    let pendingCoords = new Set(), saquesAtivos = null;
+    try { const pa = await getPendingAttack(); pendingCoords = pa.coords; saquesAtivos = pa.saques; } catch (e) {}
     const minW = cfg.minWood || 0, minS = cfg.minStone || 0, minI = cfg.minIron || 0;
     const maxDist = cfg.maxDist != null ? cfg.maxDist : 13;
     const maxWall = cfg.maxWall != null ? cfg.maxWall : 20;
@@ -838,7 +840,8 @@
     const as = cfg.activeSends, vids = {}; as.forEach((s) => { if (s.vid) vids[s.vid] = 1; });
     cfg.stats = cfg.stats || {};
     cfg.stats.active = Object.keys(vids).length;
-    cfg.stats.activeTotal = as.length;
+    // total = nº real de ataques de saque em rota (lido da tela de comandos); A/B/C = quebra estimada pelos nossos envios
+    cfg.stats.activeTotal = (saquesAtivos != null) ? saquesAtivos : as.length;
     cfg.stats.a = as.filter((s) => s.mode === 'a').length;
     cfg.stats.b = as.filter((s) => s.mode === 'b').length;
     cfg.stats.c = as.filter((s) => s.mode === 'c').length;

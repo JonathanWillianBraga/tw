@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.20.0
+// @version      9.20.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -40,7 +40,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.20.0';
+  const VERSION = '9.20.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1975,16 +1975,16 @@
     if (document.getElementById('twmgr-css')) return;
     const s = document.createElement('style'); s.id = 'twmgr-css';
     s.textContent = [
-      "#twmgr-panel{position:fixed;top:60px;right:12px;z-index:99999;width:300px;font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#e9dcc2;background:linear-gradient(160deg,#2a2016,#201810);border:1px solid #b8912e;border-radius:12px;box-shadow:0 12px 34px rgba(0,0,0,.6);overflow:hidden}",
+      "#twmgr-panel{position:fixed;top:12px;right:12px;z-index:99999;width:340px;max-height:calc(100vh - 24px);display:flex;flex-direction:column;font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#e9dcc2;background:linear-gradient(160deg,#2a2016,#201810);border:1px solid #b8912e;border-radius:12px;box-shadow:0 12px 34px rgba(0,0,0,.6);overflow:hidden}",
       "#twmgr-panel *{box-sizing:border-box}",
-      "#twmgr-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;cursor:move;background:linear-gradient(90deg,#6e5015,#9a721c 55%,#caa031);color:#fff;border-bottom:1px solid #8a6a20}",
+      "#twmgr-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;cursor:move;background:linear-gradient(90deg,#6e5015,#9a721c 55%,#caa031);color:#fff;border-bottom:1px solid #8a6a20}",
       "#twmgr-head .twmgr-title{font-weight:700;font-size:12px;letter-spacing:.3px;display:flex;align-items:center;gap:6px}",
       "#twmgr-head .twmgr-ver{font-weight:400;font-size:8px;opacity:.75}",
       "#twmgr-min{cursor:pointer;font-size:17px;line-height:1;padding:0 4px;opacity:.85}#twmgr-min:hover{opacity:1}",
       "#twmgr-upd-btn{cursor:pointer;font-size:13px;line-height:1;padding:0 4px;opacity:.85;position:relative}#twmgr-upd-btn:hover{opacity:1}",
       "#twmgr-upd-badge{position:absolute;top:-3px;right:-2px;color:#ff5a5a;font-size:9px}",
-      ".twmgr-tabs{display:flex;flex-wrap:wrap;background:#1a140d;border-bottom:1px solid #3a2e1b}",
-      ".twmgr-tab{flex:1;min-width:44px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 2px;cursor:pointer;color:#a2926c;border-bottom:2px solid transparent;transition:.15s}",
+      ".twmgr-tabs{flex:0 0 auto;display:flex;flex-wrap:wrap;background:#1a140d;border-bottom:1px solid #3a2e1b}",
+      ".twmgr-tab{flex:1 1 auto;min-width:42px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 2px;cursor:pointer;color:#a2926c;border-bottom:2px solid transparent;transition:.15s}",
       ".twmgr-tab:hover{color:#e8d29a;background:rgba(212,175,55,.06)}",
       ".twmgr-tab.active{color:#ffe08a;border-bottom-color:#d4af37;background:rgba(212,175,55,.10)}",
       ".twmgr-tab-ico{font-size:13px;line-height:1;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;border:2px solid transparent;transition:.2s}",
@@ -1993,7 +1993,8 @@
       ".twmgr-ui{width:18px;height:18px;vertical-align:middle}",
       ".twmgr-btn.on{box-shadow:0 0 12px rgba(76,200,90,.85),inset 0 0 0 1px rgba(255,255,255,.3)}",
       ".twmgr-btn.dim{opacity:.4 !important;filter:grayscale(.5);cursor:default}",
-      "#twmgr-body{padding:11px 12px 12px}",
+      "#twmgr-body{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:11px 12px 12px}",
+      "#twmgr-body::-webkit-scrollbar{width:9px}#twmgr-body::-webkit-scrollbar-thumb{background:#4a3a22;border-radius:4px}#twmgr-body::-webkit-scrollbar-track{background:#1a140d}",
       ".twmgr-hint{font-size:10px;color:#b0a079;line-height:1.4;margin-bottom:9px}.twmgr-hint b{color:#e8d29a}",
       ".twmgr-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px}",
       ".twmgr-lbl{font-size:10px;color:#c9b88f}",

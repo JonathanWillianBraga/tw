@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.25.2
+// @version      9.25.3
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.25.2';
+  const VERSION = '9.25.3';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -2325,12 +2325,12 @@
     const dy = document.getElementById('twmgr-farm-dyn'); if (dy) config.farm.dynTemplate = dy.checked;
     if (!config.farm.matrix) config.farm.matrix = defFarmMatrix();
     FARM_COLORS.forEach((k) => {
-      const a = parseInt((document.getElementById('twmgr-fm-' + k + '-a') || {}).value, 10) || 0;
-      const b = parseInt((document.getElementById('twmgr-fm-' + k + '-b') || {}).value, 10) || 0;
+      const a = (document.getElementById('twmgr-fm-' + k + '-a') || {}).checked;
+      const b = (document.getElementById('twmgr-fm-' + k + '-b') || {}).checked;
       const cc = (document.getElementById('twmgr-fm-' + k + '-c') || {}).checked;
-      let mode = 'none', qty = 1;
-      if (cc) mode = 'c'; else if (a > 0) { mode = 'a'; qty = a; } else if (b > 0) { mode = 'b'; qty = b; }
-      config.farm.matrix[k] = { mode: mode, qty: qty };
+      let mode = 'none';
+      if (a) mode = 'a'; else if (b) mode = 'b'; else if (cc) mode = 'c';
+      config.farm.matrix[k] = { mode: mode, qty: 1 };
     });
     save();
   }
@@ -2388,7 +2388,7 @@
       ".twmgr-fmtable th{font-size:10px;color:#c9a24a;font-weight:700;padding:3px 4px;border-bottom:1px solid #4a3b28;text-transform:uppercase}",
       ".twmgr-fmrow{border-bottom:1px solid rgba(255,255,255,.04)}",
       ".twmgr-fmrow:hover{background:rgba(212,175,55,.06)}",
-      ".twmgr-fmn{width:46px !important;text-align:center;padding:3px 2px !important}",
+      ".twmgr-fmck{width:16px;height:16px;cursor:pointer}",
       ".twmgr-cards{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:10px}",
       ".twmgr-card-mini{background:#191108;border:1px solid #3a2e1b;border-radius:8px;padding:6px 9px;min-width:0}",
       ".twmgr-card-wide{grid-column:1 / -1}",
@@ -2468,13 +2468,12 @@
     injectStyles();
     const p = document.createElement('div'); p.id = 'twmgr-panel';
     const tabBtn = (n, ico, label) => '<div id="twmgr-btab-' + n + '" class="twmgr-tab" data-tab="' + n + '"><span class="twmgr-tab-ico">' + ico + '</span><span class="twmgr-tab-lbl">' + label + '</span></div>';
-    // Saque: matriz estilo FarmGod — A e B = nº de comandos (a qtd é o próprio número), C = checkbox.
-    // Regra "1 por linha" garantida no JS: preencher A/B zera os outros; marcar C zera A/B.
+    // Saque: matriz estilo FarmGod — A/B/C são checkboxes; regra "1 por linha" garantida no JS (marcar um desmarca os outros).
     const fmRow = (k, label) => '<tr class="twmgr-fmrow">' +
       '<td style="text-align:left;padding:3px 6px">' + label + '</td>' +
-      '<td style="text-align:center"><input id="twmgr-fm-' + k + '-a" class="twmgr-inp twmgr-fmn" type="number" min="0" value="0"></td>' +
-      '<td style="text-align:center"><input id="twmgr-fm-' + k + '-b" class="twmgr-inp twmgr-fmn" type="number" min="0" value="0"></td>' +
-      '<td style="text-align:center"><input id="twmgr-fm-' + k + '-c" type="checkbox"></td></tr>';
+      '<td style="text-align:center"><input id="twmgr-fm-' + k + '-a" class="twmgr-fmck" type="checkbox"></td>' +
+      '<td style="text-align:center"><input id="twmgr-fm-' + k + '-b" class="twmgr-fmck" type="checkbox"></td>' +
+      '<td style="text-align:center"><input id="twmgr-fm-' + k + '-c" class="twmgr-fmck" type="checkbox"></td></tr>';
     // Helpers de layout: cards no topo, hint curto, seção com título, log recolhível por módulo.
     const cardsDiv = (mod) => '<div id="twmgr-cards-' + mod + '" class="twmgr-cards"></div>';
     const hint = (txt) => '<div class="twmgr-hint">' + txt + '</div>';
@@ -2495,7 +2494,7 @@
       '<div id="twmgr-tab-farm" style="display:none">' +
         hint('FarmGod: por <b>cor</b>, escolha <b>um</b> modo (A, B ou C). Vermelho nunca; azul só muro 0 sem defesa. Nunca empilha no mesmo alvo.') +
         cardsDiv('farm') +
-        sec('Ataque por cor (A/B = nº de comandos · 1 por linha)',
+        sec('Ataque por cor (marque 1 por linha)',
           '<table class="twmgr-fmtable"><tr><th style="text-align:left">cor</th><th>A</th><th>B</th><th>C</th></tr>' +
           fmRow('greenEmpty', '🟢 verde vazio') + fmRow('greenFull', '🟢 verde cheio') + fmRow('yellowEmpty', '🟡 amarelo vazio') + fmRow('yellowFull', '🟡 amarelo cheio') + fmRow('blue', '🔵 azul (muro 0)') + '</table>' +
           '<label class="twmgr-check" style="margin-top:6px"><input id="twmgr-farm-dyn" type="checkbox"> Template dinâmico (A=mín, B=+20% da carga)</label>') +
@@ -2706,19 +2705,15 @@
       FARM_COLORS.forEach((k) => {
         const c = M[k] || {}, mode = c.mode || 'none';
         const a = document.getElementById('twmgr-fm-' + k + '-a'), b = document.getElementById('twmgr-fm-' + k + '-b'), cc = document.getElementById('twmgr-fm-' + k + '-c');
-        if (a) a.value = mode === 'a' ? (c.qty || 1) : 0;
-        if (b) b.value = mode === 'b' ? (c.qty || 1) : 0;
-        if (cc) cc.checked = mode === 'c';
+        if (a) a.checked = mode === 'a'; if (b) b.checked = mode === 'b'; if (cc) cc.checked = mode === 'c';
       });
     })();
     document.getElementById('twmgr-farm-start').addEventListener('click', farmStart);
     document.getElementById('twmgr-farm-stop').addEventListener('click', farmStop);
     ['twmgr-farm-wood', 'twmgr-farm-stone', 'twmgr-farm-iron', 'twmgr-farm-dist', 'twmgr-farm-wall', 'twmgr-farm-int', 'twmgr-farm-mode', 'twmgr-farm-group', 'twmgr-farm-cooldown', 'twmgr-farm-mincl', 'twmgr-farm-order', 'twmgr-farm-dyn'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
     FARM_COLORS.forEach((k) => {
-      const a = document.getElementById('twmgr-fm-' + k + '-a'), b = document.getElementById('twmgr-fm-' + k + '-b'), cc = document.getElementById('twmgr-fm-' + k + '-c');
-      if (a) a.addEventListener('input', () => { if ((parseInt(a.value, 10) || 0) > 0) { if (b) b.value = 0; if (cc) cc.checked = false; } readFarmCfg(); });
-      if (b) b.addEventListener('input', () => { if ((parseInt(b.value, 10) || 0) > 0) { if (a) a.value = 0; if (cc) cc.checked = false; } readFarmCfg(); });
-      if (cc) cc.addEventListener('change', () => { if (cc.checked) { if (a) a.value = 0; if (b) b.value = 0; } readFarmCfg(); });
+      const boxes = ['-a', '-b', '-c'].map((s) => document.getElementById('twmgr-fm-' + k + s));
+      boxes.forEach((box) => { if (box) box.addEventListener('change', () => { if (box.checked) boxes.forEach((o) => { if (o && o !== box) o.checked = false; }); readFarmCfg(); }); });
     });
     setFarmStatus(config.farm.running);
 

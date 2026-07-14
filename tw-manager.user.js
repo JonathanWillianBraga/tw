@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.26.0-alpha1
+// @version      9.26.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.26.0-alpha1';
+  const VERSION = '9.26.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -368,6 +368,18 @@
         { v: fmtN(s.mapped), l: 'no alcance', hl: true },
         { v: fmtN(s.sent), l: 'explorados' },
         { v: fmtN(s.left), l: 'de fora' },
+      ];
+    } else if (mod === 'planner') {
+      const rows = (config.planner && config.planner.rows) || [];
+      const armed = rows.filter((r) => r.state === 'armed' || r.state === 'scheduled').length;
+      const sent = rows.filter((r) => r.state === 'sent').length;
+      const err = rows.filter((r) => r.state === 'error').length;
+      const sel = Object.keys((config.planner && config.planner.selected) || {}).filter((v) => config.planner.selected[v]).length;
+      arr = [
+        { v: fmtN(sel), l: 'aldeias' },
+        { v: fmtN(armed), l: 'armados', hl: true },
+        { v: fmtN(sent), l: 'enviados' },
+        { v: fmtN(err), l: 'erros' },
       ];
     }
     renderCards(mod, arr);
@@ -1556,6 +1568,196 @@
     pushLog('🎯 Coordenado desarmado.', '', 'planner');
   }
 
+  // Cache de aldeias (nome/coord) para render dos cards saber o nome.
+  let _plVilCache = null;
+
+  async function renderPlannerVillages() {
+    const cont = document.getElementById('twmgr-pl-villages'); if (!cont) return;
+    let vils = []; try { vils = await getAllVillages(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
+    _plVilCache = vils;
+    const p = config.planner;
+    const tgtCoord = (p.targetX && p.targetY) ? (p.targetX + '|' + p.targetY) : '';
+    vils.forEach((v) => { v.dist = (v.coord && tgtCoord) ? coordDist(v.coord, tgtCoord) : null; });
+    vils.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
+    cont.innerHTML = vils.map((v) => {
+      const distTxt = v.dist != null ? (' · dist ' + v.dist.toFixed(1)) : '';
+      return '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-pl-vil" data-vid="' + v.vid + '"' + (p.selected[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '<span style="color:#8f7d57">' + distTxt + '</span></label>';
+    }).join('');
+    cont.querySelectorAll('.twmgr-pl-vil').forEach((cb) => cb.addEventListener('change', () => {
+      const vid = cb.getAttribute('data-vid');
+      if (cb.checked) { config.planner.selected[vid] = true; if (!config.planner.perVillage[vid]) config.planner.perVillage[vid] = { kind: 'attack', offsetMs: 0, amounts: {} }; }
+      else { delete config.planner.selected[vid]; delete config.planner.perVillage[vid]; delete config.planner.homeAvail[vid]; }
+      save(); plannerRecomputeReservations(); renderPlannerCards();
+    }));
+  }
+
+  // Retorna "HH:MM:SS.mmm" (local) para um arriveAt em ms de servidor.
+  function fmtArriveLocal(arriveMsServer) {
+    if (!arriveMsServer) return '';
+    const d = new Date(arriveMsServer - wallToServerOffset());
+    const pad = (n, w) => String(n).padStart(w, '0');
+    return pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' + pad(d.getSeconds(), 2) + '.' + pad(d.getMilliseconds(), 3);
+  }
+
+  function renderPlannerCards() {
+    const cont = document.getElementById('twmgr-pl-cards'); if (!cont) return;
+    const p = config.planner;
+    const sel = Object.keys(p.selected || {}).filter((v) => p.selected[v]);
+    if (!sel.length) {
+      cont.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div>';
+      return;
+    }
+    const vilBy = {}; (_plVilCache || []).forEach((v) => { vilBy[v.vid] = v; });
+    const baseMs = arrivalToServerMs(p.arriveLocal);
+    const kindOpt = [['attack', '🧹 attack'], ['noble', '👑 noble'], ['fake', '🎭 fake'], ['support', '🛡️ support']];
+    cont.innerHTML = sel.map((vid) => {
+      const pv = p.perVillage[vid] || { kind: 'attack', offsetMs: 0, amounts: {} };
+      const home = p.homeAvail[vid] || {};
+      const loaded = home.loadedAt || 0;
+      const v = vilBy[vid] || { name: 'ID ' + vid };
+      const kindSel = kindOpt.map(([k, l]) => '<option value="' + k + '"' + (pv.kind === k ? ' selected' : '') + '>' + l + '</option>').join('');
+      const arrTxt = baseMs ? fmtArriveLocal(baseMs + (pv.offsetMs || 0)) : '—';
+      const grid = UNITS.map(([u, lbl]) => {
+        const max = home[u] || 0, cur = pv.amounts[u] || 0;
+        return '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#d3c299"><span style="width:56px">' + unitIcon(u, lbl) + '</span><input class="twmgr-pl-amt" data-vid="' + vid + '" data-u="' + u + '" type="number" min="0" max="' + max + '" value="' + cur + '" style="width:56px" /><span style="color:#8f7d57">/' + max + '</span></label>';
+      }).join('');
+      const warnTxt = loaded ? '' : '<span style="color:#ff9560;font-size:9px">⚠ tropas não carregadas</span>';
+      return '<div style="border:1px solid #3a2c1a;border-radius:6px;padding:6px;margin:6px 0">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px">' +
+          '<div style="font-size:11px;color:#e6cf7d"><b>' + esc(v.name) + '</b> ' + warnTxt + '</div>' +
+          '<div style="display:flex;gap:4px;align-items:center;font-size:10px">' +
+            '<select class="twmgr-pl-kind" data-vid="' + vid + '" style="font-size:10px">' + kindSel + '</select>' +
+            '<span>off</span><input class="twmgr-pl-off" data-vid="' + vid + '" type="number" value="' + (pv.offsetMs || 0) + '" step="100" style="width:64px;font-size:10px"><span>ms</span>' +
+          '</div>' +
+        '</div>' +
+        '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">→ chega às <b style="color:#d3c299">' + arrTxt + '</b></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px">' + grid + '</div>' +
+        '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">' +
+          '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-preset="attack" style="padding:3px 6px;font-size:10px">🧹 all off</button>' +
+          '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-preset="noble" style="padding:3px 6px;font-size:10px">👑 nobre</button>' +
+          '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-preset="fake" style="padding:3px 6px;font-size:10px">🎭 fake</button>' +
+          '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-preset="support" style="padding:3px 6px;font-size:10px">🛡️ all def</button>' +
+          '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-preset="zero" style="padding:3px 6px;font-size:10px">Zerar</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    // Wire eventos dos cards
+    cont.querySelectorAll('.twmgr-pl-kind').forEach((el) => el.addEventListener('change', readPlannerCfg));
+    cont.querySelectorAll('.twmgr-pl-off').forEach((el) => el.addEventListener('change', readPlannerCfg));
+    cont.querySelectorAll('.twmgr-pl-amt').forEach((el) => el.addEventListener('change', readPlannerCfg));
+    cont.querySelectorAll('.twmgr-pl-preset').forEach((btn) => btn.addEventListener('click', () => {
+      const vid = btn.getAttribute('data-vid'), preset = btn.getAttribute('data-preset');
+      const avail = config.planner.homeAvail[vid] || {};
+      const r = computePreset(preset, avail);
+      config.planner.perVillage[vid] = config.planner.perVillage[vid] || { kind: 'attack', offsetMs: 0, amounts: {} };
+      config.planner.perVillage[vid].amounts = r.amounts;
+      if (r.warn.length) pushLog('Preset ' + preset + ' em ' + vid + ': ' + r.warn.join(', '), 'err', 'planner');
+      save(); plannerRecomputeReservations(); renderPlannerCards();
+    }));
+  }
+
+  async function plannerLoadHomeAvail() {
+    const p = config.planner;
+    const sel = Object.keys(p.selected || {}).filter((v) => p.selected[v]);
+    if (!sel.length) { pushLog('Marque pelo menos 1 aldeia antes de carregar tropas.', 'err', 'planner'); return; }
+    pushLog('Coordenado: carregando tropas de ' + sel.length + ' aldeia(s)…', '', 'planner');
+    const results = await Promise.allSettled(sel.map((vid) => getVillageHomeAvail(vid).then((h) => ({ vid, h }))));
+    let ok = 0, fail = 0;
+    results.forEach((r) => {
+      if (r.status === 'fulfilled') { const h = r.value.h; h.loadedAt = Date.now(); p.homeAvail[r.value.vid] = h; ok++; }
+      else fail++;
+    });
+    save();
+    pushLog('Coordenado: tropas carregadas em ' + ok + '/' + sel.length + (fail ? ' (' + fail + ' falharam)' : '') + '.', ok ? 'ok' : 'err', 'planner');
+    renderPlannerCards();
+  }
+
+  function readPlannerCfg() {
+    const p = config.planner, g = (id) => document.getElementById(id);
+    if (g('twmgr-pl-target-x')) p.targetX = (g('twmgr-pl-target-x').value || '').replace(/\D/g, '');
+    if (g('twmgr-pl-target-y')) p.targetY = (g('twmgr-pl-target-y').value || '').replace(/\D/g, '');
+    if (g('twmgr-pl-arr')) p.arriveLocal = g('twmgr-pl-arr').value;
+    if (g('twmgr-pl-offset')) p.offsetMs = Math.max(0, parseInt(g('twmgr-pl-offset').value, 10) || 150);
+    document.querySelectorAll('.twmgr-pl-kind').forEach((s) => { const vid = s.getAttribute('data-vid'); if (p.perVillage[vid]) p.perVillage[vid].kind = s.value; });
+    document.querySelectorAll('.twmgr-pl-off').forEach((s) => { const vid = s.getAttribute('data-vid'); if (p.perVillage[vid]) p.perVillage[vid].offsetMs = parseInt(s.value, 10) || 0; });
+    document.querySelectorAll('.twmgr-pl-amt').forEach((s) => {
+      const vid = s.getAttribute('data-vid'), u = s.getAttribute('data-u');
+      if (p.perVillage[vid]) { const n = Math.max(0, parseInt(s.value, 10) || 0); if (n > 0) p.perVillage[vid].amounts[u] = n; else delete p.perVillage[vid].amounts[u]; }
+    });
+    save(); plannerRecomputeReservations();
+    // Atualiza só o texto de "chega às" dos cards sem re-render total (menos churn na UI enquanto o usuário digita).
+    const baseMs = arrivalToServerMs(p.arriveLocal);
+    document.querySelectorAll('#twmgr-pl-cards > div').forEach((card) => {
+      const off = card.querySelector('.twmgr-pl-off'); const target = card.querySelector('div[style*="chega"]');
+      // Sem re-inspeção fina — deixa o próximo render (ao alterar seleção) atualizar
+    });
+  }
+
+  function setPlannerStatus(on) { setBtnState('twmgr-pl-start', 'twmgr-pl-stop', on, '● Armado', '▶ Armar coordenado'); }
+
+  function plannerRefreshTemplatesList() {
+    const sel = document.getElementById('twmgr-pl-tpl-load'); if (!sel) return;
+    const plans = config.planner.plans || [];
+    sel.innerHTML = '<option value="">(nenhum)</option>' + plans.map((pl) => '<option value="' + pl.id + '">' + esc(pl.name) + '</option>').join('');
+  }
+
+  function plannerSaveTemplate() {
+    const input = document.getElementById('twmgr-pl-tpl-name'); if (!input) return;
+    const name = (input.value || '').trim();
+    if (!name) { pushLog('Dê um nome pro template antes de salvar.', 'err', 'planner'); return; }
+    const p = config.planner;
+    const tpl = {
+      id: genId(), name: name,
+      targetX: p.targetX, targetY: p.targetY, arriveLocal: p.arriveLocal, offsetMs: p.offsetMs,
+      selected: JSON.parse(JSON.stringify(p.selected)),
+      perVillage: JSON.parse(JSON.stringify(p.perVillage)),
+    };
+    p.plans = p.plans || []; p.plans.push(tpl); save();
+    plannerRefreshTemplatesList();
+    input.value = '';
+    pushLog('Template "' + name + '" salvo.', 'ok', 'planner');
+  }
+
+  function plannerApplyTemplate() {
+    const sel = document.getElementById('twmgr-pl-tpl-load'); if (!sel) return;
+    const id = sel.value; if (!id) return;
+    const tpl = (config.planner.plans || []).find((t) => t.id === id); if (!tpl) return;
+    const p = config.planner;
+    p.targetX = tpl.targetX || ''; p.targetY = tpl.targetY || '';
+    p.arriveLocal = tpl.arriveLocal || ''; p.offsetMs = tpl.offsetMs != null ? tpl.offsetMs : 150;
+    p.selected = JSON.parse(JSON.stringify(tpl.selected || {}));
+    p.perVillage = JSON.parse(JSON.stringify(tpl.perVillage || {}));
+    p.homeAvail = {}; // será recarregado
+    save(); plannerRecomputeReservations();
+    // Repopula os campos da UI
+    const g = (id) => document.getElementById(id);
+    if (g('twmgr-pl-target-x')) g('twmgr-pl-target-x').value = p.targetX;
+    if (g('twmgr-pl-target-y')) g('twmgr-pl-target-y').value = p.targetY;
+    if (g('twmgr-pl-arr')) g('twmgr-pl-arr').value = p.arriveLocal;
+    if (g('twmgr-pl-offset')) g('twmgr-pl-offset').value = p.offsetMs;
+    renderPlannerVillages().then(renderPlannerCards);
+    pushLog('Template "' + tpl.name + '" aplicado. Clique em 🔄 para carregar tropas.', 'ok', 'planner');
+  }
+
+  function plannerDeleteTemplate() {
+    const sel = document.getElementById('twmgr-pl-tpl-load'); if (!sel) return;
+    const id = sel.value; if (!id) return;
+    const tpl = (config.planner.plans || []).find((t) => t.id === id); if (!tpl) return;
+    if (!confirm('Apagar template "' + tpl.name + '"?')) return;
+    config.planner.plans = (config.planner.plans || []).filter((t) => t.id !== id);
+    save(); plannerRefreshTemplatesList();
+    pushLog('Template "' + tpl.name + '" apagado.', '', 'planner');
+  }
+
+  function plannerClearAll() {
+    if (!confirm('Limpar seleção e composição? (templates salvos ficam)')) return;
+    const p = config.planner;
+    p.selected = {}; p.perVillage = {}; p.homeAvail = {}; p.rows = [];
+    save(); plannerRecomputeReservations();
+    renderPlannerVillages().then(renderPlannerCards);
+    pushLog('Coordenado limpo.', '', 'planner');
+  }
+
   // ==================== MERCADO (Cunhagem) ====================
   async function getMarketState(vid) {
     const res = await fetch('/game.php?village=' + vid + '&screen=market&mode=send', { credentials: 'include' });
@@ -2467,6 +2669,22 @@
       else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#ff7568'; }
       else { bm.style.color = '#8fe39a'; bm.textContent = (config.map.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.map.nextAt - now) : '● rastreando…'; }
     }
+    const plClk = document.getElementById('twmgr-pl-srvclock'); if (plClk) { try { plClk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
+    const pls = document.getElementById('twmgr-pl-status');
+    if (pls) {
+      if (!config.planner || !config.planner.running) { pls.textContent = ''; }
+      else if (lockOther()) { pls.textContent = '⏸ outra aba'; pls.style.color = '#ff7568'; }
+      else {
+        const rr = (config.planner.rows || []);
+        const pend = rr.filter((r) => r.state === 'armed' || r.state === 'scheduled').length;
+        const sent = rr.filter((r) => r.state === 'sent').length;
+        const err = rr.filter((r) => r.state === 'error').length;
+        const nx = rr.filter((r) => r.sendAt && (r.state === 'scheduled' || r.state === 'armed')).sort((a, b) => a.sendAt - b.sendAt)[0];
+        pls.style.color = '#8fe39a';
+        pls.textContent = '● ' + sent + ' env · ' + pend + ' pend' + (err ? (' · ' + err + ' erro') : '') + (nx ? (' · próx ' + fmt(nx.sendAt - serverNow())) : '');
+      }
+    }
+    if (document.getElementById('twmgr-cards-planner')) refreshCards('planner');
     const ring = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('twmgr-run', !!on && !lockOther()); };
     ring('twmgr-btab-bb', config.bb && config.bb.running);
     ring('twmgr-btab-map', config.map && config.map.running);
@@ -2477,6 +2695,7 @@
     ring('twmgr-btab-fakes', config.fakes.running);
     ring('twmgr-btab-market', config.market.running);
     ring('twmgr-btab-build', config.build.running);
+    ring('twmgr-btab-planner', config.planner && config.planner.running);
     const dot = document.getElementById('twmgr-dot'); if (dot) dot.classList.toggle('on', anyRunning() && !lockOther());
   }
 
@@ -2683,7 +2902,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'log'].forEach((n) => {
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -2706,7 +2925,7 @@
     const modLog = (mod) => '<div class="twmgr-modlog"><div class="twmgr-modlog-head" data-modlog="' + mod + '">▸ Log do módulo (<span id="twmgr-modlog-count-' + mod + '">0</span>)</div><div id="twmgr-modlog-body-' + mod + '" class="twmgr-modlog-body" style="display:none"></div></div>';
     p.innerHTML =
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
@@ -2883,6 +3102,27 @@
         '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:8px;margin-top:4px"></div>' +
         modLog('map') +
       '</div>' +
+      '<div id="twmgr-tab-planner" style="display:none">' +
+        hint('🎯 Coordenado: 1 alvo, N aldeias. Cada aldeia manda seu ataque (limpeza/nobre/fake/apoio) chegando no horário certo. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
+        cardsDiv('planner') +
+        sec('1. Alvo',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Relógio do servidor</span><b id="twmgr-pl-srvclock" style="color:#ffd76a">--:--:--</b></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Coord alvo</span><span><input id="twmgr-pl-target-x" class="twmgr-inp" type="number" min="1" placeholder="x" style="width:56px"> | <input id="twmgr-pl-target-y" class="twmgr-inp" type="number" min="1" placeholder="y" style="width:56px"></span></div>' +
+          '<label class="twmgr-lbl">Chegada base (horário do servidor)</label><input id="twmgr-pl-arr" class="twmgr-inp" type="datetime-local" step="1" style="width:100%;margin:2px 0 0">' +
+          '<div class="twmgr-row" style="margin-top:6px"><span class="twmgr-lbl">Offset envio (ms)</span><input id="twmgr-pl-offset" class="twmgr-inp" type="number" min="0" value="150" style="width:56px"></div>') +
+        sec('2. Aldeias participantes',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Selecione</span><span style="font-size:9px"><a id="twmgr-pl-all" style="cursor:pointer;color:#e6cf7d">todas</a> · <a id="twmgr-pl-none" style="cursor:pointer;color:#e6cf7d">nenhuma</a> · <a id="twmgr-pl-load" style="cursor:pointer;color:#e6cf7d">🔄 carregar tropas</a></span></div>' +
+          '<div id="twmgr-pl-villages" style="max-height:110px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px"></div>') +
+        sec('3. Composição por aldeia',
+          '<div id="twmgr-pl-cards"><div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div></div>') +
+        sec('4. Armar',
+          '<div class="twmgr-actions"><button id="twmgr-pl-start" class="twmgr-btn twmgr-go">▶ Armar coordenado</button><button id="twmgr-pl-stop" class="twmgr-btn twmgr-stop">■ Desarmar</button><button id="twmgr-pl-clear" class="twmgr-btn twmgr-ghost" style="flex:0 0 auto">🗑</button></div>' +
+          '<div id="twmgr-pl-status" class="twmgr-cstatus"></div>') +
+        sec('Templates',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Salvar plano atual</span><span><input id="twmgr-pl-tpl-name" class="twmgr-inp" type="text" placeholder="ex: guerra XYZ" style="width:120px"> <button id="twmgr-pl-tpl-save" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">💾</button></span></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Carregar</span><span><select id="twmgr-pl-tpl-load" class="twmgr-inp" style="width:120px"></select> <button id="twmgr-pl-tpl-apply" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">📂</button> <button id="twmgr-pl-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="apagar">🗑</button></span></div>') +
+        modLog('planner') +
+      '</div>' +
       '<div id="twmgr-tab-log" style="display:none">' +
       '<div class="twmgr-hint">🤖 Notificação de CAPTCHA: alerta quando o jogo pedir verificação.</div>' +
       '<label class="twmgr-check"><input id="twmgr-cap-en" type="checkbox"> Detectar CAPTCHA</label>' +
@@ -2988,6 +3228,32 @@
     document.getElementById('twmgr-fk-stop').addEventListener('click', fakeStop);
     setFakeStatus(config.fakes.running);
 
+    // ---- Planner (Coordenado) ----
+    document.getElementById('twmgr-pl-target-x').value = config.planner.targetX || '';
+    document.getElementById('twmgr-pl-target-y').value = config.planner.targetY || '';
+    document.getElementById('twmgr-pl-arr').value = config.planner.arriveLocal || '';
+    document.getElementById('twmgr-pl-offset').value = config.planner.offsetMs != null ? config.planner.offsetMs : 150;
+    ['twmgr-pl-target-x', 'twmgr-pl-target-y', 'twmgr-pl-arr', 'twmgr-pl-offset'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', () => { readPlannerCfg(); renderPlannerVillages().then(renderPlannerCards); }); });
+    document.getElementById('twmgr-pl-all').addEventListener('click', () => {
+      document.querySelectorAll('.twmgr-pl-vil').forEach((cb) => { cb.checked = true; const vid = cb.getAttribute('data-vid'); config.planner.selected[vid] = true; if (!config.planner.perVillage[vid]) config.planner.perVillage[vid] = { kind: 'attack', offsetMs: 0, amounts: {} }; });
+      save(); plannerRecomputeReservations(); renderPlannerCards();
+    });
+    document.getElementById('twmgr-pl-none').addEventListener('click', () => {
+      document.querySelectorAll('.twmgr-pl-vil').forEach((cb) => { cb.checked = false; });
+      config.planner.selected = {}; config.planner.perVillage = {}; config.planner.homeAvail = {};
+      save(); plannerRecomputeReservations(); renderPlannerCards();
+    });
+    document.getElementById('twmgr-pl-load').addEventListener('click', plannerLoadHomeAvail);
+    document.getElementById('twmgr-pl-start').addEventListener('click', () => { readPlannerCfg(); plannerStart(); setPlannerStatus(config.planner.running); });
+    document.getElementById('twmgr-pl-stop').addEventListener('click', () => { plannerStop(); setPlannerStatus(false); });
+    document.getElementById('twmgr-pl-clear').addEventListener('click', plannerClearAll);
+    document.getElementById('twmgr-pl-tpl-save').addEventListener('click', plannerSaveTemplate);
+    document.getElementById('twmgr-pl-tpl-apply').addEventListener('click', plannerApplyTemplate);
+    document.getElementById('twmgr-pl-tpl-del').addEventListener('click', plannerDeleteTemplate);
+    plannerRefreshTemplatesList();
+    renderPlannerVillages().then(renderPlannerCards);
+    setPlannerStatus(config.planner.running);
+
     document.getElementById('twmgr-mk-coord').value = config.market.destCoord || '';
     document.getElementById('twmgr-mk-reserve').value = config.market.reserve || 0;
     document.getElementById('twmgr-mk-int').value = Math.round((config.market.interval || 600) / 60);
@@ -3061,7 +3327,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner'].forEach((m) => { refreshCards(m); renderModLog(m); });
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
     document.getElementById('twmgr-min').addEventListener('click', (e) => { e.stopPropagation(); config.uiMin = !config.uiMin; save(); applyCollapsed(); });
     document.getElementById('twmgr-upd-btn').addEventListener('click', (e) => { e.stopPropagation(); if (updateInfo.hasUpdate) doUpdate(); else checkForUpdate(true); });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.19.1
+// @version      9.19.2
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -40,7 +40,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.19.1';
+  const VERSION = '9.19.2';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1458,27 +1458,54 @@
     if (!force && _farmTplCache && (now - _farmTplCacheAt < 30 * 60 * 1000)) return _farmTplCache;
     const res = await fetch('/game.php?village=' + vid + '&screen=am_farm', { credentials: 'include' });
     const html = await res.text();
+    if (/^\s*<!doctype|^\s*<html/i.test(html.slice(0, 60)) && html.length < 2000) {
+      throw new Error('am_farm devolveu página curta (sessão expirada?)');
+    }
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    const out = { a: null, b: null, unitsA: {}, unitsB: {} };
-    // Ordem estável dos IDs conforme aparecem na tela de "configurações dos modelos"
+    const out = { a: null, b: null, unitsA: {}, unitsB: {}, debug: [] };
+
+    // Estratégia 1: IDs dos ícones farm_icon_a / farm_icon_b (data-attr ou onclick)
+    const iconId = (cls) => {
+      for (const el of doc.querySelectorAll('.' + cls + ', a.' + cls)) {
+        const d = el.getAttribute('data-template-id') || (el.dataset && el.dataset.templateId);
+        if (d && /^\d+$/.test(d)) return { id: d, src: 'icon-data' };
+        const oc = el.getAttribute('onclick') || '';
+        const m = oc.match(/sendUnits\s*\(\s*(?:this|\d+|['\"][a-z]+['\"])\s*,\s*(\d+)/i);
+        if (m) return { id: m[1], src: 'icon-onclick' };
+      }
+      return null;
+    };
+    const iconA = iconId('farm_icon_a');
+    const iconB = iconId('farm_icon_b');
+    if (iconA) { out.a = iconA.id; out.debug.push('A via ' + iconA.src); }
+    if (iconB) { out.b = iconB.id; out.debug.push('B via ' + iconB.src); }
+
+    // Estratégia 2: forms de configuração com input[name="template_id"] (ordem A, B)
     const orderedIds = [];
     doc.querySelectorAll('input[name="template_id"]').forEach((inp) => {
       const v = (inp.value || '').trim();
       if (/^\d+$/.test(v) && orderedIds.indexOf(v) === -1) orderedIds.push(v);
     });
-    // Também pega dos onclick dos ícones A/B (fonte alternativa)
-    const iconId = (cls) => {
-      const el = doc.querySelector('.' + cls);
-      if (!el) return null;
-      const d = el.getAttribute('data-template-id') || (el.dataset && el.dataset.templateId);
-      if (d && /^\d+$/.test(d)) return d;
-      const oc = el.getAttribute('onclick') || '';
-      const m = oc.match(/sendUnits\s*\(\s*(?:this|\d+)\s*,\s*(\d+)/);
-      return m ? m[1] : null;
-    };
-    out.a = iconId('farm_icon_a') || orderedIds[0] || null;
-    out.b = iconId('farm_icon_b') || orderedIds[1] || null;
-    // Lê as unidades dos formulários de configuração de cada template
+    if (!out.a && orderedIds[0]) { out.a = orderedIds[0]; out.debug.push('A via forms'); }
+    if (!out.b && orderedIds[1]) { out.b = orderedIds[1]; out.debug.push('B via forms'); }
+
+    // Estratégia 3: inline JS Accountmanager.farm.templates = [...]
+    if (!out.a || !out.b) {
+      const m = html.match(/templates\s*[:=]\s*(\[[\s\S]{0,4000}?\])/);
+      if (m) {
+        try {
+          const parsed = JSON.parse(m[1].replace(/(\w+):/g, '"$1":').replace(/'/g, '"'));
+          if (Array.isArray(parsed) && parsed.length) {
+            if (!out.a && parsed[0] && parsed[0].id) { out.a = String(parsed[0].id); out.debug.push('A via inline JS'); }
+            if (!out.b && parsed[1] && parsed[1].id) { out.b = String(parsed[1].id); out.debug.push('B via inline JS'); }
+            if (parsed[0] && parsed[0].units) out.unitsA = Object.assign({}, out.unitsA, parsed[0].units);
+            if (parsed[1] && parsed[1].units) out.unitsB = Object.assign({}, out.unitsB, parsed[1].units);
+          }
+        } catch (e) { /* JSON não parseável */ }
+      }
+    }
+
+    // Extrai unidades dos forms de configuração de cada template
     doc.querySelectorAll('form').forEach((form) => {
       const tplInp = form.querySelector('input[name="template_id"]');
       if (!tplInp) return;
@@ -1493,6 +1520,7 @@
         if (n > 0) bucket[p[0]] = n;
       });
     });
+
     _farmTplCache = out; _farmTplCacheAt = now;
     return out;
   }
@@ -1509,8 +1537,12 @@
     });
     const txt = await res.text();
     let j = null; try { j = JSON.parse(txt); } catch (e) {}
-    if (j && j.error) throw new Error(Array.isArray(j.error) ? j.error.join('; ') : String(j.error));
-    // Sem 'error' explícito assumimos sucesso (o assistente responde com dados de troops/report)
+    const err = j && (j.error || (j.response && j.response.error));
+    if (err) throw new Error(Array.isArray(err) ? err.join('; ') : String(err));
+    if (!j) {
+      // Servidor não retornou JSON — provável falha (HTML de login, alvo inválido, etc.)
+      throw new Error('assistente: resposta não-JSON (' + (txt || '').slice(0, 60).replace(/\s+/g, ' ') + ')');
+    }
     return true;
   }
 
@@ -1523,15 +1555,16 @@
     if (!forceRefresh && _mapVillagesCache && (now - _mapVillagesCacheAt < 6 * 3600 * 1000)) return _mapVillagesCache;
     const res = await fetch('/map/village.txt', { credentials: 'include' });
     const txt = await res.text();
+    if (/^\s*<!doctype|^\s*<html/i.test(txt.slice(0, 60))) throw new Error('village.txt retornou HTML (sessão expirada ou bloqueio)');
     const arr = [];
     txt.split('\n').forEach((line) => {
       const f = line.split(',');
-      if (f.length < 7) return;
-      const vid = f[0], x = parseInt(f[2], 10), y = parseInt(f[3], 10);
-      const pts = parseInt(f[5], 10);
+      if (f.length < 5) return;   // toleramos linhas curtas de mundos antigos
+      const vid = (f[0] || '').trim(), x = parseInt(f[2], 10), y = parseInt(f[3], 10);
+      const pts = parseInt(f[5] || '0', 10);
       if (!vid || isNaN(x) || isNaN(y)) return;
       let name = ''; try { name = decodeURIComponent((f[1] || '').replace(/\+/g, ' ')); } catch (e) { name = f[1] || ''; }
-      arr.push({ vid: vid, x: x, y: y, player: f[4] || '0', points: isNaN(pts) ? 0 : pts, name: name });
+      arr.push({ vid: vid, x: x, y: y, player: (f[4] || '0').trim(), points: isNaN(pts) ? 0 : pts, name: name });
     });
     _mapVillagesCache = arr; _mapVillagesCacheAt = now;
     return arr;
@@ -1591,22 +1624,28 @@
     const now = Date.now();
     if ((config.map.nextAt || 0) > now) { scheduleMap(); return; }
     const cfg = config.map;
-    // Descobre template B do assistente (id + unidades)
-    let tpls;
-    try { tpls = await getFarmTemplates(CUR_VID); }
-    catch (e) { pushLog('BM: falha ao ler assistente de saque: ' + (e.message || e), 'err'); cfg.nextAt = now + 300000; save(); scheduleMap(); return; }
-    if (!tpls.b) { pushLog('BM: não achei o Template B no assistente — configure o B em qualquer aldeia primeiro.', 'err'); cfg.nextAt = now + 600000; save(); scheduleMap(); return; }
-    // Unidades a enviar: prioriza o que veio do assistente; se vier vazio, usa o fallback manual do UI
-    const tplBUnits = (tpls.unitsB && Object.keys(tpls.unitsB).length) ? tpls.unitsB : (cfg.units || {});
-    if (mapUnitsTotal(tplBUnits) === 0) { pushLog('BM: Template B do assistente está sem tropas (e nenhum fallback configurado).', 'err'); cfg.nextAt = now + 600000; save(); scheduleMap(); return; }
-    // Guarda o snapshot detectado no config pra UI mostrar
-    cfg.units = tplBUnits; cfg.tplBId = tpls.b;
+    // Descobre template B (não é fatal — se falhar, rodamos em modo Place com o grid)
+    let tpls = { a: null, b: null, unitsA: {}, unitsB: {}, debug: [] }; let tplBId = null;
+    try {
+      tpls = await getFarmTemplates(CUR_VID);
+      tplBId = tpls.b;
+      pushLog('BM: templates detectados · A=' + (tpls.a || '?') + ' B=' + (tpls.b || '?') + (tpls.debug && tpls.debug.length ? (' [' + tpls.debug.join(', ') + ']') : ''));
+      if (tpls.unitsB && Object.keys(tpls.unitsB).length) pushLog('  B do assistente: ' + mapUnitsDesc(tpls.unitsB));
+    } catch (e) { pushLog('BM: assistente indisponível (' + (e.message || e) + '). Vou usar o Place com o grid.', 'err'); }
+    // Prioriza unidades vindas do assistente; senão usa o grid do UI
+    const tplBFromAssistant = (tpls.unitsB && Object.keys(tpls.unitsB).length) ? tpls.unitsB : null;
+    const tplBUnits = tplBFromAssistant || cfg.units || {};
+    if (mapUnitsTotal(tplBUnits) === 0) {
+      pushLog('BM: sem tropas pra enviar — configure o Template B no assistente ("↻ sync B") ou preencha o grid manualmente.', 'err');
+      cfg.nextAt = now + 600000; save(); scheduleMap(); return;
+    }
+    cfg.units = tplBUnits; cfg.tplBId = tplBId; save();
     const plan = await mapPlanTargets();
     if (!plan) { cfg.nextAt = now + 120000; save(); scheduleMap(); return; }
     cfg.lastPreview = plan.plan.flatMap((p) => p.targets.map((t) => ({ src: p.src.coord, srcName: p.src.name, coord: t.coord, dist: Math.round(t.dist * 10) / 10, pts: t.points, name: t.name, lastAt: t.lastAt }))).slice(0, 500);
     save(); renderMapPreview();
     const totalPlanned = plan.plan.reduce((a, p) => a + p.targets.length, 0);
-    pushLog('BM: ' + plan.myV.length + ' aldeia(s) minha(s) · ' + plan.barbCount + ' bárbaro(s) no mundo · ' + totalPlanned + ' planejado(s) · B=' + mapUnitsDesc(tplBUnits) + ' (tpl ' + tpls.b + ')', 'ok');
+    pushLog('BM: ' + plan.myV.length + ' aldeia(s) minha(s) · ' + plan.barbCount + ' bárbaro(s) após filtro pts · ' + totalPlanned + ' planejado(s) · caminho=' + (tplBId ? 'B+fallback' : 'Place') + ' · ' + mapUnitsDesc(tplBUnits), 'ok');
     if (totalPlanned === 0) { cfg.nextAt = now + Math.max(60, cfg.interval || 1800) * 1000; save(); scheduleMap(); return; }
     const delay = Math.max(0, cfg.delay != null ? cfg.delay : 500);
     let sentTotal = 0, sentB = 0, sentPlace = 0;
@@ -1632,10 +1671,12 @@
         if (!ok || !Object.keys(amounts).length) { semTropa++; continue; }
         // Caminho 1: assistente de saque B (mantém alvo listado + relatório fresco)
         let usedPath = null, lastErr = null;
-        try {
-          await sendFarmB(p.src.vid, t.vid, tpls.b);
-          usedPath = 'B';
-        } catch (e) { lastErr = e; }
+        if (tplBId) {
+          try {
+            await sendFarmB(p.src.vid, t.vid, tplBId);
+            usedPath = 'B';
+          } catch (e) { lastErr = e; }
+        }
         // Caminho 2: fallback Place (quando o alvo ainda não está listado no assistente)
         if (!usedPath) {
           try {
@@ -1673,14 +1714,42 @@
 
   async function mapPreview() {
     readMapCfg();
-    if (mapUnitsTotal(config.map.units) === 0) { pushLog('BM prévia: template B vazio.', 'err'); return; }
-    pushLog('BM: gerando prévia (sem enviar)…');
+    showTab('log');
+    pushLog('BM: === Diagnóstico + Prévia ===', 'ok');
+    // 1. village.txt
+    let all = null;
+    try {
+      all = await getMapVillages();
+      const barbAll = all.filter((v) => v.player === '0');
+      pushLog('  Mundo: ' + all.length + ' aldeias · ' + barbAll.length + ' bárbaras (arquivo /map/village.txt)');
+      if (all.length < 200) pushLog('  ⚠ village.txt trouxe pouca coisa — servidor pode ter limitado ou sessão expirou.', 'err');
+    } catch (e) { pushLog('  village.txt: ERRO ' + (e.message || e), 'err'); return; }
+    // 2. templates do assistente
+    try {
+      const tpls = await getFarmTemplates(CUR_VID, true);
+      pushLog('  Templates: A=' + (tpls.a || '?') + ' B=' + (tpls.b || '?') + (tpls.debug && tpls.debug.length ? (' [' + tpls.debug.join(', ') + ']') : ''));
+      pushLog('  B unidades: ' + (Object.keys(tpls.unitsB).length ? mapUnitsDesc(tpls.unitsB) : '(não detectadas)'));
+      if (tpls.unitsB && Object.keys(tpls.unitsB).length && (!config.map.units || !Object.keys(config.map.units).length)) {
+        config.map.units = tpls.unitsB; save();
+        document.querySelectorAll('.twmgr-bm-u').forEach((inp) => { const u = inp.getAttribute('data-unit'); inp.value = tpls.unitsB[u] || 0; });
+      }
+    } catch (e) { pushLog('  templates: ERRO ' + (e.message || e), 'err'); }
+    // 3. plano
     const plan = await mapPlanTargets();
     if (!plan) return;
-    config.map.lastPreview = plan.plan.flatMap((p) => p.targets.map((t) => ({ src: p.src.coord, srcName: p.src.name, coord: t.coord, dist: Math.round(t.dist * 10) / 10, pts: t.points, name: t.name, lastAt: t.lastAt })));
+    config.map.lastPreview = plan.plan.flatMap((p) => p.targets.map((t) => ({ src: p.src.coord, srcName: p.src.name, coord: t.coord, dist: Math.round(t.dist * 10) / 10, pts: t.points, name: t.name, lastAt: t.lastAt }))).slice(0, 500);
     save(); renderMapPreview();
     const tot = plan.plan.reduce((a, p) => a + p.targets.length, 0);
-    pushLog('BM prévia · ' + plan.myV.length + ' aldeia(s) minha(s) · ' + plan.barbCount + ' bárbaro(s) mundo · ' + tot + ' alvo(s) elegível(is).', 'ok');
+    pushLog('  Filtro pts (' + config.map.minPoints + '–' + config.map.maxPoints + '): ' + plan.barbCount + ' bárbaros');
+    pushLog('  Minhas aldeias: ' + plan.myV.length + (config.map.group ? (' (grupo ' + config.map.group + ')') : ' (todas)'));
+    pushLog('  Candidatos no range ' + config.map.maxDist + ' campos · ≥' + config.map.minDaysSinceAttack + 'd sem atk: ' + plan.totalCandidates);
+    pushLog('  Planejados neste ciclo (cota ' + config.map.maxPerVillage + '/aldeia): ' + tot, tot > 0 ? 'ok' : 'err');
+    if (tot === 0 && plan.myV.length > 0 && all) {
+      const barbs = all.filter((b) => b.player === '0');
+      let minD = Infinity;
+      plan.myV.forEach((s) => { barbs.forEach((b) => { const d = fieldDist(s.x, s.y, b.x, b.y); if (d < minD) minD = d; }); });
+      if (isFinite(minD)) pushLog('  Dica: o bárbaro mais próximo está a ' + (Math.round(minD * 10) / 10) + ' campos. Aumente "Distância máx." acima disso pra alcançar.');
+    }
     showTab('map');
   }
   function renderMapPreview() {
@@ -1714,9 +1783,12 @@
   function setMapStatus(on) { setBtnState('twmgr-bm-start', 'twmgr-bm-stop', on, '● Rastreando', '▶ Rastrear'); }
   function mapStart() {
     readMapCfg();
-    if (mapUnitsTotal(config.map.units) === 0) { pushLog('BM: configure o template B (nenhuma tropa marcada).', 'err'); return; }
+    // Se o grid está vazio, tentamos sincronizar automaticamente do assistente ao rodar.
     config.map.running = true; config.map.nextAt = 0; save();
-    setMapStatus(true); pushLog('Bárbaros Mapa iniciado · dist ≤' + config.map.maxDist + ' · ≥' + config.map.minDaysSinceAttack + 'd sem atk · [' + mapUnitsDesc(config.map.units) + ']', 'ok'); mapTick();
+    setMapStatus(true);
+    showTab('log');
+    pushLog('Bárbaros Mapa iniciado · dist ≤' + config.map.maxDist + ' · ≥' + config.map.minDaysSinceAttack + 'd sem atk', 'ok');
+    mapTick();
   }
   function mapStop() { readMapCfg(); config.map.running = false; save(); clearTimeout(mapTimer); setMapStatus(false); pushLog('Bárbaros Mapa parado.'); }
   async function mapRefreshCache() { _mapVillagesCache = null; try { const v = await getMapVillages(true); pushLog('BM: mapa recarregado — ' + v.length + ' aldeias no mundo (' + v.filter((x) => x.player === '0').length + ' bárbaras).', 'ok'); } catch (e) { pushLog('BM: recarregar falhou: ' + (e.message || e), 'err'); } }

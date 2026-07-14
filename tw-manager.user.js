@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.25.6
+// @version      9.26.0-alpha1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.25.6';
+  const VERSION = '9.26.0-alpha1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -110,7 +110,17 @@
     sentAt: {},                           // vid do bárbaro -> timestamp do último scout nosso
     lastPreview: [],                      // lista mostrada na tabela
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha() });
+  const defPlanner = () => ({
+    running: false, offsetMs: 150,
+    targetX: '', targetY: '',
+    arriveLocal: '',                       // datetime-local base (usuário digita)
+    selected: {},                          // { [vid]: true } — aldeias participantes
+    perVillage: {},                        // { [vid]: { kind, offsetMs, amounts:{unit:qty} } }
+    homeAvail: {},                         // { [vid]: { unit:N, loadedAt: ms } } — cache do "Carregar tropas"
+    rows: [],                              // gerado no plannerStart a partir de perVillage
+    plans: [],                             // templates salvos { id, name, targetX, targetY, arriveLocal, selected, perVillage }
+  });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -234,14 +244,25 @@
     if (c.captcha.ntfyTopic == null) c.captcha.ntfyTopic = '';
     if (c.captcha.cooldownSec == null) c.captcha.cooldownSec = 300;
     if (c.captcha.lastNotifiedAt == null) c.captcha.lastNotifiedAt = 0;
+    if (!c.planner) c.planner = defPlanner();
+    if (c.planner.offsetMs == null) c.planner.offsetMs = 150;
+    if (!c.planner.selected || typeof c.planner.selected !== 'object') c.planner.selected = {};
+    if (!c.planner.perVillage || typeof c.planner.perVillage !== 'object') c.planner.perVillage = {};
+    if (!c.planner.homeAvail || typeof c.planner.homeAvail !== 'object') c.planner.homeAvail = {};
+    if (!Array.isArray(c.planner.rows)) c.planner.rows = [];
+    if (!Array.isArray(c.planner.plans)) c.planner.plans = [];
+    if (c.planner.targetX == null) c.planner.targetX = '';
+    if (c.planner.targetY == null) c.planner.targetY = '';
+    if (c.planner.arriveLocal == null) c.planner.arriveLocal = '';
+    if (!c.reservations || typeof c.reservations !== 'object') c.reservations = {};
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, uiTimer = null;
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running); }
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, uiTimer = null;
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.running); }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
@@ -455,11 +476,24 @@
     return { avail: avail, commands: parseCommands(doc) };
   }
 
-  async function sendAttack(vid, x, y, amounts) {
+  // Retorna o avail com as reservas do Planner descontadas (não negativo).
+  function applyReservationsToAvail(vid, avail) {
+    const r = (config.reservations || {})[vid] || {};
+    const out = {};
+    UNITS.forEach(([u]) => { out[u] = Math.max(0, (avail[u] || 0) - (r[u] || 0)); });
+    return out;
+  }
+  async function getVillageStateReserved(vid) {
+    const st = await getVillageState(vid);
+    return { avail: applyReservationsToAvail(vid, st.avail), availRaw: st.avail, reserved: (config.reservations || {})[vid] || {}, commands: st.commands };
+  }
+
+  async function sendAttack(vid, x, y, amounts, kind) {
     const p1 = new URLSearchParams();
     Object.entries(amounts).forEach(([u, a]) => p1.set(u, String(a)));
     p1.set('x', String(x)); p1.set('y', String(y)); p1.set('input', x + '|' + y);
-    p1.set('attack', 'l'); p1.set('h', CSRF);
+    if (kind === 'support') p1.set('support', 'l'); else p1.set('attack', 'l');
+    p1.set('h', CSRF);
     const r1 = await fetch('/game.php?village=' + vid + '&screen=place&try=confirm', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p1.toString() });
     let t1 = await r1.text();
     try { const j = JSON.parse(t1); t1 = (j.response && j.response.dialog) || j.dialog || t1; } catch (e) {}
@@ -504,7 +538,7 @@
     let sentAny = false;
     for (const origin of Object.keys(byOrigin)) {
       let state;
-      try { state = await getVillageState(origin); }
+      try { state = await getVillageStateReserved(origin); }
       catch (e) { pushLog('Erro ao ler estado (' + origin + '): ' + (e.message || e), 'err'); byOrigin[origin].forEach((t) => { t.nextSendAt = now + 30000; }); continue; }
       const avail = state.avail;
       for (const t of byOrigin[origin]) {
@@ -544,7 +578,9 @@
     return arr.map((v) => {
       const carryFactor = parseFloat(v.unit_carry_factor) || 1;
       const home = v.unit_counts_home || {};
-      const avail = {}; SCAV_UNITS.forEach(([u]) => { avail[u] = parseInt(home[u], 10) || 0; });
+      const availRaw = {}; SCAV_UNITS.forEach(([u]) => { availRaw[u] = parseInt(home[u], 10) || 0; });
+      const reserved = (config.reservations || {})[String(v.village_id)] || {};
+      const avail = {}; SCAV_UNITS.forEach(([u]) => { avail[u] = Math.max(0, availRaw[u] - (reserved[u] || 0)); });
       const options = [];
       for (let id = 1; id <= 4; id++) {
         const o = v.options && v.options[id];
@@ -764,7 +800,7 @@
     const colorTxt = (t) => ({ green: 'verde', yellow: 'amarelo', blue: 'azul', red: 'vermelho' }[t.color] || t.color) + (t.full ? ' cheio' : ' vazio');
     let count = 0;
     for (const v of villages) {
-      if (minCL > 0) { try { if (((await getVillageState(v.vid)).avail.light || 0) < minCL) { pushLog(v.name + ': pulada — menos de ' + minCL + ' cavalaria leve.', '', 'farm'); continue; } } catch (e) {} }
+      if (minCL > 0) { try { if (((await getVillageStateReserved(v.vid)).avail.light || 0) < minCL) { pushLog(v.name + ': pulada — menos de ' + minCL + ' cavalaria leve.', '', 'farm'); continue; } } catch (e) {} }
       let tpl = null;
       if (!dyn) { try { tpl = await getFarmTemplates(v.vid); } catch (e) { tpl = null; } }
       let targets;
@@ -875,7 +911,7 @@
       let targets;
       try { targets = await getFarmTargets(v.vid); }
       catch (e) { pushLog('Muralha em ' + v.name + ': erro ao ler os alvos (' + (e.message || e) + ').', 'err', 'wall'); continue; }
-      let avail; try { avail = (await getVillageState(v.vid)).avail; } catch (e) { avail = {}; }
+      let avail; try { avail = (await getVillageStateReserved(v.vid)).avail; } catch (e) { avail = {}; }
       const eligible = []; const skip = { semmuro: 0, fora: 0, jaenv: 0 };
       targets.forEach((t) => {
         if (!t.reportId) return;
@@ -1159,11 +1195,12 @@
   }
 
   // ==================== FAKES (multi-alvo, multi-origem, fake eficiente) ====================
-  async function fakePrepare(vid, x, y, amounts) {
+  async function fakePrepare(vid, x, y, amounts, kind) {
     const p1 = new URLSearchParams();
     Object.entries(amounts).forEach(([u, a]) => p1.set(u, String(a)));
     p1.set('x', String(x)); p1.set('y', String(y)); p1.set('input', x + '|' + y);
-    p1.set('attack', 'l'); p1.set('h', CSRF);
+    if (kind === 'support') p1.set('support', 'l'); else p1.set('attack', 'l');
+    p1.set('h', CSRF);
     const r1 = await fetch('/game.php?village=' + vid + '&screen=place&try=confirm', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p1.toString() });
     let t1 = await r1.text();
     try { const j = JSON.parse(t1); t1 = (j.response && j.response.dialog) || j.dialog || t1; } catch (e) {}
@@ -1186,6 +1223,7 @@
     if (/n[aã]o tem tropas suficientes|not enough/i.test(t2)) throw new Error('recusado: tropas insuficientes');
     return true;
   }
+  const attackPrepare = fakePrepare, attackFire = fakeFire;
   const FAKE_POP = { spear: 1, sword: 1, axe: 1, archer: 1, spy: 2, light: 4, marcher: 5, heavy: 6, ram: 5, catapult: 8, knight: 10, snob: 100 };
   function parseCoords(raw) {
     const out = [], seen = {};
@@ -1199,7 +1237,7 @@
     UNITS.forEach(([u]) => { let n = 0; const alt = doc.querySelector('a.units-entry-all[data-unit="' + u + '"]'); if (alt) { const dc = alt.getAttribute('data-all-count'); n = parseInt(dc != null ? dc : (alt.textContent || '').replace(/\D/g, ''), 10); } avail[u] = isNaN(n) ? 0 : n; });
     const pm = doc.querySelector('#pop_max_label');
     const popMax = pm ? (parseInt((pm.textContent || '').replace(/\D/g, ''), 10) || 0) : 0;
-    return { avail: avail, popMax: popMax };
+    return { avail: applyReservationsToAvail(vid, avail), popMax: popMax };
   }
   function computeFakeComp(T, avail, siege, filler) {
     const amounts = {}; let pop = 0;
@@ -1336,6 +1374,187 @@
     setFakeStatus(true); pushLog('Fakes armados — ' + gen.length + ' no total.', 'ok', 'fakes'); fakeTick();
   }
   function fakeStop() { readFakesCfg(); config.fakes.running = false; save(); clearTimeout(fakeTimer); setFakeStatus(false); pushLog('Fakes desarmados.', '', 'fakes'); }
+
+  // ==================== PLANNER (Ataque Coordenado) ====================
+  // Lê o "home available" — tropas em casa (aproximação: usa o max do input do jogo se disponível,
+  // senão cai no data-all-count do link geral). O Fase 3 (UI) confirma o parser no jogo real.
+  async function getVillageHomeAvail(vid) {
+    const res = await fetch('/game.php?village=' + vid + '&screen=place', { credentials: 'include' });
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const home = {};
+    UNITS.forEach(([u]) => {
+      let n = 0;
+      const inp = doc.querySelector('#unit_input_' + u);
+      if (inp) {
+        // placeholder típico: "0/N" onde N é o total em casa
+        const ph = inp.getAttribute('placeholder') || '';
+        const mm = ph.match(/(\d+)\s*\/\s*(\d+)/);
+        if (mm) n = parseInt(mm[2], 10) || 0;
+        if (!n) { const mx = inp.getAttribute('data-max') || inp.getAttribute('max') || inp.getAttribute('data-all-count-home'); if (mx) n = parseInt(mx, 10) || 0; }
+      }
+      if (!n) {
+        const alt = doc.querySelector('a.units-entry-all[data-unit="' + u + '"]');
+        if (alt) { const dc = alt.getAttribute('data-all-count'); n = parseInt(dc != null ? dc : (alt.textContent || '').replace(/\D/g, ''), 10) || 0; }
+      }
+      home[u] = isNaN(n) ? 0 : n;
+    });
+    return home;
+  }
+
+  const OFF_UNITS = ['spear', 'sword', 'axe', 'archer', 'light', 'marcher', 'heavy', 'ram', 'catapult'];
+  const DEF_UNITS = ['spear', 'sword', 'archer', 'heavy', 'knight'];
+  const NOBLE_ESCORT_PCT = 0.6;
+  const FAKE_MIN_POP = 5;
+
+  // Dado um preset e o avail (home) de uma aldeia, retorna { amounts, warn: [...] }.
+  function computePreset(kind, avail) {
+    const amounts = {}; const warn = [];
+    const av = (u) => avail[u] || 0;
+    if (kind === 'zero') return { amounts: {}, warn: [] };
+    if (kind === 'attack') {
+      OFF_UNITS.forEach((u) => { if (av(u) > 0) amounts[u] = av(u); });
+      if (Object.keys(amounts).length === 0) warn.push('sem tropas de ataque');
+      return { amounts: amounts, warn: warn };
+    }
+    if (kind === 'noble') {
+      if (av('snob') < 1) { warn.push('sem nobre'); return { amounts: amounts, warn: warn }; }
+      amounts.snob = 1;
+      OFF_UNITS.forEach((u) => { const q = Math.floor(av(u) * NOBLE_ESCORT_PCT); if (q > 0) amounts[u] = q; });
+      return { amounts: amounts, warn: warn };
+    }
+    if (kind === 'fake') {
+      let siege = null;
+      if (av('ram') >= 1) siege = 'ram';
+      else if (av('catapult') >= 1) siege = 'catapult';
+      let pop = 0;
+      if (siege) { amounts[siege] = 1; pop += FAKE_POP[siege] || 5; }
+      else warn.push('sem ram/catapult, fake sem siege');
+      const need = Math.max(0, FAKE_MIN_POP - pop);
+      if (need > 0) {
+        const spies = Math.min(av('spy'), Math.ceil(need / (FAKE_POP.spy || 2)));
+        if (spies > 0) amounts.spy = spies;
+        else warn.push('sem spy pra completar 5 pop');
+      }
+      return { amounts: amounts, warn: warn };
+    }
+    if (kind === 'support') {
+      DEF_UNITS.forEach((u) => { if (av(u) > 0) amounts[u] = av(u); });
+      if (Object.keys(amounts).length === 0) warn.push('sem tropas de defesa');
+      return { amounts: amounts, warn: warn };
+    }
+    return { amounts: amounts, warn: ['kind desconhecido: ' + kind] };
+  }
+
+  // Recalcula config.reservations a partir do estado atual do Planner.
+  // Se running: soma amounts de rows com state armed|scheduled.
+  // Senão: soma amounts de perVillage[vid] onde selected[vid] === true.
+  function plannerRecomputeReservations() {
+    const res = {};
+    const p = config.planner || {};
+    if (p.running && Array.isArray(p.rows)) {
+      p.rows.forEach((r) => {
+        if (r.state !== 'armed' && r.state !== 'scheduled') return;
+        const vid = String(r.origin); res[vid] = res[vid] || {};
+        Object.entries(r.amounts || {}).forEach(([u, q]) => { res[vid][u] = (res[vid][u] || 0) + (parseInt(q, 10) || 0); });
+      });
+    } else {
+      Object.keys(p.selected || {}).forEach((vid) => {
+        if (!p.selected[vid]) return;
+        const pv = (p.perVillage || {})[vid]; if (!pv) return;
+        res[vid] = res[vid] || {};
+        Object.entries(pv.amounts || {}).forEach(([u, q]) => { const n = parseInt(q, 10) || 0; if (n > 0) res[vid][u] = (res[vid][u] || 0) + n; });
+      });
+    }
+    config.reservations = res;
+    save();
+  }
+
+  // Converte perVillage em rows[] com arriveAt calculado (base + offset por linha).
+  function plannerBuildRows() {
+    const p = config.planner;
+    const baseMs = arrivalToServerMs(p.arriveLocal); if (!baseMs) throw new Error('chegada base inválida');
+    const rows = [];
+    Object.keys(p.selected || {}).forEach((vid) => {
+      if (!p.selected[vid]) return;
+      const pv = (p.perVillage || {})[vid]; if (!pv) return;
+      const amounts = {}; let any = false;
+      Object.entries(pv.amounts || {}).forEach(([u, q]) => { const n = parseInt(q, 10) || 0; if (n > 0) { amounts[u] = n; any = true; } });
+      if (!any) return;
+      rows.push({
+        id: genId(), origin: String(vid), x: String(p.targetX), y: String(p.targetY),
+        kind: pv.kind || 'attack', amounts: amounts,
+        arriveAt: baseMs + (pv.offsetMs || 0), offsetMs: pv.offsetMs || 0,
+        durSec: null, sendAt: 0, state: 'armed', error: null, sentAt: null,
+      });
+    });
+    p.rows = rows;
+    return rows;
+  }
+
+  const PL_ICON = { attack: '🧹', noble: '👑', fake: '🎭', support: '🛡️' };
+
+  function schedulePlannerFire(r) {
+    const lead = 12000;
+    const delayPrep = Math.max(0, (r.sendAt - lead) - serverNow());
+    setTimeout(async () => {
+      if (!config.planner.running || r.state !== 'scheduled' || lockOther()) return;
+      let prep;
+      try { prep = await attackPrepare(r.origin, r.x, r.y, r.amounts, r.kind); }
+      catch (e) { r.state = 'error'; r.error = (e.message || e); save(); plannerRecomputeReservations(); pushLog((PL_ICON[r.kind] || '') + ' ' + r.kind + ' ' + r.x + '|' + r.y + ': preparo falhou (' + r.error + ').', 'err', 'planner'); return; }
+      const fireDelay = Math.max(0, (r.sendAt - (config.planner.offsetMs || 0)) - serverNow());
+      setTimeout(async () => {
+        if (!config.planner.running || r.state !== 'scheduled' || lockOther()) return;
+        try { await attackFire(prep); r.state = 'sent'; r.sentAt = serverNow(); pushLog((PL_ICON[r.kind] || '') + ' ' + r.kind + ' enviado → ' + r.x + '|' + r.y + ' (de ' + r.origin + ')', 'ok', 'planner'); }
+        catch (e) { r.state = 'error'; r.error = (e.message || e); pushLog((PL_ICON[r.kind] || '') + ' ' + r.kind + ' ' + r.x + '|' + r.y + ': envio falhou (' + r.error + ').', 'err', 'planner'); }
+        save(); plannerRecomputeReservations();
+      }, fireDelay);
+    }, delayPrep);
+  }
+
+  async function plannerTick() {
+    clearTimeout(plannerTimer);
+    if (!config.planner.running) return;
+    if (lockOther()) { plannerTimer = setTimeout(plannerTick, 5000); return; }
+    claimLock();
+    const nowS = serverNow();
+    for (const r of config.planner.rows) {
+      if (r.state === 'sent' || r.state === 'error' || r.state === 'scheduled') continue;
+      if (!r.arriveAt) { r.state = 'error'; r.error = 'sem horário'; continue; }
+      if (r.durSec == null) {
+        try { const p = await attackPrepare(r.origin, r.x, r.y, r.amounts, r.kind); r.durSec = p.dur; }
+        catch (e) { r.state = 'error'; r.error = (e.message || e); pushLog((PL_ICON[r.kind] || '') + ' ' + r.kind + ' ' + r.x + '|' + r.y + ': ' + r.error, 'err', 'planner'); continue; }
+        if (!r.durSec) { r.state = 'error'; r.error = 'sem duração'; continue; }
+      }
+      r.sendAt = r.arriveAt - r.durSec * 1000;
+      if (r.sendAt - nowS < -2000) { r.state = 'error'; r.error = 'envio no passado'; continue; }
+      r.state = 'scheduled'; schedulePlannerFire(r);
+    }
+    save();
+    plannerTimer = setTimeout(plannerTick, 30000);
+  }
+
+  function plannerStart() {
+    const p = config.planner;
+    if (!p.targetX || !p.targetY) { pushLog('Coordenado: informe o alvo (x|y).', 'err', 'planner'); return; }
+    if (!p.arriveLocal) { pushLog('Coordenado: informe a chegada base.', 'err', 'planner'); return; }
+    let rows;
+    try { rows = plannerBuildRows(); } catch (e) { pushLog('Coordenado: ' + (e.message || e), 'err', 'planner'); return; }
+    if (!rows.length) { pushLog('Coordenado: nenhuma aldeia com tropas configuradas.', 'err', 'planner'); return; }
+    p.running = true;
+    save();
+    plannerRecomputeReservations();
+    pushLog('🎯 Coordenado armado — ' + rows.length + ' ataque(s) contra ' + p.targetX + '|' + p.targetY + '.', 'ok', 'planner');
+    plannerTick();
+  }
+
+  function plannerStop() {
+    config.planner.running = false;
+    clearTimeout(plannerTimer);
+    config.planner.rows = [];
+    save();
+    plannerRecomputeReservations();
+    pushLog('🎯 Coordenado desarmado.', '', 'planner');
+  }
 
   // ==================== MERCADO (Cunhagem) ====================
   async function getMarketState(vid) {
@@ -2006,7 +2225,7 @@
     for (const p of plan.plan) {
       if (!p.targets.length) continue;
       let state;
-      try { state = await getVillageState(p.src.vid); }
+      try { state = await getVillageStateReserved(p.src.vid); }
       catch (e) { pushLog('Mapa: erro ao ler o estado de ' + p.src.name + ' (' + (e.message || e) + ').', 'err', 'map'); continue; }
       const avail = state.avail;
       const busy = {};
@@ -2868,6 +3087,7 @@
     if (config.build.running) { if (!lockOther()) pushLog('Edifícios retomado.', 'ok', 'build'); scheduleBuild(); }
     if (config.bb && config.bb.running) { if (!lockOther()) pushLog('Cultivo retomado.', 'ok', 'bb'); scheduleBB(); }
     if (config.map && config.map.running) { if (!lockOther()) pushLog('Mapa retomado.', 'ok', 'map'); scheduleMap(); }
+    if (config.planner && config.planner.running) { (config.planner.rows || []).forEach((r) => { if (r.state === 'scheduled') r.state = 'armed'; }); if (!lockOther()) pushLog('🎯 Coordenado retomado.', 'ok', 'planner'); plannerTick(); }
     startCaptchaWatcher();
   }
 

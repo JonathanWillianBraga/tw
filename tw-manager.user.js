@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.22.3
+// @version      9.22.4
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.22.3';
+  const VERSION = '9.22.4';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -2179,8 +2179,8 @@
       "#twmgr-head .twmgr-ver{font-weight:400;font-size:8px;opacity:.75}",
       "#twmgr-head-actions{flex:0 0 auto;display:flex;align-items:center;gap:7px}",
       "#twmgr-min{cursor:pointer;font-size:17px;line-height:1;padding:0 2px;opacity:.85}#twmgr-min:hover{opacity:1}",
-      "#twmgr-logbtn,#twmgr-upd-btn{cursor:pointer;font-size:13px;line-height:1;padding:2px 3px;border-radius:5px;opacity:.85;position:relative;transition:.15s}",
-      "#twmgr-logbtn:hover,#twmgr-upd-btn:hover{opacity:1;background:rgba(255,255,255,.14)}",
+      "#twmgr-logbtn,#twmgr-upd-btn,#twmgr-cfgbtn{cursor:pointer;font-size:13px;line-height:1;padding:2px 3px;border-radius:5px;opacity:.85;position:relative;transition:.15s}",
+      "#twmgr-logbtn:hover,#twmgr-upd-btn:hover,#twmgr-cfgbtn:hover{opacity:1;background:rgba(255,255,255,.14)}",
       "#twmgr-upd-badge{position:absolute;top:-3px;right:-2px;color:#ff5a5a;font-size:9px}",
       ".twmgr-tabs{flex:0 0 auto;display:flex;flex-wrap:nowrap;overflow-x:auto;background:#1a140d;border-bottom:1px solid #3a2e1b;scrollbar-width:thin}",
       ".twmgr-tab{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 1px;cursor:pointer;color:#a2926c;border-bottom:2px solid transparent;transition:.15s}",
@@ -2260,7 +2260,16 @@
     const tabBtn = (n, ico, label) => '<div id="twmgr-btab-' + n + '" class="twmgr-tab" data-tab="' + n + '"><span class="twmgr-tab-ico">' + ico + '</span><span class="twmgr-tab-lbl">' + label + '</span></div>';
     const fmRow = (k, label) => '<tr><td style="text-align:left;padding:1px 4px">' + label + '</td><td style="text-align:center"><input id="twmgr-fm-' + k + '-a" class="twmgr-inp" type="number" min="0" value="0" style="width:42px"></td><td style="text-align:center"><input id="twmgr-fm-' + k + '-b" class="twmgr-inp" type="number" min="0" value="0" style="width:42px"></td><td style="text-align:center"><input id="twmgr-fm-' + k + '-c" type="checkbox"></td></tr>';
     p.innerHTML =
-      '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
+      '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-cfgbtn" title="Configurações (CAPTCHA)">⚙️</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
+      '<div id="twmgr-cfgpop" style="display:none;position:absolute;top:44px;right:8px;z-index:5;width:260px;background:linear-gradient(160deg,#2a2016,#201810);border:1px solid #b8912e;border-radius:10px;box-shadow:0 8px 20px rgba(0,0,0,.55);padding:10px 12px;font-size:11px;color:#e9dcc2">' +
+        '<div style="font-size:12px;color:#e8d29a;margin-bottom:4px">🚨 Notificação de CAPTCHA</div>' +
+        '<div style="font-size:10px;color:#8f7d57;line-height:1.4;margin-bottom:8px">Detecta bot-check do TW / hCaptcha / reCAPTCHA e te avisa. Cooldown de 5 min.</div>' +
+        '<label class="twmgr-check" style="margin-bottom:6px"><input id="twmgr-cap-en" type="checkbox"> Ativar detector</label>' +
+        '<label class="twmgr-check" style="margin-bottom:6px"><input id="twmgr-cap-brw" type="checkbox"> Notificação do navegador</label>' +
+        '<div class="twmgr-row"><span class="twmgr-lbl">Tópico ntfy.sh</span><input id="twmgr-cap-ntfy" class="twmgr-inp" type="text" placeholder="patrick-tw-abc" style="width:130px"></div>' +
+        '<div style="font-size:9px;color:#8f7d57;margin:-3px 0 6px">Escolha nome difícil (é público). Instale o app ntfy.sh no celular e assine esse tópico.</div>' +
+        '<button id="twmgr-cap-test" class="twmgr-btn twmgr-ghost" style="width:100%;font-size:10px">🔔 testar notificação</button>' +
+      '</div>' +
       '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none"><div class="twmgr-hint">Coleta em <b>todas as suas aldeias</b>: distribui as tropas marcadas entre as opções livres e reenvia no retorno.</div><div class="twmgr-units">' + SCAV_UNITS.map(([u, n]) => '<label><input id="twmgr-su-' + u + '" type="checkbox"> ' + unitIcon(u, n) + ' ' + n + '</label>').join('') + '</div><div class="twmgr-actions"><button id="twmgr-scav-start" class="twmgr-btn twmgr-go">▶ Coletar</button><button id="twmgr-scav-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div><div id="twmgr-scav-status" class="twmgr-cstatus"></div></div>' +
@@ -2361,21 +2370,32 @@
       '</div>';
     document.body.appendChild(p);
 
-    document.getElementById('twmgr-logbtn').addEventListener('click', () => showTab('log'));
+    const _logbtn = document.getElementById('twmgr-logbtn'); if (_logbtn) _logbtn.addEventListener('click', () => showTab('log'));
 
-    // Notificação de CAPTCHA
-    document.getElementById('twmgr-cap-en').checked = !!config.captcha.enabled;
-    document.getElementById('twmgr-cap-brw').checked = !!config.captcha.browserNotif;
-    document.getElementById('twmgr-cap-ntfy').value = config.captcha.ntfyTopic || '';
+    // Toggle do popup de config (CAPTCHA)
+    const _cfgbtn = document.getElementById('twmgr-cfgbtn'), _cfgpop = document.getElementById('twmgr-cfgpop');
+    if (_cfgbtn && _cfgpop) {
+      _cfgbtn.addEventListener('click', (e) => { e.stopPropagation(); _cfgpop.style.display = _cfgpop.style.display === 'none' ? 'block' : 'none'; });
+      document.addEventListener('click', (e) => { if (_cfgpop.style.display !== 'none' && !_cfgpop.contains(e.target) && e.target !== _cfgbtn) _cfgpop.style.display = 'none'; });
+    }
+
+    // Notificação de CAPTCHA — todos os wire-ups tolerantes a ausência de elemento
+    const _capEn = document.getElementById('twmgr-cap-en');
+    const _capBrw = document.getElementById('twmgr-cap-brw');
+    const _capNtfy = document.getElementById('twmgr-cap-ntfy');
+    const _capTest = document.getElementById('twmgr-cap-test');
+    if (_capEn) _capEn.checked = !!config.captcha.enabled;
+    if (_capBrw) _capBrw.checked = !!config.captcha.browserNotif;
+    if (_capNtfy) _capNtfy.value = config.captcha.ntfyTopic || '';
     const readCapCfg = () => {
-      config.captcha.enabled = document.getElementById('twmgr-cap-en').checked;
-      config.captcha.browserNotif = document.getElementById('twmgr-cap-brw').checked;
-      config.captcha.ntfyTopic = document.getElementById('twmgr-cap-ntfy').value.trim();
+      if (_capEn) config.captcha.enabled = _capEn.checked;
+      if (_capBrw) config.captcha.browserNotif = _capBrw.checked;
+      if (_capNtfy) config.captcha.ntfyTopic = _capNtfy.value.trim();
       save();
     };
-    ['twmgr-cap-en', 'twmgr-cap-brw', 'twmgr-cap-ntfy'].forEach((id) => document.getElementById(id).addEventListener('change', readCapCfg));
-    document.getElementById('twmgr-cap-brw').addEventListener('change', async () => { if (document.getElementById('twmgr-cap-brw').checked) await ensureNotifyPermission(); });
-    document.getElementById('twmgr-cap-test').addEventListener('click', testCaptchaNotif);
+    [_capEn, _capBrw, _capNtfy].forEach((el) => { if (el) el.addEventListener('change', readCapCfg); });
+    if (_capBrw) _capBrw.addEventListener('change', async () => { if (_capBrw.checked) await ensureNotifyPermission(); });
+    if (_capTest) _capTest.addEventListener('click', testCaptchaNotif);
 
     SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) el.checked = !!(config.scav.units && config.scav.units[u]); });
     document.getElementById('twmgr-scav-start').addEventListener('click', scavStart);

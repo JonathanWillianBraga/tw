@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.31.0
+// @version      9.31.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.31.0';
+  const VERSION = '9.31.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -334,6 +334,7 @@
   function renderCards(mod, arr) {
     const box = document.getElementById('twmgr-cards-' + mod); if (!box) return;
     box.innerHTML = arr.map((c) =>
+      (c.br ? '<div class="twmgr-card-break"></div>' : '') +
       '<div class="twmgr-card-mini' + (c.wide ? ' twmgr-card-wide' : '') + '"><div class="twmgr-card-v"' + (c.hl ? ' style="color:#5fd3e8"' : '') + '>' + (c.v == null ? '—' : c.v) + '</div><div class="twmgr-card-l">' + c.l + '</div></div>'
     ).join('');
   }
@@ -347,8 +348,8 @@
         { v: fmtN(s.active), l: 'aldeias' },
         { v: fmtN(s.activeTotal), l: 'saques ativos', hl: true },
         { v: fmtN(s.a), l: 'A' }, { v: fmtN(s.b), l: 'B' }, { v: fmtN(s.c), l: 'C' },
-        { v: fmtN(lt.today), l: 'saqueado hoje' },
-        { v: fmtN(lt.estimate), l: 'estimativa fim do dia', wide: true },
+        { v: fmtN(lt.today), l: 'saqueado hoje', br: true },
+        { v: fmtN(lt.estimate), l: 'estimativa fim do dia' },
       ];
     } else if (mod === 'wall') {
       const s = (config.wall.stats || {});
@@ -3109,10 +3110,14 @@
       ".twmgr-tab.twmgr-run .twmgr-tab-ico{border-color:#3fce54;background:rgba(63,206,84,.15);box-shadow:0 0 9px rgba(63,206,84,.6)}",
       ".twmgr-ui{width:18px;height:18px;vertical-align:middle}",
       ".twmgr-fmtable{width:100%;border-collapse:collapse;font-size:11px}",
-      ".twmgr-fmtable th{font-size:10px;color:#c9a24a;font-weight:700;padding:3px 4px;border-bottom:1px solid #4a3b28;text-transform:uppercase}",
+      ".twmgr-fmtable th{font-size:10px;color:#ffd76a;font-weight:700;padding:4px 2px;border-bottom:1px solid #6a5320;text-transform:uppercase;vertical-align:middle}",
+      ".twmgr-fmtable td{vertical-align:middle}",
+      ".twmgr-fmtable th:first-child,.twmgr-fmrow td:first-child{text-align:left}",
+      ".twmgr-fmtable th:not(:first-child),.twmgr-fmrow td:not(:first-child){width:44px;text-align:center}",
       ".twmgr-fmrow{border-bottom:1px solid rgba(255,255,255,.04)}",
       ".twmgr-fmrow:hover{background:rgba(212,175,55,.06)}",
-      ".twmgr-fmck{width:16px;height:16px;cursor:pointer}",
+      ".twmgr-fmck{width:15px;height:15px;cursor:pointer;vertical-align:middle;margin:0}",
+      ".twmgr-card-break{flex-basis:100%;height:0}",
       ".twmgr-cards{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}",
       ".twmgr-card-mini{flex:1 1 0;min-width:58px;background:linear-gradient(165deg,#241a0e,#181008);border:1px solid #45351d;border-radius:9px;padding:7px 6px 6px;text-align:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}",
       ".twmgr-card-wide{flex-basis:100%}",

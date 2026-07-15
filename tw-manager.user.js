@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.30.0
+// @version      9.31.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.30.0';
+  const VERSION = '9.31.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1139,17 +1139,31 @@
       const qs = queuedSec[b] || 0;
       if (qs >= cfg.refillBelowMin * 60) { if (reason === 'alvo atingido') reason = 'fila cheia'; return; }
       const needSec = cfg.targetHours * 3600 - qs; if (needSec <= 0) return;
+      // peso proporcional ao alvo (contínuo = média dos que têm alvo)
       const w = list.map((x) => x.capped ? Math.max(1, x.t) : 0);
       const pos = w.filter((v) => v > 0); const avg = pos.length ? pos.reduce((a, v) => a + v, 0) / pos.length : 1;
       list.forEach((x, i) => { if (!x.capped) w[i] = avg; });
       const wsum = w.reduce((a, v) => a + v, 0) || 1;
+      // 1) quanto CADA unidade quer neste ciclo (reparte o tempo de fila proporcional ao peso), limitado pelo alvo restante
+      const want = list.map((x, i) => {
+        let n = Math.floor((needSec * w[i] / wsum) / x.su.buildTime);
+        if (x.capped) n = Math.min(n, Math.max(0, x.t - x.su.total));
+        return Math.max(0, n);
+      });
+      // custo total desejado (vira demanda pro Equilíbrio abastecer)
+      let cw = 0, cs = 0, ci = 0, cp = 0;
+      list.forEach((x, i) => { cw += want[i] * x.su.wood; cs += want[i] * x.su.stone; ci += want[i] * x.su.iron; cp += want[i] * x.su.pop; });
+      wantCost.wood += cw; wantCost.stone += cs; wantCost.iron += ci;
+      // 2) UM fator de escala pra tudo caber no recurso/pop disponível, mantendo a PROPORÇÃO (crescem juntas)
+      let f = 1;
+      if (cw > 0) f = Math.min(f, res.wood / cw);
+      if (cs > 0) f = Math.min(f, res.stone / cs);
+      if (ci > 0) f = Math.min(f, res.iron / ci);
+      if (cp > 0) f = Math.min(f, popFree / cp);
+      if (!(f > 0)) f = 0;
       let added = 0;
       list.forEach((x, i) => {
-        let nWant = Math.floor((needSec * w[i] / wsum) / x.su.buildTime);
-        if (x.capped) nWant = Math.min(nWant, x.t - x.su.total);
-        if (nWant > 0) { wantCost.wood += nWant * x.su.wood; wantCost.stone += nWant * x.su.stone; wantCost.iron += nWant * x.su.iron; }
-        let n = Math.min(nWant, Math.floor(res.wood / x.su.wood), Math.floor(res.stone / x.su.stone), Math.floor(res.iron / x.su.iron));
-        if (x.su.pop > 0) n = Math.min(n, Math.floor(popFree / x.su.pop));
+        const n = Math.floor(want[i] * f);
         if (n > 0) { amounts[x.u] = (amounts[x.u] || 0) + n; res.wood -= n * x.su.wood; res.stone -= n * x.su.stone; res.iron -= n * x.su.iron; popFree -= n * x.su.pop; added += n * x.su.buildTime; reason = 'reposto'; }
       });
       if (added > 0) addedSec[b] = added; else if (reason !== 'reposto') reason = 'sem recurso/pop';

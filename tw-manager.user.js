@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.31.3
+// @version      9.32.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.31.3';
+  const VERSION = '9.32.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -848,11 +848,14 @@
     const now = Date.now();
     if ((config.farm.nextAt || 0) > now) { scheduleFarm(); return; }
     const cfg = config.farm;
-    let villages;
+    // Origens = minhas aldeias com coordenada (pra escolher a mais próxima por alvo).
+    let mine;
     try {
-      if (cfg.group) { villages = (await getVillagesInGroup(cfg.group)).map((x) => ({ vid: x.vid, name: x.coord || x.vid })); try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
-      else villages = await getAllScavengeState();
+      if (cfg.group) { mine = (await getVillagesInGroup(cfg.group)).map((x) => ({ vid: x.vid, coord: x.coord, name: x.coord })); try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
+      else mine = await getAllVillages();
     } catch (e) { pushLog('Saque: erro ao listar aldeias: ' + (e.message || e), 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
+    const myV = [];
+    mine.forEach((v) => { const m = (v.coord || '').match(/(\d+)\|(\d+)/); if (m) myV.push({ vid: v.vid, name: v.name || v.coord, coord: v.coord, x: +m[1], y: +m[2] }); });
     let pendingCoords = new Set(), saquesAtivos = null;
     try { const pa = await getPendingAttack(); pendingCoords = pa.coords; saquesAtivos = pa.saques; } catch (e) {}
     const minW = cfg.minWood || 0, minS = cfg.minStone || 0, minI = cfg.minIron || 0;
@@ -875,86 +878,77 @@
       return null;
     };
     const colorTxt = (t) => ({ green: 'verde', yellow: 'amarelo', blue: 'azul', red: 'vermelho' }[t.color] || t.color) + (t.full ? ' cheio' : ' vazio');
+    // Lê os alvos (assistente = conta inteira) e os templates uma vez só.
+    let targets;
+    try { targets = await getFarmTargets(CUR_VID); }
+    catch (e) { pushLog('Saque: erro ao ler os alvos do assistente (' + (e.message || e) + ').', 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
+    let tpl = null;
+    if (!dyn) { try { tpl = await getFarmTemplates(CUR_VID); } catch (e) { tpl = null; } }
+    const availCache = {};
+    const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
+    const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, del: 0, mur: 0, pend: 0, semorig: 0 };
+    const eligible = [];
+    targets.forEach((t) => {
+      if (!t.reportId) { skip.norep++; return; }
+      if (t.color === 'red') { skip.red++; return; }
+      if (t.wall != null && t.wall > maxWall) { skip.mur++; return; }
+      const cell = cellFor(t);
+      if (!cell || !cell.mode || cell.mode === 'none') { skip.off++; return; }
+      if (t.color === 'blue' && (t.wall == null || t.wall > blueMaxWall)) { skip.azul++; return; }
+      t._cell = cell; eligible.push(t);
+    });
+    if ((cfg.order || 'dist') === 'recurso') eligible.sort((a, b) => (b.wood + b.stone + b.iron) - (a.wood + a.stone + a.iron));
+    else eligible.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
     let count = 0;
-    for (const v of villages) {
-      if (minCL > 0) { try { if (((await getVillageStateReserved(v.vid)).avail.light || 0) < minCL) { pushLog(v.name + ': pulada — menos de ' + minCL + ' cavalaria leve.', '', 'farm'); continue; } } catch (e) {} }
-      let tpl = null;
-      if (!dyn) { try { tpl = await getFarmTemplates(v.vid); } catch (e) { tpl = null; } }
-      let targets;
-      try { targets = await getFarmTargets(v.vid); }
-      catch (e) { pushLog('Saque em ' + v.name + ': erro ao ler os alvos (' + (e.message || e) + ').', 'err', 'farm'); continue; }
-      const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, del: 0, dist: 0, mur: 0, pend: 0 };
-      const eligible = [];
-      targets.forEach((t) => {
-        if (!t.reportId) { skip.norep++; return; }
-        if (t.color === 'red') { skip.red++; return; }
-        if (t.dist != null && t.dist > maxDist) { skip.dist++; return; }
-        if (t.wall != null && t.wall > maxWall) { skip.mur++; return; }
-        const cell = cellFor(t);
-        if (!cell || !cell.mode || cell.mode === 'none') { skip.off++; return; }
-        if (t.color === 'blue' && (t.wall == null || t.wall > blueMaxWall)) { skip.azul++; return; }
-        t._cell = cell; eligible.push(t);
-      });
-      if ((cfg.order || 'dist') === 'recurso') eligible.sort((a, b) => (b.wood + b.stone + b.iron) - (a.wood + a.stone + a.iron));
-      else eligible.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
-      let vSent = 0, exhausted = false;
-      for (const t of eligible) {
-        if (exhausted) break;
-        if (t.color === 'blue') {
-          if (defended[t.reportId]) { skip.def++; continue; }
-          let defTotal = 0; try { defTotal = await getReportDefenseTotal(t.reportId); } catch (e) {}
-          if (defTotal >= blueDeleteMinDef) {
-            try { await deleteReport(t.reportId); pushLog('Saque: relatório azul de ' + t.coord + ' apagado (' + defTotal + ' tropas de defesa) — evitando atacar aldeia populada.', 'ok', 'farm'); skip.del++; }
-            catch (e) { pushLog('Saque: falha ao apagar relatório azul de ' + t.coord + ' (' + defTotal + ' tropas): ' + (e.message || e), 'err', 'farm'); defended[t.reportId] = now; skip.def++; }
-            continue;
-          }
-          if (defTotal > 0) { defended[t.reportId] = now; skip.def++; continue; }
+    for (const t of eligible) {
+      const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
+      const tx = +cm[1], ty = +cm[2];
+      if (t.color === 'blue') {
+        if (defended[t.reportId]) { skip.def++; continue; }
+        let defTotal = 0; try { defTotal = await getReportDefenseTotal(t.reportId); } catch (e) {}
+        if (defTotal >= blueDeleteMinDef) {
+          try { await deleteReport(t.reportId); pushLog('Saque: relatório azul de ' + t.coord + ' apagado (' + defTotal + ' tropas de defesa) — evitando atacar aldeia populada.', 'ok', 'farm'); skip.del++; }
+          catch (e) { pushLog('Saque: falha ao apagar relatório azul de ' + t.coord + ' (' + defTotal + ' tropas): ' + (e.message || e), 'err', 'farm'); defended[t.reportId] = now; skip.def++; }
+          continue;
         }
-        const cell = t._cell, mode = cell.mode, qty = Math.max(1, cell.qty || 1);
-        const cm = (t.coord || '').match(/(\d+)\|(\d+)/), sum = (t.wood || 0) + (t.stone || 0) + (t.iron || 0);
-        // "Repetir farm" ligado: reataca por tempo (empilha ondas a cada repeatMin, mesmo com tropa no ar).
-        // Desligado: só envia se NÃO tiver ataque nosso a caminho pro alvo (+ trava curta anti-corrida).
-        const inFlight = pendingCoords.has(t.coord);
-        if (repeatOn) {
-          if (sent[t.coord] && now - sent[t.coord] < repeatMs) { skip.pend++; continue; }
-        } else {
-          if (inFlight) { skip.pend++; continue; }
-          if (sent[t.coord] && now - sent[t.coord] < 120000) { skip.pend++; continue; }
-        }
-        let did = false;
-        try {
-          if (mode === 'c') {
-            if (t.cEnabled && t.wood >= minW && t.stone >= minS && t.iron >= minI) {
-              await sendFarmC(v.vid, t.reportId); did = true; count++; cfg.activeSends.push({ coord: t.coord, mode: 'c', vid: v.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250));
-            }
-          } else if (mode === 'a' && (dyn || t.aEnabled)) {
-            for (let k = 0; k < qty; k++) {
-              if (dyn) { if (!cm) break; await sendAttack(v.vid, cm[1], cm[2], { light: Math.max(1, Math.ceil(sum / 80)), spy: 1 }); }
-              else { if (!tpl || !tpl.a) break; await sendFarmB(v.vid, t.targetId, tpl.a); }
-              did = true; count++; cfg.activeSends.push({ coord: t.coord, mode: 'a', vid: v.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250));
-            }
-          } else if (mode === 'b' && (dyn || t.bEnabled)) {
-            for (let k = 0; k < qty; k++) {
-              if (dyn) { if (!cm) break; await sendAttack(v.vid, cm[1], cm[2], { light: Math.max(1, Math.ceil(sum * 1.2 / 80)), spy: 1 }); }
-              else { if (!tpl || !tpl.b) break; await sendFarmB(v.vid, t.targetId, tpl.b); }
-              did = true; count++; cfg.activeSends.push({ coord: t.coord, mode: 'b', vid: v.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250));
-            }
-          }
-        } catch (e) { exhausted = true; pushLog('Saque em ' + v.name + ': envio falhou (tropa insuficiente?) — pulando pra próxima aldeia.', 'err', 'farm'); }
-        if (did) { sent[t.coord] = now; pendingCoords.add(t.coord); vSent++; pushLog('Saque: ' + v.name + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (mode !== 'c' ? ' ×' + qty : ''), 'ok', 'farm'); }
+        if (defTotal > 0) { defended[t.reportId] = now; skip.def++; continue; }
       }
-      const parts = ['enviou ' + vSent];
-      if (exhausted) parts.push('interrompida (sem tropa)');
-      if (skip.off) parts.push(skip.off + ' cor sem modo');
-      if (skip.azul) parts.push(skip.azul + ' azul c/ muralha');
-      if (skip.def) parts.push(skip.def + ' azul c/ defesa');
-      if (skip.del) parts.push(skip.del + ' relatório(s) azul apagado(s)');
-      if (skip.dist) parts.push(skip.dist + ' fora do alcance');
-      if (skip.mur) parts.push(skip.mur + ' muralha alta');
-      if (skip.pend) parts.push(skip.pend + ' já c/ ataque a caminho');
-      if (skip.norep) parts.push(skip.norep + ' sem relatório');
-      pushLog(v.name + ': ' + parts.join(' · '), '', 'farm');
+      const cell = t._cell, mode = cell.mode, qty = Math.max(1, cell.qty || 1);
+      const sum = (t.wood || 0) + (t.stone || 0) + (t.iron || 0);
+      // "Repetir farm" ligado: reataca por tempo (empilha ondas). Desligado: só se não tiver ataque a caminho.
+      const inFlight = pendingCoords.has(t.coord);
+      if (repeatOn) { if (sent[t.coord] && now - sent[t.coord] < repeatMs) { skip.pend++; continue; } }
+      else { if (inFlight) { skip.pend++; continue; } if (sent[t.coord] && now - sent[t.coord] < 120000) { skip.pend++; continue; } }
+      if (mode === 'c' && !(t.cEnabled && t.wood >= minW && t.stone >= minS && t.iron >= minI)) { skip.off++; continue; }   // C indisponível ou abaixo do recurso mínimo
+      // Escolhe a aldeia MAIS PRÓXIMA (dentro do alcance) com CL suficiente.
+      const cands = myV.map((s) => ({ s: s, d: fieldDist(s.x, s.y, tx, ty) })).filter((o) => o.d <= maxDist).sort((a, b) => a.d - b.d);
+      if (!cands.length) { skip.dist++; continue; }
+      const estCL = Math.max(1, Math.ceil((mode === 'b' ? sum * 1.2 : sum) / 80));   // CL estimada do envio (p/ descontar da origem)
+      let did = false, usedName = '', usedDist = 0;
+      for (const c of cands) {
+        const avail = await getAvail(c.s.vid);
+        if (minCL > 0 && (avail.light || 0) < minCL) continue;   // origem drenada -> tenta a próxima mais próxima
+        try {
+          if (mode === 'c') { await sendFarmC(c.s.vid, t.reportId); did = true; }
+          else if (mode === 'a') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum / 80)), spy: 1 }); } else { if (!tpl || !tpl.a) break; await sendFarmB(c.s.vid, t.targetId, tpl.a); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
+          else if (mode === 'b') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum * 1.2 / 80)), spy: 1 }); } else { if (!tpl || !tpl.b) break; await sendFarmB(c.s.vid, t.targetId, tpl.b); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
+        } catch (e) { did = false; continue; }   // origem sem tropa / fora de alcance -> tenta a próxima
+        if (did) { avail.light = Math.max(0, (avail.light || 0) - estCL); usedName = c.s.name; usedDist = c.d; count++; cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break; }
+      }
+      if (did) { sent[t.coord] = now; pendingCoords.add(t.coord); pushLog('Saque: ' + usedName + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (mode !== 'c' ? ' ×' + qty : '') + ' · ' + (Math.round(usedDist * 10) / 10) + ' campos', 'ok', 'farm'); }
+      else skip.semorig++;
     }
+    const parts = ['enviou ' + count];
+    if (skip.semorig) parts.push(skip.semorig + ' sem origem c/ CL');
+    if (skip.off) parts.push(skip.off + ' cor sem modo / C indisp.');
+    if (skip.azul) parts.push(skip.azul + ' azul c/ muralha');
+    if (skip.def) parts.push(skip.def + ' azul c/ defesa');
+    if (skip.del) parts.push(skip.del + ' relatório azul apagado');
+    if (skip.dist) parts.push(skip.dist + ' fora do alcance');
+    if (skip.mur) parts.push(skip.mur + ' muralha alta');
+    if (skip.pend) parts.push(skip.pend + ' já c/ ataque a caminho');
+    if (skip.norep) parts.push(skip.norep + ' sem relatório');
+    pushLog('Saque: ' + parts.join(' · '), '', 'farm');
     Object.keys(sent).forEach((r) => { if (now - sent[r] > 12 * 3600 * 1000) delete sent[r]; });
     Object.keys(defended).forEach((r) => { if (now - defended[r] > 12 * 3600 * 1000) delete defended[r]; });
     cfg.sentReports = sent; cfg.defended = defended;

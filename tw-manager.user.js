@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.31.1
+// @version      9.31.2
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.31.1';
+  const VERSION = '9.31.2';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -787,8 +787,9 @@
     let today = null;
     try {
       const res = await fetch('/game.php?village=' + CUR_VID + '&screen=ranking&mode=in_a_day&type=' + type, { credentials: 'include' });
-      const txt = await res.text();
-      const m = txt.match(/pontua[çc][ãa]o\s+hoje[^0-9]*([\d.]+)/i);
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      const txt = ((doc.querySelector('#content_value') || doc.body).textContent || '').replace(/\s+/g, ' ');   // texto puro (sem tags/atributos com dígitos)
+      const m = txt.match(/pontua[çc][ãa]o\s+hoje[^0-9]*?([\d.]+)/i);
       if (m) today = parseInt(m[1].replace(/\./g, ''), 10) || 0;
     } catch (e) {}
     // estimativa fim do dia: extrapola linear pelo tempo decorrido desde a meia-noite do servidor
@@ -3110,7 +3111,7 @@
       ".twmgr-tab.twmgr-run .twmgr-tab-ico{border-color:#3fce54;background:rgba(63,206,84,.15);box-shadow:0 0 9px rgba(63,206,84,.6)}",
       ".twmgr-ui{width:18px;height:18px;vertical-align:middle}",
       ".twmgr-fmtable{width:100%;border-collapse:collapse;font-size:11px}",
-      ".twmgr-fmtable th{font-size:10px;color:#ffd76a;font-weight:700;padding:4px 2px;border-bottom:1px solid #6a5320;text-transform:uppercase;vertical-align:middle}",
+      ".twmgr-fmtable th{font-size:10px;color:#ffd76a !important;font-weight:700;padding:4px 2px;border-bottom:1px solid #6a5320;text-transform:uppercase;vertical-align:middle;background:#160f06 !important;background-image:none !important}",
       ".twmgr-fmtable td{vertical-align:middle}",
       ".twmgr-fmtable th:first-child,.twmgr-fmrow td:first-child{text-align:left}",
       ".twmgr-fmtable th:not(:first-child),.twmgr-fmrow td:not(:first-child){width:44px;text-align:center}",

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.33.0
+// @version      9.33.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.33.0';
+  const VERSION = '9.33.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -141,13 +141,7 @@
     activeId: null,                        // id do ataque mostrado na UI (setado no load())
     templates: [],                         // templates salvos { id, name, targetX, targetY, arriveLocal, selected, perVillage }
   });
-  const defUnits = () => ({
-    latest: {},          // { [vid]: { spear: N, sword: N, ... } } — último snapshot
-    updatedAt: 0,        // ms do último fetch
-    history: {},         // { 'YYYY-MM-DD': { totals: {u: n}, at: ms } } — 1 snapshot por dia
-    historyDays: 60,     // rotação do histórico
-  });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), reservations: {} });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -310,11 +304,6 @@
     });
     if (!c.planner.activeId || !c.planner.attacks.some((a) => a.id === c.planner.activeId)) c.planner.activeId = c.planner.attacks[0].id;
     if (!c.reservations || typeof c.reservations !== 'object') c.reservations = {};
-    if (!c.units) c.units = defUnits();
-    if (!c.units.latest || typeof c.units.latest !== 'object') c.units.latest = {};
-    if (!c.units.history || typeof c.units.history !== 'object') c.units.history = {};
-    if (c.units.updatedAt == null) c.units.updatedAt = 0;
-    if (c.units.historyDays == null) c.units.historyDays = 60;
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -1102,31 +1091,9 @@
     if (!vils.length) vils.push({ vid: CUR_VID, name: CUR_NAME });
     return vils;
   }
-  // ==================== TROPAS (contador consolidado) ====================
-  // Puxa o total (incluindo em rota) de cada aldeia via getVillageState (data-all-count).
-  // Prefere fazer N requests confiáveis a arriscar parser da tela overview_villages?mode=units.
-  async function getAllUnitsOverview() {
-    let vils = [];
-    try { vils = await getAllVillages(); }
-    catch (e) { throw new Error('não consegui listar aldeias: ' + (e.message || e)); }
-    const out = [];
-    for (const v of vils) {
-      try {
-        const st = await getVillageState(v.vid);
-        out.push({ vid: v.vid, name: v.name, coord: v.coord, units: st.avail });
-      } catch (e) {
-        out.push({ vid: v.vid, name: v.name, coord: v.coord, units: {}, error: e.message || String(e) });
-      }
-      await sleep(200);
-    }
-    return out;
-  }
-  function unitsTotals(perVillage) {
-    const tot = {};
-    UNITS.forEach(([u]) => { tot[u] = 0; });
-    Object.values(perVillage || {}).forEach((v) => { UNITS.forEach(([u]) => { tot[u] += v[u] || 0; }); });
-    return tot;
-  }
+  // ==================== TROPAS (helpers de força/pop) ====================
+  // Injetados direto na tela do jogo (screen=overview_villages&mode=units).
+  // Sem UI no TW Manager, sem requests — só parse do DOM local.
   function unitsForce(totals) {
     let att = 0, def = 0, defCav = 0, defArch = 0, pop = 0, nobles = 0, total = 0;
     UNITS.forEach(([u]) => {
@@ -1136,73 +1103,76 @@
     });
     return { total: total, att: att, def: def, defCav: defCav, defArch: defArch, pop: pop, nobles: nobles };
   }
-  function unitsMaybeSnapshot(perVillage) {
-    const today = new Date().toISOString().slice(0, 10);
-    const h = config.units.history;
-    if (h[today]) return;
-    h[today] = { totals: unitsTotals(perVillage), at: Date.now() };
-    const keys = Object.keys(h).sort();
-    while (keys.length > (config.units.historyDays || 60)) delete h[keys.shift()];
-  }
-  async function refreshUnits(force) {
-    const ageMs = Date.now() - (config.units.updatedAt || 0);
-    if (!force && ageMs < 5 * 60 * 1000 && Object.keys(config.units.latest || {}).length) { renderUnits(); return; }
-    setUnitsStatus('atualizando…');
-    let list;
-    try { list = await getAllUnitsOverview(); }
-    catch (e) { pushLog('Tropas: erro ao ler o overview (' + (e.message || e) + ').', 'err', 'units'); setUnitsStatus('erro: ' + (e.message || e)); return; }
-    const perV = {};
-    list.forEach((v) => { perV[v.vid] = v.units || {}; });
-    config.units.latest = perV;
-    config.units.updatedAt = Date.now();
-    unitsMaybeSnapshot(perV);
-    save();
-    pushLog('Tropas: snapshot atualizado (' + list.length + ' aldeias).', 'ok', 'units');
-    renderUnits();
-  }
 
-  function setUnitsStatus(txt, isErr) {
-    const el = document.getElementById('twmgr-units-status'); if (!el) return;
-    el.textContent = txt || '';
-    el.style.color = isErr ? '#ff7568' : '#8fe39a';
-  }
-  function renderUnits() {
-    const box = document.getElementById('twmgr-cards-units');
-    const detail = document.getElementById('twmgr-units-detail');
-    if (!box && !detail) return;
-    const perV = (config.units && config.units.latest) || {};
-    const totals = unitsTotals(perV);
+  // Detecta se estamos na tela Visualizações > Tropas e injeta:
+  //   1) um bloco de resumo global no topo (total tropas + off/def/pop/nobres)
+  //   2) uma tbody "TOTAL GERAL" no fim da tabela somando todas aldeias
+  function enhanceUnitsPage() {
+    const gd = window.game_data;
+    if (!gd || gd.screen !== 'overview_villages' || gd.mode !== 'units') return;
+    const table = document.getElementById('units_table'); if (!table) return;
+    if (document.getElementById('twmgr-units-summary')) return; // já injetado
+
+    // 1) Mapa coluna → unit code, lido do thead (varia por mundo).
+    const headImgs = table.querySelectorAll('thead th img[src*="/unit_"]');
+    if (!headImgs.length) return;
+    const colUnits = []; // ex.: ['spear', 'sword', 'axe', 'spy', 'light', 'heavy', 'ram', 'catapult', 'knight', 'snob', 'militia']
+    headImgs.forEach((img) => {
+      const m = (img.getAttribute('src') || '').match(/\/unit_([a-z]+)\.[a-z]+/i);
+      colUnits.push(m ? m[1] : null);
+    });
+
+    // 2) Itera cada tbody (1 por aldeia) e pega a linha "total" (font-weight bold).
+    const totals = {}; UNITS.forEach(([u]) => { totals[u] = 0; });
+    const bodies = table.querySelectorAll('tbody.row_marker');
+    bodies.forEach((tb) => {
+      const totalRow = tb.querySelector('tr[style*="font-weight: bold"]') || tb.querySelector('tr[style*="font-weight:bold"]');
+      if (!totalRow) return;
+      const cells = totalRow.querySelectorAll('td.unit-item');
+      cells.forEach((td, i) => {
+        const unit = colUnits[i]; if (!unit || !UNIT_STATS[unit]) return; // ignora militia e outras sem stats
+        const n = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0;
+        totals[unit] = (totals[unit] || 0) + n;
+      });
+    });
+
     const f = unitsForce(totals);
-    if (box) {
-      const arr = [
-        { v: fmtN(f.total), l: 'total tropas', hl: true, wide: true },
-        { v: fmtN(f.att), l: 'força off ⚔️' },
-        { v: fmtN(f.def), l: 'def geral 🛡️' },
-        { v: fmtN(f.defCav), l: 'def cav 🐎' },
-        { v: fmtN(f.defArch), l: 'def arq 🏹' },
-        { v: fmtN(f.pop), l: 'pop ocupada 🌾' },
-        { v: fmtN(f.nobles), l: 'nobres 👑' },
-      ];
-      renderCards('units', arr);
-    }
-    if (detail) {
-      const vidCount = Object.keys(perV).length;
-      if (!vidCount) { detail.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— sem dados ainda. Clique em 🔄 atualizar —</div>'; }
-      else {
-        const rows = UNITS.map(([u, lbl]) => {
-          const n = totals[u] || 0, s = UNIT_STATS[u] || {};
-          const popTot = n * (s.pop || 0);
-          return '<tr><td style="padding:2px 6px">' + unitIcon(u, lbl) + '</td>' +
-            '<td style="padding:2px 6px;color:#8f7d57;font-size:10px">' + lbl + '</td>' +
-            '<td style="padding:2px 6px;text-align:right;font-weight:bold">' + fmtN(n) + '</td>' +
-            '<td style="padding:2px 6px;text-align:right;color:#8f7d57;font-size:10px">' + fmtN(popTot) + ' pop</td></tr>';
-        }).join('');
-        detail.innerHTML = '<table style="width:100%;border-collapse:collapse">' + rows + '</table>';
-      }
-    }
-    // Timestamp na barra de status
-    const ts = config.units && config.units.updatedAt ? new Date(config.units.updatedAt) : null;
-    if (ts) setUnitsStatus('atualizado ' + ts.toLocaleTimeString() + ' · ' + Object.keys(perV).length + ' aldeia(s)');
+    const fmt = (n) => Number(n).toLocaleString('pt-BR');
+
+    // 3) Bloco de resumo global acima da tabela.
+    const summary = document.createElement('div');
+    summary.id = 'twmgr-units-summary';
+    summary.style.cssText = 'margin:6px 0 8px;padding:8px 10px;border:1px solid #7d510a;border-radius:6px;background:linear-gradient(180deg,#f4e4bc,#e8d29a);font-size:12px;color:#3b2914;box-shadow:0 1px 2px rgba(0,0,0,.1)';
+    const item = (label, val, big) => '<div style="display:flex;flex-direction:column;align-items:center;min-width:80px"><div style="font-size:' + (big ? '16px' : '13px') + ';font-weight:bold;font-variant-numeric:tabular-nums">' + fmt(val) + '</div><div style="font-size:10px;color:#6b4a1e">' + label + '</div></div>';
+    summary.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">' +
+        '<div style="font-weight:bold;font-size:11px;color:#5a3c0f">🏰 Resumo (TW Manager)</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">' +
+          item('total tropas', f.total, true) +
+          item('força ⚔️', f.att) +
+          item('def 🛡️', f.def) +
+          item('def cav 🐎', f.defCav) +
+          item('def arq 🏹', f.defArch) +
+          item('pop 🌾', f.pop) +
+          item('nobres 👑', f.nobles) +
+        '</div>' +
+      '</div>';
+    table.parentNode.insertBefore(summary, table);
+
+    // 4) Nova tbody "TOTAL GERAL" no final da tabela.
+    const nCols = table.querySelectorAll('thead th').length;
+    const totalBody = document.createElement('tbody');
+    totalBody.id = 'twmgr-units-grandtotal';
+    let cells = '<td style="padding:4px 6px;color:#5a3c0f">TOTAL GERAL</td><td></td>';
+    colUnits.forEach((unit) => {
+      const n = (unit && totals[unit]) || 0;
+      cells += '<td class="unit-item" style="text-align:center">' + (n > 0 ? fmt(n) : '0') + '</td>';
+    });
+    // coluna ação (última). Se número de colunas não bate, completa com <td>s vazias.
+    const emittedCols = 2 + colUnits.length;
+    for (let i = emittedCols; i < nCols; i++) cells += '<td></td>';
+    totalBody.innerHTML = '<tr style="background:linear-gradient(180deg,#f4e4bc,#e8d29a);font-weight:bold;font-size:13px;color:#3b2914;border-top:2px solid #7d510a">' + cells + '</tr>';
+    table.appendChild(totalBody);
   }
 
   async function resolveTargets() {
@@ -3312,11 +3282,10 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'units', 'log'].forEach((n) => {
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
-    if (name === 'units') { try { refreshUnits(false); } catch (e) {} }
   }
 
   function buildUI() {
@@ -3336,7 +3305,7 @@
     const modLog = (mod) => '<div class="twmgr-modlog"><div class="twmgr-modlog-head" data-modlog="' + mod + '">▸ Log do módulo (<span id="twmgr-modlog-count-' + mod + '">0</span>)</div><div id="twmgr-modlog-body-' + mod + '" class="twmgr-modlog-body" style="display:none"></div></div>';
     p.innerHTML =
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('units', '🏰', 'Tropas') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
@@ -3540,14 +3509,6 @@
           '<div class="twmgr-row"><span class="twmgr-lbl">Carregar</span><span><select id="twmgr-pl-tpl-load" class="twmgr-inp" style="width:120px"></select> <button id="twmgr-pl-tpl-apply" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">📂</button> <button id="twmgr-pl-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="apagar">🗑</button></span></div>') +
         modLog('planner') +
       '</div>' +
-      '<div id="twmgr-tab-units" style="display:none">' +
-        hint('🏰 Contador consolidado de tropas (total, incluindo em rota). Snapshot diário salvo em segundo plano para gráficos futuros.') +
-        cardsDiv('units') +
-        sec('Detalhamento por unidade', '<div id="twmgr-units-detail"><div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— sem dados ainda —</div></div>') +
-        '<div class="twmgr-actions"><button id="twmgr-units-refresh" class="twmgr-btn twmgr-go">🔄 atualizar</button></div>' +
-        '<div id="twmgr-units-status" class="twmgr-cstatus"></div>' +
-        modLog('units') +
-      '</div>' +
       '<div id="twmgr-tab-log" style="display:none">' +
       '<div class="twmgr-hint">🤖 Notificação de CAPTCHA: alerta quando o jogo pedir verificação.</div>' +
       '<label class="twmgr-check"><input id="twmgr-cap-en" type="checkbox"> Detectar CAPTCHA</label>' +
@@ -3694,11 +3655,6 @@
     document.getElementById('twmgr-pl-tpl-del').addEventListener('click', plannerDeleteTemplate);
     plannerRefreshTemplatesList();
 
-    // Contador de Tropas: wire do botão + render inicial com dados cacheados (se houver).
-    const unitsRefreshBtn = document.getElementById('twmgr-units-refresh');
-    if (unitsRefreshBtn) unitsRefreshBtn.addEventListener('click', () => refreshUnits(true));
-    try { renderUnits(); } catch (e) {}
-
     document.getElementById('twmgr-mk-coord').value = config.market.destCoord || '';
     document.getElementById('twmgr-mk-reserve').value = config.market.reserve || 0;
     document.getElementById('twmgr-mk-int').value = Math.round((config.market.interval || 600) / 60);
@@ -3772,7 +3728,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'units'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -3816,4 +3772,5 @@
   }
 
   buildUI();
+  try { enhanceUnitsPage(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
 })();

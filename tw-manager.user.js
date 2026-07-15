@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.26.0
+// @version      9.26.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.26.0';
+  const VERSION = '9.26.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -715,7 +715,7 @@
 
   // Lê a tela de comandos (só ataques): coords com ataque nosso em rota (p/ não empilhar) + nº de ATAQUES DE SAQUE em rota (ícone de farm) p/ o card.
   async function getPendingAttack() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=attack', { credentials: 'include' });
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=attack&page=-1', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const coords = new Set(); let saques = 0;
     doc.querySelectorAll('#commands_table tr').forEach((tr) => {
@@ -842,14 +842,12 @@
         }
         const cell = t._cell, mode = cell.mode, qty = Math.max(1, cell.qty || 1);
         const cm = (t.coord || '').match(/(\d+)\|(\d+)/), sum = (t.wood || 0) + (t.stone || 0) + (t.iron || 0);
-        // "Em rota" = ataque de VERDADE ainda a caminho (lista viva de comandos) — não a nossa memória de último envio.
-        // Nunca empilha: C não manda se já tem algo a caminho; A/B só re-manda em cima de ataque NOSSO com mais tempo que o "tempo entre farms".
+        // "Em rota" = ataque nosso ainda a caminho (lista viva de comandos + envios deste tick).
+        // Regra unificada: NUNCA empilha em cima de ataque em rota (qty>1 na matriz é override explícito).
+        // "cooldown" = intervalo mínimo entre envios quando o alvo já está livre (ataque anterior voltou).
         const inFlight = pendingCoords.has(t.coord);
-        if (mode === 'c') {
-          if (inFlight) { skip.pend++; continue; }
-        } else {
-          if (inFlight && (!sent[t.coord] || now - sent[t.coord] < cooldownMs)) { skip.pend++; continue; }
-        }
+        if (inFlight) { skip.pend++; continue; }
+        if (sent[t.coord] && now - sent[t.coord] < cooldownMs) { skip.pend++; continue; }
         let did = false;
         try {
           if (mode === 'c') {
@@ -870,7 +868,7 @@
             }
           }
         } catch (e) { exhausted = true; pushLog('Saque em ' + v.name + ': envio falhou (tropa insuficiente?) — pulando pra próxima aldeia.', 'err', 'farm'); }
-        if (did) { sent[t.coord] = now; vSent++; pushLog('Saque: ' + v.name + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (mode !== 'c' ? ' ×' + qty : ''), 'ok', 'farm'); }
+        if (did) { sent[t.coord] = now; pendingCoords.add(t.coord); vSent++; pushLog('Saque: ' + v.name + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (mode !== 'c' ? ' ×' + qty : ''), 'ok', 'farm'); }
       }
       const parts = ['enviou ' + vSent];
       if (exhausted) parts.push('interrompida (sem tropa)');

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.28.0
+// @version      9.28.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.28.0';
+  const VERSION = '9.28.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1718,7 +1718,10 @@
     cont.querySelectorAll('.twmgr-pl-wave-add').forEach((el) => el.addEventListener('click', () => {
       const vid = el.getAttribute('data-vid');
       atk.perVillage[vid] = atk.perVillage[vid] || [];
-      atk.perVillage[vid].push({ kind: 'attack', offsetMs: 0, amounts: {} });
+      // Nova onda herda offset = max(existentes) + 200ms, pra chegar sempre depois da anterior sem colidir.
+      const maxOff = atk.perVillage[vid].reduce((m, w) => Math.max(m, w.offsetMs || 0), 0);
+      const nextOff = atk.perVillage[vid].length ? maxOff + 200 : 0;
+      atk.perVillage[vid].push({ kind: 'attack', offsetMs: nextOff, amounts: {} });
       save(); renderPlannerCards(atk);
     }));
     cont.querySelectorAll('.twmgr-pl-wave-del').forEach((el) => el.addEventListener('click', () => {
@@ -1842,6 +1845,81 @@
     if (g('twmgr-pl-offset')) g('twmgr-pl-offset').value = atk.offsetMs != null ? atk.offsetMs : 150;
     setPlannerStatus(atk.running);
     renderPlannerVillages(atk).then(() => renderPlannerCards(atk));
+    renderPlannerQueue(atk);
+  }
+
+  const PL_STATE_META = {
+    armed:     { label: 'armado',   color: '#8f7d57' },
+    scheduled: { label: 'agendado', color: '#e6cf7d' },
+    sent:      { label: 'enviado',  color: '#8fe39a' },
+    error:     { label: 'erro',     color: '#ff7568' },
+  };
+
+  // Tabela linha-a-linha da fila do ataque ATIVO. Ordenada por sendAt (fallback arriveAt).
+  function renderPlannerQueue(atk) {
+    const cont = document.getElementById('twmgr-pl-queue'); if (!cont) return;
+    const rows = ((atk && atk.rows) || []).slice().sort((a, b) => (a.sendAt || a.arriveAt || 0) - (b.sendAt || b.arriveAt || 0));
+    if (!rows.length) {
+      cont.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— fila vazia. Arme o ataque pra ver as linhas aqui. —</div>';
+      return;
+    }
+    const vilBy = {}; (_plVilCache || []).forEach((v) => { vilBy[v.vid] = v; });
+    const th = 'text-align:left;padding:2px 4px;font-size:9px;color:#8f7d57;font-weight:normal;border-bottom:1px solid #3a2c1a';
+    const td = 'padding:2px 4px;font-size:10px;color:#d3c299;vertical-align:middle';
+    cont.innerHTML =
+      '<table style="width:100%;border-collapse:collapse">' +
+        '<thead><tr>' +
+          '<th style="' + th + '">#</th>' +
+          '<th style="' + th + '">origem</th>' +
+          '<th style="' + th + '">kind</th>' +
+          '<th style="' + th + '">chega</th>' +
+          '<th style="' + th + '">sai</th>' +
+          '<th style="' + th + '">estado</th>' +
+          '<th style="' + th + ';text-align:right">ação</th>' +
+        '</tr></thead>' +
+        '<tbody>' + rows.map((r, i) => {
+          const v = vilBy[r.origin] || { name: 'ID ' + r.origin };
+          const meta = PL_STATE_META[r.state] || { label: r.state, color: '#8f7d57' };
+          const errTitle = r.state === 'error' && r.error ? (' title="' + esc(String(r.error)) + '"') : '';
+          const arrTxt = r.arriveAt ? fmtArriveLocal(r.arriveAt) : '—';
+          const sendTxt = r.sendAt ? fmtArriveLocal(r.sendAt) : '—';
+          const canCancel = r.state === 'armed' || r.state === 'scheduled';
+          const canRemove = r.state === 'sent' || r.state === 'error';
+          const actions = canCancel
+            ? '<span class="twmgr-pl-queue-cancel" data-id="' + r.id + '" title="cancelar" style="cursor:pointer;color:#ff9560">✕</span>'
+            : (canRemove ? '<span class="twmgr-pl-queue-del" data-id="' + r.id + '" title="remover do histórico" style="cursor:pointer;color:#8f7d57">🗑</span>' : '');
+          return '<tr style="border-bottom:1px solid #2a2010">' +
+            '<td style="' + td + ';color:#8f7d57">' + (i + 1) + '</td>' +
+            '<td style="' + td + '">' + esc(v.name) + '</td>' +
+            '<td style="' + td + '">' + (PL_ICON[r.kind] || '') + '</td>' +
+            '<td style="' + td + ';font-family:monospace;font-size:9px">' + arrTxt + '</td>' +
+            '<td style="' + td + ';font-family:monospace;font-size:9px">' + sendTxt + '</td>' +
+            '<td style="' + td + ';color:' + meta.color + '"' + errTitle + '>' + meta.label + '</td>' +
+            '<td style="' + td + ';text-align:right">' + actions + '</td>' +
+          '</tr>';
+        }).join('') + '</tbody>' +
+      '</table>';
+    cont.querySelectorAll('.twmgr-pl-queue-cancel').forEach((el) => el.addEventListener('click', () => {
+      const id = el.getAttribute('data-id');
+      const r = atk.rows.find((x) => x.id === id); if (!r) return;
+      r.state = 'error'; r.error = 'cancelado pelo usuário';
+      save(); plannerRecomputeReservations(); renderPlannerQueue(atk);
+      pushLog('[' + atk.name + '] linha cancelada (' + r.origin + ' → ' + r.x + '|' + r.y + ').', '', 'planner');
+    }));
+    cont.querySelectorAll('.twmgr-pl-queue-del').forEach((el) => el.addEventListener('click', () => {
+      const id = el.getAttribute('data-id');
+      atk.rows = atk.rows.filter((x) => x.id !== id);
+      save(); renderPlannerQueue(atk);
+    }));
+  }
+
+  function plannerClearHistory() {
+    const atk = plActive(); if (!atk) return;
+    const before = (atk.rows || []).length;
+    atk.rows = (atk.rows || []).filter((r) => r.state === 'armed' || r.state === 'scheduled');
+    const removed = before - atk.rows.length;
+    save(); renderPlannerQueue(atk);
+    pushLog('[' + atk.name + '] histórico limpo (' + removed + ' linha' + (removed === 1 ? '' : 's') + ').', '', 'planner');
   }
 
   function plannerRefreshTemplatesList() {
@@ -2828,6 +2906,7 @@
       }
     }
     if (document.getElementById('twmgr-cards-planner')) refreshCards('planner');
+    if (document.getElementById('twmgr-pl-queue')) { try { renderPlannerQueue(plActive()); } catch (e) {} }
     // Atualiza só o indicador (●) de cada aba de ataque, sem reconstruir a lista (evita "roubar" cliques).
     document.querySelectorAll('.twmgr-pl-tab').forEach((el) => {
       const atk = (config.planner.attacks || []).find((a) => a.id === el.getAttribute('data-id'));
@@ -3270,6 +3349,9 @@
         sec('4. Armar este ataque',
           '<div class="twmgr-actions"><button id="twmgr-pl-start" class="twmgr-btn twmgr-go">▶ Armar este ataque</button><button id="twmgr-pl-stop" class="twmgr-btn twmgr-stop">■ Desarmar</button><button id="twmgr-pl-clear" class="twmgr-btn twmgr-ghost" style="flex:0 0 auto">🗑</button></div>' +
           '<div id="twmgr-pl-status" class="twmgr-cstatus"></div>') +
+        sec('5. Fila deste ataque',
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:10px;color:#8f7d57">ordenada por horário de envio</span><button id="twmgr-pl-queue-clear" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="remover enviados e erros do histórico">🗑 limpar histórico</button></div>' +
+          '<div id="twmgr-pl-queue" style="max-height:220px;overflow-y:auto"></div>') +
         sec('Templates',
           '<div class="twmgr-row"><span class="twmgr-lbl">Salvar plano atual</span><span><input id="twmgr-pl-tpl-name" class="twmgr-inp" type="text" placeholder="ex: guerra XYZ" style="width:120px"> <button id="twmgr-pl-tpl-save" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">💾</button></span></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Carregar</span><span><select id="twmgr-pl-tpl-load" class="twmgr-inp" style="width:120px"></select> <button id="twmgr-pl-tpl-apply" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">📂</button> <button id="twmgr-pl-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="apagar">🗑</button></span></div>') +
@@ -3412,6 +3494,7 @@
     });
     document.getElementById('twmgr-pl-stop').addEventListener('click', () => { const atk = plActive(); plannerStop(atk); setPlannerStatus(false); renderPlannerTabs(); });
     document.getElementById('twmgr-pl-clear').addEventListener('click', () => plannerClearAll(plActive()));
+    document.getElementById('twmgr-pl-queue-clear').addEventListener('click', plannerClearHistory);
     document.getElementById('twmgr-pl-tpl-save').addEventListener('click', plannerSaveTemplate);
     document.getElementById('twmgr-pl-tpl-apply').addEventListener('click', plannerApplyTemplate);
     document.getElementById('twmgr-pl-tpl-del').addEventListener('click', plannerDeleteTemplate);

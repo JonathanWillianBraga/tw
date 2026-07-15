@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.26.1
+// @version      9.28.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.26.1';
+  const VERSION = '9.28.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -110,7 +110,8 @@
     sentAt: {},                           // vid do bárbaro -> timestamp do último scout nosso
     lastPreview: [],                      // lista mostrada na tabela
   });
-  const defPlanner = () => ({
+  const defPlannerAttack = (name) => ({
+    id: genId(), name: name || 'Ataque',
     running: false, offsetMs: 150,
     targetX: '', targetY: '',
     arriveLocal: '',                       // datetime-local base (usuário digita)
@@ -118,7 +119,11 @@
     perVillage: {},                        // { [vid]: { kind, offsetMs, amounts:{unit:qty} } }
     homeAvail: {},                         // { [vid]: { unit:N, loadedAt: ms } } — cache do "Carregar tropas"
     rows: [],                              // gerado no plannerStart a partir de perVillage
-    plans: [],                             // templates salvos { id, name, targetX, targetY, arriveLocal, selected, perVillage }
+  });
+  const defPlanner = () => ({
+    attacks: [defPlannerAttack('Ataque 1')], // vários ataques independentes, cada um pode ser armado por conta própria
+    activeId: null,                        // id do ataque mostrado na UI (setado no load())
+    templates: [],                         // templates salvos { id, name, targetX, targetY, arriveLocal, selected, perVillage }
   });
   const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), reservations: {} });
   function load() {
@@ -245,15 +250,39 @@
     if (c.captcha.cooldownSec == null) c.captcha.cooldownSec = 300;
     if (c.captcha.lastNotifiedAt == null) c.captcha.lastNotifiedAt = 0;
     if (!c.planner) c.planner = defPlanner();
-    if (c.planner.offsetMs == null) c.planner.offsetMs = 150;
-    if (!c.planner.selected || typeof c.planner.selected !== 'object') c.planner.selected = {};
-    if (!c.planner.perVillage || typeof c.planner.perVillage !== 'object') c.planner.perVillage = {};
-    if (!c.planner.homeAvail || typeof c.planner.homeAvail !== 'object') c.planner.homeAvail = {};
-    if (!Array.isArray(c.planner.rows)) c.planner.rows = [];
-    if (!Array.isArray(c.planner.plans)) c.planner.plans = [];
-    if (c.planner.targetX == null) c.planner.targetX = '';
-    if (c.planner.targetY == null) c.planner.targetY = '';
-    if (c.planner.arriveLocal == null) c.planner.arriveLocal = '';
+    if (!Array.isArray(c.planner.attacks) || !c.planner.attacks.length) {
+      // Migração do formato antigo (1 único ataque direto em config.planner) pro novo (lista de ataques independentes).
+      const legacy = c.planner;
+      const atk = defPlannerAttack('Ataque 1');
+      atk.running = !!legacy.running;
+      atk.offsetMs = legacy.offsetMs != null ? legacy.offsetMs : 150;
+      atk.targetX = legacy.targetX || ''; atk.targetY = legacy.targetY || '';
+      atk.arriveLocal = legacy.arriveLocal || '';
+      atk.selected = (legacy.selected && typeof legacy.selected === 'object') ? legacy.selected : {};
+      atk.perVillage = (legacy.perVillage && typeof legacy.perVillage === 'object') ? legacy.perVillage : {};
+      atk.homeAvail = (legacy.homeAvail && typeof legacy.homeAvail === 'object') ? legacy.homeAvail : {};
+      atk.rows = Array.isArray(legacy.rows) ? legacy.rows : [];
+      c.planner = { attacks: [atk], activeId: atk.id, templates: Array.isArray(legacy.plans) ? legacy.plans : [] };
+    }
+    if (!Array.isArray(c.planner.templates)) c.planner.templates = [];
+    c.planner.attacks.forEach((atk) => {
+      if (!atk.id) atk.id = genId();
+      if (!atk.name) atk.name = 'Ataque';
+      if (atk.offsetMs == null) atk.offsetMs = 150;
+      if (!atk.selected || typeof atk.selected !== 'object') atk.selected = {};
+      if (!atk.perVillage || typeof atk.perVillage !== 'object') atk.perVillage = {};
+      if (!atk.homeAvail || typeof atk.homeAvail !== 'object') atk.homeAvail = {};
+      if (!Array.isArray(atk.rows)) atk.rows = [];
+      if (atk.targetX == null) atk.targetX = '';
+      if (atk.targetY == null) atk.targetY = '';
+      if (atk.arriveLocal == null) atk.arriveLocal = '';
+      // Migração: perVillage[vid] era 1 onda só (objeto); agora é uma lista de ondas (array).
+      Object.keys(atk.perVillage).forEach((vid) => {
+        if (!Array.isArray(atk.perVillage[vid])) atk.perVillage[vid] = atk.perVillage[vid] ? [atk.perVillage[vid]] : [];
+        atk.perVillage[vid].forEach((w) => { if (!w.amounts || typeof w.amounts !== 'object') w.amounts = {}; if (!w.kind) w.kind = 'attack'; if (w.offsetMs == null) w.offsetMs = 0; });
+      });
+    });
+    if (!c.planner.activeId || !c.planner.attacks.some((a) => a.id === c.planner.activeId)) c.planner.activeId = c.planner.attacks[0].id;
     if (!c.reservations || typeof c.reservations !== 'object') c.reservations = {};
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
@@ -262,7 +291,7 @@
 
   let config = load();
   let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, uiTimer = null;
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.running); }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)); }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
@@ -370,15 +399,16 @@
         { v: fmtN(s.left), l: 'de fora' },
       ];
     } else if (mod === 'planner') {
-      const rows = (config.planner && config.planner.rows) || [];
+      const attacks = (config.planner && config.planner.attacks) || [];
+      const rows = attacks.reduce((acc, a) => acc.concat(a.rows || []), []);
       const armed = rows.filter((r) => r.state === 'armed' || r.state === 'scheduled').length;
       const sent = rows.filter((r) => r.state === 'sent').length;
       const err = rows.filter((r) => r.state === 'error').length;
-      const sel = Object.keys((config.planner && config.planner.selected) || {}).filter((v) => config.planner.selected[v]).length;
+      const running = attacks.filter((a) => a.running).length;
       arr = [
-        { v: fmtN(sel), l: 'aldeias' },
-        { v: fmtN(armed), l: 'armados', hl: true },
-        { v: fmtN(sent), l: 'enviados' },
+        { v: fmtN(running), l: 'ataques armados', hl: true },
+        { v: fmtN(armed), l: 'ondas pendentes' },
+        { v: fmtN(sent), l: 'enviadas' },
         { v: fmtN(err), l: 'erros' },
       ];
     }
@@ -1455,137 +1485,151 @@
     return { amounts: amounts, warn: ['kind desconhecido: ' + kind] };
   }
 
-  // Recalcula config.reservations a partir do estado atual do Planner.
-  // Se running: soma amounts de rows com state armed|scheduled.
-  // Senão: soma amounts de perVillage[vid] onde selected[vid] === true.
+  // Retorna o ataque atualmente exibido na aba Coordenado (ou o primeiro, se o ativo sumiu).
+  function plActive() {
+    const p = config.planner;
+    return p.attacks.find((a) => a.id === p.activeId) || p.attacks[0];
+  }
+
+  // Soma reservas de TODOS os ataques (armados usam rows; em edição usam perVillage) — uma aldeia
+  // pode participar de vários ataques ao mesmo tempo, então as reservas se acumulam.
   function plannerRecomputeReservations() {
     const res = {};
-    const p = config.planner || {};
-    if (p.running && Array.isArray(p.rows)) {
-      p.rows.forEach((r) => {
-        if (r.state !== 'armed' && r.state !== 'scheduled') return;
-        const vid = String(r.origin); res[vid] = res[vid] || {};
-        Object.entries(r.amounts || {}).forEach(([u, q]) => { res[vid][u] = (res[vid][u] || 0) + (parseInt(q, 10) || 0); });
-      });
-    } else {
-      Object.keys(p.selected || {}).forEach((vid) => {
-        if (!p.selected[vid]) return;
-        const pv = (p.perVillage || {})[vid]; if (!pv) return;
-        res[vid] = res[vid] || {};
-        Object.entries(pv.amounts || {}).forEach(([u, q]) => { const n = parseInt(q, 10) || 0; if (n > 0) res[vid][u] = (res[vid][u] || 0) + n; });
-      });
-    }
+    const attacks = (config.planner && config.planner.attacks) || [];
+    attacks.forEach((atk) => {
+      if (atk.running && Array.isArray(atk.rows)) {
+        atk.rows.forEach((r) => {
+          if (r.state !== 'armed' && r.state !== 'scheduled') return;
+          const vid = String(r.origin); res[vid] = res[vid] || {};
+          Object.entries(r.amounts || {}).forEach(([u, q]) => { res[vid][u] = (res[vid][u] || 0) + (parseInt(q, 10) || 0); });
+        });
+      } else {
+        Object.keys(atk.selected || {}).forEach((vid) => {
+          if (!atk.selected[vid]) return;
+          const waves = (atk.perVillage || {})[vid]; if (!waves) return;
+          res[vid] = res[vid] || {};
+          waves.forEach((pv) => {
+            Object.entries(pv.amounts || {}).forEach(([u, q]) => { const n = parseInt(q, 10) || 0; if (n > 0) res[vid][u] = (res[vid][u] || 0) + n; });
+          });
+        });
+      }
+    });
     config.reservations = res;
     save();
   }
 
-  // Converte perVillage em rows[] com arriveAt calculado (base + offset por linha).
-  function plannerBuildRows() {
-    const p = config.planner;
-    const baseMs = arrivalToServerMs(p.arriveLocal); if (!baseMs) throw new Error('chegada base inválida');
+  // Converte perVillage (agora uma LISTA de ondas por aldeia) de UM ataque em rows[] — 1 linha por onda,
+  // cada onda com seu próprio horário (base + offset).
+  function plannerBuildRows(atk) {
+    const baseMs = arrivalToServerMs(atk.arriveLocal); if (!baseMs) throw new Error('chegada base inválida');
     const rows = [];
-    Object.keys(p.selected || {}).forEach((vid) => {
-      if (!p.selected[vid]) return;
-      const pv = (p.perVillage || {})[vid]; if (!pv) return;
-      const amounts = {}; let any = false;
-      Object.entries(pv.amounts || {}).forEach(([u, q]) => { const n = parseInt(q, 10) || 0; if (n > 0) { amounts[u] = n; any = true; } });
-      if (!any) return;
-      rows.push({
-        id: genId(), origin: String(vid), x: String(p.targetX), y: String(p.targetY),
-        kind: pv.kind || 'attack', amounts: amounts,
-        arriveAt: baseMs + (pv.offsetMs || 0), offsetMs: pv.offsetMs || 0,
-        durSec: null, sendAt: 0, state: 'armed', error: null, sentAt: null,
+    Object.keys(atk.selected || {}).forEach((vid) => {
+      if (!atk.selected[vid]) return;
+      const waves = (atk.perVillage || {})[vid]; if (!waves || !waves.length) return;
+      waves.forEach((pv) => {
+        const amounts = {}; let any = false;
+        Object.entries(pv.amounts || {}).forEach(([u, q]) => { const n = parseInt(q, 10) || 0; if (n > 0) { amounts[u] = n; any = true; } });
+        if (!any) return;
+        rows.push({
+          id: genId(), origin: String(vid), x: String(atk.targetX), y: String(atk.targetY),
+          kind: pv.kind || 'attack', amounts: amounts,
+          arriveAt: baseMs + (pv.offsetMs || 0), offsetMs: pv.offsetMs || 0,
+          durSec: null, sendAt: 0, state: 'armed', error: null, sentAt: null,
+        });
       });
     });
-    p.rows = rows;
+    atk.rows = rows;
     return rows;
   }
 
   const PL_ICON = { attack: '🧹', noble: '👑', fake: '🎭', support: '🛡️' };
 
-  function schedulePlannerFire(r) {
+  function schedulePlannerFire(atk, r) {
     const lead = 12000;
     const delayPrep = Math.max(0, (r.sendAt - lead) - serverNow());
     setTimeout(async () => {
-      if (!config.planner.running || r.state !== 'scheduled' || lockOther()) return;
+      if (!atk.running || r.state !== 'scheduled' || lockOther()) return;
       let prep;
       try { prep = await attackPrepare(r.origin, r.x, r.y, r.amounts, r.kind); }
-      catch (e) { r.state = 'error'; r.error = (e.message || e); save(); plannerRecomputeReservations(); pushLog((PL_ICON[r.kind] || '') + ' ' + r.kind + ' ' + r.x + '|' + r.y + ': preparo falhou (' + r.error + ').', 'err', 'planner'); return; }
-      const fireDelay = Math.max(0, (r.sendAt - (config.planner.offsetMs || 0)) - serverNow());
+      catch (e) { r.state = 'error'; r.error = (e.message || e); save(); plannerRecomputeReservations(); pushLog((PL_ICON[r.kind] || '') + ' [' + atk.name + '] ' + r.kind + ' ' + r.x + '|' + r.y + ': preparo falhou (' + r.error + ').', 'err', 'planner'); return; }
+      const fireDelay = Math.max(0, (r.sendAt - (atk.offsetMs || 0)) - serverNow());
       setTimeout(async () => {
-        if (!config.planner.running || r.state !== 'scheduled' || lockOther()) return;
-        try { await attackFire(prep); r.state = 'sent'; r.sentAt = serverNow(); pushLog((PL_ICON[r.kind] || '') + ' ' + r.kind + ' enviado → ' + r.x + '|' + r.y + ' (de ' + r.origin + ')', 'ok', 'planner'); }
-        catch (e) { r.state = 'error'; r.error = (e.message || e); pushLog((PL_ICON[r.kind] || '') + ' ' + r.kind + ' ' + r.x + '|' + r.y + ': envio falhou (' + r.error + ').', 'err', 'planner'); }
+        if (!atk.running || r.state !== 'scheduled' || lockOther()) return;
+        try { await attackFire(prep); r.state = 'sent'; r.sentAt = serverNow(); pushLog((PL_ICON[r.kind] || '') + ' [' + atk.name + '] ' + r.kind + ' enviado → ' + r.x + '|' + r.y + ' (de ' + r.origin + ')', 'ok', 'planner'); }
+        catch (e) { r.state = 'error'; r.error = (e.message || e); pushLog((PL_ICON[r.kind] || '') + ' [' + atk.name + '] ' + r.kind + ' ' + r.x + '|' + r.y + ': envio falhou (' + r.error + ').', 'err', 'planner'); }
         save(); plannerRecomputeReservations();
       }, fireDelay);
     }, delayPrep);
   }
 
+  // Tick único e global: percorre TODOS os ataques armados (cada um pode estar mirando alvo/horário diferentes).
   async function plannerTick() {
     clearTimeout(plannerTimer);
-    if (!config.planner.running) return;
+    const attacks = (config.planner && config.planner.attacks) || [];
+    if (!attacks.some((a) => a.running)) return;
     if (lockOther()) { plannerTimer = setTimeout(plannerTick, 5000); return; }
     claimLock();
     const nowS = serverNow();
-    for (const r of config.planner.rows) {
-      if (r.state === 'sent' || r.state === 'error' || r.state === 'scheduled') continue;
-      if (!r.arriveAt) { r.state = 'error'; r.error = 'sem horário'; continue; }
-      if (r.durSec == null) {
-        try { const p = await attackPrepare(r.origin, r.x, r.y, r.amounts, r.kind); r.durSec = p.dur; }
-        catch (e) { r.state = 'error'; r.error = (e.message || e); pushLog((PL_ICON[r.kind] || '') + ' ' + r.kind + ' ' + r.x + '|' + r.y + ': ' + r.error, 'err', 'planner'); continue; }
-        if (!r.durSec) { r.state = 'error'; r.error = 'sem duração'; continue; }
+    for (const atk of attacks) {
+      if (!atk.running) continue;
+      for (const r of atk.rows) {
+        if (r.state === 'sent' || r.state === 'error' || r.state === 'scheduled') continue;
+        if (!r.arriveAt) { r.state = 'error'; r.error = 'sem horário'; continue; }
+        if (r.durSec == null) {
+          try { const p = await attackPrepare(r.origin, r.x, r.y, r.amounts, r.kind); r.durSec = p.dur; }
+          catch (e) { r.state = 'error'; r.error = (e.message || e); pushLog((PL_ICON[r.kind] || '') + ' [' + atk.name + '] ' + r.kind + ' ' + r.x + '|' + r.y + ': ' + r.error, 'err', 'planner'); continue; }
+          if (!r.durSec) { r.state = 'error'; r.error = 'sem duração'; continue; }
+        }
+        r.sendAt = r.arriveAt - r.durSec * 1000;
+        if (r.sendAt - nowS < -2000) { r.state = 'error'; r.error = 'envio no passado'; continue; }
+        r.state = 'scheduled'; schedulePlannerFire(atk, r);
       }
-      r.sendAt = r.arriveAt - r.durSec * 1000;
-      if (r.sendAt - nowS < -2000) { r.state = 'error'; r.error = 'envio no passado'; continue; }
-      r.state = 'scheduled'; schedulePlannerFire(r);
     }
     save();
     plannerTimer = setTimeout(plannerTick, 30000);
   }
 
-  function plannerStart() {
-    const p = config.planner;
-    if (!p.targetX || !p.targetY) { pushLog('Coordenado: informe o alvo (x|y).', 'err', 'planner'); return; }
-    if (!p.arriveLocal) { pushLog('Coordenado: informe a chegada base.', 'err', 'planner'); return; }
+  function plannerStart(atk) {
+    if (!atk.targetX || !atk.targetY) { pushLog('[' + atk.name + ']: informe o alvo (x|y).', 'err', 'planner'); return; }
+    if (!atk.arriveLocal) { pushLog('[' + atk.name + ']: informe a chegada base.', 'err', 'planner'); return; }
     let rows;
-    try { rows = plannerBuildRows(); } catch (e) { pushLog('Coordenado: ' + (e.message || e), 'err', 'planner'); return; }
-    if (!rows.length) { pushLog('Coordenado: nenhuma aldeia com tropas configuradas.', 'err', 'planner'); return; }
-    p.running = true;
+    try { rows = plannerBuildRows(atk); } catch (e) { pushLog('[' + atk.name + ']: ' + (e.message || e), 'err', 'planner'); return; }
+    if (!rows.length) { pushLog('[' + atk.name + ']: nenhuma aldeia com tropas configuradas.', 'err', 'planner'); return; }
+    atk.running = true;
     save();
     plannerRecomputeReservations();
-    pushLog('🎯 Coordenado armado — ' + rows.length + ' ataque(s) contra ' + p.targetX + '|' + p.targetY + '.', 'ok', 'planner');
+    pushLog('🎯 [' + atk.name + '] armado — ' + rows.length + ' ataque(s) contra ' + atk.targetX + '|' + atk.targetY + '.', 'ok', 'planner');
     plannerTick();
   }
 
-  function plannerStop() {
-    config.planner.running = false;
-    clearTimeout(plannerTimer);
-    config.planner.rows = [];
+  function plannerStop(atk) {
+    atk.running = false;
+    atk.rows = [];
     save();
     plannerRecomputeReservations();
-    pushLog('🎯 Coordenado desarmado.', '', 'planner');
+    pushLog('🎯 [' + atk.name + '] desarmado.', '', 'planner');
+    if (!config.planner.attacks.some((a) => a.running)) clearTimeout(plannerTimer);
   }
 
   // Cache de aldeias (nome/coord) para render dos cards saber o nome.
   let _plVilCache = null;
 
-  async function renderPlannerVillages() {
+  async function renderPlannerVillages(atk) {
     const cont = document.getElementById('twmgr-pl-villages'); if (!cont) return;
     let vils = []; try { vils = await getAllVillages(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
     _plVilCache = vils;
-    const p = config.planner;
-    const tgtCoord = (p.targetX && p.targetY) ? (p.targetX + '|' + p.targetY) : '';
+    const tgtCoord = (atk.targetX && atk.targetY) ? (atk.targetX + '|' + atk.targetY) : '';
     vils.forEach((v) => { v.dist = (v.coord && tgtCoord) ? coordDist(v.coord, tgtCoord) : null; });
     vils.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
     cont.innerHTML = vils.map((v) => {
       const distTxt = v.dist != null ? (' · dist ' + v.dist.toFixed(1)) : '';
-      return '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-pl-vil" data-vid="' + v.vid + '"' + (p.selected[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '<span style="color:#8f7d57">' + distTxt + '</span></label>';
+      return '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-pl-vil" data-vid="' + v.vid + '"' + (atk.selected[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '<span style="color:#8f7d57">' + distTxt + '</span></label>';
     }).join('');
     cont.querySelectorAll('.twmgr-pl-vil').forEach((cb) => cb.addEventListener('change', () => {
       const vid = cb.getAttribute('data-vid');
-      if (cb.checked) { config.planner.selected[vid] = true; if (!config.planner.perVillage[vid]) config.planner.perVillage[vid] = { kind: 'attack', offsetMs: 0, amounts: {} }; }
-      else { delete config.planner.selected[vid]; delete config.planner.perVillage[vid]; delete config.planner.homeAvail[vid]; }
-      save(); plannerRecomputeReservations(); renderPlannerCards();
+      if (cb.checked) { atk.selected[vid] = true; if (!atk.perVillage[vid] || !atk.perVillage[vid].length) atk.perVillage[vid] = [{ kind: 'attack', offsetMs: 0, amounts: {} }]; }
+      else { delete atk.selected[vid]; delete atk.perVillage[vid]; delete atk.homeAvail[vid]; }
+      save(); plannerRecomputeReservations(); renderPlannerCards(atk);
     }));
   }
 
@@ -1597,120 +1641,210 @@
     return pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' + pad(d.getSeconds(), 2) + '.' + pad(d.getMilliseconds(), 3);
   }
 
-  function renderPlannerCards() {
+  // Cada aldeia pode ter várias ONDAS (waves) — cada onda é um ataque/nobre/fake/apoio próprio, com seu
+  // próprio horário de chegada, dentro do mesmo ataque coordenado.
+  function renderPlannerCards(atk) {
     const cont = document.getElementById('twmgr-pl-cards'); if (!cont) return;
-    const p = config.planner;
-    const sel = Object.keys(p.selected || {}).filter((v) => p.selected[v]);
+    const sel = Object.keys(atk.selected || {}).filter((v) => atk.selected[v]);
     if (!sel.length) {
       cont.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div>';
       return;
     }
     const vilBy = {}; (_plVilCache || []).forEach((v) => { vilBy[v.vid] = v; });
-    const baseMs = arrivalToServerMs(p.arriveLocal);
+    const baseMs = arrivalToServerMs(atk.arriveLocal);
     const kindOpt = [['attack', '🧹 attack'], ['noble', '👑 noble'], ['fake', '🎭 fake'], ['support', '🛡️ support']];
     cont.innerHTML = sel.map((vid) => {
-      const pv = p.perVillage[vid] || { kind: 'attack', offsetMs: 0, amounts: {} };
-      const home = p.homeAvail[vid] || {};
+      const waves = atk.perVillage[vid] || [];
+      const home = atk.homeAvail[vid] || {};
       const loaded = home.loadedAt || 0;
       const v = vilBy[vid] || { name: 'ID ' + vid };
-      const kindSel = kindOpt.map(([k, l]) => '<option value="' + k + '"' + (pv.kind === k ? ' selected' : '') + '>' + l + '</option>').join('');
-      const arrTxt = baseMs ? fmtArriveLocal(baseMs + (pv.offsetMs || 0)) : '—';
-      const grid = UNITS.map(([u, lbl]) => {
-        const max = home[u] || 0, cur = pv.amounts[u] || 0;
-        return '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#d3c299"><span style="width:56px">' + unitIcon(u, lbl) + '</span><input class="twmgr-pl-amt" data-vid="' + vid + '" data-u="' + u + '" type="number" min="0" max="' + max + '" value="' + cur + '" style="width:56px" /><span style="color:#8f7d57">/' + max + '</span></label>';
-      }).join('');
       const warnTxt = loaded ? '' : '<span style="color:#ff9560;font-size:9px">⚠ tropas não carregadas</span>';
-      return '<div style="border:1px solid #3a2c1a;border-radius:6px;padding:6px;margin:6px 0">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px">' +
-          '<div style="font-size:11px;color:#e6cf7d"><b>' + esc(v.name) + '</b> ' + warnTxt + '</div>' +
-          '<div style="display:flex;gap:4px;align-items:center;font-size:10px">' +
-            '<select class="twmgr-pl-kind" data-vid="' + vid + '" style="font-size:10px">' + kindSel + '</select>' +
-            '<span>off</span><input class="twmgr-pl-off" data-vid="' + vid + '" type="number" value="' + (pv.offsetMs || 0) + '" step="100" style="width:64px;font-size:10px"><span>ms</span>' +
+      const wavesHTML = waves.map((pv, widx) => {
+        const kindSel = kindOpt.map(([k, l]) => '<option value="' + k + '"' + (pv.kind === k ? ' selected' : '') + '>' + l + '</option>').join('');
+        const arrTxt = baseMs ? fmtArriveLocal(baseMs + (pv.offsetMs || 0)) : '—';
+        const grid = UNITS.map(([u, lbl]) => {
+          const max = home[u] || 0, cur = (pv.amounts && pv.amounts[u]) || 0;
+          return '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#d3c299"><span style="width:56px">' + unitIcon(u, lbl) + '</span><input class="twmgr-pl-amt" data-vid="' + vid + '" data-widx="' + widx + '" data-u="' + u + '" type="number" min="0" max="' + max + '" value="' + cur + '" style="width:56px" /><span style="color:#8f7d57">/' + max + '</span></label>';
+        }).join('');
+        return '<div style="border-top:1px dashed #3a2c1a;padding-top:6px;margin-top:6px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px">' +
+            '<div style="font-size:10px;color:#8f7d57">Onda ' + (widx + 1) + '</div>' +
+            '<div style="display:flex;gap:4px;align-items:center;font-size:10px">' +
+              '<select class="twmgr-pl-kind" data-vid="' + vid + '" data-widx="' + widx + '" style="font-size:10px">' + kindSel + '</select>' +
+              '<span>off</span><input class="twmgr-pl-off" data-vid="' + vid + '" data-widx="' + widx + '" type="number" value="' + (pv.offsetMs || 0) + '" step="100" style="width:64px;font-size:10px"><span>ms</span>' +
+              '<span class="twmgr-pl-wave-del" data-vid="' + vid + '" data-widx="' + widx + '" title="remover onda" style="cursor:pointer;opacity:.7">✕</span>' +
+            '</div>' +
           '</div>' +
+          '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">→ chega às <b style="color:#d3c299">' + arrTxt + '</b></div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px">' + grid + '</div>' +
+          '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">' +
+            '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-widx="' + widx + '" data-preset="attack" style="padding:3px 6px;font-size:10px">🧹 all off</button>' +
+            '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-widx="' + widx + '" data-preset="noble" style="padding:3px 6px;font-size:10px">👑 nobre</button>' +
+            '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-widx="' + widx + '" data-preset="fake" style="padding:3px 6px;font-size:10px">🎭 fake</button>' +
+            '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-widx="' + widx + '" data-preset="support" style="padding:3px 6px;font-size:10px">🛡️ all def</button>' +
+            '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-widx="' + widx + '" data-preset="zero" style="padding:3px 6px;font-size:10px">Zerar</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+      return '<div style="border:1px solid #3a2c1a;border-radius:6px;padding:6px;margin:6px 0">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px">' +
+          '<div style="font-size:11px;color:#e6cf7d"><b>' + esc(v.name) + '</b> ' + warnTxt + '</div>' +
+          '<span class="twmgr-pl-wave-add" data-vid="' + vid + '" title="adicionar onda" style="cursor:pointer;font-size:10px;color:#e6cf7d;border:1px dashed #5c4a29;border-radius:4px;padding:2px 6px">+ onda</span>' +
         '</div>' +
-        '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">→ chega às <b style="color:#d3c299">' + arrTxt + '</b></div>' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px">' + grid + '</div>' +
-        '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">' +
-          '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-preset="attack" style="padding:3px 6px;font-size:10px">🧹 all off</button>' +
-          '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-preset="noble" style="padding:3px 6px;font-size:10px">👑 nobre</button>' +
-          '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-preset="fake" style="padding:3px 6px;font-size:10px">🎭 fake</button>' +
-          '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-preset="support" style="padding:3px 6px;font-size:10px">🛡️ all def</button>' +
-          '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-preset="zero" style="padding:3px 6px;font-size:10px">Zerar</button>' +
-        '</div>' +
+        wavesHTML +
       '</div>';
     }).join('');
     // Wire eventos dos cards
     cont.querySelectorAll('.twmgr-pl-kind').forEach((el) => el.addEventListener('change', readPlannerCfg));
     cont.querySelectorAll('.twmgr-pl-off').forEach((el) => el.addEventListener('change', readPlannerCfg));
     cont.querySelectorAll('.twmgr-pl-amt').forEach((el) => el.addEventListener('change', readPlannerCfg));
+    cont.querySelectorAll('.twmgr-pl-wave-add').forEach((el) => el.addEventListener('click', () => {
+      const vid = el.getAttribute('data-vid');
+      atk.perVillage[vid] = atk.perVillage[vid] || [];
+      atk.perVillage[vid].push({ kind: 'attack', offsetMs: 0, amounts: {} });
+      save(); renderPlannerCards(atk);
+    }));
+    cont.querySelectorAll('.twmgr-pl-wave-del').forEach((el) => el.addEventListener('click', () => {
+      const vid = el.getAttribute('data-vid'), widx = parseInt(el.getAttribute('data-widx'), 10);
+      if (atk.perVillage[vid]) atk.perVillage[vid].splice(widx, 1);
+      save(); plannerRecomputeReservations(); renderPlannerCards(atk);
+    }));
     cont.querySelectorAll('.twmgr-pl-preset').forEach((btn) => btn.addEventListener('click', () => {
-      const vid = btn.getAttribute('data-vid'), preset = btn.getAttribute('data-preset');
-      const avail = config.planner.homeAvail[vid] || {};
+      const vid = btn.getAttribute('data-vid'), widx = parseInt(btn.getAttribute('data-widx'), 10), preset = btn.getAttribute('data-preset');
+      const avail = atk.homeAvail[vid] || {};
       const r = computePreset(preset, avail);
-      config.planner.perVillage[vid] = config.planner.perVillage[vid] || { kind: 'attack', offsetMs: 0, amounts: {} };
-      config.planner.perVillage[vid].amounts = r.amounts;
+      atk.perVillage[vid] = atk.perVillage[vid] || [];
+      atk.perVillage[vid][widx] = atk.perVillage[vid][widx] || { kind: 'attack', offsetMs: 0, amounts: {} };
+      atk.perVillage[vid][widx].amounts = r.amounts;
       if (r.warn.length) pushLog('Preset ' + preset + ' em ' + vid + ': ' + r.warn.join(', '), 'err', 'planner');
-      save(); plannerRecomputeReservations(); renderPlannerCards();
+      save(); plannerRecomputeReservations(); renderPlannerCards(atk);
     }));
   }
 
-  async function plannerLoadHomeAvail() {
-    const p = config.planner;
-    const sel = Object.keys(p.selected || {}).filter((v) => p.selected[v]);
+  async function plannerLoadHomeAvail(atk) {
+    const sel = Object.keys(atk.selected || {}).filter((v) => atk.selected[v]);
     if (!sel.length) { pushLog('Marque pelo menos 1 aldeia antes de carregar tropas.', 'err', 'planner'); return; }
-    pushLog('Coordenado: carregando tropas de ' + sel.length + ' aldeia(s)…', '', 'planner');
+    pushLog('[' + atk.name + ']: carregando tropas de ' + sel.length + ' aldeia(s)…', '', 'planner');
     const results = await Promise.allSettled(sel.map((vid) => getVillageHomeAvail(vid).then((h) => ({ vid, h }))));
     let ok = 0, fail = 0;
     results.forEach((r) => {
-      if (r.status === 'fulfilled') { const h = r.value.h; h.loadedAt = Date.now(); p.homeAvail[r.value.vid] = h; ok++; }
+      if (r.status === 'fulfilled') { const h = r.value.h; h.loadedAt = Date.now(); atk.homeAvail[r.value.vid] = h; ok++; }
       else fail++;
     });
     save();
-    pushLog('Coordenado: tropas carregadas em ' + ok + '/' + sel.length + (fail ? ' (' + fail + ' falharam)' : '') + '.', ok ? 'ok' : 'err', 'planner');
-    renderPlannerCards();
+    pushLog('[' + atk.name + ']: tropas carregadas em ' + ok + '/' + sel.length + (fail ? ' (' + fail + ' falharam)' : '') + '.', ok ? 'ok' : 'err', 'planner');
+    renderPlannerCards(atk);
   }
 
+  // Lê os campos da UI (que sempre refletem o ataque ATIVO) de volta pro objeto do ataque ativo.
   function readPlannerCfg() {
-    const p = config.planner, g = (id) => document.getElementById(id);
-    if (g('twmgr-pl-target-x')) p.targetX = (g('twmgr-pl-target-x').value || '').replace(/\D/g, '');
-    if (g('twmgr-pl-target-y')) p.targetY = (g('twmgr-pl-target-y').value || '').replace(/\D/g, '');
-    if (g('twmgr-pl-arr')) p.arriveLocal = g('twmgr-pl-arr').value;
-    if (g('twmgr-pl-offset')) p.offsetMs = Math.max(0, parseInt(g('twmgr-pl-offset').value, 10) || 150);
-    document.querySelectorAll('.twmgr-pl-kind').forEach((s) => { const vid = s.getAttribute('data-vid'); if (p.perVillage[vid]) p.perVillage[vid].kind = s.value; });
-    document.querySelectorAll('.twmgr-pl-off').forEach((s) => { const vid = s.getAttribute('data-vid'); if (p.perVillage[vid]) p.perVillage[vid].offsetMs = parseInt(s.value, 10) || 0; });
+    const atk = plActive(), g = (id) => document.getElementById(id);
+    if (g('twmgr-pl-target-x')) atk.targetX = (g('twmgr-pl-target-x').value || '').replace(/\D/g, '');
+    if (g('twmgr-pl-target-y')) atk.targetY = (g('twmgr-pl-target-y').value || '').replace(/\D/g, '');
+    if (g('twmgr-pl-arr')) atk.arriveLocal = g('twmgr-pl-arr').value;
+    if (g('twmgr-pl-offset')) atk.offsetMs = Math.max(0, parseInt(g('twmgr-pl-offset').value, 10) || 150);
+    document.querySelectorAll('.twmgr-pl-kind').forEach((s) => { const vid = s.getAttribute('data-vid'), widx = parseInt(s.getAttribute('data-widx'), 10); const w = atk.perVillage[vid] && atk.perVillage[vid][widx]; if (w) w.kind = s.value; });
+    document.querySelectorAll('.twmgr-pl-off').forEach((s) => { const vid = s.getAttribute('data-vid'), widx = parseInt(s.getAttribute('data-widx'), 10); const w = atk.perVillage[vid] && atk.perVillage[vid][widx]; if (w) w.offsetMs = parseInt(s.value, 10) || 0; });
     document.querySelectorAll('.twmgr-pl-amt').forEach((s) => {
-      const vid = s.getAttribute('data-vid'), u = s.getAttribute('data-u');
-      if (p.perVillage[vid]) { const n = Math.max(0, parseInt(s.value, 10) || 0); if (n > 0) p.perVillage[vid].amounts[u] = n; else delete p.perVillage[vid].amounts[u]; }
+      const vid = s.getAttribute('data-vid'), widx = parseInt(s.getAttribute('data-widx'), 10), u = s.getAttribute('data-u');
+      const w = atk.perVillage[vid] && atk.perVillage[vid][widx];
+      if (w) { const n = Math.max(0, parseInt(s.value, 10) || 0); if (n > 0) w.amounts[u] = n; else delete w.amounts[u]; }
     });
     save(); plannerRecomputeReservations();
-    // Atualiza só o texto de "chega às" dos cards sem re-render total (menos churn na UI enquanto o usuário digita).
-    const baseMs = arrivalToServerMs(p.arriveLocal);
-    document.querySelectorAll('#twmgr-pl-cards > div').forEach((card) => {
-      const off = card.querySelector('.twmgr-pl-off'); const target = card.querySelector('div[style*="chega"]');
-      // Sem re-inspeção fina — deixa o próximo render (ao alterar seleção) atualizar
-    });
   }
 
-  function setPlannerStatus(on) { setBtnState('twmgr-pl-start', 'twmgr-pl-stop', on, '● Armado', '▶ Armar coordenado'); }
+  function setPlannerStatus(on) { setBtnState('twmgr-pl-start', 'twmgr-pl-stop', on, '● Armado', '▶ Armar este ataque'); }
+
+  // ---- Lista de ataques independentes (adicionar/trocar/renomear/remover) ----
+  function plannerAddAttack() {
+    const n = (config.planner.attacks || []).length + 1;
+    const atk = defPlannerAttack('Ataque ' + n);
+    config.planner.attacks.push(atk);
+    config.planner.activeId = atk.id;
+    save();
+    renderPlannerTabs();
+    renderPlannerActive();
+    pushLog('Novo ataque criado: [' + atk.name + '].', '', 'planner');
+  }
+
+  function plannerRemoveAttack(id) {
+    const atk = config.planner.attacks.find((a) => a.id === id); if (!atk) return;
+    if (config.planner.attacks.length <= 1) { pushLog('Precisa manter pelo menos 1 ataque.', 'err', 'planner'); return; }
+    if (!confirm('Remover [' + atk.name + ']?' + (atk.running ? ' Ele está armado — será desarmado.' : ''))) return;
+    if (atk.running) plannerStop(atk);
+    config.planner.attacks = config.planner.attacks.filter((a) => a.id !== id);
+    if (config.planner.activeId === id) config.planner.activeId = config.planner.attacks[0].id;
+    save(); plannerRecomputeReservations();
+    renderPlannerTabs();
+    renderPlannerActive();
+  }
+
+  function plannerRenameAttack(id) {
+    const atk = config.planner.attacks.find((a) => a.id === id); if (!atk) return;
+    const name = prompt('Nome do ataque:', atk.name);
+    if (!name || !name.trim()) return;
+    atk.name = name.trim();
+    save(); renderPlannerTabs();
+  }
+
+  function plannerSwitchAttack(id) {
+    if (!config.planner.attacks.some((a) => a.id === id)) return;
+    config.planner.activeId = id;
+    save();
+    renderPlannerTabs();
+    renderPlannerActive();
+  }
+
+  function renderPlannerTabs() {
+    const cont = document.getElementById('twmgr-pl-attacks'); if (!cont) return;
+    const p = config.planner;
+    cont.innerHTML = p.attacks.map((atk) => {
+      const active = atk.id === p.activeId;
+      return '<div class="twmgr-pl-tab' + (active ? ' active' : '') + '" data-id="' + atk.id + '" style="display:flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;cursor:pointer;font-size:10px;border:1px solid ' + (active ? '#d4af37' : '#3a2c1a') + ';background:' + (active ? 'rgba(212,175,55,.15)' : 'transparent') + ';color:#d3c299">' +
+        '<span class="twmgr-pl-tab-dot" style="color:#8fe39a;display:' + (atk.running ? 'inline' : 'none') + '">●</span>' +
+        '<span class="twmgr-pl-tab-name">' + esc(atk.name) + '</span>' +
+        '<span class="twmgr-pl-tab-ren" data-id="' + atk.id + '" title="renomear" style="opacity:.6">✎</span>' +
+        '<span class="twmgr-pl-tab-del" data-id="' + atk.id + '" title="remover" style="opacity:.6">✕</span>' +
+      '</div>';
+    }).join('') + '<div id="twmgr-pl-tab-add" title="adicionar ataque" style="padding:3px 8px;border-radius:6px;cursor:pointer;font-size:12px;border:1px dashed #5c4a29;color:#e6cf7d">+ ataque</div>';
+    cont.querySelectorAll('.twmgr-pl-tab').forEach((el) => el.addEventListener('click', (e) => {
+      if (e.target.classList.contains('twmgr-pl-tab-ren') || e.target.classList.contains('twmgr-pl-tab-del')) return;
+      plannerSwitchAttack(el.getAttribute('data-id'));
+    }));
+    cont.querySelectorAll('.twmgr-pl-tab-ren').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); plannerRenameAttack(el.getAttribute('data-id')); }));
+    cont.querySelectorAll('.twmgr-pl-tab-del').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); plannerRemoveAttack(el.getAttribute('data-id')); }));
+    const addBtn = document.getElementById('twmgr-pl-tab-add'); if (addBtn) addBtn.addEventListener('click', plannerAddAttack);
+  }
+
+  // Repopula os campos (alvo/chegada/aldeias/composição/status) com os dados do ataque ATIVO.
+  function renderPlannerActive() {
+    const atk = plActive(), g = (id) => document.getElementById(id);
+    if (g('twmgr-pl-target-x')) g('twmgr-pl-target-x').value = atk.targetX || '';
+    if (g('twmgr-pl-target-y')) g('twmgr-pl-target-y').value = atk.targetY || '';
+    if (g('twmgr-pl-arr')) g('twmgr-pl-arr').value = atk.arriveLocal || '';
+    if (g('twmgr-pl-offset')) g('twmgr-pl-offset').value = atk.offsetMs != null ? atk.offsetMs : 150;
+    setPlannerStatus(atk.running);
+    renderPlannerVillages(atk).then(() => renderPlannerCards(atk));
+  }
 
   function plannerRefreshTemplatesList() {
     const sel = document.getElementById('twmgr-pl-tpl-load'); if (!sel) return;
-    const plans = config.planner.plans || [];
-    sel.innerHTML = '<option value="">(nenhum)</option>' + plans.map((pl) => '<option value="' + pl.id + '">' + esc(pl.name) + '</option>').join('');
+    const tpls = config.planner.templates || [];
+    sel.innerHTML = '<option value="">(nenhum)</option>' + tpls.map((pl) => '<option value="' + pl.id + '">' + esc(pl.name) + '</option>').join('');
   }
 
   function plannerSaveTemplate() {
     const input = document.getElementById('twmgr-pl-tpl-name'); if (!input) return;
     const name = (input.value || '').trim();
     if (!name) { pushLog('Dê um nome pro template antes de salvar.', 'err', 'planner'); return; }
-    const p = config.planner;
+    const atk = plActive();
     const tpl = {
       id: genId(), name: name,
-      targetX: p.targetX, targetY: p.targetY, arriveLocal: p.arriveLocal, offsetMs: p.offsetMs,
-      selected: JSON.parse(JSON.stringify(p.selected)),
-      perVillage: JSON.parse(JSON.stringify(p.perVillage)),
+      targetX: atk.targetX, targetY: atk.targetY, arriveLocal: atk.arriveLocal, offsetMs: atk.offsetMs,
+      selected: JSON.parse(JSON.stringify(atk.selected)),
+      perVillage: JSON.parse(JSON.stringify(atk.perVillage)),
     };
-    p.plans = p.plans || []; p.plans.push(tpl); save();
+    config.planner.templates = config.planner.templates || []; config.planner.templates.push(tpl); save();
     plannerRefreshTemplatesList();
     input.value = '';
     pushLog('Template "' + name + '" salvo.', 'ok', 'planner');
@@ -1719,41 +1853,34 @@
   function plannerApplyTemplate() {
     const sel = document.getElementById('twmgr-pl-tpl-load'); if (!sel) return;
     const id = sel.value; if (!id) return;
-    const tpl = (config.planner.plans || []).find((t) => t.id === id); if (!tpl) return;
-    const p = config.planner;
-    p.targetX = tpl.targetX || ''; p.targetY = tpl.targetY || '';
-    p.arriveLocal = tpl.arriveLocal || ''; p.offsetMs = tpl.offsetMs != null ? tpl.offsetMs : 150;
-    p.selected = JSON.parse(JSON.stringify(tpl.selected || {}));
-    p.perVillage = JSON.parse(JSON.stringify(tpl.perVillage || {}));
-    p.homeAvail = {}; // será recarregado
+    const tpl = (config.planner.templates || []).find((t) => t.id === id); if (!tpl) return;
+    const atk = plActive();
+    atk.targetX = tpl.targetX || ''; atk.targetY = tpl.targetY || '';
+    atk.arriveLocal = tpl.arriveLocal || ''; atk.offsetMs = tpl.offsetMs != null ? tpl.offsetMs : 150;
+    atk.selected = JSON.parse(JSON.stringify(tpl.selected || {}));
+    atk.perVillage = JSON.parse(JSON.stringify(tpl.perVillage || {}));
+    atk.homeAvail = {}; // será recarregado
     save(); plannerRecomputeReservations();
-    // Repopula os campos da UI
-    const g = (id) => document.getElementById(id);
-    if (g('twmgr-pl-target-x')) g('twmgr-pl-target-x').value = p.targetX;
-    if (g('twmgr-pl-target-y')) g('twmgr-pl-target-y').value = p.targetY;
-    if (g('twmgr-pl-arr')) g('twmgr-pl-arr').value = p.arriveLocal;
-    if (g('twmgr-pl-offset')) g('twmgr-pl-offset').value = p.offsetMs;
-    renderPlannerVillages().then(renderPlannerCards);
-    pushLog('Template "' + tpl.name + '" aplicado. Clique em 🔄 para carregar tropas.', 'ok', 'planner');
+    renderPlannerActive();
+    pushLog('Template "' + tpl.name + '" aplicado em [' + atk.name + ']. Clique em 🔄 para carregar tropas.', 'ok', 'planner');
   }
 
   function plannerDeleteTemplate() {
     const sel = document.getElementById('twmgr-pl-tpl-load'); if (!sel) return;
     const id = sel.value; if (!id) return;
-    const tpl = (config.planner.plans || []).find((t) => t.id === id); if (!tpl) return;
+    const tpl = (config.planner.templates || []).find((t) => t.id === id); if (!tpl) return;
     if (!confirm('Apagar template "' + tpl.name + '"?')) return;
-    config.planner.plans = (config.planner.plans || []).filter((t) => t.id !== id);
+    config.planner.templates = (config.planner.templates || []).filter((t) => t.id !== id);
     save(); plannerRefreshTemplatesList();
     pushLog('Template "' + tpl.name + '" apagado.', '', 'planner');
   }
 
-  function plannerClearAll() {
-    if (!confirm('Limpar seleção e composição? (templates salvos ficam)')) return;
-    const p = config.planner;
-    p.selected = {}; p.perVillage = {}; p.homeAvail = {}; p.rows = [];
+  function plannerClearAll(atk) {
+    if (!confirm('Limpar seleção e composição de [' + atk.name + ']? (templates salvos ficam)')) return;
+    atk.selected = {}; atk.perVillage = {}; atk.homeAvail = {}; atk.rows = [];
     save(); plannerRecomputeReservations();
-    renderPlannerVillages().then(renderPlannerCards);
-    pushLog('Coordenado limpo.', '', 'planner');
+    renderPlannerVillages(atk).then(() => renderPlannerCards(atk));
+    pushLog('[' + atk.name + '] limpo.', '', 'planner');
   }
 
   // ==================== MERCADO (Cunhagem) ====================
@@ -2670,10 +2797,11 @@
     const plClk = document.getElementById('twmgr-pl-srvclock'); if (plClk) { try { plClk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
     const pls = document.getElementById('twmgr-pl-status');
     if (pls) {
-      if (!config.planner || !config.planner.running) { pls.textContent = ''; }
+      const plAtk = config.planner && plActive();
+      if (!plAtk || !plAtk.running) { pls.textContent = ''; }
       else if (lockOther()) { pls.textContent = '⏸ outra aba'; pls.style.color = '#ff7568'; }
       else {
-        const rr = (config.planner.rows || []);
+        const rr = (plAtk.rows || []);
         const pend = rr.filter((r) => r.state === 'armed' || r.state === 'scheduled').length;
         const sent = rr.filter((r) => r.state === 'sent').length;
         const err = rr.filter((r) => r.state === 'error').length;
@@ -2683,6 +2811,12 @@
       }
     }
     if (document.getElementById('twmgr-cards-planner')) refreshCards('planner');
+    // Atualiza só o indicador (●) de cada aba de ataque, sem reconstruir a lista (evita "roubar" cliques).
+    document.querySelectorAll('.twmgr-pl-tab').forEach((el) => {
+      const atk = (config.planner.attacks || []).find((a) => a.id === el.getAttribute('data-id'));
+      const dot = el.querySelector('.twmgr-pl-tab-dot');
+      if (dot) dot.style.display = (atk && atk.running) ? 'inline' : 'none';
+    });
     const ring = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('twmgr-run', !!on && !lockOther()); };
     ring('twmgr-btab-bb', config.bb && config.bb.running);
     ring('twmgr-btab-map', config.map && config.map.running);
@@ -2693,7 +2827,7 @@
     ring('twmgr-btab-fakes', config.fakes.running);
     ring('twmgr-btab-market', config.market.running);
     ring('twmgr-btab-build', config.build.running);
-    ring('twmgr-btab-planner', config.planner && config.planner.running);
+    ring('twmgr-btab-planner', config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running));
     const dot = document.getElementById('twmgr-dot'); if (dot) dot.classList.toggle('on', anyRunning() && !lockOther());
   }
 
@@ -3101,9 +3235,10 @@
         modLog('map') +
       '</div>' +
       '<div id="twmgr-tab-planner" style="display:none">' +
-        hint('🎯 Coordenado: 1 alvo, N aldeias. Cada aldeia manda seu ataque (limpeza/nobre/fake/apoio) chegando no horário certo. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
+        hint('🎯 Coordenado: monte vários ataques independentes — cada um com seu próprio alvo, aldeias e tropas — e arme cada um separadamente (o botão libera um novo ataque em branco assim que você arma). Cada aldeia pode mandar <b>várias ondas</b> (+ onda) dentro do mesmo ataque. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
         cardsDiv('planner') +
-        sec('1. Alvo',
+        sec('Ataques', '<div id="twmgr-pl-attacks" style="display:flex;flex-wrap:wrap;gap:6px"></div>') +
+        sec('1. Alvo (do ataque selecionado acima)',
           '<div class="twmgr-row"><span class="twmgr-lbl">Relógio do servidor</span><b id="twmgr-pl-srvclock" style="color:#ffd76a">--:--:--</b></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Coord alvo</span><span><input id="twmgr-pl-target-x" class="twmgr-inp" type="number" min="1" placeholder="x" style="width:56px"> | <input id="twmgr-pl-target-y" class="twmgr-inp" type="number" min="1" placeholder="y" style="width:56px"></span></div>' +
           '<label class="twmgr-lbl">Chegada base (horário do servidor)</label><input id="twmgr-pl-arr" class="twmgr-inp" type="datetime-local" step="1" style="width:100%;margin:2px 0 0">' +
@@ -3111,10 +3246,10 @@
         sec('2. Aldeias participantes',
           '<div class="twmgr-row"><span class="twmgr-lbl">Selecione</span><span style="font-size:9px"><a id="twmgr-pl-all" style="cursor:pointer;color:#e6cf7d">todas</a> · <a id="twmgr-pl-none" style="cursor:pointer;color:#e6cf7d">nenhuma</a> · <a id="twmgr-pl-load" style="cursor:pointer;color:#e6cf7d">🔄 carregar tropas</a></span></div>' +
           '<div id="twmgr-pl-villages" style="max-height:110px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px"></div>') +
-        sec('3. Composição por aldeia',
+        sec('3. Composição por aldeia (+ onda pra mandar mais de um ataque da mesma aldeia)',
           '<div id="twmgr-pl-cards"><div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div></div>') +
-        sec('4. Armar',
-          '<div class="twmgr-actions"><button id="twmgr-pl-start" class="twmgr-btn twmgr-go">▶ Armar coordenado</button><button id="twmgr-pl-stop" class="twmgr-btn twmgr-stop">■ Desarmar</button><button id="twmgr-pl-clear" class="twmgr-btn twmgr-ghost" style="flex:0 0 auto">🗑</button></div>' +
+        sec('4. Armar este ataque',
+          '<div class="twmgr-actions"><button id="twmgr-pl-start" class="twmgr-btn twmgr-go">▶ Armar este ataque</button><button id="twmgr-pl-stop" class="twmgr-btn twmgr-stop">■ Desarmar</button><button id="twmgr-pl-clear" class="twmgr-btn twmgr-ghost" style="flex:0 0 auto">🗑</button></div>' +
           '<div id="twmgr-pl-status" class="twmgr-cstatus"></div>') +
         sec('Templates',
           '<div class="twmgr-row"><span class="twmgr-lbl">Salvar plano atual</span><span><input id="twmgr-pl-tpl-name" class="twmgr-inp" type="text" placeholder="ex: guerra XYZ" style="width:120px"> <button id="twmgr-pl-tpl-save" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">💾</button></span></div>' +
@@ -3227,30 +3362,40 @@
     setFakeStatus(config.fakes.running);
 
     // ---- Planner (Coordenado) ----
-    document.getElementById('twmgr-pl-target-x').value = config.planner.targetX || '';
-    document.getElementById('twmgr-pl-target-y').value = config.planner.targetY || '';
-    document.getElementById('twmgr-pl-arr').value = config.planner.arriveLocal || '';
-    document.getElementById('twmgr-pl-offset').value = config.planner.offsetMs != null ? config.planner.offsetMs : 150;
-    ['twmgr-pl-target-x', 'twmgr-pl-target-y', 'twmgr-pl-arr', 'twmgr-pl-offset'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', () => { readPlannerCfg(); renderPlannerVillages().then(renderPlannerCards); }); });
+    renderPlannerTabs();
+    renderPlannerActive();
+    ['twmgr-pl-target-x', 'twmgr-pl-target-y', 'twmgr-pl-arr', 'twmgr-pl-offset'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', () => { readPlannerCfg(); const atk = plActive(); renderPlannerVillages(atk).then(() => renderPlannerCards(atk)); }); });
     document.getElementById('twmgr-pl-all').addEventListener('click', () => {
-      document.querySelectorAll('.twmgr-pl-vil').forEach((cb) => { cb.checked = true; const vid = cb.getAttribute('data-vid'); config.planner.selected[vid] = true; if (!config.planner.perVillage[vid]) config.planner.perVillage[vid] = { kind: 'attack', offsetMs: 0, amounts: {} }; });
-      save(); plannerRecomputeReservations(); renderPlannerCards();
+      const atk = plActive();
+      document.querySelectorAll('.twmgr-pl-vil').forEach((cb) => { cb.checked = true; const vid = cb.getAttribute('data-vid'); atk.selected[vid] = true; if (!atk.perVillage[vid] || !atk.perVillage[vid].length) atk.perVillage[vid] = [{ kind: 'attack', offsetMs: 0, amounts: {} }]; });
+      save(); plannerRecomputeReservations(); renderPlannerCards(atk);
     });
     document.getElementById('twmgr-pl-none').addEventListener('click', () => {
+      const atk = plActive();
       document.querySelectorAll('.twmgr-pl-vil').forEach((cb) => { cb.checked = false; });
-      config.planner.selected = {}; config.planner.perVillage = {}; config.planner.homeAvail = {};
-      save(); plannerRecomputeReservations(); renderPlannerCards();
+      atk.selected = {}; atk.perVillage = {}; atk.homeAvail = {};
+      save(); plannerRecomputeReservations(); renderPlannerCards(atk);
     });
-    document.getElementById('twmgr-pl-load').addEventListener('click', plannerLoadHomeAvail);
-    document.getElementById('twmgr-pl-start').addEventListener('click', () => { readPlannerCfg(); plannerStart(); setPlannerStatus(config.planner.running); });
-    document.getElementById('twmgr-pl-stop').addEventListener('click', () => { plannerStop(); setPlannerStatus(false); });
-    document.getElementById('twmgr-pl-clear').addEventListener('click', plannerClearAll);
+    document.getElementById('twmgr-pl-load').addEventListener('click', () => plannerLoadHomeAvail(plActive()));
+    document.getElementById('twmgr-pl-start').addEventListener('click', () => {
+      readPlannerCfg();
+      const atk = plActive();
+      const wasRunning = atk.running;
+      plannerStart(atk);
+      if (atk.running && !wasRunning) {
+        // Armou agora: libera um ataque novo em branco já selecionado, pra continuar configurando e armando sem travar o botão.
+        plannerAddAttack();
+      } else {
+        setPlannerStatus(atk.running);
+        renderPlannerTabs();
+      }
+    });
+    document.getElementById('twmgr-pl-stop').addEventListener('click', () => { const atk = plActive(); plannerStop(atk); setPlannerStatus(false); renderPlannerTabs(); });
+    document.getElementById('twmgr-pl-clear').addEventListener('click', () => plannerClearAll(plActive()));
     document.getElementById('twmgr-pl-tpl-save').addEventListener('click', plannerSaveTemplate);
     document.getElementById('twmgr-pl-tpl-apply').addEventListener('click', plannerApplyTemplate);
     document.getElementById('twmgr-pl-tpl-del').addEventListener('click', plannerDeleteTemplate);
     plannerRefreshTemplatesList();
-    renderPlannerVillages().then(renderPlannerCards);
-    setPlannerStatus(config.planner.running);
 
     document.getElementById('twmgr-mk-coord').value = config.market.destCoord || '';
     document.getElementById('twmgr-mk-reserve').value = config.market.reserve || 0;
@@ -3351,7 +3496,11 @@
     if (config.build.running) { if (!lockOther()) pushLog('Edifícios retomado.', 'ok', 'build'); scheduleBuild(); }
     if (config.bb && config.bb.running) { if (!lockOther()) pushLog('Cultivo retomado.', 'ok', 'bb'); scheduleBB(); }
     if (config.map && config.map.running) { if (!lockOther()) pushLog('Mapa retomado.', 'ok', 'map'); scheduleMap(); }
-    if (config.planner && config.planner.running) { (config.planner.rows || []).forEach((r) => { if (r.state === 'scheduled') r.state = 'armed'; }); if (!lockOther()) pushLog('🎯 Coordenado retomado.', 'ok', 'planner'); plannerTick(); }
+    if (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) {
+      config.planner.attacks.forEach((atk) => { if (!atk.running) return; (atk.rows || []).forEach((r) => { if (r.state === 'scheduled') r.state = 'armed'; }); });
+      if (!lockOther()) pushLog('🎯 Coordenado retomado.', 'ok', 'planner');
+      plannerTick();
+    }
     startCaptchaWatcher();
   }
 

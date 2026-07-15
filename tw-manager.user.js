@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.28.5
+// @version      9.29.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.28.5';
+  const VERSION = '9.29.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -87,7 +87,7 @@
   // Por cor: um modo único ('none'|'a'|'b'|'c') + qtd (só p/ a/b; C manda 1x).
   const defFarmMatrix = () => ({ greenEmpty: { mode: 'a', qty: 1 }, greenFull: { mode: 'b', qty: 1 }, yellowEmpty: { mode: 'none', qty: 1 }, yellowFull: { mode: 'none', qty: 1 }, blue: { mode: 'b', qty: 1 } });
   const FARM_COLORS = ['greenEmpty', 'greenFull', 'yellowEmpty', 'yellowFull', 'blue'];
-  const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, blueMaxWall: 0, blueDeleteMinDef: 10, delay: 500, mode: 'suave', group: null, cooldownMin: 10, minCL: 0, order: 'dist', dynTemplate: false, matrix: defFarmMatrix(), sentReports: {}, defended: {} });
+  const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, blueMaxWall: 0, blueDeleteMinDef: 10, delay: 500, mode: 'suave', group: null, repeat: false, repeatMin: 10, minCL: 0, order: 'dist', dynTemplate: false, matrix: defFarmMatrix(), sentReports: {}, defended: {} });
   const defWall = () => ({ running: false, nextAt: 0, interval: 600, wallMin: 1, wallMax: 6, ramMode: 'auto', ramFixed: 20, ramWall6: 24, axeCount: 80, spyCount: 1, sentDemo: {} });
   const defRecruit = () => ({
     running: false, nextAt: 0, interval: 600, targetHours: 2, refillBelowMin: 30,
@@ -153,7 +153,10 @@
     if (c.farm.minIron == null) c.farm.minIron = oldMin;
     if (!c.farm.mode) c.farm.mode = 'suave';
     if (c.farm.group === undefined) c.farm.group = null;
-    if (c.farm.cooldownMin == null) c.farm.cooldownMin = 10;
+    // "Repetir farm": migra do antigo cooldownMin se existir
+    if (c.farm.repeat == null) c.farm.repeat = false;
+    if (c.farm.repeatMin == null) c.farm.repeatMin = (c.farm.cooldownMin != null ? c.farm.cooldownMin : 10);
+    delete c.farm.cooldownMin;
     if (c.farm.minCL == null) c.farm.minCL = 0;
     if (!c.farm.order) c.farm.order = 'dist';
     if (c.farm.dynTemplate == null) c.farm.dynTemplate = false;
@@ -856,7 +859,8 @@
     const blueMaxWall = cfg.blueMaxWall != null ? cfg.blueMaxWall : 0;
     const blueDeleteMinDef = cfg.blueDeleteMinDef != null ? cfg.blueDeleteMinDef : 10;
     const delayBase = cfg.mode === 'agressivo' ? 200 : 500;
-    const cooldownMs = Math.max(0, cfg.cooldownMin || 0) * 60000;
+    const repeatOn = !!cfg.repeat;
+    const repeatMs = Math.max(0, cfg.repeatMin || 0) * 60000;
     const minCL = cfg.minCL || 0, dyn = !!cfg.dynTemplate, M = cfg.matrix || {};
     const sent = cfg.sentReports || {}, defended = cfg.defended || {};
     // "Saques ativos agora": poda os que já pousaram (destino sumiu da lista de comandos) + os muito antigos.
@@ -906,12 +910,15 @@
         }
         const cell = t._cell, mode = cell.mode, qty = Math.max(1, cell.qty || 1);
         const cm = (t.coord || '').match(/(\d+)\|(\d+)/), sum = (t.wood || 0) + (t.stone || 0) + (t.iron || 0);
-        // "Em rota" = ataque nosso ainda a caminho (lista viva de comandos + envios deste tick).
-        // Regra unificada: NUNCA empilha em cima de ataque em rota (qty>1 na matriz é override explícito).
-        // "cooldown" = intervalo mínimo entre envios quando o alvo já está livre (ataque anterior voltou).
+        // "Repetir farm" ligado: reataca por tempo (empilha ondas a cada repeatMin, mesmo com tropa no ar).
+        // Desligado: só envia se NÃO tiver ataque nosso a caminho pro alvo (+ trava curta anti-corrida).
         const inFlight = pendingCoords.has(t.coord);
-        if (inFlight) { skip.pend++; continue; }
-        if (sent[t.coord] && now - sent[t.coord] < cooldownMs) { skip.pend++; continue; }
+        if (repeatOn) {
+          if (sent[t.coord] && now - sent[t.coord] < repeatMs) { skip.pend++; continue; }
+        } else {
+          if (inFlight) { skip.pend++; continue; }
+          if (sent[t.coord] && now - sent[t.coord] < 120000) { skip.pend++; continue; }
+        }
         let did = false;
         try {
           if (mode === 'c') {
@@ -3028,7 +3035,8 @@
     const bdd = document.getElementById('twmgr-farm-bluedelmindef'); if (bdd) { config.farm.blueDeleteMinDef = parseInt(bdd.value, 10); if (isNaN(config.farm.blueDeleteMinDef) || config.farm.blueDeleteMinDef < 1) config.farm.blueDeleteMinDef = 10; }
     const md = document.getElementById('twmgr-farm-mode'); if (md) config.farm.mode = md.value || 'suave';
     const gp = document.getElementById('twmgr-farm-group'); if (gp) config.farm.group = gp.value || null;
-    const cd = document.getElementById('twmgr-farm-cooldown'); if (cd) { config.farm.cooldownMin = parseInt(cd.value, 10); if (isNaN(config.farm.cooldownMin) || config.farm.cooldownMin < 0) config.farm.cooldownMin = 10; }
+    const rp = document.getElementById('twmgr-farm-repeat'); if (rp) config.farm.repeat = rp.checked;
+    const rm = document.getElementById('twmgr-farm-repeatmin'); if (rm) { config.farm.repeatMin = parseInt(rm.value, 10); if (isNaN(config.farm.repeatMin) || config.farm.repeatMin < 1) config.farm.repeatMin = 10; }
     const mc = document.getElementById('twmgr-farm-mincl'); if (mc) config.farm.minCL = Math.max(0, parseInt(mc.value, 10) || 0);
     const od = document.getElementById('twmgr-farm-order'); if (od) config.farm.order = od.value || 'dist';
     const dy = document.getElementById('twmgr-farm-dyn'); if (dy) config.farm.dynTemplate = dy.checked;
@@ -3219,7 +3227,8 @@
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Modo</span><select id="twmgr-farm-mode" class="twmgr-inp" style="width:120px"><option value="agressivo">Agressivo</option><option value="suave">Suave</option></select></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Ordem de farm</span><select id="twmgr-farm-order" class="twmgr-inp" style="width:130px"><option value="dist">Por distância</option><option value="recurso">Por recurso</option></select></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Tempo entre farms (min)</span><input id="twmgr-farm-cooldown" class="twmgr-inp" type="number" min="0" value="10" style="width:66px"></div>' +
+          '<label class="twmgr-check"><input id="twmgr-farm-repeat" type="checkbox"> Repetir farm (empilha ondas no mesmo alvo)</label>' +
+          '<div class="twmgr-row" id="twmgr-farm-repeatrow"><span class="twmgr-lbl">Repetir a cada (min)</span><input id="twmgr-farm-repeatmin" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-farm-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-farm-start" class="twmgr-btn twmgr-go">▶ Saquear</button><button id="twmgr-farm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-farm-status" class="twmgr-cstatus"></div>' +
@@ -3434,7 +3443,9 @@
     document.getElementById('twmgr-farm-bluedelmindef').value = config.farm.blueDeleteMinDef != null ? config.farm.blueDeleteMinDef : 10;
     document.getElementById('twmgr-farm-int').value = Math.round((config.farm.interval || 600) / 60);
     document.getElementById('twmgr-farm-mode').value = config.farm.mode || 'suave';
-    document.getElementById('twmgr-farm-cooldown').value = config.farm.cooldownMin != null ? config.farm.cooldownMin : 10;
+    document.getElementById('twmgr-farm-repeat').checked = !!config.farm.repeat;
+    document.getElementById('twmgr-farm-repeatmin').value = config.farm.repeatMin != null ? config.farm.repeatMin : 10;
+    document.getElementById('twmgr-farm-repeatrow').style.display = config.farm.repeat ? 'flex' : 'none';
     document.getElementById('twmgr-farm-mincl').value = config.farm.minCL != null ? config.farm.minCL : 0;
     document.getElementById('twmgr-farm-order').value = config.farm.order || 'dist';
     document.getElementById('twmgr-farm-dyn').checked = !!config.farm.dynTemplate;
@@ -3448,7 +3459,8 @@
     })();
     document.getElementById('twmgr-farm-start').addEventListener('click', farmStart);
     document.getElementById('twmgr-farm-stop').addEventListener('click', farmStop);
-    ['twmgr-farm-wood', 'twmgr-farm-stone', 'twmgr-farm-iron', 'twmgr-farm-dist', 'twmgr-farm-wall', 'twmgr-farm-bluewall', 'twmgr-farm-bluedelmindef', 'twmgr-farm-int', 'twmgr-farm-mode', 'twmgr-farm-group', 'twmgr-farm-cooldown', 'twmgr-farm-mincl', 'twmgr-farm-order', 'twmgr-farm-dyn'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
+    ['twmgr-farm-wood', 'twmgr-farm-stone', 'twmgr-farm-iron', 'twmgr-farm-dist', 'twmgr-farm-wall', 'twmgr-farm-bluewall', 'twmgr-farm-bluedelmindef', 'twmgr-farm-int', 'twmgr-farm-mode', 'twmgr-farm-group', 'twmgr-farm-repeatmin', 'twmgr-farm-mincl', 'twmgr-farm-order', 'twmgr-farm-dyn'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
+    document.getElementById('twmgr-farm-repeat').addEventListener('change', (e) => { document.getElementById('twmgr-farm-repeatrow').style.display = e.target.checked ? 'flex' : 'none'; readFarmCfg(); });
     FARM_COLORS.forEach((k) => {
       const boxes = ['-a', '-b', '-c'].map((s) => document.getElementById('twmgr-fm-' + k + s));
       boxes.forEach((box) => { if (box) box.addEventListener('change', () => { if (box.checked) boxes.forEach((o) => { if (o && o !== box) o.checked = false; }); readFarmCfg(); }); });

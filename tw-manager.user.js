@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.26.1
+// @version      9.27.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.26.1';
+  const VERSION = '9.27.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -87,7 +87,7 @@
   // Por cor: um modo único ('none'|'a'|'b'|'c') + qtd (só p/ a/b; C manda 1x).
   const defFarmMatrix = () => ({ greenEmpty: { mode: 'a', qty: 1 }, greenFull: { mode: 'b', qty: 1 }, yellowEmpty: { mode: 'none', qty: 1 }, yellowFull: { mode: 'none', qty: 1 }, blue: { mode: 'b', qty: 1 } });
   const FARM_COLORS = ['greenEmpty', 'greenFull', 'yellowEmpty', 'yellowFull', 'blue'];
-  const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, blueMaxWall: 0, delay: 500, mode: 'suave', group: null, cooldownMin: 10, minCL: 0, order: 'dist', dynTemplate: false, matrix: defFarmMatrix(), sentReports: {}, defended: {} });
+  const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, blueMaxWall: 0, blueDeleteMinDef: 10, delay: 500, mode: 'suave', group: null, cooldownMin: 10, minCL: 0, order: 'dist', dynTemplate: false, matrix: defFarmMatrix(), sentReports: {}, defended: {} });
   const defWall = () => ({ running: false, nextAt: 0, interval: 600, wallMin: 1, wallMax: 6, ramMode: 'auto', ramFixed: 20, ramWall6: 24, axeCount: 80, spyCount: 1, sentDemo: {} });
   const defRecruit = () => ({
     running: false, nextAt: 0, interval: 600, targetHours: 2, refillBelowMin: 30,
@@ -138,6 +138,7 @@
     if (c.farm.maxDist == null) c.farm.maxDist = 13;
     if (c.farm.maxWall == null) c.farm.maxWall = 20;
     if (c.farm.blueMaxWall == null) c.farm.blueMaxWall = 0;
+    if (c.farm.blueDeleteMinDef == null) c.farm.blueDeleteMinDef = 10;
     if (c.farm.delay == null) c.farm.delay = 500;
     // limpa campos de aríete que ficaram no farm em versões antigas (migraram pro Quebra-muralha)
     delete c.farm.ramMode; delete c.farm.ramFixed; delete c.farm.ramWall6; delete c.farm.axeCount;
@@ -765,17 +766,26 @@
     const base = (x) => Math.pow(1.09, x) * (4 * x - 2) + 0.5;   // fórmula oficial (nº de níveis)
     return Math.ceil(base(w) * ((ramWall6 || 24) / base(6)));    // calibrado no dado do usuário (muro 6)
   }
-  // Relatório: true se o defensor tem tropa (usado p/ pular azul com defesa)
-  async function getReportDefenders(reportId) {
+  // Relatório: soma o total de tropas do defensor (0 se não achar nada / aldeia vazia).
+  async function getReportDefenseTotal(reportId) {
     try {
       const res = await fetch('/game.php?village=' + CUR_VID + '&screen=report&view=' + reportId, { credentials: 'include' });
       const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
       const tbl = doc.querySelector('#attack_info_def_units') || doc.querySelector('#attack_spy_away') || doc.querySelector('#attack_info_def');
-      if (tbl) { const cells = tbl.querySelectorAll('td.unit-item, .unit-item'); for (const c of cells) { if ((parseInt((c.textContent || '').replace(/\D/g, ''), 10) || 0) > 0) return true; } return false; }
-      const txt = (doc.querySelector('#content_value') || doc.body).textContent.replace(/\s+/g, ' ');
-      if (/Defensor:\s*---/.test(txt)) return false;
+      if (tbl) {
+        const cells = tbl.querySelectorAll('td.unit-item, .unit-item');
+        let total = 0; cells.forEach((c) => { total += parseInt((c.textContent || '').replace(/\D/g, ''), 10) || 0; });
+        return total;
+      }
     } catch (e) {}
-    return false;
+    return 0;
+  }
+  // Apaga um relatório — endpoint real confirmado pelo usuário via DevTools (GET simples, redireciona pra lista).
+  async function deleteReport(reportId) {
+    const url = '/game.php?village=' + CUR_VID + '&screen=report&mode=all&action=del_one&id=' + reportId + '&h=' + CSRF;
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return true;
   }
   async function farmTick() {
     clearTimeout(farmTimer);
@@ -796,6 +806,7 @@
     const maxDist = cfg.maxDist != null ? cfg.maxDist : 13;
     const maxWall = cfg.maxWall != null ? cfg.maxWall : 20;
     const blueMaxWall = cfg.blueMaxWall != null ? cfg.blueMaxWall : 0;
+    const blueDeleteMinDef = cfg.blueDeleteMinDef != null ? cfg.blueDeleteMinDef : 10;
     const delayBase = cfg.mode === 'agressivo' ? 200 : 500;
     const cooldownMs = Math.max(0, cfg.cooldownMin || 0) * 60000;
     const minCL = cfg.minCL || 0, dyn = !!cfg.dynTemplate, M = cfg.matrix || {};
@@ -818,7 +829,7 @@
       let targets;
       try { targets = await getFarmTargets(v.vid); }
       catch (e) { pushLog('Saque em ' + v.name + ': erro ao ler os alvos (' + (e.message || e) + ').', 'err', 'farm'); continue; }
-      const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, dist: 0, mur: 0, pend: 0 };
+      const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, del: 0, dist: 0, mur: 0, pend: 0 };
       const eligible = [];
       targets.forEach((t) => {
         if (!t.reportId) { skip.norep++; return; }
@@ -837,8 +848,13 @@
         if (exhausted) break;
         if (t.color === 'blue') {
           if (defended[t.reportId]) { skip.def++; continue; }
-          let hasDef = false; try { hasDef = await getReportDefenders(t.reportId); } catch (e) {}
-          if (hasDef) { defended[t.reportId] = now; skip.def++; continue; }
+          let defTotal = 0; try { defTotal = await getReportDefenseTotal(t.reportId); } catch (e) {}
+          if (defTotal >= blueDeleteMinDef) {
+            try { await deleteReport(t.reportId); pushLog('Saque: relatório azul de ' + t.coord + ' apagado (' + defTotal + ' tropas de defesa) — evitando atacar aldeia populada.', 'ok', 'farm'); skip.del++; }
+            catch (e) { pushLog('Saque: falha ao apagar relatório azul de ' + t.coord + ' (' + defTotal + ' tropas): ' + (e.message || e), 'err', 'farm'); defended[t.reportId] = now; skip.def++; }
+            continue;
+          }
+          if (defTotal > 0) { defended[t.reportId] = now; skip.def++; continue; }
         }
         const cell = t._cell, mode = cell.mode, qty = Math.max(1, cell.qty || 1);
         const cm = (t.coord || '').match(/(\d+)\|(\d+)/), sum = (t.wood || 0) + (t.stone || 0) + (t.iron || 0);
@@ -875,6 +891,7 @@
       if (skip.off) parts.push(skip.off + ' cor sem modo');
       if (skip.azul) parts.push(skip.azul + ' azul c/ muralha');
       if (skip.def) parts.push(skip.def + ' azul c/ defesa');
+      if (skip.del) parts.push(skip.del + ' relatório(s) azul apagado(s)');
       if (skip.dist) parts.push(skip.dist + ' fora do alcance');
       if (skip.mur) parts.push(skip.mur + ' muralha alta');
       if (skip.pend) parts.push(skip.pend + ' já c/ ataque a caminho');
@@ -2759,6 +2776,7 @@
     const dt = document.getElementById('twmgr-farm-dist'); if (dt) config.farm.maxDist = parseFloat((dt.value || '').replace(',', '.')) || 13;
     const wl = document.getElementById('twmgr-farm-wall'); if (wl) { config.farm.maxWall = parseInt(wl.value, 10); if (isNaN(config.farm.maxWall)) config.farm.maxWall = 20; }
     const bw = document.getElementById('twmgr-farm-bluewall'); if (bw) { config.farm.blueMaxWall = parseInt(bw.value, 10); if (isNaN(config.farm.blueMaxWall) || config.farm.blueMaxWall < 0) config.farm.blueMaxWall = 0; }
+    const bdd = document.getElementById('twmgr-farm-bluedelmindef'); if (bdd) { config.farm.blueDeleteMinDef = parseInt(bdd.value, 10); if (isNaN(config.farm.blueDeleteMinDef) || config.farm.blueDeleteMinDef < 1) config.farm.blueDeleteMinDef = 10; }
     const md = document.getElementById('twmgr-farm-mode'); if (md) config.farm.mode = md.value || 'suave';
     const gp = document.getElementById('twmgr-farm-group'); if (gp) config.farm.group = gp.value || null;
     const cd = document.getElementById('twmgr-farm-cooldown'); if (cd) { config.farm.cooldownMin = parseInt(cd.value, 10); if (isNaN(config.farm.cooldownMin) || config.farm.cooldownMin < 0) config.farm.cooldownMin = 10; }
@@ -2947,6 +2965,7 @@
           '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-farm-dist" class="twmgr-inp" type="number" min="0" step="0.1" value="13" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Muralha máx. (nível)</span><input id="twmgr-farm-wall" class="twmgr-inp" type="number" min="0" max="20" value="20" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Muralha máx. do azul</span><input id="twmgr-farm-bluewall" class="twmgr-inp" type="number" min="0" max="20" value="0" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Se o relatório azul mostrar esse tanto de tropa (ou mais) na defesa, o relatório é apagado — a aldeia some do assistente e nunca mais é atacada por engano.">Apagar relatório azul c/ defesa ≥</span><input id="twmgr-farm-bluedelmindef" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Mínimo CL p/ farmar</span><input id="twmgr-farm-mincl" class="twmgr-inp" type="number" min="0" value="0" style="width:66px"></div>') +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Modo</span><select id="twmgr-farm-mode" class="twmgr-inp" style="width:120px"><option value="agressivo">Agressivo</option><option value="suave">Suave</option></select></div>' +
@@ -3159,6 +3178,7 @@
     document.getElementById('twmgr-farm-dist').value = config.farm.maxDist != null ? config.farm.maxDist : 13;
     document.getElementById('twmgr-farm-wall').value = config.farm.maxWall != null ? config.farm.maxWall : 20;
     document.getElementById('twmgr-farm-bluewall').value = config.farm.blueMaxWall != null ? config.farm.blueMaxWall : 0;
+    document.getElementById('twmgr-farm-bluedelmindef').value = config.farm.blueDeleteMinDef != null ? config.farm.blueDeleteMinDef : 10;
     document.getElementById('twmgr-farm-int').value = Math.round((config.farm.interval || 600) / 60);
     document.getElementById('twmgr-farm-mode').value = config.farm.mode || 'suave';
     document.getElementById('twmgr-farm-cooldown').value = config.farm.cooldownMin != null ? config.farm.cooldownMin : 10;
@@ -3175,7 +3195,7 @@
     })();
     document.getElementById('twmgr-farm-start').addEventListener('click', farmStart);
     document.getElementById('twmgr-farm-stop').addEventListener('click', farmStop);
-    ['twmgr-farm-wood', 'twmgr-farm-stone', 'twmgr-farm-iron', 'twmgr-farm-dist', 'twmgr-farm-wall', 'twmgr-farm-bluewall', 'twmgr-farm-int', 'twmgr-farm-mode', 'twmgr-farm-group', 'twmgr-farm-cooldown', 'twmgr-farm-mincl', 'twmgr-farm-order', 'twmgr-farm-dyn'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
+    ['twmgr-farm-wood', 'twmgr-farm-stone', 'twmgr-farm-iron', 'twmgr-farm-dist', 'twmgr-farm-wall', 'twmgr-farm-bluewall', 'twmgr-farm-bluedelmindef', 'twmgr-farm-int', 'twmgr-farm-mode', 'twmgr-farm-group', 'twmgr-farm-cooldown', 'twmgr-farm-mincl', 'twmgr-farm-order', 'twmgr-farm-dyn'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
     FARM_COLORS.forEach((k) => {
       const boxes = ['-a', '-b', '-c'].map((s) => document.getElementById('twmgr-fm-' + k + s));
       boxes.forEach((box) => { if (box) box.addEventListener('change', () => { if (box.checked) boxes.forEach((o) => { if (o && o !== box) o.checked = false; }); readFarmCfg(); }); });

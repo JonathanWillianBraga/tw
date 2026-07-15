@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.28.3
+// @version      9.28.4
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.28.3';
+  const VERSION = '9.28.4';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -2623,6 +2623,9 @@
     const explored = {};
     try { (await getFarmTargets(CUR_VID)).forEach((t) => { if (t.reportId && t.coord) explored[t.coord] = t.reportAt || 0; }); }
     catch (e) { pushLog('Mapa: não consegui ler os relatórios do assistente (vou considerar todos como não-explorados): ' + (e.message || e), 'err', 'map'); }
+    // O filtro do assistente pode esconder aldeias que você já está atacando; a lista de comandos cobre esse buraco.
+    let attacking = new Set();
+    try { attacking = (await getPendingAttack()).coords; } catch (e) {}
     // Claim: cada bárbaro é atribuído à aldeia MINHA mais próxima que ainda tem cota (maxPerVillage).
     // Assim evitamos que a mesma aldeia minha sature os N primeiros bárbaros e sobre 0 pras outras.
     const candByOrigin = {}; myV.forEach((s) => candByOrigin[s.vid] = []);
@@ -2630,6 +2633,8 @@
     for (const b of barb) {
       const coord = b.x + '|' + b.y;
       const last = sentAt[b.vid] || 0;
+      // já tem ataque nosso em rota pra lá (o filtro do assistente costuma esconder essas): não explora
+      if (attacking.has(coord)) continue;
       // trava curta: já mandei explorador há pouco (relatório ainda não chegou/apareceu)
       if (last && staleMs > 0 && (now - last) < staleMs) continue;
       // já explorado: pula se JÁ tem relatório FRESCO; relatório velho (> N dias) pode re-explorar

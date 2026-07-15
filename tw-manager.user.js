@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.28.1
+// @version      9.28.2
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.28.1';
+  const VERSION = '9.28.2';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -462,6 +462,22 @@
   }
   function absUrl(raw) { try { return new URL(raw, location.href).href; } catch (e) { return raw; } }
 
+  // Converte a data do relatório do assistente ("hoje às 12:03:39", "ontem às ...", "13/07/26 às ...") em timestamp (ms). null se não der.
+  function parseReportDate(txt) {
+    txt = (txt || '').trim().toLowerCase();
+    if (!txt) return null;
+    const tm = txt.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    const hh = tm ? +tm[1] : 0, mm = tm ? +tm[2] : 0, ss = (tm && tm[3]) ? +tm[3] : 0;
+    const d = new Date();
+    if (txt.indexOf('hoje') >= 0) { d.setHours(hh, mm, ss, 0); return d.getTime(); }
+    if (txt.indexOf('ontem') >= 0) { d.setDate(d.getDate() - 1); d.setHours(hh, mm, ss, 0); return d.getTime(); }
+    const dm = txt.match(/(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})/);
+    if (dm) { let y = +dm[3]; if (y < 100) y += 2000; return new Date(y, (+dm[2]) - 1, +dm[1], hh, mm, ss).getTime(); }
+    const dm2 = txt.match(/(\d{1,2})[\/.](\d{1,2})/);
+    if (dm2) { return new Date((new Date()).getFullYear(), (+dm2[2]) - 1, +dm2[1], hh, mm, ss).getTime(); }
+    return null;
+  }
+
   function serverNow() { try { return window.Timing.getCurrentServerTime(); } catch (e) { return Date.now(); } }
   function wallToServerOffset() {
     const ed = document.querySelector('#serverDate'), et = document.querySelector('#serverTime');
@@ -723,6 +739,8 @@
       const vals = tr.querySelectorAll('span.res, span.warn');
       const nums = Array.prototype.slice.call(vals, 0, 3).map((s) => parseInt((s.textContent || '').replace(/\D/g, ''), 10) || 0);
       const resTd = tr.querySelector('td[colspan="3"]');
+      const dateTd = resTd ? resTd.previousElementSibling : null;   // coluna "Tempo" (último relatório)
+      const reportAt = dateTd ? parseReportDate(dateTd.textContent) : null;
       const wallTd = resTd ? resTd.nextElementSibling : null;
       const distTd = wallTd ? wallTd.nextElementSibling : null;
       const wall = wallTd ? (parseInt((wallTd.textContent || '').replace(/\D/g, ''), 10) || 0) : null;
@@ -739,7 +757,7 @@
       const mlImg = tr.querySelector('img[src*="/max_loot/"]');
       const mm = mlImg ? (mlImg.getAttribute('src') || '').match(/max_loot\/(\d)/) : null;
       const full = mm ? (mm[1] === '1') : false;                        // true = cheio, false = vazio
-      rows.push({ targetId: targetId, reportId: reportId, wood: nums[0] || 0, stone: nums[1] || 0, iron: nums[2] || 0, wall: wall, dist: dist, cEnabled: cEnabled, aEnabled: aEnabled, bEnabled: bEnabled, color: color, full: full, coord: coord });
+      rows.push({ targetId: targetId, reportId: reportId, reportAt: reportAt, wood: nums[0] || 0, stone: nums[1] || 0, iron: nums[2] || 0, wall: wall, dist: dist, cEnabled: cEnabled, aEnabled: aEnabled, bEnabled: bEnabled, color: color, full: full, coord: coord });
     });
     return rows;
   }
@@ -2601,13 +2619,25 @@
     const now = Date.now();
     const staleMs = Math.max(0, (cfg.minDaysSinceScout || 0)) * 86400000;
     const sentAt = cfg.sentAt || {};
+    // "Já explorado": lê o assistente (conta-inteira) uma vez -> coord -> data do último relatório.
+    const explored = {};
+    try { (await getFarmTargets(CUR_VID)).forEach((t) => { if (t.reportId && t.coord) explored[t.coord] = t.reportAt || 0; }); }
+    catch (e) { pushLog('Mapa: não consegui ler os relatórios do assistente (vou considerar todos como não-explorados): ' + (e.message || e), 'err', 'map'); }
     // Claim: cada bárbaro é atribuído à aldeia MINHA mais próxima que ainda tem cota (maxPerVillage).
     // Assim evitamos que a mesma aldeia minha sature os N primeiros bárbaros e sobre 0 pras outras.
     const candByOrigin = {}; myV.forEach((s) => candByOrigin[s.vid] = []);
     const pairs = [];
     for (const b of barb) {
+      const coord = b.x + '|' + b.y;
       const last = sentAt[b.vid] || 0;
+      // trava curta: já mandei explorador há pouco (relatório ainda não chegou/apareceu)
       if (last && staleMs > 0 && (now - last) < staleMs) continue;
+      // já explorado: pula se JÁ tem relatório FRESCO; relatório velho (> N dias) pode re-explorar
+      if (coord in explored) {
+        const rAt = explored[coord];
+        if (rAt) { if ((now - rAt) < staleMs) continue; }   // com data: pula se fresco
+        else if (staleMs > 0) continue;                      // sem data legível: pula (a não ser que dias=0)
+      }
       let best = null;
       for (const s of myV) {
         const d = fieldDist(s.x, s.y, b.x, b.y);

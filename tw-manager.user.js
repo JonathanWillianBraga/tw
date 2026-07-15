@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.29.0
+// @version      9.30.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.29.0';
+  const VERSION = '9.30.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -979,58 +979,51 @@
     claimLock();
     const now = Date.now();
     if ((config.wall.nextAt || 0) > now) { scheduleWall(); return; }
-    let villages;
-    try { villages = await getAllScavengeState(); }
+    let mine;
+    try { mine = await getAllVillages(); }
     catch (e) { pushLog('Muralha: erro ao listar as aldeias (' + (e.message || e) + ').', 'err', 'wall'); config.wall.nextAt = now + 120000; save(); scheduleWall(); return; }
+    const myV = [];
+    mine.forEach((v) => { const m = (v.coord || '').match(/(\d+)\|(\d+)/); if (m) myV.push({ vid: v.vid, name: v.name || v.coord, coord: v.coord, x: +m[1], y: +m[2] }); });
     const wMin = config.wall.wallMin != null ? config.wall.wallMin : 1;
     const wMax = config.wall.wallMax != null ? config.wall.wallMax : 6;
     const axeN = Math.max(1, config.wall.axeCount || 80);
     const delay = Math.max(0, config.farm.delay != null ? config.farm.delay : 500);
     const demo = config.wall.sentDemo || {};
     const COOLDOWN = 6 * 3600 * 1000;   // não re-manda no mesmo report por 6h
-    let count = 0, pendingWalls = 0;
-    for (const v of villages) {
-      let targets;
-      try { targets = await getFarmTargets(v.vid); }
-      catch (e) { pushLog('Muralha em ' + v.name + ': erro ao ler os alvos (' + (e.message || e) + ').', 'err', 'wall'); continue; }
-      let avail; try { avail = (await getVillageStateReserved(v.vid)).avail; } catch (e) { avail = {}; }
-      const eligible = []; const skip = { semmuro: 0, fora: 0, jaenv: 0 };
-      targets.forEach((t) => {
-        if (!t.reportId) return;
-        if (t.wall == null) { skip.semmuro++; return; }                 // sem info de muralha -> deixa pro C ou próximo scan
-        if (t.wall < wMin || t.wall > wMax) { skip.fora++; return; }      // fora da faixa de muro do quebra
-        if (demo[t.reportId] && (now - demo[t.reportId] < COOLDOWN)) { skip.jaenv++; return; }
-        eligible.push(t);
-      });
-      pendingWalls += eligible.length;
-      eligible.sort((a, b) => (b.wall || 0) - (a.wall || 0));             // muralhas maiores primeiro
-      let vSent = 0, semRam = 0, semBB = false;
-      for (let i = 0; i < eligible.length; i++) {
-        const t = eligible[i];
-        const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
-        let rams;
-        if (config.wall.ramMode === 'fixo') rams = Math.max(1, config.wall.ramFixed || 20);
-        else rams = ramsForWall(t.wall, config.wall.ramWall6 || 24);
-        if ((avail.axe || 0) < axeN) { semBB = true; break; }             // sem bárbaro nesta aldeia -> próxima
-        if ((avail.ram || 0) < rams) { semRam++; continue; }              // sem aríete p/ esse muro -> tenta outro alvo
+    // Alvos com muralha na faixa (assistente = conta inteira), MAIORES primeiro.
+    let eligible = [];
+    try { eligible = (await getFarmTargets(CUR_VID)).filter((t) => t.reportId && t.coord && t.wall != null && t.wall >= wMin && t.wall <= wMax && !(demo[t.reportId] && (now - demo[t.reportId] < COOLDOWN))); }
+    catch (e) { pushLog('Muralha: erro ao ler os alvos do assistente (' + (e.message || e) + ').', 'err', 'wall'); config.wall.nextAt = now + 120000; save(); scheduleWall(); return; }
+    eligible.sort((a, b) => (b.wall || 0) - (a.wall || 0));
+    const pendingWalls = eligible.length;
+    // Tropa por aldeia (sob demanda, com cache) — descontada conforme vai assinando alvos.
+    const availCache = {};
+    const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
+    let count = 0, semTropa = 0;
+    for (const t of eligible) {
+      const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
+      const tx = +cm[1], ty = +cm[2];
+      const rams = config.wall.ramMode === 'fixo' ? Math.max(1, config.wall.ramFixed || 20) : ramsForWall(t.wall, config.wall.ramWall6 || 24);
+      // aldeias candidatas, da MAIS PRÓXIMA pra mais longe; usa a 1ª que tiver bárbaro + aríete.
+      const cands = myV.map((s) => ({ s: s, d: fieldDist(s.x, s.y, tx, ty) })).sort((a, b) => a.d - b.d);
+      let done = false;
+      for (const c of cands) {
+        const avail = await getAvail(c.s.vid);
+        if ((avail.axe || 0) < axeN || (avail.ram || 0) < rams) continue;   // sem tropa nessa origem -> próxima mais próxima
         const spies = Math.min(config.wall.spyCount || 1, avail.spy || 0);
         const amounts = { axe: axeN, ram: rams }; if (spies > 0) amounts.spy = spies;
         try {
-          await sendAttack(v.vid, cm[1], cm[2], amounts);
+          await sendAttack(c.s.vid, tx, ty, amounts);
           avail.axe -= axeN; avail.ram -= rams; avail.spy = (avail.spy || 0) - spies;
-          demo[t.reportId] = now; count++; vSent++;
-          pushLog('Muralha: ' + v.name + ' → ' + t.coord + ' (muro ' + t.wall + ') com ' + axeN + ' bárbaro + ' + rams + ' aríete' + (spies ? ' + ' + spies + ' explorador' : ''), 'ok', 'wall');
-          if (i < eligible.length - 1) await sleep(delay + Math.floor(Math.random() * 250));
-        } catch (e) { pushLog('Muralha em ' + v.name + ' → ' + t.coord + ': ' + (e.message || e), 'err', 'wall'); }
+          demo[t.reportId] = now; count++; done = true;
+          pushLog('Muralha: ' + c.s.name + ' → ' + t.coord + ' (muro ' + t.wall + ', ' + (Math.round(c.d * 10) / 10) + ' campos) com ' + axeN + ' bárbaro + ' + rams + ' aríete' + (spies ? ' + ' + spies + ' explorador' : ''), 'ok', 'wall');
+          await sleep(delay + Math.floor(Math.random() * 250));
+          break;
+        } catch (e) { pushLog('Muralha em ' + c.s.name + ' → ' + t.coord + ': ' + (e.message || e), 'err', 'wall'); }   // falhou nessa origem -> tenta a próxima
       }
-      const parts = ['enviou ' + vSent];
-      if (semBB) parts.push('sem bárbaro suficiente');
-      if (semRam) parts.push(semRam + ' alvo(s) sem aríete');
-      if (skip.fora) parts.push(skip.fora + ' fora da faixa de muro');
-      if (skip.semmuro) parts.push(skip.semmuro + ' sem info de muro');
-      if (skip.jaenv) parts.push(skip.jaenv + ' já atacado (6h)');
-      pushLog(v.name + ': ' + parts.join(' · '), '', 'wall');
+      if (!done) semTropa++;
     }
+    if (semTropa) pushLog('Muralha: ' + semTropa + ' alvo(s) sem nenhuma aldeia próxima com bárbaro+aríete.', '', 'wall');
     Object.keys(demo).forEach((r) => { if (now - demo[r] > 12 * 3600 * 1000) delete demo[r]; });
     config.wall.sentDemo = demo;
     config.wall.stats = config.wall.stats || {};

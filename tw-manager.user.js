@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.34.0
+// @version      9.35.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.34.0';
+  const VERSION = '9.35.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -379,6 +379,7 @@
         { v: fmtN(s.a), l: 'A' }, { v: fmtN(s.b), l: 'B' }, { v: fmtN(s.c), l: 'C' },
         { v: fmtN(lt.today), l: 'saqueado hoje', br: true },
         { v: fmtN(lt.estimate), l: 'estimativa fim do dia' },
+        { v: (s.coverage == null ? '—' : s.coverage + '%'), l: 'eficiência (cobertura)', hl: true },
       ];
     } else if (mod === 'wall') {
       const s = (config.wall.stats || {});
@@ -799,13 +800,14 @@
   async function getPendingAttack() {
     const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=attack&page=-1', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    const coords = new Set(); let saques = 0;
+    const coords = new Set(); let saques = 0; const farmCoords = new Set();
     doc.querySelectorAll('#commands_table tr').forEach((tr) => {
       const label = tr.querySelector('.quickedit-label'); if (!label) return;
-      const m = (label.textContent || '').match(/\((\d+)\|(\d+)\)/); if (m) coords.add(m[1] + '|' + m[2]);
-      if (tr.querySelector('img[src*="command/farm"]')) saques++;   // ícone farm.webp = ataque de saque do assistente
+      const m = (label.textContent || '').match(/\((\d+)\|(\d+)\)/); const coord = m ? m[1] + '|' + m[2] : null;
+      if (coord) coords.add(coord);
+      if (tr.querySelector('img[src*="command/farm"]')) { saques++; if (coord) farmCoords.add(coord); }   // ícone farm.webp = ataque de saque
     });
-    return { coords: coords, saques: saques };
+    return { coords: coords, saques: saques, farmCoords: farmCoords };
   }
 
   // "Minha pontuação hoje" do ranking Em um dia (type: loot_res = saqueado, scavenge = coletado). Cache por type.
@@ -885,8 +887,8 @@
     } catch (e) { pushLog('Saque: erro ao listar aldeias: ' + (e.message || e), 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
     const myV = [];
     mine.forEach((v) => { const m = (v.coord || '').match(/(\d+)\|(\d+)/); if (m) myV.push({ vid: v.vid, name: v.name || v.coord, coord: v.coord, x: +m[1], y: +m[2] }); });
-    let pendingCoords = new Set(), saquesAtivos = null;
-    try { const pa = await getPendingAttack(); pendingCoords = pa.coords; saquesAtivos = pa.saques; } catch (e) {}
+    let pendingCoords = new Set(), saquesAtivos = null, farmCoords = new Set();
+    try { const pa = await getPendingAttack(); pendingCoords = pa.coords; saquesAtivos = pa.saques; farmCoords = pa.farmCoords || new Set(); } catch (e) {}
     const minW = cfg.minWood || 0, minS = cfg.minStone || 0, minI = cfg.minIron || 0;
     const maxDist = cfg.maxDist != null ? cfg.maxDist : 13;
     const maxWall = cfg.maxWall != null ? cfg.maxWall : 20;
@@ -990,6 +992,11 @@
     cfg.stats.a = as.filter((s) => s.mode === 'a').length;
     cfg.stats.b = as.filter((s) => s.mode === 'b').length;
     cfg.stats.c = as.filter((s) => s.mode === 'c').length;
+    // eficiência (cobertura) = barbs com ataque de saque em rota ÷ farmáveis (assistente + em ataque; o filtro esconde os em ataque, por isso somamos)
+    const assistCount = targets.filter((t) => t.reportId).length;
+    const farmavel = assistCount + farmCoords.size;
+    cfg.stats.farmavel = farmavel;
+    cfg.stats.coverage = farmavel > 0 ? Math.min(100, Math.round(farmCoords.size / farmavel * 100)) : null;
     cfg.nextAt = now + Math.max(60, cfg.interval || 600) * 1000;
     save();
     refreshCards('farm'); refreshDaily('farm', cfg, 'loot', 'loot_res');

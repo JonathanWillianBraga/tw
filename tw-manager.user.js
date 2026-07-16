@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.32.0
+// @version      9.34.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -25,6 +25,22 @@
     ['spy', 'Expl.'], ['light', 'C.leve'], ['marcher', 'A.cav.'], ['heavy', 'C.pes.'],
     ['ram', 'Aríete'], ['catapult', 'Catap.'], ['knight', 'Palad.'], ['snob', 'Nobre'],
   ];
+
+  // Stats canônicos do Tribal Wars — usado pra calcular força off/def e pop ocupada por tropa.
+  const UNIT_STATS = {
+    spear:    { att: 10,  def: 15,  defCav: 45,  defArch: 20,  pop: 1 },
+    sword:    { att: 25,  def: 50,  defCav: 15,  defArch: 40,  pop: 1 },
+    axe:      { att: 40,  def: 10,  defCav: 5,   defArch: 10,  pop: 1 },
+    archer:   { att: 15,  def: 50,  defCav: 40,  defArch: 5,   pop: 1 },
+    spy:      { att: 0,   def: 2,   defCav: 1,   defArch: 2,   pop: 2 },
+    light:    { att: 130, def: 30,  defCav: 40,  defArch: 30,  pop: 4 },
+    marcher:  { att: 120, def: 40,  defCav: 30,  defArch: 50,  pop: 5 },
+    heavy:    { att: 150, def: 200, defCav: 80,  defArch: 180, pop: 6 },
+    ram:      { att: 2,   def: 20,  defCav: 50,  defArch: 20,  pop: 5 },
+    catapult: { att: 30,  def: 100, defCav: 50,  defArch: 100, pop: 8 },
+    knight:   { att: 150, def: 250, defCav: 400, defArch: 150, pop: 10 },
+    snob:     { att: 30,  def: 100, defCav: 50,  defArch: 100, pop: 100 },
+  };
 
   const SCAV_UNITS = [['spear', 'Lanc.'], ['sword', 'Espad.'], ['axe', 'Bárb.'], ['light', 'C.leve'], ['heavy', 'C.pes.'], ['knight', 'Palad.']];
   const CARRY = { spear: 25, sword: 15, axe: 10, light: 80, heavy: 50, knight: 100 };
@@ -61,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.32.0';
+  const VERSION = '9.34.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -125,7 +141,17 @@
     activeId: null,                        // id do ataque mostrado na UI (setado no load())
     templates: [],                         // templates salvos { id, name, targetX, targetY, arriveLocal, selected, perVillage }
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), reservations: {} });
+  const defUnits = () => ({
+    // history[YYYY-MM-DD] = {
+    //   at: msEpoch,
+    //   totals: { [unit]: N },
+    //   byVillage: { [vid]: { name, coord, totals: {u:N}, force: {...} } },
+    //   force: { total, att, def, defCav, defArch, pop, nobles },
+    // }
+    history: {},
+    historyDays: 90,
+  });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -288,6 +314,9 @@
     });
     if (!c.planner.activeId || !c.planner.attacks.some((a) => a.id === c.planner.activeId)) c.planner.activeId = c.planner.attacks[0].id;
     if (!c.reservations || typeof c.reservations !== 'object') c.reservations = {};
+    if (!c.units) c.units = defUnits();
+    if (!c.units.history || typeof c.units.history !== 'object') c.units.history = {};
+    if (c.units.historyDays == null) c.units.historyDays = 90;
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -1075,6 +1104,203 @@
     if (!vils.length) vils.push({ vid: CUR_VID, name: CUR_NAME });
     return vils;
   }
+  // ==================== TROPAS (helpers de força/pop) ====================
+  // Injetados direto na tela do jogo (screen=overview_villages&mode=units).
+  // Sem UI no TW Manager, sem requests — só parse do DOM local.
+  function unitsForce(totals) {
+    let att = 0, def = 0, defCav = 0, defArch = 0, pop = 0, nobles = 0, total = 0;
+    UNITS.forEach(([u]) => {
+      const n = totals[u] || 0, s = UNIT_STATS[u]; if (!s) return;
+      att += n * s.att; def += n * s.def; defCav += n * s.defCav; defArch += n * s.defArch;
+      pop += n * s.pop; total += n; if (u === 'snob') nobles = n;
+    });
+    return { total: total, att: att, def: def, defCav: defCav, defArch: defArch, pop: pop, nobles: nobles };
+  }
+
+  // Snapshot 1x por dia (sobrescreve se rodar de novo no mesmo dia). Rotaciona por historyDays.
+  function unitsSaveSnapshot(byVillage, totals, force) {
+    const today = new Date().toISOString().slice(0, 10);
+    const h = config.units.history;
+    h[today] = { at: Date.now(), totals: totals, byVillage: byVillage, force: force };
+    const keys = Object.keys(h).sort();
+    while (keys.length > (config.units.historyDays || 90)) delete h[keys.shift()];
+    save();
+  }
+
+  // Retorna a data (YYYY-MM-DD) mais recente com snapshot cujo daysAgo >= n.
+  function unitsFindSnapshotDaysAgo(n) {
+    const targetMs = Date.now() - n * 86400000;
+    const keys = Object.keys(config.units.history || {}).sort().reverse();
+    for (const k of keys) {
+      const at = config.units.history[k].at || new Date(k).getTime();
+      if (at <= targetMs) return config.units.history[k];
+    }
+    return null;
+  }
+
+  // Desenha um sparkline SVG simples a partir de série [{at, v}].
+  function unitsSparkline(series, w, h, color) {
+    if (!series.length) return '<svg width="' + w + '" height="' + h + '"></svg>';
+    if (series.length === 1) return '<svg width="' + w + '" height="' + h + '"><circle cx="' + (w / 2) + '" cy="' + (h / 2) + '" r="2" fill="' + color + '"/></svg>';
+    const vals = series.map((p) => p.v), min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
+    const range = max - min || 1;
+    const pad = 2;
+    const pts = series.map((p, i) => {
+      const x = pad + (i * (w - pad * 2)) / (series.length - 1);
+      const y = (h - pad) - ((p.v - min) / range) * (h - pad * 2);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    return '<svg width="' + w + '" height="' + h + '" style="vertical-align:middle">' +
+      '<polyline fill="none" stroke="' + color + '" stroke-width="1.5" points="' + pts + '"/>' +
+      '</svg>';
+  }
+
+  function unitsDownloadCsv() {
+    const rows = [];
+    rows.push(['data', 'total_tropas', 'forca_off', 'def_geral', 'def_cav', 'def_arq', 'pop_ocupada', 'nobres']
+      .concat(UNITS.map((u) => u[0])).join(','));
+    const keys = Object.keys(config.units.history || {}).sort();
+    keys.forEach((k) => {
+      const s = config.units.history[k];
+      const f = s.force || {};
+      const row = [k, f.total || 0, f.att || 0, f.def || 0, f.defCav || 0, f.defArch || 0, f.pop || 0, f.nobles || 0];
+      UNITS.forEach(([u]) => row.push((s.totals && s.totals[u]) || 0));
+      rows.push(row.join(','));
+    });
+    const csv = rows.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'tw-tropas-' + WORLD + '-' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // Detecta se estamos na tela Visualizações > Tropas, parseia a tabela, salva snapshot
+  // e injeta: resumo, deltas, sparklines, botão CSV e linha "TOTAL GERAL" na tabela.
+  function enhanceUnitsPage() {
+    const gd = window.game_data;
+    if (!gd || gd.screen !== 'overview_villages' || gd.mode !== 'units') return;
+    const table = document.getElementById('units_table'); if (!table) return;
+    if (document.getElementById('twmgr-units-summary')) return;
+
+    // 1) Mapa coluna → unit code, lido do thead (varia por mundo).
+    const headImgs = table.querySelectorAll('thead th img[src*="/unit_"]');
+    if (!headImgs.length) return;
+    const colUnits = [];
+    headImgs.forEach((img) => {
+      const m = (img.getAttribute('src') || '').match(/\/unit_([a-z]+)\.[a-z]+/i);
+      colUnits.push(m ? m[1] : null);
+    });
+
+    // 2) Parseia cada tbody (1 por aldeia): pega linha "total" + info da aldeia.
+    const totals = {}; UNITS.forEach(([u]) => { totals[u] = 0; });
+    const byVillage = {};
+    const bodies = table.querySelectorAll('tbody.row_marker');
+    bodies.forEach((tb) => {
+      const totalRow = tb.querySelector('tr[style*="font-weight: bold"]') || tb.querySelector('tr[style*="font-weight:bold"]');
+      if (!totalRow) return;
+      const nameEl = tb.querySelector('.quickedit-vn[data-id]');
+      const vid = nameEl ? String(nameEl.getAttribute('data-id')) : null;
+      const labelEl = tb.querySelector('.quickedit-label');
+      const rawName = labelEl ? (labelEl.textContent || '').replace(/\s+/g, ' ').trim() : (vid || '?');
+      const coordM = rawName.match(/(\d{1,3})\|(\d{1,3})/);
+      const coord = coordM ? (coordM[1] + '|' + coordM[2]) : null;
+      const cells = totalRow.querySelectorAll('td.unit-item');
+      const vTotals = {};
+      cells.forEach((td, i) => {
+        const unit = colUnits[i]; if (!unit || !UNIT_STATS[unit]) return;
+        const n = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0;
+        vTotals[unit] = n;
+        totals[unit] = (totals[unit] || 0) + n;
+      });
+      if (vid) byVillage[vid] = { name: rawName, coord: coord, totals: vTotals, force: unitsForce(vTotals) };
+    });
+
+    const f = unitsForce(totals);
+    const fmt = (n) => Number(n).toLocaleString('pt-BR');
+    const fmtSigned = (n) => (n >= 0 ? '+' : '') + fmt(n);
+    const colorFor = (delta) => delta > 0 ? '#2f7a2f' : (delta < 0 ? '#a52020' : '#6b4a1e');
+    const arrowFor = (delta) => delta > 0 ? '↑' : (delta < 0 ? '↓' : '·');
+
+    // 3) Salva snapshot ANTES de calcular deltas (pra ter o de hoje já disponível).
+    unitsSaveSnapshot(byVillage, totals, f);
+
+    // 4) Deltas vs snapshots antigos.
+    const snapYest = unitsFindSnapshotDaysAgo(1);
+    const snap7 = unitsFindSnapshotDaysAgo(7);
+    const snap30 = unitsFindSnapshotDaysAgo(30);
+    const deltaBlock = (label, snap) => {
+      if (!snap || !snap.force) return '<div style="min-width:110px;color:#8f7d57;font-size:10px">' + label + ': —</div>';
+      const dTotal = f.total - (snap.force.total || 0);
+      const dAtt = f.att - (snap.force.att || 0);
+      const dDef = f.def - (snap.force.def || 0);
+      return '<div style="min-width:110px;font-size:10px;line-height:1.4">' +
+        '<div style="color:#5a3c0f;font-weight:bold">' + label + '</div>' +
+        '<div style="color:' + colorFor(dTotal) + '">' + arrowFor(dTotal) + ' tropas ' + fmtSigned(dTotal) + '</div>' +
+        '<div style="color:' + colorFor(dAtt) + '">' + arrowFor(dAtt) + ' off ' + fmtSigned(dAtt) + '</div>' +
+        '<div style="color:' + colorFor(dDef) + '">' + arrowFor(dDef) + ' def ' + fmtSigned(dDef) + '</div>' +
+      '</div>';
+    };
+
+    // 5) Séries pra sparklines (últimos 30 dias, cronológico).
+    const histKeys = Object.keys(config.units.history).sort();
+    const seriesTotal = histKeys.slice(-30).map((k) => ({ at: config.units.history[k].at, v: (config.units.history[k].force || {}).total || 0 }));
+    const seriesAtt = histKeys.slice(-30).map((k) => ({ at: config.units.history[k].at, v: (config.units.history[k].force || {}).att || 0 }));
+    const seriesDef = histKeys.slice(-30).map((k) => ({ at: config.units.history[k].at, v: (config.units.history[k].force || {}).def || 0 }));
+
+    // 6) Bloco de resumo + deltas + sparklines + botão CSV.
+    const summary = document.createElement('div');
+    summary.id = 'twmgr-units-summary';
+    summary.style.cssText = 'margin:6px 0 8px;padding:8px 10px;border:1px solid #7d510a;border-radius:6px;background:linear-gradient(180deg,#f4e4bc,#e8d29a);font-size:12px;color:#3b2914;box-shadow:0 1px 2px rgba(0,0,0,.1)';
+    const item = (label, val, big) => '<div style="display:flex;flex-direction:column;align-items:center;min-width:80px"><div style="font-size:' + (big ? '16px' : '13px') + ';font-weight:bold;font-variant-numeric:tabular-nums">' + fmt(val) + '</div><div style="font-size:10px;color:#6b4a1e">' + label + '</div></div>';
+    const sparkBlock = (label, series, color) => '<div style="display:flex;flex-direction:column;align-items:center;min-width:110px">' +
+      '<div style="font-size:10px;color:#5a3c0f;font-weight:bold">' + label + ' (' + series.length + 'd)</div>' +
+      unitsSparkline(series, 110, 28, color) +
+      '</div>';
+    summary.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px">' +
+        '<div style="font-weight:bold;font-size:11px;color:#5a3c0f">🏰 Resumo (TW Manager) · <span style="font-weight:normal;font-size:10px">' + histKeys.length + ' snapshot' + (histKeys.length === 1 ? '' : 's') + ' no histórico</span></div>' +
+        '<button id="twmgr-units-csv" style="padding:2px 8px;font-size:10px;border:1px solid #7d510a;border-radius:4px;background:#e8d29a;cursor:pointer;color:#3b2914">📥 baixar histórico CSV</button>' +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding-bottom:6px;border-bottom:1px dashed #b89a5a">' +
+        item('total tropas', f.total, true) +
+        item('força ⚔️', f.att) +
+        item('def 🛡️', f.def) +
+        item('def cav 🐎', f.defCav) +
+        item('def arq 🏹', f.defArch) +
+        item('pop 🌾', f.pop) +
+        item('nobres 👑', f.nobles) +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:16px;padding:6px 0;border-bottom:1px dashed #b89a5a">' +
+        deltaBlock('vs ontem', snapYest) +
+        deltaBlock('vs 7 dias', snap7) +
+        deltaBlock('vs 30 dias', snap30) +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:12px;padding-top:6px;align-items:center">' +
+        sparkBlock('total tropas', seriesTotal, '#5a3c0f') +
+        sparkBlock('força ⚔️', seriesAtt, '#a52020') +
+        sparkBlock('def 🛡️', seriesDef, '#2f6b2f') +
+      '</div>';
+    table.parentNode.insertBefore(summary, table);
+    const csvBtn = document.getElementById('twmgr-units-csv');
+    if (csvBtn) csvBtn.addEventListener('click', unitsDownloadCsv);
+
+    // 7) Nova tbody "TOTAL GERAL" no final da tabela.
+    const nCols = table.querySelectorAll('thead th').length;
+    const totalBody = document.createElement('tbody');
+    totalBody.id = 'twmgr-units-grandtotal';
+    let cellsHtml = '<td style="padding:4px 6px;color:#5a3c0f">TOTAL GERAL</td><td></td>';
+    colUnits.forEach((unit) => {
+      const n = (unit && totals[unit]) || 0;
+      cellsHtml += '<td class="unit-item" style="text-align:center">' + (n > 0 ? fmt(n) : '0') + '</td>';
+    });
+    const emittedCols = 2 + colUnits.length;
+    for (let i = emittedCols; i < nCols; i++) cellsHtml += '<td></td>';
+    totalBody.innerHTML = '<tr style="background:linear-gradient(180deg,#f4e4bc,#e8d29a);font-weight:bold;font-size:13px;color:#3b2914;border-top:2px solid #7d510a">' + cellsHtml + '</tr>';
+    table.appendChild(totalBody);
+  }
+
   async function resolveTargets() {
     const r = config.recruit, map = {};
     const add = (list, prof) => (list || []).forEach((v) => { if (map[v.vid]) return; map[v.vid] = { name: v.coord || v.vid, targets: r.profiles[prof].targets }; });
@@ -3672,4 +3898,5 @@
   }
 
   buildUI();
+  try { enhanceUnitsPage(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
 })();

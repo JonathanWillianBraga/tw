@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.37.0
+// @version      9.38.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.37.0';
+  const VERSION = '9.38.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1109,7 +1109,9 @@
     return vils;
   }
   async function getAllVillages() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&page=-1&_=' + Date.now(), { credentials: 'include', cache: 'no-store', headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' } });
+    // group=0 força "todas as aldeias": a tela overview_villages é stateful por grupo no servidor,
+    // e sem isso o fetch volta só as aldeias do último grupo selecionado (contagem oscilava 13→8→3).
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0&page=-1&_=' + Date.now(), { credentials: 'include', cache: 'no-store', headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' } });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const seen = {}, vils = [];
     doc.querySelectorAll('span.quickedit-vn[data-id], span.quickedit[data-id], .quickedit-out[data-id]').forEach((el) => {
@@ -3949,20 +3951,27 @@
     setStatus(config.running);
     uiTimer = setInterval(tickUI, 1000);
 
-    if (anyRunning() && lockOther()) pushLog('Outra aba já está ativa; esta ficará em espera.', 'err');
-    if (config.running) { if (!lockOther()) pushLog('Auto-ATK retomado.', 'ok'); processDue(); }
-    if (config.scav.running) { if (!lockOther()) pushLog('Coleta retomada.', 'ok', 'scav'); scheduleScav(); }
-    if (config.farm.running) { if (!lockOther()) pushLog('Saque retomado.', 'ok', 'farm'); scheduleFarm(); }
-    if (config.wall.running) { if (!lockOther()) pushLog('Muralha retomada.', 'ok', 'wall'); scheduleWall(); }
-    if (config.recruit.running) { if (!lockOther()) pushLog('Recrutar retomado.', 'ok', 'recruit'); scheduleRecruit(); }
-    if (config.fakes.running) { config.fakes.gen.forEach((f) => { if (f.state === 'scheduled') f.state = 'armed'; }); if (!lockOther()) pushLog('Fakes rearmados.', 'ok', 'fakes'); fakeTick(); }
-    if (config.market.running) { if (!lockOther()) pushLog('Mercado retomado.', 'ok', 'market'); scheduleMarket(); }
-    if (config.build.running) { if (!lockOther()) pushLog('Edifícios retomado.', 'ok', 'build'); scheduleBuild(); }
-    if (config.bb && config.bb.running) { if (!lockOther()) pushLog('Cultivo retomado.', 'ok', 'bb'); scheduleBB(); }
-    if (config.map && config.map.running) { if (!lockOther()) pushLog('Mapa retomado.', 'ok', 'map'); scheduleMap(); }
+    // Freio anti-spam: quando a página recarrega em rajada (você navegando no jogo), não repete
+    // as mensagens de "retomado". Só loga se passaram >30s desde o último log de retomada.
+    const _lrl = Number(localStorage.getItem(KEY + '_lastResumeLog') || 0);
+    const resumeQuiet = (Date.now() - _lrl) < 30000;
+    if (!resumeQuiet) localStorage.setItem(KEY + '_lastResumeLog', String(Date.now()));
+    const rlog = (m, mod) => { if (!resumeQuiet && !lockOther()) pushLog(m, 'ok', mod); };
+
+    if (!resumeQuiet && anyRunning() && lockOther()) pushLog('Outra aba já está ativa; esta ficará em espera.', 'err');
+    if (config.running) { rlog('Auto-ATK retomado.'); processDue(); }
+    if (config.scav.running) { rlog('Coleta retomada.', 'scav'); scheduleScav(); }
+    if (config.farm.running) { rlog('Saque retomado.', 'farm'); scheduleFarm(); }
+    if (config.wall.running) { rlog('Muralha retomada.', 'wall'); scheduleWall(); }
+    if (config.recruit.running) { rlog('Recrutar retomado.', 'recruit'); scheduleRecruit(); }
+    if (config.fakes.running) { config.fakes.gen.forEach((f) => { if (f.state === 'scheduled') f.state = 'armed'; }); rlog('Fakes rearmados.', 'fakes'); fakeTick(); }
+    if (config.market.running) { rlog('Mercado retomado.', 'market'); scheduleMarket(); }
+    if (config.build.running) { rlog('Edifícios retomado.', 'build'); scheduleBuild(); }
+    if (config.bb && config.bb.running) { rlog('Cultivo retomado.', 'bb'); scheduleBB(); }
+    if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); scheduleMap(); }
     if (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) {
       config.planner.attacks.forEach((atk) => { if (!atk.running) return; (atk.rows || []).forEach((r) => { if (r.state === 'scheduled') r.state = 'armed'; }); });
-      if (!lockOther()) pushLog('🎯 Coordenado retomado.', 'ok', 'planner');
+      rlog('🎯 Coordenado retomado.', 'planner');
       plannerTick();
     }
     startCaptchaWatcher();

@@ -1124,14 +1124,86 @@
     return { total: total, att: att, def: def, defCav: defCav, defArch: defArch, pop: pop, nobles: nobles };
   }
 
-  // Snapshot 1x por dia (sobrescreve se rodar de novo no mesmo dia). Rotaciona por historyDays.
+  // Chave de bucket de 6h (00, 06, 12, 18). Ex.: 2026-07-15T12.
+  function unitsBucketKey(ms) {
+    const d = new Date(ms || Date.now());
+    const bucketH = Math.floor(d.getHours() / 6) * 6;
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(bucketH);
+  }
+
+  // Snapshot no bucket atual (sobrescreve o mesmo bucket). Rotaciona por historyDays * 4.
   function unitsSaveSnapshot(byVillage, totals, force) {
-    const today = new Date().toISOString().slice(0, 10);
+    const key = unitsBucketKey();
     const h = config.units.history;
-    h[today] = { at: Date.now(), totals: totals, byVillage: byVillage, force: force };
+    h[key] = { at: Date.now(), totals: totals, byVillage: byVillage, force: force };
+    const maxEntries = (config.units.historyDays || 90) * 4;
     const keys = Object.keys(h).sort();
-    while (keys.length > (config.units.historyDays || 90)) delete h[keys.shift()];
+    while (keys.length > maxEntries) delete h[keys.shift()];
     save();
+  }
+
+  // Parse compartilhado entre enhanceUnitsPage (DOM local) e unitsFetchAndSnapshot (fetch).
+  // Retorna { totals, byVillage, force, ok }. Se a tabela não existir/mudou, ok=false.
+  function unitsParseTable(root) {
+    const table = (root || document).getElementById ? (root || document).getElementById('units_table') : root.querySelector('#units_table');
+    if (!table) return { ok: false };
+    const headImgs = table.querySelectorAll('thead th img[src*="/unit_"]');
+    if (!headImgs.length) return { ok: false };
+    const colUnits = [];
+    headImgs.forEach((img) => {
+      const m = (img.getAttribute('src') || '').match(/\/unit_([a-z]+)\.[a-z]+/i);
+      colUnits.push(m ? m[1] : null);
+    });
+    const totals = {}; UNITS.forEach(([u]) => { totals[u] = 0; });
+    const byVillage = {};
+    const bodies = table.querySelectorAll('tbody.row_marker');
+    bodies.forEach((tb) => {
+      const totalRow = tb.querySelector('tr[style*="font-weight: bold"]') || tb.querySelector('tr[style*="font-weight:bold"]');
+      if (!totalRow) return;
+      const nameEl = tb.querySelector('.quickedit-vn[data-id]');
+      const vid = nameEl ? String(nameEl.getAttribute('data-id')) : null;
+      const labelEl = tb.querySelector('.quickedit-label');
+      const rawName = labelEl ? (labelEl.textContent || '').replace(/\s+/g, ' ').trim() : (vid || '?');
+      const coordM = rawName.match(/(\d{1,3})\|(\d{1,3})/);
+      const coord = coordM ? (coordM[1] + '|' + coordM[2]) : null;
+      const cells = totalRow.querySelectorAll('td.unit-item');
+      const vTotals = {};
+      cells.forEach((td, i) => {
+        const unit = colUnits[i]; if (!unit || !UNIT_STATS[unit]) return;
+        const n = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0;
+        vTotals[unit] = n;
+        totals[unit] = (totals[unit] || 0) + n;
+      });
+      if (vid) byVillage[vid] = { name: rawName, coord: coord, totals: vTotals, force: unitsForce(vTotals) };
+    });
+    return { ok: true, table: table, colUnits: colUnits, totals: totals, byVillage: byVillage, force: unitsForce(totals) };
+  }
+
+  // Fetch em background da tela units — usado pelo scheduler quando entra em novo bucket.
+  async function unitsFetchAndSnapshot() {
+    try {
+      const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units', { credentials: 'include' });
+      if (!res.ok) return;
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      const p = unitsParseTable(doc);
+      if (!p.ok) return;
+      unitsSaveSnapshot(p.byVillage, p.totals, p.force);
+    } catch (e) { /* silencioso: proximo tick tenta de novo */ }
+  }
+
+  // Checa a cada 15min se entramos em bucket novo (00/06/12/18). Se sim, dispara fetch.
+  let unitsAutoTimer = null;
+  function unitsScheduleAuto() {
+    if (unitsAutoTimer) clearInterval(unitsAutoTimer);
+    const check = () => {
+      const keys = Object.keys(config.units.history || {});
+      const last = keys.length ? keys.sort().pop() : null;
+      const now = unitsBucketKey();
+      if (last !== now) unitsFetchAndSnapshot();
+    };
+    check(); // ao boot, garante o snapshot do bucket corrente se estiver faltando
+    unitsAutoTimer = setInterval(check, 15 * 60 * 1000);
   }
 
   // Retorna a data (YYYY-MM-DD) mais recente com snapshot cujo daysAgo >= n.
@@ -1188,43 +1260,11 @@
   function enhanceUnitsPage() {
     const gd = window.game_data;
     if (!gd || gd.screen !== 'overview_villages' || gd.mode !== 'units') return;
-    const table = document.getElementById('units_table'); if (!table) return;
     if (document.getElementById('twmgr-units-summary')) return;
 
-    // 1) Mapa coluna → unit code, lido do thead (varia por mundo).
-    const headImgs = table.querySelectorAll('thead th img[src*="/unit_"]');
-    if (!headImgs.length) return;
-    const colUnits = [];
-    headImgs.forEach((img) => {
-      const m = (img.getAttribute('src') || '').match(/\/unit_([a-z]+)\.[a-z]+/i);
-      colUnits.push(m ? m[1] : null);
-    });
-
-    // 2) Parseia cada tbody (1 por aldeia): pega linha "total" + info da aldeia.
-    const totals = {}; UNITS.forEach(([u]) => { totals[u] = 0; });
-    const byVillage = {};
-    const bodies = table.querySelectorAll('tbody.row_marker');
-    bodies.forEach((tb) => {
-      const totalRow = tb.querySelector('tr[style*="font-weight: bold"]') || tb.querySelector('tr[style*="font-weight:bold"]');
-      if (!totalRow) return;
-      const nameEl = tb.querySelector('.quickedit-vn[data-id]');
-      const vid = nameEl ? String(nameEl.getAttribute('data-id')) : null;
-      const labelEl = tb.querySelector('.quickedit-label');
-      const rawName = labelEl ? (labelEl.textContent || '').replace(/\s+/g, ' ').trim() : (vid || '?');
-      const coordM = rawName.match(/(\d{1,3})\|(\d{1,3})/);
-      const coord = coordM ? (coordM[1] + '|' + coordM[2]) : null;
-      const cells = totalRow.querySelectorAll('td.unit-item');
-      const vTotals = {};
-      cells.forEach((td, i) => {
-        const unit = colUnits[i]; if (!unit || !UNIT_STATS[unit]) return;
-        const n = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0;
-        vTotals[unit] = n;
-        totals[unit] = (totals[unit] || 0) + n;
-      });
-      if (vid) byVillage[vid] = { name: rawName, coord: coord, totals: vTotals, force: unitsForce(vTotals) };
-    });
-
-    const f = unitsForce(totals);
+    const p = unitsParseTable(document);
+    if (!p.ok) return;
+    const table = p.table, colUnits = p.colUnits, totals = p.totals, byVillage = p.byVillage, f = p.force;
     const fmt = (n) => Number(n).toLocaleString('pt-BR');
     const fmtSigned = (n) => (n >= 0 ? '+' : '') + fmt(n);
     const colorFor = (delta) => delta > 0 ? '#2f7a2f' : (delta < 0 ? '#a52020' : '#6b4a1e');
@@ -1250,11 +1290,25 @@
       '</div>';
     };
 
-    // 5) Séries pra sparklines (últimos 30 dias, cronológico).
+    // 5) Séries pra sparklines. Longo (últimos ~30 dias) e "hoje" (últimas 24h).
     const histKeys = Object.keys(config.units.history).sort();
-    const seriesTotal = histKeys.slice(-30).map((k) => ({ at: config.units.history[k].at, v: (config.units.history[k].force || {}).total || 0 }));
-    const seriesAtt = histKeys.slice(-30).map((k) => ({ at: config.units.history[k].at, v: (config.units.history[k].force || {}).att || 0 }));
-    const seriesDef = histKeys.slice(-30).map((k) => ({ at: config.units.history[k].at, v: (config.units.history[k].force || {}).def || 0 }));
+    // Longo prazo: 1 ponto por dia (média dos buckets do dia)
+    const byDay = {};
+    histKeys.forEach((k) => {
+      const day = k.slice(0, 10);
+      if (!byDay[day]) byDay[day] = { total: 0, att: 0, def: 0, n: 0, at: 0 };
+      const s = config.units.history[k].force || {};
+      byDay[day].total += s.total || 0; byDay[day].att += s.att || 0; byDay[day].def += s.def || 0;
+      byDay[day].n++; byDay[day].at = Math.max(byDay[day].at, config.units.history[k].at || 0);
+    });
+    const dayKeys = Object.keys(byDay).sort().slice(-30);
+    const seriesTotal = dayKeys.map((d) => ({ at: byDay[d].at, v: Math.round(byDay[d].total / byDay[d].n) }));
+    const seriesAtt = dayKeys.map((d) => ({ at: byDay[d].at, v: Math.round(byDay[d].att / byDay[d].n) }));
+    const seriesDef = dayKeys.map((d) => ({ at: byDay[d].at, v: Math.round(byDay[d].def / byDay[d].n) }));
+    // Curto prazo: últimos 24h de buckets (até 4 pontos)
+    const cutoff24h = Date.now() - 24 * 3600 * 1000;
+    const todayKeys = histKeys.filter((k) => (config.units.history[k].at || 0) >= cutoff24h);
+    const seriesToday = todayKeys.map((k) => ({ at: config.units.history[k].at, v: (config.units.history[k].force || {}).total || 0 }));
 
     // 6) Bloco de resumo + deltas + sparklines + botão CSV.
     const summary = document.createElement('div');
@@ -1285,9 +1339,13 @@
         deltaBlock('vs 30 dias', snap30) +
       '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:12px;padding-top:6px;align-items:center">' +
-        sparkBlock('total tropas', seriesTotal, '#5a3c0f') +
-        sparkBlock('força ⚔️', seriesAtt, '#a52020') +
-        sparkBlock('def 🛡️', seriesDef, '#2f6b2f') +
+        '<div style="display:flex;flex-direction:column;align-items:center;min-width:110px">' +
+          '<div style="font-size:10px;color:#5a3c0f;font-weight:bold">total (hoje ' + seriesToday.length + 'pt)</div>' +
+          unitsSparkline(seriesToday, 110, 28, '#7d510a') +
+        '</div>' +
+        sparkBlock('total (30d)', seriesTotal, '#5a3c0f') +
+        sparkBlock('força ⚔️ (30d)', seriesAtt, '#a52020') +
+        sparkBlock('def 🛡️ (30d)', seriesDef, '#2f6b2f') +
       '</div>';
     table.parentNode.insertBefore(summary, table);
     const csvBtn = document.getElementById('twmgr-units-csv');
@@ -3906,4 +3964,5 @@
 
   buildUI();
   try { enhanceUnitsPage(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
+  try { unitsScheduleAuto(); } catch (e) { /* silencioso: scheduler é opcional */ }
 })();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.36.0
+// @version      9.37.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.36.0';
+  const VERSION = '9.37.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1392,14 +1392,15 @@
   async function getRecruitState(vid) {
     const res = await fetch('/game.php?village=' + vid + '&screen=train', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    const units = {}, rmap = {}; RUNITS.forEach(([u]) => rmap[u] = true);
-    doc.querySelectorAll('tr').forEach((tr) => {
-      let u = null;
-      const inp = tr.querySelector('input[name]');
-      if (inp && rmap[inp.getAttribute('name')]) u = inp.getAttribute('name');
-      if (!u) { const img = tr.querySelector('img[src*="/unit_"]'); if (img) { const m = img.src.match(/unit_([a-z]+)\.png/); if (m && rmap[m[1]]) u = m[1]; } }
-      if (!u || units[u]) return;
-      const txt = (tr.textContent || '').replace(/\s+/g, ' ').trim();
+    // Vai DIRETO no input de cada unidade e sobe pro <tr> dela (closest) — evita casar com uma <tr>
+    // ancestral que embrulha a página (bug: lia o menu inteiro e total virava lixo, excluindo a unidade).
+    const units = {};
+    RUNITS.forEach(([u]) => {
+      let inp = doc.querySelector('input[name="' + u + '"]');
+      let row = inp ? inp.closest('tr') : null;
+      if (!row) { const img = doc.querySelector('img[src*="unit_' + u + '."], img[src*="unit_' + u + '_"]'); if (img) row = img.closest('tr'); }
+      if (!row) return;
+      const txt = (row.textContent || '').replace(/\s+/g, ' ').trim();
       const cm = txt.match(/(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+):(\d{2}):(\d{2})/);
       if (!cm) return;
       const tot = txt.match(/(\d+)\s*\/\s*(\d+)/), mx = txt.match(/\((\d+)\)/);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.40.0
+// @version      9.41.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.40.0';
+  const VERSION = '9.41.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -3204,6 +3204,69 @@
   }
   function testCaptchaNotif() { fireCaptchaNotification('teste-manual', true); }
 
+  // ---- Detecção do bot-check pela REDE (sem depender do F5) ----
+  // O overlay do TW só entra no DOM quando o jogo o renderiza (às vezes só no F5). Mas as respostas
+  // das requisições (nossas e do próprio jogo) já trazem o bot-check antes disso — grampeamos fetch+XHR
+  // só pra ESPIAR as respostas (repasse intacto) e disparar o alerta na hora.
+  function scanForBotCheck(text, url) {
+    const hay = ((url || '') + ' ' + (text || '')).toLowerCase();
+    const toks = ['bot_check', 'bot_protection', 'botprotection', 'botprotection_quest', 'bot_protection_row', 'data-bot-challenge', '/human.php', 'action=bot_protection', 'h-captcha', 'hcaptcha.com', 'g-recaptcha', 'sitekey', 'botschutz'];
+    for (const t of toks) { if (hay.indexOf(t) >= 0) return t; }
+    if (/prote..o contra rob/.test(hay) || /verifica..o de rob/.test(hay)) return 'pt-robo';
+    return null;
+  }
+  function scanAndFire(text, url) {
+    try {
+      if (!config.captcha || !config.captcha.enabled) return;
+      const m = scanForBotCheck(text, url);
+      if (m) fireCaptchaNotification('rede:' + m + (url ? (' · ' + String(url).slice(0, 80)) : ''), false);
+    } catch (e) {}
+  }
+  function looksTW(url) {
+    try {
+      if (!url) return false;
+      const u = String(url).toLowerCase();
+      if (u.indexOf('ntfy.sh') >= 0 || u.indexOf('githubusercontent') >= 0) return false;   // nossas próprias chamadas
+      if (u.indexOf('/game.php') >= 0 || u.indexOf('/human.php') >= 0) return true;
+      if (u.indexOf('bot_check') >= 0 || u.indexOf('bot_protection') >= 0 || u.indexOf('botprotection') >= 0) return true;
+      return false;
+    } catch (e) { return false; }
+  }
+  function installBotHooks() {
+    if (window.__twBotHooked) return;
+    window.__twBotHooked = true;
+    try {
+      const _origFetch = window.fetch;
+      if (typeof _origFetch === 'function') {
+        window.fetch = function () {
+          const p = _origFetch.apply(this, arguments);
+          try { p.then((res) => { try { if (res && looksTW(res.url)) res.clone().text().then((t) => scanAndFire(t, res.url)).catch(() => {}); } catch (e) {} }).catch(() => {}); } catch (e) {}
+          return p;   // promise original, intacto
+        };
+      }
+    } catch (e) {}
+    try {
+      const _open = XMLHttpRequest.prototype.open, _send = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function (method, url) { try { this.__twUrl = url; } catch (e) {} return _open.apply(this, arguments); };
+      XMLHttpRequest.prototype.send = function () {
+        try {
+          this.addEventListener('load', function () {
+            try {
+              const u = this.__twUrl || this.responseURL || '';
+              if (!looksTW(u)) return;
+              let t = ''; const rt = this.responseType;
+              if (rt === '' || rt === 'text') { try { t = this.responseText || ''; } catch (e) { t = ''; } }
+              scanAndFire(t, u);
+            } catch (e) {}
+          });
+        } catch (e) {}
+        return _send.apply(this, arguments);
+      };
+    } catch (e) {}
+    // validação ponta-a-ponta sem esperar um bot-check real
+    try { window.__twSimBotCheck = function () { scanAndFire('<div id="bot_check"></div>', location.href); return 'disparado'; }; } catch (e) {}
+  }
+
   function tickUI() {
     if (anyRunning() && !lockOther()) claimLock();
     const now = Date.now();
@@ -3989,6 +4052,7 @@
       rlog('🎯 Coordenado retomado.', 'planner');
       plannerTick();
     }
+    installBotHooks();
     startCaptchaWatcher();
   }
 

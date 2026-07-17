@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.51.1
+// @version      9.52.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.51.1';
+  const VERSION = '9.52.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -114,7 +114,7 @@
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
   const BB_TPL = 'main 20\nstorage 20\nfarm 22\nstable 15\nbarracks 15\nsmith 10\ngarage 5\nfarm 24\nstorage 25\nbarracks 20\nstable 20\ngarage 10\nwood 30\nstone 30\niron 30\nstorage 30\nfarm 27\nmarket 15';
   const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, gradMain: 20, gradStable: 15, inflight: {} });
-  const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, pollSec: 120, iframeMin: 15 });
+  const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
   const defMap = () => ({
     running: false, nextAt: 0,
     maxDist: 20, minDaysSinceScout: 2,
@@ -279,8 +279,7 @@
     if (c.captcha.browserNotif == null) c.captcha.browserNotif = true;
     if (c.captcha.ntfyTopic == null) c.captcha.ntfyTopic = '';
     if (c.captcha.cooldownSec == null) c.captcha.cooldownSec = 300;
-    if (c.captcha.pollSec == null) c.captcha.pollSec = 120;
-    if (c.captcha.iframeMin == null) c.captcha.iframeMin = 15;
+    if (c.captcha.reloadMin == null) c.captcha.reloadMin = 0;
     if (c.captcha.lastNotifiedAt == null) c.captcha.lastNotifiedAt = 0;
     if (!c.planner) c.planner = defPlanner();
     if (!Array.isArray(c.planner.attacks) || !c.planner.attacks.length) {
@@ -1024,7 +1023,7 @@
       _farmZeroStreak++;
       if (_farmZeroStreak >= 3) {
         pushLog('Saque: 3 ciclos sem enviar' + (errs ? (' (' + errs + ' recusados)') : ' (assistente vazio)') + ' — possível verificação/bloqueio. Volte ao PC.', 'err', 'farm');
-        if (config.captcha && config.captcha.enabled) queueCaptchaConfirmation('saque-parado' + (errs ? ('/' + errs + 'rec') : ''));
+        if (config.captcha && config.captcha.enabled) fireCaptchaNotification('saque-parado' + (errs ? ('/' + errs + 'rec') : ''), false);
         _farmZeroStreak = 0;   // zera p/ re-alertar se continuar parado
       }
     } else { _farmZeroStreak = 0; }   // 0 por falta de CL/alcance/cooldown = normal, não é bloqueio
@@ -3235,10 +3234,10 @@
     if (now - _captchaCheckLast < 1000) return;   // debounce
     _captchaCheckLast = now;
     let hit = isCaptchaVisible();
-    // O bot-check do br143 ("Proteção contra Bots") é uma PÁGINA com texto, sem os elementos hcaptcha —
-    // e NÃO é servido a fetch/iframe (só existe no DOM já renderizado). Então escaneia o texto da página.
-    if (!hit) { try { const m = scanForBotCheck((document.body && document.body.textContent) || '', location.href); if (m) hit = 'dom:' + m; } catch (e) {} }
-    if (hit) queueCaptchaConfirmation('dom:' + hit);
+    // "Proteção contra Bots" é uma PÁGINA de texto (sem elementos hcaptcha). Escaneia o texto VISÍVEL
+    // (innerText — NÃO textContent, que inclui <script> e dava falso-positivo com a lib hcaptcha).
+    if (!hit) { try { const m = scanForBotCheck((document.body && document.body.innerText) || ''); if (m) hit = 'dom:' + m; } catch (e) {} }
+    if (hit) fireCaptchaNotification(hit, false);
   }
   function startCaptchaWatcher() {
     // Poll leve
@@ -3255,166 +3254,42 @@
   }
   function testCaptchaNotif() { fireCaptchaNotification('teste-manual', true); }
 
-  // ---- Detecção do bot-check pela REDE (sem depender do F5) ----
-  // O overlay do TW só entra no DOM quando o jogo o renderiza (às vezes só no F5). Mas as respostas
-  // das requisições (nossas e do próprio jogo) já trazem o bot-check antes disso — grampeamos fetch+XHR
-  // só pra ESPIAR as respostas (repasse intacto) e disparar o alerta na hora.
-  function scanForBotCheck(text, url) {
-    const hay = ((url || '') + ' ' + (text || '')).toLowerCase();
-    const toks = ['bot_check', 'bot_protection', 'botprotection', 'botprotection_quest', 'bot_protection_row', 'data-bot-challenge', '/human.php', 'action=bot_protection', 'h-captcha', 'hcaptcha.com', 'g-recaptcha', 'sitekey', 'botschutz'];
-    for (const t of toks) { if (hay.indexOf(t) >= 0) return t; }
-    // texto visível da própria página de bot-check (br143 mostra "Proteção contra Bots" / "iniciar a
-    // verificação da proteção do bot"). "bots" != "robôs" — por isso o regex antigo não casava.
-    if (/prote..o (contra|do) (rob|bot)|iniciar a verifica..o|verifica..o d[ae] prote..o|bot protection|sou humano|i am human|n[aã]o sou (um )?rob/.test(hay)) return 'bot-page';
+  // ---- Detecção do bot-check (só pelo DOM da página renderizada) ----
+  function scanForBotCheck(text) {
+    const hay = (text || '').toLowerCase();
+    // APENAS frases VISÍVEIS da tela de verificação. NÃO usar identificadores como "hcaptcha"/"bot_check"/
+    // "sitekey" — eles aparecem em scripts/HTML de páginas NORMAIS (a lib hcaptcha vem pré-carregada) e
+    // davam falso-positivo. Chamar sempre com innerText (texto renderizado, sem <script>).
+    if (/prote..o contra bots?|iniciar a verifica..o da prote..o|verifica..o da prote..o do bot|bot protection required/.test(hay)) return 'bot-page';
     return null;
   }
-  function scanAndFire(text, url) {
-    try {
-      if (!config.captcha || !config.captcha.enabled) return;
-      const m = scanForBotCheck(text, url);
-      if (m) queueCaptchaConfirmation('rede:' + m + (url ? (' · ' + String(url).slice(0, 80)) : ''));
-    } catch (e) {}
-  }
-  function looksTW(url) {
-    try {
-      if (!url) return false;
-      const u = String(url).toLowerCase();
-      if (u.indexOf('ntfy.sh') >= 0 || u.indexOf('githubusercontent') >= 0) return false;   // nossas próprias chamadas
-      if (u.indexOf('/game.php') >= 0 || u.indexOf('/human.php') >= 0) return true;
-      if (u.indexOf('bot_check') >= 0 || u.indexOf('bot_protection') >= 0 || u.indexOf('botprotection') >= 0) return true;
-      return false;
-    } catch (e) { return false; }
-  }
   function installBotHooks() {
-    if (window.__twBotHooked) return;
-    window.__twBotHooked = true;
-    try {
-      const _origFetch = window.fetch;
-      if (typeof _origFetch === 'function') {
-        window.fetch = function () {
-          const p = _origFetch.apply(this, arguments);
-          try { p.then((res) => { try { if (res && looksTW(res.url)) res.clone().text().then((t) => scanAndFire(t, res.url)).catch(() => {}); } catch (e) {} }).catch(() => {}); } catch (e) {}
-          return p;   // promise original, intacto
-        };
-      }
-    } catch (e) {}
-    try {
-      const _open = XMLHttpRequest.prototype.open, _send = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.open = function (method, url) { try { this.__twUrl = url; } catch (e) {} return _open.apply(this, arguments); };
-      XMLHttpRequest.prototype.send = function () {
-        try {
-          this.addEventListener('load', function () {
-            try {
-              const u = this.__twUrl || this.responseURL || '';
-              if (!looksTW(u)) return;
-              let t = ''; const rt = this.responseType;
-              if (rt === '' || rt === 'text') { try { t = this.responseText || ''; } catch (e) { t = ''; } }
-              scanAndFire(t, u);
-            } catch (e) {}
-          });
-        } catch (e) {}
-        return _send.apply(this, arguments);
-      };
-    } catch (e) {}
-    // validação ponta-a-ponta sem esperar um bot-check real
-    try { window.__twSimBotCheck = function () { scanAndFire('<div id="bot_check"></div>', location.href); return 'disparado'; }; } catch (e) {}
+    // Detecção do bot-check é 100% pelo watcher de DOM (texto visível + widget hcaptcha visível). NÃO
+    // grampeamos fetch/XHR: o bot-check do br143 não é servido a requisições, e ler HTML cru dava
+    // falso-positivo com a lib hcaptcha pré-carregada. Aqui fica só o helper de teste manual.
+    try { window.__twSimBotCheck = function () { fireCaptchaNotification('teste-sim', true); return 'disparado'; }; } catch (e) {}
   }
-  // Sonda: uma requisição leve periódica (mini-F5 automático). Sem ela, o bot-check só é detectado
-  // quando "cai" a próxima requisição de um módulo — pode demorar minutos. Com ela, o grampo de rede
-  // recebe o desafio em ~pollSec e dispara sem você precisar dar F5. Custo: ~1 GET leve/pollSec.
-  let _canaryTimer = null, _canaryIdx = 0;
-  const CANARY_SCREENS = ['overview', 'place', 'map'];   // rotaciona: bot-check pode aparecer só em certas telas
-  async function botCanary() {
+  // Auto-F5 quando AFK: o bot-check do br143 só se revela num carregamento de página (F5). Então, se
+  // você ficou sem mexer no mouse/teclado por X min, o script recarrega a página — aí a tela "Proteção
+  // contra Bots" aparece e o watcher de DOM dispara o ntfy. NÃO recarrega se você está ativo, se outra
+  // aba está no comando, ou se o bot-check já está na tela (deixa você resolver).
+  let _reloadTimer = null, _lastActivity = Date.now();
+  function _markActivity() { _lastActivity = Date.now(); }
+  function maybeAutoReload() {
     try {
-      if (!config.captcha || !config.captcha.enabled) return;
-      if (lockOther()) return;   // outra aba ativa cuida disso
-      const screen = CANARY_SCREENS[_canaryIdx++ % CANARY_SCREENS.length];
-      // pede COMO PÁGINA (Accept: text/html) — o bot-check às vezes só é servido pra navegações,
-      // não pra fetch de dados. redirect 'follow' deixa a URL final delatar um redirect pro bot-check.
-      const res = await fetch('/game.php?village=' + CUR_VID + '&screen=' + screen + '&_=' + Date.now(), { credentials: 'include', cache: 'no-store', redirect: 'follow', headers: { 'Accept': 'text/html,application/xhtml+xml' } });
-      // Sinal EXPLÍCITO: se a request pra uma tela normal (overview/place/map) redirecionou pra outra
-      // URL, o TW quase sempre está mandando pro bot-check. Dispara independente do scanForBotCheck.
-      if (res && res.redirected) queueCaptchaConfirmation('canary-redirect:' + String(res.url).slice(0, 120));
-      // o grampo de fetch já escaneia a resposta e dispara fireCaptchaNotification se for bot-check
+      const min = (config.captcha && config.captcha.reloadMin) || 0;
+      if (!min || min < 1 || lockOther()) return;
+      if (isCaptchaVisible() || scanForBotCheck((document.body && document.body.innerText) || '')) { checkCaptchaOnce(); return; }   // já tem bot-check: não recarrega
+      if (Date.now() - _lastActivity < min * 60000) return;   // você está ativo -> não atrapalha
+      location.reload();
     } catch (e) {}
   }
-  function startBotCanary() {
-    clearInterval(_canaryTimer);
-    const sec = (config.captcha && config.captcha.pollSec) || 0;
-    if (!sec || sec < 30) return;   // 0 (ou < 30s) = desligada
-    _canaryTimer = setInterval(botCanary, sec * 1000);
-  }
-
-  // Iframe oculto — força uma NAVEGAÇÃO REAL. Alguns servidores TW só entregam bot-check em
-  // navegações (não em fetch/XHR), então só a sonda de rede pode passar batido.
-  // runIframeCheck() é a primitiva: cria iframe, escaneia, resolve com {detected, reason}.
-  // Reusada por: (1) sonda periódica (iframeProbe) e (2) confirmador de suspeitas (confirmCaptcha).
-  function runIframeCheck() {
-    return new Promise((resolve) => {
-      try {
-        if (!config.captcha || !config.captcha.enabled) return resolve({ detected: false, reason: 'off' });
-        if (lockOther()) return resolve({ detected: false, reason: 'lock' });
-        const iframe = document.createElement('iframe');
-        iframe.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;border:0;opacity:0';
-        iframe.setAttribute('aria-hidden', 'true');
-        iframe.src = '/game.php?village=' + CUR_VID + '&screen=overview&_=' + Date.now();
-        let done = false;
-        const finish = (r) => { if (done) return; done = true; try { iframe.remove(); } catch (e) {} resolve(r); };
-        iframe.onload = () => {
-          try {
-            const doc = iframe.contentDocument;
-            const text = (doc && doc.body && doc.body.textContent) || '';
-            const url = (doc && doc.location && doc.location.href) || iframe.src;
-            const hit = scanForBotCheck(text, url);
-            finish({ detected: !!hit, reason: hit || null });
-          } catch (e) { finish({ detected: false, reason: 'cross-origin' }); }
-        };
-        iframe.onerror = () => finish({ detected: false, reason: 'error' });
-        setTimeout(() => finish({ detected: false, reason: 'timeout' }), 30000);
-        document.body.appendChild(iframe);
-      } catch (e) { resolve({ detected: false, reason: 'exception' }); }
-    });
-  }
-
-  // Sonda periódica: se o iframe pegar bot-check, ENFILEIRA pra confirmação em 2 passos
-  // (não dispara direto — quem confirma é o confirmCaptcha após 20s com outro iframe fresh).
-  let _iframeTimer = null;
-  async function iframeProbe() {
-    try {
-      const r = await runIframeCheck();
-      if (r.detected) queueCaptchaConfirmation('iframe:' + r.reason);
-    } catch (e) {}
-  }
-  function startIframeProbe() {
-    clearInterval(_iframeTimer);
-    const min = (config.captcha && config.captcha.iframeMin) || 0;
-    if (!min || min < 1) return;   // 0 = desligado
-    _iframeTimer = setInterval(iframeProbe, min * 60 * 1000);
-  }
-
-  // ---- Confirmação em 2 passos (elimina falso positivo) ----
-  // Qualquer detecção (grampo/sonda/watcher/AFK) chama queueCaptchaConfirmation em vez de fire direto.
-  // Espera 20s e faz um iframe probe FRESH pra confirmar. Só notifica se este segundo probe também detectar.
-  // Se já tem confirmação pendente, coalesce (o motivo do 1º detecta prevalece; segundos disparos são ignorados).
-  let _confirmPending = null;   // { reason, at, timer }
-  function queueCaptchaConfirmation(reason) {
-    if (!config.captcha || !config.captcha.enabled) return;
-    if (_confirmPending) return;   // já tem confirmação em andamento — coalesce
-    const at = Date.now();
-    pushLog('CAPTCHA suspeito [' + reason + '] — confirmando em 20s…', '');
-    _confirmPending = { reason: reason, at: at };
-    _confirmPending.timer = setTimeout(async () => {
-      const pending = _confirmPending;
-      _confirmPending = null;
-      try {
-        const r = await runIframeCheck();
-        if (r.detected) {
-          fireCaptchaNotification(pending.reason + ' → confirmado (' + r.reason + ')', false);
-        } else {
-          pushLog('CAPTCHA suspeito [' + pending.reason + '] descartado — confirmação negativa (' + (r.reason || 'sem sinal') + ').', '');
-        }
-      } catch (e) { _confirmPending = null; }
-    }, 20000);
+  function startAutoReload() {
+    clearInterval(_reloadTimer);
+    const min = (config.captcha && config.captcha.reloadMin) || 0;
+    if (!min || min < 1) return;
+    ['mousemove', 'mousedown', 'keydown', 'touchstart', 'wheel'].forEach((ev) => { try { window.addEventListener(ev, _markActivity, { passive: true }); } catch (e) {} });
+    _reloadTimer = setInterval(maybeAutoReload, Math.max(60, min * 60) * 1000);
   }
 
   function tickUI() {
@@ -3944,12 +3819,11 @@
         modLog('planner') +
       '</div>' +
       '<div id="twmgr-tab-log" style="display:none">' +
-      '<div class="twmgr-hint">🤖 Notificação de CAPTCHA: alerta quando o jogo pedir verificação.</div>' +
+      '<div class="twmgr-hint">🤖 Alerta de CAPTCHA: avisa (navegador + ntfy) quando a tela de verificação aparece. O bot-check só surge num F5 — por isso o <b>Auto-F5 AFK</b>: se você ficar X min sem mexer, recarrega a página pra forçar a verificação a aparecer e te chamar.</div>' +
       '<label class="twmgr-check"><input id="twmgr-cap-en" type="checkbox"> Detectar CAPTCHA</label>' +
       '<label class="twmgr-check"><input id="twmgr-cap-brw" type="checkbox"> Notificação do navegador</label>' +
       '<div class="twmgr-row"><span class="twmgr-lbl">Tópico ntfy.sh (opcional)</span><input id="twmgr-cap-ntfy" class="twmgr-inp" type="text" placeholder="meu-topico" style="width:120px"></div>' +
-      '<div class="twmgr-row"><span class="twmgr-lbl">Sonda anti-F5 (seg, 0=off)</span><input id="twmgr-cap-poll" class="twmgr-inp" type="number" min="0" step="10" value="120" style="width:66px"></div>' +
-      '<div class="twmgr-row"><span class="twmgr-lbl">Sonda iframe (min, 0=off)</span><input id="twmgr-cap-iframe" class="twmgr-inp" type="number" min="0" step="1" value="15" style="width:66px"></div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl" title="Recarrega a página a cada X min quando você está AFK, pra forçar o bot-check a aparecer e te avisar. 0 = desligado.">Auto-F5 AFK (min, 0=off)</span><input id="twmgr-cap-reload" class="twmgr-inp" type="number" min="0" step="1" value="0" style="width:66px"></div>' +
       '<button id="twmgr-cap-test" class="twmgr-btn twmgr-ghost" style="width:100%;margin:4px 0 8px">🔔 Testar notificação</button>' +
       '<div id="twmgr-log" class="twmgr-log"></div>' +
       '</div>' +
@@ -3962,21 +3836,17 @@
     document.getElementById('twmgr-cap-en').checked = !!config.captcha.enabled;
     document.getElementById('twmgr-cap-brw').checked = !!config.captcha.browserNotif;
     document.getElementById('twmgr-cap-ntfy').value = config.captcha.ntfyTopic || '';
-    document.getElementById('twmgr-cap-poll').value = config.captcha.pollSec != null ? config.captcha.pollSec : 120;
-    document.getElementById('twmgr-cap-iframe').value = config.captcha.iframeMin != null ? config.captcha.iframeMin : 15;
+    document.getElementById('twmgr-cap-reload').value = config.captcha.reloadMin != null ? config.captcha.reloadMin : 0;
     const readCapCfg = () => {
       config.captcha.enabled = document.getElementById('twmgr-cap-en').checked;
       config.captcha.browserNotif = document.getElementById('twmgr-cap-brw').checked;
       config.captcha.ntfyTopic = document.getElementById('twmgr-cap-ntfy').value.trim();
-      const ps = parseInt(document.getElementById('twmgr-cap-poll').value, 10);
-      config.captcha.pollSec = (isNaN(ps) || ps < 0) ? 120 : ps;
-      const im = parseInt(document.getElementById('twmgr-cap-iframe').value, 10);
-      config.captcha.iframeMin = (isNaN(im) || im < 0) ? 15 : im;
+      const rm = parseInt(document.getElementById('twmgr-cap-reload').value, 10);
+      config.captcha.reloadMin = (isNaN(rm) || rm < 0) ? 0 : rm;
       save();
-      startBotCanary();   // aplica o novo intervalo (ou desliga se 0)
-      startIframeProbe(); // idem para o iframe
+      startAutoReload();   // aplica o novo intervalo (ou desliga se 0)
     };
-    ['twmgr-cap-en', 'twmgr-cap-brw', 'twmgr-cap-ntfy', 'twmgr-cap-poll', 'twmgr-cap-iframe'].forEach((id) => document.getElementById(id).addEventListener('change', readCapCfg));
+    ['twmgr-cap-en', 'twmgr-cap-brw', 'twmgr-cap-ntfy', 'twmgr-cap-reload'].forEach((id) => document.getElementById(id).addEventListener('change', readCapCfg));
     document.getElementById('twmgr-cap-brw').addEventListener('change', async () => { if (document.getElementById('twmgr-cap-brw').checked) await ensureNotifyPermission(); });
     document.getElementById('twmgr-cap-test').addEventListener('click', testCaptchaNotif);
 
@@ -4214,8 +4084,7 @@
     }
     installBotHooks();
     startCaptchaWatcher();
-    startBotCanary();
-    startIframeProbe();
+    startAutoReload();
   }
 
   function makeDraggable(panel, handle) {

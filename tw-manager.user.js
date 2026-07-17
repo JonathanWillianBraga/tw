@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.49.0
+// @version      9.50.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.49.0';
+  const VERSION = '9.50.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -326,7 +326,7 @@
 
   let config = load();
   let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, uiTimer = null;
-  let _farmStuck = 0;   // ciclos seguidos do Saque com envios recusados (detecção de bloqueio/bot-check p/ alerta AFK)
+  let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)); }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1013,17 +1013,20 @@
     if (skip.pend) parts.push(skip.pend + ' já c/ ataque a caminho');
     if (skip.norep) parts.push(skip.norep + ' sem relatório');
     pushLog('Saque: ' + parts.join(' · '), '', 'farm');
-    // Detecção de BLOQUEIO por efeito (serve pra pegar bot-check enquanto você está AFK): se tentou
-    // enviar de origens que TINHAM tropa e o servidor recusou tudo (0 enviados, vários erros), é quase
-    // certo que a conta travou (verificação/bot-check). Dispara o mesmo alerta (ntfy) pra você voltar.
-    if (count === 0 && errs >= 3) {
-      _farmStuck++;
-      if (_farmStuck >= 2) {
-        pushLog('Saque: ' + errs + ' envios recusados seguidos e 0 concluídos — provável verificação/bloqueio. Volte ao PC.', 'err', 'farm');
-        if (config.captcha && config.captcha.enabled) fireCaptchaNotification('travado:saque(' + errs + ')', false);
-        _farmStuck = 0;
+    // Detecção de BLOQUEIO por efeito (pega bot-check enquanto você está AFK). Só conta como suspeito o
+    // que é sintoma REAL de bloqueio: servidor RECUSOU envios (errs) OU o assistente voltou VAZIO
+    // (0 alvos, degradado). "0 enviados por falta de CL / fora de alcance / cooldown" é NORMAL e ZERA o
+    // contador (não é bloqueio). Se vinha enviando e fica 3 ciclos suspeitos, alerta pra você voltar ao PC.
+    const bloqueioSuspeito = (errs > 0) || (targets.length === 0);
+    if (count > 0) { _farmZeroStreak = 0; _farmEverSent = true; }
+    else if (_farmEverSent && bloqueioSuspeito) {
+      _farmZeroStreak++;
+      if (_farmZeroStreak >= 3) {
+        pushLog('Saque: 3 ciclos sem enviar' + (errs ? (' (' + errs + ' recusados)') : ' (assistente vazio)') + ' — possível verificação/bloqueio. Volte ao PC.', 'err', 'farm');
+        if (config.captcha && config.captcha.enabled) fireCaptchaNotification('saque-parado' + (errs ? ('/' + errs + 'rec') : ''), false);
+        _farmZeroStreak = 0;   // zera p/ re-alertar se continuar parado
       }
-    } else { _farmStuck = 0; }
+    } else { _farmZeroStreak = 0; }   // 0 por falta de CL/alcance/cooldown = normal, não é bloqueio
     Object.keys(sent).forEach((r) => { if (now - sent[r] > 12 * 3600 * 1000) delete sent[r]; });
     Object.keys(defended).forEach((r) => { if (now - defended[r] > 12 * 3600 * 1000) delete defended[r]; });
     cfg.sentReports = sent; cfg.defended = defended;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.51.0
+// @version      9.51.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.51.0';
+  const VERSION = '9.51.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1024,7 +1024,7 @@
       _farmZeroStreak++;
       if (_farmZeroStreak >= 3) {
         pushLog('Saque: 3 ciclos sem enviar' + (errs ? (' (' + errs + ' recusados)') : ' (assistente vazio)') + ' — possível verificação/bloqueio. Volte ao PC.', 'err', 'farm');
-        if (config.captcha && config.captcha.enabled) fireCaptchaNotification('saque-parado' + (errs ? ('/' + errs + 'rec') : ''), false);
+        if (config.captcha && config.captcha.enabled) queueCaptchaConfirmation('saque-parado' + (errs ? ('/' + errs + 'rec') : ''));
         _farmZeroStreak = 0;   // zera p/ re-alertar se continuar parado
       }
     } else { _farmZeroStreak = 0; }   // 0 por falta de CL/alcance/cooldown = normal, não é bloqueio
@@ -3238,7 +3238,7 @@
     // O bot-check do br143 ("Proteção contra Bots") é uma PÁGINA com texto, sem os elementos hcaptcha —
     // e NÃO é servido a fetch/iframe (só existe no DOM já renderizado). Então escaneia o texto da página.
     if (!hit) { try { const m = scanForBotCheck((document.body && document.body.textContent) || '', location.href); if (m) hit = 'dom:' + m; } catch (e) {} }
-    if (hit) fireCaptchaNotification(hit, false);
+    if (hit) queueCaptchaConfirmation('dom:' + hit);
   }
   function startCaptchaWatcher() {
     // Poll leve
@@ -3272,7 +3272,7 @@
     try {
       if (!config.captcha || !config.captcha.enabled) return;
       const m = scanForBotCheck(text, url);
-      if (m) fireCaptchaNotification('rede:' + m + (url ? (' · ' + String(url).slice(0, 80)) : ''), false);
+      if (m) queueCaptchaConfirmation('rede:' + m + (url ? (' · ' + String(url).slice(0, 80)) : ''));
     } catch (e) {}
   }
   function looksTW(url) {
@@ -3334,7 +3334,7 @@
       const res = await fetch('/game.php?village=' + CUR_VID + '&screen=' + screen + '&_=' + Date.now(), { credentials: 'include', cache: 'no-store', redirect: 'follow', headers: { 'Accept': 'text/html,application/xhtml+xml' } });
       // Sinal EXPLÍCITO: se a request pra uma tela normal (overview/place/map) redirecionou pra outra
       // URL, o TW quase sempre está mandando pro bot-check. Dispara independente do scanForBotCheck.
-      if (res && res.redirected) fireCaptchaNotification('canary-redirect:' + String(res.url).slice(0, 120), false);
+      if (res && res.redirected) queueCaptchaConfirmation('canary-redirect:' + String(res.url).slice(0, 120));
       // o grampo de fetch já escaneia a resposta e dispara fireCaptchaNotification se for bot-check
     } catch (e) {}
   }
@@ -3345,34 +3345,44 @@
     _canaryTimer = setInterval(botCanary, sec * 1000);
   }
 
-  // Iframe oculto — força uma NAVEGAÇÃO REAL periódica. Alguns servidores TW só entregam bot-check
-  // em navegações (não em fetch/XHR), então a sonda de rede acima não pega. O iframe conta como
-  // navegação e o servidor responde a página real (com o bot-check embutido, se houver).
-  // Zero interrupção da sua tela — iframe fica off-screen e é removido após scan.
+  // Iframe oculto — força uma NAVEGAÇÃO REAL. Alguns servidores TW só entregam bot-check em
+  // navegações (não em fetch/XHR), então só a sonda de rede pode passar batido.
+  // runIframeCheck() é a primitiva: cria iframe, escaneia, resolve com {detected, reason}.
+  // Reusada por: (1) sonda periódica (iframeProbe) e (2) confirmador de suspeitas (confirmCaptcha).
+  function runIframeCheck() {
+    return new Promise((resolve) => {
+      try {
+        if (!config.captcha || !config.captcha.enabled) return resolve({ detected: false, reason: 'off' });
+        if (lockOther()) return resolve({ detected: false, reason: 'lock' });
+        const iframe = document.createElement('iframe');
+        iframe.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;border:0;opacity:0';
+        iframe.setAttribute('aria-hidden', 'true');
+        iframe.src = '/game.php?village=' + CUR_VID + '&screen=overview&_=' + Date.now();
+        let done = false;
+        const finish = (r) => { if (done) return; done = true; try { iframe.remove(); } catch (e) {} resolve(r); };
+        iframe.onload = () => {
+          try {
+            const doc = iframe.contentDocument;
+            const text = (doc && doc.body && doc.body.textContent) || '';
+            const url = (doc && doc.location && doc.location.href) || iframe.src;
+            const hit = scanForBotCheck(text, url);
+            finish({ detected: !!hit, reason: hit || null });
+          } catch (e) { finish({ detected: false, reason: 'cross-origin' }); }
+        };
+        iframe.onerror = () => finish({ detected: false, reason: 'error' });
+        setTimeout(() => finish({ detected: false, reason: 'timeout' }), 30000);
+        document.body.appendChild(iframe);
+      } catch (e) { resolve({ detected: false, reason: 'exception' }); }
+    });
+  }
+
+  // Sonda periódica: se o iframe pegar bot-check, ENFILEIRA pra confirmação em 2 passos
+  // (não dispara direto — quem confirma é o confirmCaptcha após 20s com outro iframe fresh).
   let _iframeTimer = null;
   async function iframeProbe() {
     try {
-      if (!config.captcha || !config.captcha.enabled) return;
-      if (lockOther()) return;
-      const iframe = document.createElement('iframe');
-      iframe.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;border:0;opacity:0';
-      iframe.setAttribute('aria-hidden', 'true');
-      iframe.src = '/game.php?village=' + CUR_VID + '&screen=overview&_=' + Date.now();
-      let removed = false;
-      const cleanup = () => { if (removed) return; removed = true; try { iframe.remove(); } catch (e) {} };
-      iframe.onload = () => {
-        try {
-          const doc = iframe.contentDocument;
-          const text = (doc && doc.body && doc.body.textContent) || '';
-          const url = (doc && doc.location && doc.location.href) || iframe.src;
-          const hit = scanForBotCheck(text, url);
-          if (hit) fireCaptchaNotification('iframe:' + hit, false);
-        } catch (e) { /* cross-origin ou acesso negado */ }
-        setTimeout(cleanup, 500);
-      };
-      iframe.onerror = cleanup;
-      setTimeout(cleanup, 30000);   // failsafe: nunca segurar iframe por >30s
-      document.body.appendChild(iframe);
+      const r = await runIframeCheck();
+      if (r.detected) queueCaptchaConfirmation('iframe:' + r.reason);
     } catch (e) {}
   }
   function startIframeProbe() {
@@ -3380,6 +3390,31 @@
     const min = (config.captcha && config.captcha.iframeMin) || 0;
     if (!min || min < 1) return;   // 0 = desligado
     _iframeTimer = setInterval(iframeProbe, min * 60 * 1000);
+  }
+
+  // ---- Confirmação em 2 passos (elimina falso positivo) ----
+  // Qualquer detecção (grampo/sonda/watcher/AFK) chama queueCaptchaConfirmation em vez de fire direto.
+  // Espera 20s e faz um iframe probe FRESH pra confirmar. Só notifica se este segundo probe também detectar.
+  // Se já tem confirmação pendente, coalesce (o motivo do 1º detecta prevalece; segundos disparos são ignorados).
+  let _confirmPending = null;   // { reason, at, timer }
+  function queueCaptchaConfirmation(reason) {
+    if (!config.captcha || !config.captcha.enabled) return;
+    if (_confirmPending) return;   // já tem confirmação em andamento — coalesce
+    const at = Date.now();
+    pushLog('CAPTCHA suspeito [' + reason + '] — confirmando em 20s…', '');
+    _confirmPending = { reason: reason, at: at };
+    _confirmPending.timer = setTimeout(async () => {
+      const pending = _confirmPending;
+      _confirmPending = null;
+      try {
+        const r = await runIframeCheck();
+        if (r.detected) {
+          fireCaptchaNotification(pending.reason + ' → confirmado (' + r.reason + ')', false);
+        } else {
+          pushLog('CAPTCHA suspeito [' + pending.reason + '] descartado — confirmação negativa (' + (r.reason || 'sem sinal') + ').', '');
+        }
+      } catch (e) { _confirmPending = null; }
+    }, 20000);
   }
 
   function tickUI() {

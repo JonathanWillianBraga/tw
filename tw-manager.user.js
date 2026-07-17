@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.41.0
+// @version      9.42.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.41.0';
+  const VERSION = '9.42.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -113,7 +113,7 @@
   const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, thresholdPct: 50, maxDist: 15, inflight: {} });
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
   const BB_TPL = 'main 20\nstorage 20\nfarm 22\nstable 15\nbarracks 15\nsmith 10\ngarage 5\nfarm 24\nstorage 25\nbarracks 20\nstable 20\ngarage 10\nwood 30\nstone 30\niron 30\nstorage 30\nfarm 27\nmarket 15';
-  const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, gradMain: 20, gradStable: 15 });
+  const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, gradMain: 20, gradStable: 15, inflight: {} });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0 });
   const defMap = () => ({
     running: false, nextAt: 0,
@@ -260,6 +260,7 @@
     if (c.bb.interval == null) c.bb.interval = 600;
     if (c.bb.gradMain == null) c.bb.gradMain = 20;
     if (c.bb.gradStable == null) c.bb.gradStable = 15;
+    if (!c.bb.inflight) c.bb.inflight = {};
     if (!c.map) c.map = defMap();
     if (!c.map.sentAt) c.map.sentAt = {};
     if (!c.map.lastPreview) c.map.lastPreview = [];
@@ -2693,14 +2694,32 @@
 
   // ==================== MÓDULO BB (aldeias bárbaras conquistadas) ====================
   // Constrói a ladder BB, abastece JIT das aldeias grandes próximas, e ao graduar (EP+estábulo) recruta CL sozinho.
+  // Recursos que EU já mandei pra este destino e ainda não chegaram (evita reenviar e transbordar).
+  function bbInflightSum(vid) {
+    const now = Date.now();
+    const arr = (config.bb.inflight && config.bb.inflight[vid]) || [];
+    const out = { wood: 0, stone: 0, iron: 0 };
+    arr.forEach((e) => { if (e.arriveAt > now && out[e.r] != null) out[e.r] += e.amt; });
+    return out;
+  }
+  function bbInflightAdd(vid, amt, dur) {
+    config.bb.inflight = config.bb.inflight || {};
+    const arr = config.bb.inflight[vid] = config.bb.inflight[vid] || [];
+    const at = Date.now() + ((dur && dur > 0 ? dur : 3600) * 1000);   // sem duração lida -> assume 1h
+    ['wood', 'stone', 'iron'].forEach((r) => { if ((amt[r] || 0) > 0) arr.push({ r: r, amt: amt[r], arriveAt: at }); });
+  }
   async function feedBB(v, needCost, sources, srcState) {
     let ms; try { ms = await getMarketState(v.vid); } catch (e) { return false; }
     if (!ms.storage) return false;
-    const free = { wood: Math.max(0, ms.storage - ms.wood), stone: Math.max(0, ms.storage - ms.stone), iron: Math.max(0, ms.storage - ms.iron) };
+    // "efetivo" = recurso atual + o que já está a caminho. Sem isso, cada ciclo relê o atual (baixo,
+    // porque o transporte ainda não chegou) e manda de novo -> quando tudo chega junto, transborda.
+    const inf = bbInflightSum(v.vid);
+    const eff = { wood: ms.wood + inf.wood, stone: ms.stone + inf.stone, iron: ms.iron + inf.iron };
+    const free = { wood: Math.max(0, ms.storage - eff.wood), stone: Math.max(0, ms.storage - eff.stone), iron: Math.max(0, ms.storage - eff.iron) };
     const target = {
-      wood: Math.max(0, Math.min((needCost.wood || 0) - ms.wood, free.wood)),
-      stone: Math.max(0, Math.min((needCost.stone || 0) - ms.stone, free.stone)),
-      iron: Math.max(0, Math.min((needCost.iron || 0) - ms.iron, free.iron)),
+      wood: Math.max(0, Math.min((needCost.wood || 0) - eff.wood, free.wood)),
+      stone: Math.max(0, Math.min((needCost.stone || 0) - eff.stone, free.stone)),
+      iron: Math.max(0, Math.min((needCost.iron || 0) - eff.iron, free.iron)),
     };
     if (target.wood + target.stone + target.iron <= 0) return false;
     const cm = (v.coord || '').match(/(\d+)\|(\d+)/); if (!cm) return false;
@@ -2722,11 +2741,12 @@
       if (tot > ss.capacity) { const f = ss.capacity / tot; amt = { wood: Math.floor(amt.wood * f), stone: Math.floor(amt.stone * f), iron: Math.floor(amt.iron * f) }; }
       if (amt.wood + amt.stone + amt.iron <= 0) continue;
       try {
-        await sendMarketResources(s.vid, v.coord, amt);
+        const dur = await sendMarketResources(s.vid, v.coord, amt);
         sent = true;
         pushLog('Cultivo (abastece): ' + s.coord + ' → ' + v.coord + ' (' + amt.wood + '/' + amt.stone + '/' + amt.iron + ')', 'ok', 'bb');
         ss.wood -= amt.wood; ss.stone -= amt.stone; ss.iron -= amt.iron; ss.capacity -= (amt.wood + amt.stone + amt.iron);
         target.wood -= amt.wood; target.stone -= amt.stone; target.iron -= amt.iron;
+        bbInflightAdd(v.vid, amt, dur);   // marca o que está a caminho deste destino
       } catch (e) { /* alvo/erro -> tenta próxima fonte */ }
       await sleep(250);
     }
@@ -2739,6 +2759,12 @@
     claimLock();
     const now = Date.now();
     if ((config.bb.nextAt || 0) > now) { scheduleBB(); return; }
+    // poda transportes que já chegaram
+    config.bb.inflight = config.bb.inflight || {};
+    Object.keys(config.bb.inflight).forEach((vid) => {
+      config.bb.inflight[vid] = (config.bb.inflight[vid] || []).filter((e) => e.arriveAt > now);
+      if (!config.bb.inflight[vid].length) delete config.bb.inflight[vid];
+    });
     if (!config.bb.group) { pushLog('Cultivo: selecione o grupo na aba.', '', 'bb'); config.bb.nextAt = now + 300000; save(); scheduleBB(); return; }
     let vils;
     try { vils = await getVillagesInGroup(config.bb.group); }

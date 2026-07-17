@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.50.0
+// @version      9.51.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.50.0';
+  const VERSION = '9.51.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -114,7 +114,7 @@
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
   const BB_TPL = 'main 20\nstorage 20\nfarm 22\nstable 15\nbarracks 15\nsmith 10\ngarage 5\nfarm 24\nstorage 25\nbarracks 20\nstable 20\ngarage 10\nwood 30\nstone 30\niron 30\nstorage 30\nfarm 27\nmarket 15';
   const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, gradMain: 20, gradStable: 15, inflight: {} });
-  const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, pollSec: 120 });
+  const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, pollSec: 120, iframeMin: 15 });
   const defMap = () => ({
     running: false, nextAt: 0,
     maxDist: 20, minDaysSinceScout: 2,
@@ -280,6 +280,7 @@
     if (c.captcha.ntfyTopic == null) c.captcha.ntfyTopic = '';
     if (c.captcha.cooldownSec == null) c.captcha.cooldownSec = 300;
     if (c.captcha.pollSec == null) c.captcha.pollSec = 120;
+    if (c.captcha.iframeMin == null) c.captcha.iframeMin = 15;
     if (c.captcha.lastNotifiedAt == null) c.captcha.lastNotifiedAt = 0;
     if (!c.planner) c.planner = defPlanner();
     if (!Array.isArray(c.planner.attacks) || !c.planner.attacks.length) {
@@ -3321,14 +3322,19 @@
   // Sonda: uma requisição leve periódica (mini-F5 automático). Sem ela, o bot-check só é detectado
   // quando "cai" a próxima requisição de um módulo — pode demorar minutos. Com ela, o grampo de rede
   // recebe o desafio em ~pollSec e dispara sem você precisar dar F5. Custo: ~1 GET leve/pollSec.
-  let _canaryTimer = null;
+  let _canaryTimer = null, _canaryIdx = 0;
+  const CANARY_SCREENS = ['overview', 'place', 'map'];   // rotaciona: bot-check pode aparecer só em certas telas
   async function botCanary() {
     try {
       if (!config.captcha || !config.captcha.enabled) return;
       if (lockOther()) return;   // outra aba ativa cuida disso
+      const screen = CANARY_SCREENS[_canaryIdx++ % CANARY_SCREENS.length];
       // pede COMO PÁGINA (Accept: text/html) — o bot-check às vezes só é servido pra navegações,
       // não pra fetch de dados. redirect 'follow' deixa a URL final delatar um redirect pro bot-check.
-      await fetch('/game.php?village=' + CUR_VID + '&screen=overview&_=' + Date.now(), { credentials: 'include', cache: 'no-store', redirect: 'follow', headers: { 'Accept': 'text/html,application/xhtml+xml' } });
+      const res = await fetch('/game.php?village=' + CUR_VID + '&screen=' + screen + '&_=' + Date.now(), { credentials: 'include', cache: 'no-store', redirect: 'follow', headers: { 'Accept': 'text/html,application/xhtml+xml' } });
+      // Sinal EXPLÍCITO: se a request pra uma tela normal (overview/place/map) redirecionou pra outra
+      // URL, o TW quase sempre está mandando pro bot-check. Dispara independente do scanForBotCheck.
+      if (res && res.redirected) fireCaptchaNotification('canary-redirect:' + String(res.url).slice(0, 120), false);
       // o grampo de fetch já escaneia a resposta e dispara fireCaptchaNotification se for bot-check
     } catch (e) {}
   }
@@ -3337,6 +3343,43 @@
     const sec = (config.captcha && config.captcha.pollSec) || 0;
     if (!sec || sec < 30) return;   // 0 (ou < 30s) = desligada
     _canaryTimer = setInterval(botCanary, sec * 1000);
+  }
+
+  // Iframe oculto — força uma NAVEGAÇÃO REAL periódica. Alguns servidores TW só entregam bot-check
+  // em navegações (não em fetch/XHR), então a sonda de rede acima não pega. O iframe conta como
+  // navegação e o servidor responde a página real (com o bot-check embutido, se houver).
+  // Zero interrupção da sua tela — iframe fica off-screen e é removido após scan.
+  let _iframeTimer = null;
+  async function iframeProbe() {
+    try {
+      if (!config.captcha || !config.captcha.enabled) return;
+      if (lockOther()) return;
+      const iframe = document.createElement('iframe');
+      iframe.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;border:0;opacity:0';
+      iframe.setAttribute('aria-hidden', 'true');
+      iframe.src = '/game.php?village=' + CUR_VID + '&screen=overview&_=' + Date.now();
+      let removed = false;
+      const cleanup = () => { if (removed) return; removed = true; try { iframe.remove(); } catch (e) {} };
+      iframe.onload = () => {
+        try {
+          const doc = iframe.contentDocument;
+          const text = (doc && doc.body && doc.body.textContent) || '';
+          const url = (doc && doc.location && doc.location.href) || iframe.src;
+          const hit = scanForBotCheck(text, url);
+          if (hit) fireCaptchaNotification('iframe:' + hit, false);
+        } catch (e) { /* cross-origin ou acesso negado */ }
+        setTimeout(cleanup, 500);
+      };
+      iframe.onerror = cleanup;
+      setTimeout(cleanup, 30000);   // failsafe: nunca segurar iframe por >30s
+      document.body.appendChild(iframe);
+    } catch (e) {}
+  }
+  function startIframeProbe() {
+    clearInterval(_iframeTimer);
+    const min = (config.captcha && config.captcha.iframeMin) || 0;
+    if (!min || min < 1) return;   // 0 = desligado
+    _iframeTimer = setInterval(iframeProbe, min * 60 * 1000);
   }
 
   function tickUI() {
@@ -3871,6 +3914,7 @@
       '<label class="twmgr-check"><input id="twmgr-cap-brw" type="checkbox"> Notificação do navegador</label>' +
       '<div class="twmgr-row"><span class="twmgr-lbl">Tópico ntfy.sh (opcional)</span><input id="twmgr-cap-ntfy" class="twmgr-inp" type="text" placeholder="meu-topico" style="width:120px"></div>' +
       '<div class="twmgr-row"><span class="twmgr-lbl">Sonda anti-F5 (seg, 0=off)</span><input id="twmgr-cap-poll" class="twmgr-inp" type="number" min="0" step="10" value="120" style="width:66px"></div>' +
+      '<div class="twmgr-row"><span class="twmgr-lbl">Sonda iframe (min, 0=off)</span><input id="twmgr-cap-iframe" class="twmgr-inp" type="number" min="0" step="1" value="15" style="width:66px"></div>' +
       '<button id="twmgr-cap-test" class="twmgr-btn twmgr-ghost" style="width:100%;margin:4px 0 8px">🔔 Testar notificação</button>' +
       '<div id="twmgr-log" class="twmgr-log"></div>' +
       '</div>' +
@@ -3884,16 +3928,20 @@
     document.getElementById('twmgr-cap-brw').checked = !!config.captcha.browserNotif;
     document.getElementById('twmgr-cap-ntfy').value = config.captcha.ntfyTopic || '';
     document.getElementById('twmgr-cap-poll').value = config.captcha.pollSec != null ? config.captcha.pollSec : 120;
+    document.getElementById('twmgr-cap-iframe').value = config.captcha.iframeMin != null ? config.captcha.iframeMin : 15;
     const readCapCfg = () => {
       config.captcha.enabled = document.getElementById('twmgr-cap-en').checked;
       config.captcha.browserNotif = document.getElementById('twmgr-cap-brw').checked;
       config.captcha.ntfyTopic = document.getElementById('twmgr-cap-ntfy').value.trim();
       const ps = parseInt(document.getElementById('twmgr-cap-poll').value, 10);
       config.captcha.pollSec = (isNaN(ps) || ps < 0) ? 120 : ps;
+      const im = parseInt(document.getElementById('twmgr-cap-iframe').value, 10);
+      config.captcha.iframeMin = (isNaN(im) || im < 0) ? 15 : im;
       save();
       startBotCanary();   // aplica o novo intervalo (ou desliga se 0)
+      startIframeProbe(); // idem para o iframe
     };
-    ['twmgr-cap-en', 'twmgr-cap-brw', 'twmgr-cap-ntfy', 'twmgr-cap-poll'].forEach((id) => document.getElementById(id).addEventListener('change', readCapCfg));
+    ['twmgr-cap-en', 'twmgr-cap-brw', 'twmgr-cap-ntfy', 'twmgr-cap-poll', 'twmgr-cap-iframe'].forEach((id) => document.getElementById(id).addEventListener('change', readCapCfg));
     document.getElementById('twmgr-cap-brw').addEventListener('change', async () => { if (document.getElementById('twmgr-cap-brw').checked) await ensureNotifyPermission(); });
     document.getElementById('twmgr-cap-test').addEventListener('click', testCaptchaNotif);
 
@@ -4132,6 +4180,7 @@
     installBotHooks();
     startCaptchaWatcher();
     startBotCanary();
+    startIframeProbe();
   }
 
   function makeDraggable(panel, handle) {

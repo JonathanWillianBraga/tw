@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.48.0
+// @version      9.49.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.48.0';
+  const VERSION = '9.49.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -326,6 +326,7 @@
 
   let config = load();
   let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, uiTimer = null;
+  let _farmStuck = 0;   // ciclos seguidos do Saque com envios recusados (detecção de bloqueio/bot-check p/ alerta AFK)
   function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)); }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -956,7 +957,7 @@
     });
     if ((cfg.order || 'dist') === 'recurso') eligible.sort((a, b) => (b.wood + b.stone + b.iron) - (a.wood + a.stone + a.iron));
     else eligible.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
-    let count = 0;
+    let count = 0, errs = 0;   // errs = envios recusados pelo servidor APÓS a origem passar na pré-checagem de tropa
     for (const t of eligible) {
       const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
       const tx = +cm[1], ty = +cm[2];
@@ -995,7 +996,7 @@
           if (mode === 'c') { await sendFarmC(c.s.vid, t.reportId); did = true; }
           else if (mode === 'a') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum / 80)), spy: 1 }); } else { if (!tpl || !tpl.a) break; await sendFarmB(c.s.vid, t.targetId, tpl.a); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
           else if (mode === 'b') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum * 1.2 / 80)), spy: 1 }); } else { if (!tpl || !tpl.b) break; await sendFarmB(c.s.vid, t.targetId, tpl.b); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
-        } catch (e) { did = false; continue; }   // origem sem tropa / fora de alcance -> tenta a próxima
+        } catch (e) { did = false; errs++; continue; }   // servidor recusou (origem já tinha tropa) -> pode ser bloqueio/bot-check
         if (did) { avail.light = Math.max(0, (avail.light || 0) - estCL); usedName = c.s.name; usedDist = c.d; count++; cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break; }
       }
       if (did) { sent[t.coord] = now; pendingCoords.add(t.coord); pushLog('Saque: ' + usedName + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (mode !== 'c' ? ' ×' + qty : '') + ' · ' + (Math.round(usedDist * 10) / 10) + ' campos', 'ok', 'farm'); }
@@ -1012,6 +1013,17 @@
     if (skip.pend) parts.push(skip.pend + ' já c/ ataque a caminho');
     if (skip.norep) parts.push(skip.norep + ' sem relatório');
     pushLog('Saque: ' + parts.join(' · '), '', 'farm');
+    // Detecção de BLOQUEIO por efeito (serve pra pegar bot-check enquanto você está AFK): se tentou
+    // enviar de origens que TINHAM tropa e o servidor recusou tudo (0 enviados, vários erros), é quase
+    // certo que a conta travou (verificação/bot-check). Dispara o mesmo alerta (ntfy) pra você voltar.
+    if (count === 0 && errs >= 3) {
+      _farmStuck++;
+      if (_farmStuck >= 2) {
+        pushLog('Saque: ' + errs + ' envios recusados seguidos e 0 concluídos — provável verificação/bloqueio. Volte ao PC.', 'err', 'farm');
+        if (config.captcha && config.captcha.enabled) fireCaptchaNotification('travado:saque(' + errs + ')', false);
+        _farmStuck = 0;
+      }
+    } else { _farmStuck = 0; }
     Object.keys(sent).forEach((r) => { if (now - sent[r] > 12 * 3600 * 1000) delete sent[r]; });
     Object.keys(defended).forEach((r) => { if (now - defended[r] > 12 * 3600 * 1000) delete defended[r]; });
     cfg.sentReports = sent; cfg.defended = defended;

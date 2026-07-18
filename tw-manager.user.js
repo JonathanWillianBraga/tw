@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.52.0
+// @version      9.53.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.52.0';
+  const VERSION = '9.53.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -151,7 +151,13 @@
     history: {},
     historyDays: 90,
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), reservations: {} });
+  const defDesviar = () => ({
+    keepSpy: true,        // deixar exploradores em casa (pra farmar/monitorar)
+    keepKnight: false,    // deixar paladino
+    cancelOffsetMs: 5000, // cancelar N ms APÓS o ataque bater (buffer de segurança)
+    pending: [],          // [{ id, vid, supportVid, supportCoord, cmdId, cancelAt, incomingArriveAt, state, err }]
+  });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -319,6 +325,11 @@
     if (!c.units) c.units = defUnits();
     if (!c.units.history || typeof c.units.history !== 'object') c.units.history = {};
     if (c.units.historyDays == null) c.units.historyDays = 90;
+    if (!c.desviar) c.desviar = defDesviar();
+    if (c.desviar.keepSpy == null) c.desviar.keepSpy = true;
+    if (c.desviar.keepKnight == null) c.desviar.keepKnight = false;
+    if (c.desviar.cancelOffsetMs == null) c.desviar.cancelOffsetMs = 5000;
+    if (!Array.isArray(c.desviar.pending)) c.desviar.pending = [];
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -4094,7 +4105,248 @@
     document.addEventListener('mouseup', () => { drag = false; });
   }
 
+  // ==================== DESVIAR (esvaziar aldeia com apoio-fantasma) ====================
+  // Botão em cada linha de incoming: envia todas as tropas (menos exploradores) como APOIO pra
+  // aldeia mais próxima e agenda o CANCELAMENTO desse apoio pra logo após o ataque bater.
+  // Tropas em rota de retorno estão seguras — o inimigo saqueia aldeia vazia.
+
+  // Helpers -----------------------------------------------------------------
+  const desviarCoordDist = (a, b) => { const [ax, ay] = a.split('|').map(Number); const [bx, by] = b.split('|').map(Number); return Math.hypot(ax - bx, ay - by); };
+
+  async function pickNearestOwnVillage(originVid) {
+    const vils = await getAllVillages();
+    const origin = vils.find((v) => String(v.vid) === String(originVid));
+    if (!origin || !origin.coord) throw new Error('aldeia origem sem coord (' + originVid + ')');
+    let best = null, bestD = Infinity;
+    vils.forEach((v) => {
+      if (String(v.vid) === String(originVid)) return;
+      if (!v.coord) return;
+      const d = desviarCoordDist(origin.coord, v.coord);
+      if (d < bestD) { bestD = d; best = v; }
+    });
+    if (!best) throw new Error('nenhuma outra aldeia sua encontrada');
+    return best;   // { vid, name, coord }
+  }
+
+  // Depois de enviar o apoio, procura o cmd_id do apoio recém-saído da aldeia originVid.
+  // Estratégia: lê /screen=place&mode=units da origem e pega comando "out" mais recente cujo
+  // destino bate com o coord esperado. Se o servidor não expõe cmd_id lá, cai pro overview.
+  async function findLatestSupportCommand(originVid, targetCoord) {
+    try {
+      // Tentativa 1: overview_villages&mode=commands na origem (mais confiável)
+      const res = await fetch('/game.php?village=' + originVid + '&screen=overview_villages&mode=commands&page=-1&_=' + Date.now(),
+        { credentials: 'include', cache: 'no-store' });
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      // Cada comando tem link tipo /game.php?...&screen=info_command&id=NNN
+      let bestId = null, bestTs = -Infinity;
+      doc.querySelectorAll('a[href*="screen=info_command"]').forEach((a) => {
+        const href = a.getAttribute('href') || '';
+        const idm = href.match(/[?&]id=(\d+)/); if (!idm) return;
+        const id = idm[1];
+        const row = a.closest('tr'); if (!row) return;
+        // Confirma que destino é o targetCoord
+        const txt = row.textContent || '';
+        if (targetCoord && txt.indexOf(targetCoord) < 0) return;
+        // Ignora comandos que já são "return" (retorno) — só queremos o support outgoing
+        if (row.querySelector('img[src*="return"]')) return;
+        // pega ts do timer se possível — senão usa maior id como proxy (id cresce com o tempo)
+        const idNum = parseInt(id, 10);
+        if (idNum > bestTs) { bestTs = idNum; bestId = id; }
+      });
+      return bestId;
+    } catch (e) { return null; }
+  }
+
+  async function cancelCommand(vid, cmdId) {
+    // Tentativa 1: GET com action=cancel (formato mais comum no TW)
+    try {
+      const url = '/game.php?village=' + vid + '&screen=info_command&id=' + cmdId + '&action=cancel&h=' + window.game_data.csrf;
+      const r = await fetch(url, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
+      if (r.ok) return true;
+    } catch (e) {}
+    // Fallback: POST simples
+    try {
+      const p = new URLSearchParams(); p.set('h', window.game_data.csrf);
+      const r = await fetch('/game.php?village=' + vid + '&screen=info_command&id=' + cmdId + '&action=cancel',
+        { method: 'POST', credentials: 'include', body: p.toString() });
+      return r.ok;
+    } catch (e) { return false; }
+  }
+
+  function scheduleDesviarCancel(item) {
+    const delay = Math.max(0, item.cancelAt - serverNow());
+    setTimeout(async () => {
+      const cur = (config.desviar.pending || []).find((x) => x.id === item.id);
+      if (!cur || cur.state !== 'scheduled') return;
+      try {
+        const ok = await cancelCommand(cur.vid, cur.cmdId);
+        cur.state = ok ? 'canceled' : 'failed';
+        cur.err = ok ? '' : 'cancel HTTP falhou';
+      } catch (e) { cur.state = 'failed'; cur.err = e.message || String(e); }
+      save();
+      pushLog('🚨 Desvio ' + (cur.state === 'canceled' ? 'OK' : 'FALHOU') + ' — vid ' + cur.vid + ' cmd ' + cur.cmdId + (cur.err ? ' (' + cur.err + ')' : ''), cur.state === 'canceled' ? 'ok' : 'err', 'desv');
+      desviarRefreshRowStates();
+    }, delay);
+  }
+
+  // Motor principal
+  async function desviarAldeia(originVid, incomingArriveMs, destinoVid) {
+    try {
+      let destino;
+      if (destinoVid) {
+        const vils = await getAllVillages();
+        destino = vils.find((v) => String(v.vid) === String(destinoVid));
+      } else {
+        destino = await pickNearestOwnVillage(originVid);
+      }
+      if (!destino || !destino.coord) throw new Error('destino sem coord');
+      const [dx, dy] = destino.coord.split('|');
+
+      const state = await getVillageState(originVid);
+      const amounts = {};
+      UNITS.forEach(([u]) => {
+        if (u === 'spy' && config.desviar.keepSpy) return;
+        if (u === 'knight' && config.desviar.keepKnight) return;
+        if (u === 'snob') return;
+        const n = (state.avail && state.avail[u]) || 0;
+        if (n > 0) amounts[u] = n;
+      });
+      if (!Object.keys(amounts).length) throw new Error('sem tropas em casa pra desviar');
+
+      pushLog('🚨 Desviando aldeia ' + originVid + ' → apoio ' + destino.coord + ' · ' + Object.entries(amounts).map(([u, n]) => n + ' ' + u).join(', '), '', 'desv');
+
+      await sendAttack(originVid, dx, dy, amounts, 'support');
+      await sleep(700);   // dá tempo do server registrar o cmd
+      const cmdId = await findLatestSupportCommand(originVid, destino.coord);
+      if (!cmdId) throw new Error('apoio saiu mas cmd_id não encontrado — cancele manualmente se precisar');
+
+      const cancelAt = incomingArriveMs + (config.desviar.cancelOffsetMs || 5000);
+      const item = { id: 'd' + Date.now() + Math.random().toString(36).slice(2, 6),
+                     vid: String(originVid), supportVid: String(destino.vid), supportCoord: destino.coord,
+                     cmdId: cmdId, cancelAt: cancelAt, incomingArriveAt: incomingArriveMs,
+                     state: 'scheduled', err: '' };
+      config.desviar.pending.push(item);
+      save();
+      scheduleDesviarCancel(item);
+      pushLog('🚨 Desvio armado ✓ cmd ' + cmdId + ' · cancel em ' + new Date(cancelAt).toLocaleTimeString(), 'ok', 'desv');
+      desviarRefreshRowStates();
+      return item;
+    } catch (e) {
+      pushLog('🚨 Desvio FALHOU: ' + (e.message || e), 'err', 'desv');
+      throw e;
+    }
+  }
+
+  // UI ---- injeção na tela de incomings ----
+  const DESV_ROW_COLORS = {
+    scheduled: 'rgba(140,220,140,.35)',   // verde claro
+    canceling: 'rgba(255,225,120,.35)',   // amarelo
+    canceled:  'rgba(180,180,180,.25)',   // cinza
+    failed:    'rgba(255,120,120,.30)',   // vermelho suave
+  };
+
+  function desviarFindPending(originVid, arriveMs) {
+    return (config.desviar.pending || []).find((p) => String(p.vid) === String(originVid) && Math.abs((p.incomingArriveAt || 0) - (arriveMs || 0)) < 2000);
+  }
+
+  function desviarRefreshRowStates() {
+    document.querySelectorAll('tr[data-twmgr-desv-vid]').forEach((tr) => {
+      const vid = tr.getAttribute('data-twmgr-desv-vid');
+      const arriveMs = parseInt(tr.getAttribute('data-twmgr-desv-arr'), 10);
+      const pend = desviarFindPending(vid, arriveMs);
+      const btn = tr.querySelector('.twmgr-desviar-btn'); if (!btn) return;
+      if (!pend) { tr.style.background = ''; btn.textContent = '🔄 Desviar'; btn.disabled = false; return; }
+      tr.style.background = DESV_ROW_COLORS[pend.state] || '';
+      const label = { scheduled: '✓ armado', canceling: '⏳ cancelando', canceled: '✓ cancelado', failed: '✗ falhou' }[pend.state] || pend.state;
+      btn.textContent = label;
+      btn.disabled = pend.state !== 'failed';   // permite re-tentar se falhou
+    });
+  }
+
+  // Parseia horário de chegada da coluna "Chegada" da tabela do TW.
+  // Formatos: "hoje às 14:06:31:584" ou "amanhã às 02:05:31:197" ou "20/07/2026 às 15:30:00".
+  function desviarParseArriveAt(text) {
+    if (!text) return 0;
+    const clean = text.replace(/\s+/g, ' ').trim();
+    // extrai HH:MM:SS(:mmm)?
+    const m = clean.match(/(\d{1,2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/);
+    if (!m) return 0;
+    const [_, hh, mm, ss, ms] = m;
+    const now = new Date();
+    const d = new Date(now);
+    d.setHours(+hh, +mm, +ss, ms ? +ms : 0);
+    if (/amanh[aã]/i.test(clean)) d.setDate(d.getDate() + 1);
+    else if (/hoje/i.test(clean)) {
+      if (d.getTime() < now.getTime() - 60 * 60 * 1000) d.setDate(d.getDate() + 1);   // rollover meia-noite
+    } else {
+      // data explícita DD/MM/YYYY
+      const dm = clean.match(/(\d{1,2})[/](\d{1,2})[/](\d{4})/);
+      if (dm) { d.setFullYear(+dm[3], +dm[2] - 1, +dm[1]); }
+    }
+    return d.getTime();
+  }
+
+  function enhanceIncomingsPage() {
+    const gd = window.game_data;
+    if (!gd || gd.screen !== 'overview_villages' || gd.mode !== 'incomings') return;
+    const table = document.getElementById('incomings_table'); if (!table) return;
+    if (table.hasAttribute('data-twmgr-desv-enhanced')) return;
+    table.setAttribute('data-twmgr-desv-enhanced', '1');
+
+    // Adiciona header
+    const thead = table.querySelector('tr:first-child'); if (!thead) return;
+    const th = document.createElement('th'); th.textContent = 'Desviar'; th.style.whiteSpace = 'nowrap';
+    thead.appendChild(th);
+
+    // Adiciona célula em cada linha de incoming
+    table.querySelectorAll('tr').forEach((tr) => {
+      if (tr === thead) return;
+      // Ignora linhas de rodapé (têm colspan)
+      if (tr.querySelector('th[colspan], td[colspan]')) { const td = document.createElement('td'); tr.appendChild(td); return; }
+      // Destino: primeira quickedit com data-id na coluna Destino
+      const destSpan = tr.querySelector('.quickedit[data-id]'); if (!destSpan) { const td = document.createElement('td'); tr.appendChild(td); return; }
+      const vid = destSpan.getAttribute('data-id');
+      // Chegada: procurar a última td com texto tipo "hoje às HH:MM:SS"
+      let arriveMs = 0;
+      const tds = tr.querySelectorAll('td');
+      for (const td of tds) {
+        const t = td.textContent || '';
+        if (/(hoje|amanh[aã]|\d{1,2}[/]\d{1,2}[/]\d{4}) [aàáç]s /i.test(t) && /:\d{2}/.test(t)) { arriveMs = desviarParseArriveAt(t); break; }
+      }
+      tr.setAttribute('data-twmgr-desv-vid', vid);
+      tr.setAttribute('data-twmgr-desv-arr', String(arriveMs));
+
+      const td = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.className = 'btn twmgr-desviar-btn';
+      btn.textContent = '🔄 Desviar';
+      btn.style.whiteSpace = 'nowrap';
+      btn.addEventListener('click', async () => {
+        if (btn.disabled) return;
+        btn.disabled = true; btn.textContent = '⏳ enviando…';
+        try { await desviarAldeia(vid, arriveMs); }
+        catch (e) { btn.disabled = false; btn.textContent = '🔄 Desviar'; alert('Desvio falhou: ' + (e.message || e)); }
+      });
+      td.appendChild(btn);
+      tr.appendChild(td);
+    });
+
+    // Aplica cores conforme estado persistido
+    desviarRefreshRowStates();
+    // Refresh periódico das cores (o estado muda quando o cancel dispara)
+    setInterval(desviarRefreshRowStates, 2000);
+  }
+
+  // Retomada pós reload: pra cada pending com state='scheduled', reagenda o cancel
+  function desviarResumeAll() {
+    (config.desviar.pending || []).forEach((item) => {
+      if (item.state === 'scheduled') scheduleDesviarCancel(item);
+    });
+  }
+
   buildUI();
   try { enhanceUnitsPage(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
   try { unitsScheduleAuto(); } catch (e) { /* silencioso: scheduler é opcional */ }
+  try { enhanceIncomingsPage(); } catch (e) { /* silencioso */ }
+  try { desviarResumeAll(); } catch (e) { /* silencioso */ }
 })();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.54.2
+// @version      9.54.3
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.54.2';
+  const VERSION = '9.54.3';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -4380,11 +4380,14 @@
   async function loadMapData(force) {
     const age = Date.now() - (config.mapUi.dataCachedAt || 0);
     if (!force && _mapVilCache && age < 6 * 3600 * 1000) return;
-    try {
-      const [rV, rP] = await Promise.all([
-        fetch('/map/village.txt', { credentials: 'include', cache: 'no-store' }).then((r) => r.text()),
-        fetch('/map/player.txt', { credentials: 'include', cache: 'no-store' }).then((r) => r.text()),
-      ]);
+    // Cada fetch independente — village.txt é essencial, player.txt é opcional (só distingue tribo/inimigo).
+    // TW às vezes rate-limita player.txt (429) — não pode bloquear a feature.
+    const fetchTxt = async (url) => {
+      try { const r = await fetch(url, { credentials: 'include', cache: 'no-store' }); if (!r.ok) return null; return await r.text(); }
+      catch (e) { return null; }
+    };
+    const [rV, rP] = await Promise.all([fetchTxt('/map/village.txt'), fetchTxt('/map/player.txt')]);
+    if (rV) {
       const vils = new Map();
       rV.split('\n').forEach((line) => {
         if (!line.trim()) return;
@@ -4393,6 +4396,11 @@
         if (p.length < 6) return;
         vils.set(p[0], { x: +p[2], y: +p[3], playerId: p[4], points: parseInt(p[5], 10) || 0 });
       });
+      _mapVilCache = vils;
+      config.mapUi.dataCachedAt = Date.now();
+      save();
+    }
+    if (rP) {
       const players = new Map();
       rP.split('\n').forEach((line) => {
         if (!line.trim()) return;
@@ -4401,11 +4409,10 @@
         if (p.length < 4) return;
         players.set(p[0], { name: decodeURIComponent(p[1] || '').replace(/\+/g, ' '), tribeId: p[2] });
       });
-      _mapVilCache = vils;
       _mapPlayerCache = players;
-      config.mapUi.dataCachedAt = Date.now();
-      save();
-    } catch (e) { /* silencioso */ }
+    }
+    if (!rV) console.warn('[TWMgr Mapa] village.txt falhou — feature desabilitada até a proxima recarga');
+    if (!rP) console.warn('[TWMgr Mapa] player.txt falhou (rate limit?) — sem distincao entre tribo/inimigo, categoriza como enemy');
   }
 
   // Categoria da aldeia baseado no dono
@@ -4432,15 +4439,16 @@
   function mapEnsureOverlay() {
     if (_mapOverlay && document.body.contains(_mapOverlay)) return _mapOverlay;
     const T = window.TWMap;
-    if (!T || !T.map || !T.map.el) return null;
-    const parent = T.map.el;
-    // Wrapper posicionado dentro do map.el pra o canvas herdar a origem certa.
+    // Prefere TWMap.map.el, mas cai para #map_container / #map se não for Element válido.
+    let parent = T && T.map && T.map.el;
+    if (!(parent instanceof Element)) parent = document.getElementById('map_container');
+    if (!(parent instanceof Element)) parent = document.getElementById('map');
+    if (!(parent instanceof Element)) { console.warn('[TWMgr Mapa] nenhum container Element encontrado pro overlay'); return null; }
     const c = document.createElement('canvas');
     c.id = 'twmgr-map-overlay';
     c.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:9998';
-    // getComputedStyle pra posição segura
     if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
-    const size = T.map.size || [parent.clientWidth || 800, parent.clientHeight || 600];
+    const size = (T && T.map && T.map.size) || [parent.clientWidth || 800, parent.clientHeight || 600];
     c.width = size[0]; c.height = size[1];
     c.style.width = size[0] + 'px'; c.style.height = size[1] + 'px';
     parent.appendChild(c);
@@ -4536,7 +4544,7 @@
     }
   }
 
-  function mapApplyFilters() { mapCanvasRedraw(); }
+  function mapApplyFilters() { try { mapCanvasRedraw(); } catch (e) { console.warn('[TWMgr Mapa] redraw falhou:', e.message || e); } }
 
   function mapBuildPanel() {
     if (document.getElementById('twmgr-map-panel')) return;
@@ -4614,10 +4622,10 @@
     });
     const ok = await waitTWMap();
     if (!ok) { console.warn('[TWMgr Mapa] TWMap.map.pixelByCoord não disponível — filtros não funcionarão'); return; }
-    mapCanvasRedraw();
+    mapApplyFilters();
     // Redraw periódico (250ms) — cobre scroll/zoom sem custo perceptivo (só itera aldeias no viewport)
     clearInterval(_mapRedrawTimer);
-    _mapRedrawTimer = setInterval(mapCanvasRedraw, 250);
+    _mapRedrawTimer = setInterval(mapApplyFilters, 250);
     // Hook opcional: se o TWMap dispara evento de setPos, redesenha imediato
     try {
       const origSetPos = window.TWMap.map.setPos;

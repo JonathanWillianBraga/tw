@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.53.0
+// @version      9.54.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.53.0';
+  const VERSION = '9.54.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -157,7 +157,22 @@
     cancelOffsetMs: 5000, // cancelar N ms APÓS o ataque bater (buffer de segurança)
     pending: [],          // [{ id, vid, supportVid, supportCoord, cmdId, cancelAt, incomingArriveAt, state, err }]
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), reservations: {} });
+  const defMapUi = () => ({
+    // Filtros visuais persistidos entre visitas ao screen=map
+    collapsed: false,          // painel colapsado?
+    show: {
+      mine: true,              // aldeias próprias
+      tribe: true,             // aliadas da minha tribo
+      enemy: true,             // outros jogadores (fora da tribo)
+      barb: true,              // bárbaros
+    },
+    pointsMin: 0,              // filtro min de pontos (0 = sem mínimo)
+    pointsMax: 0,              // filtro max (0 = sem máximo)
+    showBadge: true,           // exibir badge de pontos em cada aldeia
+    dimOpacity: 0.15,          // opacidade das aldeias filtradas
+    dataCachedAt: 0,           // ms do último load do village.txt
+  });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -330,6 +345,15 @@
     if (c.desviar.keepKnight == null) c.desviar.keepKnight = false;
     if (c.desviar.cancelOffsetMs == null) c.desviar.cancelOffsetMs = 5000;
     if (!Array.isArray(c.desviar.pending)) c.desviar.pending = [];
+    if (!c.mapUi) c.mapUi = defMapUi();
+    if (typeof c.mapUi.collapsed !== 'boolean') c.mapUi.collapsed = false;
+    if (!c.mapUi.show || typeof c.mapUi.show !== 'object') c.mapUi.show = defMapUi().show;
+    ['mine','tribe','enemy','barb'].forEach((k) => { if (typeof c.mapUi.show[k] !== 'boolean') c.mapUi.show[k] = true; });
+    if (c.mapUi.pointsMin == null) c.mapUi.pointsMin = 0;
+    if (c.mapUi.pointsMax == null) c.mapUi.pointsMax = 0;
+    if (typeof c.mapUi.showBadge !== 'boolean') c.mapUi.showBadge = true;
+    if (c.mapUi.dimOpacity == null) c.mapUi.dimOpacity = 0.15;
+    if (c.mapUi.dataCachedAt == null) c.mapUi.dataCachedAt = 0;
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -4344,9 +4368,184 @@
     });
   }
 
+  // ==================== MAPA — filtros e badges na tela do jogo ====================
+  // Enriquece screen=map com painel de controle (só bárbaros / só minhas / só tribo / filtro por
+  // pontos), atenua aldeias fora do filtro (opacity, sem quebrar clique) e badge de pontos.
+
+  let _mapVilCache = null;        // Map: vid -> { x, y, playerId, points }
+  let _mapPlayerCache = null;     // Map: playerId -> { name, tribeId }
+  const MY_PLAYER_ID = (window.game_data && window.game_data.player && String(window.game_data.player.id)) || '';
+  const MY_TRIBE_ID = (window.game_data && window.game_data.player && String(window.game_data.player.ally)) || '0';
+
+  async function loadMapData(force) {
+    const age = Date.now() - (config.mapUi.dataCachedAt || 0);
+    if (!force && _mapVilCache && age < 6 * 3600 * 1000) return;
+    try {
+      const [rV, rP] = await Promise.all([
+        fetch('/map/village.txt', { credentials: 'include', cache: 'no-store' }).then((r) => r.text()),
+        fetch('/map/player.txt', { credentials: 'include', cache: 'no-store' }).then((r) => r.text()),
+      ]);
+      const vils = new Map();
+      rV.split('\n').forEach((line) => {
+        if (!line.trim()) return;
+        // Formato: id,name,x,y,player_id,points,rank
+        const p = line.split(',');
+        if (p.length < 6) return;
+        vils.set(p[0], { x: +p[2], y: +p[3], playerId: p[4], points: parseInt(p[5], 10) || 0 });
+      });
+      const players = new Map();
+      rP.split('\n').forEach((line) => {
+        if (!line.trim()) return;
+        // Formato: id,name,tribe_id,villages,points,rank
+        const p = line.split(',');
+        if (p.length < 4) return;
+        players.set(p[0], { name: decodeURIComponent(p[1] || '').replace(/\+/g, ' '), tribeId: p[2] });
+      });
+      _mapVilCache = vils;
+      _mapPlayerCache = players;
+      config.mapUi.dataCachedAt = Date.now();
+      save();
+    } catch (e) { /* silencioso */ }
+  }
+
+  // Categoria da aldeia baseado no dono
+  function mapCategoryOf(vil) {
+    if (!vil) return 'unknown';
+    if (vil.playerId === '0' || !vil.playerId) return 'barb';
+    if (vil.playerId === MY_PLAYER_ID) return 'mine';
+    const player = _mapPlayerCache && _mapPlayerCache.get(vil.playerId);
+    if (player && player.tribeId && player.tribeId !== '0' && player.tribeId === MY_TRIBE_ID) return 'tribe';
+    return 'enemy';
+  }
+
+  const MAP_CAT_LABELS = { mine: '🟢 Minha', tribe: '🔵 Tribo', enemy: '🔴 Inimigo', barb: '⚪ Bárbaro' };
+
+  // Passa por cada .village visível no mapa e aplica opacity/badge
+  function mapApplyFilters() {
+    if (!_mapVilCache) return;
+    const cfg = config.mapUi;
+    const dim = cfg.dimOpacity != null ? cfg.dimOpacity : 0.15;
+    const pMin = cfg.pointsMin || 0;
+    const pMax = cfg.pointsMax || 0;   // 0 = sem máximo
+    const counts = { mine: 0, tribe: 0, enemy: 0, barb: 0, visible: 0, hidden: 0 };
+    document.querySelectorAll('#map_container .village, #map .village').forEach((el) => {
+      // vid pode estar em data-id, id="map_village_XXX" ou class
+      let vid = el.getAttribute('data-id');
+      if (!vid) { const m = (el.id || '').match(/(\d+)/); if (m) vid = m[1]; }
+      if (!vid) { const m2 = (el.className || '').match(/village_(\d+)/); if (m2) vid = m2[1]; }
+      if (!vid) return;
+      const vil = _mapVilCache.get(String(vid));
+      const cat = mapCategoryOf(vil);
+      const showCat = cfg.show[cat] !== false;
+      const points = vil ? vil.points : 0;
+      const passesPoints = (!pMin || points >= pMin) && (!pMax || points <= pMax);
+      const visible = showCat && passesPoints;
+      el.style.opacity = visible ? '' : String(dim);
+      el.style.transition = 'opacity 0.15s';
+      if (visible) counts.visible++; else counts.hidden++;
+      counts[cat] = (counts[cat] || 0) + (visible ? 1 : 0);
+      // Badge de pontos
+      let badge = el.querySelector('.twmgr-map-badge');
+      if (cfg.showBadge && visible && vil) {
+        if (!badge) {
+          badge = document.createElement('div');
+          badge.className = 'twmgr-map-badge';
+          badge.style.cssText = 'position:absolute;bottom:0;right:0;background:rgba(0,0,0,.75);color:#ffd76a;font-size:9px;padding:0 2px;border-radius:2px;line-height:1.2;pointer-events:none;font-family:Verdana,sans-serif;z-index:5';
+          el.style.position = el.style.position || 'relative';
+          el.appendChild(badge);
+        }
+        const p = vil.points;
+        badge.textContent = p >= 1000 ? (Math.round(p / 100) / 10).toFixed(1) + 'k' : String(p);
+      } else if (badge) {
+        badge.remove();
+      }
+    });
+    // Atualiza contadores no painel
+    const cnt = document.getElementById('twmgr-map-counts');
+    if (cnt) cnt.textContent = counts.visible + ' visíveis · 🟢' + (counts.mine||0) + ' 🔵' + (counts.tribe||0) + ' 🔴' + (counts.enemy||0) + ' ⚪' + (counts.barb||0);
+  }
+
+  function mapBuildPanel() {
+    if (document.getElementById('twmgr-map-panel')) return;
+    const cfg = config.mapUi;
+    const panel = document.createElement('div');
+    panel.id = 'twmgr-map-panel';
+    panel.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:10000;background:linear-gradient(180deg,#f4e4bc,#e8d29a);border:1px solid #7d510a;border-radius:8px;padding:8px 10px;font-size:11px;color:#3b2914;box-shadow:0 2px 6px rgba(0,0,0,.35);min-width:220px;font-family:Verdana,sans-serif';
+    const check = (id, label, checked) => '<label style="display:flex;align-items:center;gap:6px;margin:2px 0;cursor:pointer"><input id="' + id + '" type="checkbox"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
+    panel.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+        '<b style="color:#5a3c0f">🗺️ TW Manager · Mapa</b>' +
+        '<span id="twmgr-map-collapse" style="cursor:pointer;padding:0 6px;color:#5a3c0f">' + (cfg.collapsed ? '▲' : '▼') + '</span>' +
+      '</div>' +
+      '<div id="twmgr-map-body" style="' + (cfg.collapsed ? 'display:none' : '') + '">' +
+        check('twmgr-map-show-mine', '🟢 Minhas aldeias', cfg.show.mine) +
+        check('twmgr-map-show-tribe', '🔵 Tribo', cfg.show.tribe) +
+        check('twmgr-map-show-enemy', '🔴 Inimigos', cfg.show.enemy) +
+        check('twmgr-map-show-barb', '⚪ Bárbaros', cfg.show.barb) +
+        '<div style="margin:6px 0;border-top:1px dashed #b89a5a;padding-top:6px">Pontos entre:</div>' +
+        '<div style="display:flex;gap:4px;align-items:center">' +
+          '<input id="twmgr-map-pmin" type="number" min="0" placeholder="mín" value="' + (cfg.pointsMin || '') + '" style="width:60px;padding:2px 4px;font-size:11px">' +
+          '<span>–</span>' +
+          '<input id="twmgr-map-pmax" type="number" min="0" placeholder="máx" value="' + (cfg.pointsMax || '') + '" style="width:60px;padding:2px 4px;font-size:11px">' +
+        '</div>' +
+        check('twmgr-map-badge', 'Mostrar pontos na aldeia', cfg.showBadge) +
+        '<div style="margin-top:6px;border-top:1px dashed #b89a5a;padding-top:6px;font-size:10px;color:#5a3c0f">' +
+          '<div id="twmgr-map-counts">—</div>' +
+          '<div style="margin-top:4px;display:flex;justify-content:space-between;align-items:center">' +
+            '<span style="color:#8b6d3f;font-size:9px">cache: ' + (cfg.dataCachedAt ? new Date(cfg.dataCachedAt).toLocaleTimeString() : '—') + '</span>' +
+            '<button id="twmgr-map-reload" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#e8d29a;cursor:pointer;color:#3b2914">🔄 recarregar</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+
+    // Wire eventos
+    const save_ = () => { save(); mapApplyFilters(); };
+    document.getElementById('twmgr-map-collapse').addEventListener('click', () => {
+      cfg.collapsed = !cfg.collapsed;
+      document.getElementById('twmgr-map-body').style.display = cfg.collapsed ? 'none' : '';
+      document.getElementById('twmgr-map-collapse').textContent = cfg.collapsed ? '▲' : '▼';
+      save();
+    });
+    ['mine','tribe','enemy','barb'].forEach((k) => {
+      document.getElementById('twmgr-map-show-' + k).addEventListener('change', (e) => {
+        cfg.show[k] = e.target.checked; save_();
+      });
+    });
+    document.getElementById('twmgr-map-pmin').addEventListener('change', (e) => { cfg.pointsMin = parseInt(e.target.value, 10) || 0; save_(); });
+    document.getElementById('twmgr-map-pmax').addEventListener('change', (e) => { cfg.pointsMax = parseInt(e.target.value, 10) || 0; save_(); });
+    document.getElementById('twmgr-map-badge').addEventListener('change', (e) => { cfg.showBadge = e.target.checked; save_(); });
+    document.getElementById('twmgr-map-reload').addEventListener('click', async () => {
+      const btn = document.getElementById('twmgr-map-reload');
+      btn.disabled = true; btn.textContent = '⏳ carregando…';
+      await loadMapData(true);
+      btn.disabled = false; btn.textContent = '🔄 recarregar';
+      mapApplyFilters();
+    });
+  }
+
+  async function enhanceMapPage() {
+    const gd = window.game_data;
+    if (!gd || gd.screen !== 'map') return;
+    await loadMapData(false);
+    mapBuildPanel();
+    mapApplyFilters();
+    // O TW re-renderiza aldeias ao scrollar/zoom — MutationObserver com debounce mantém badges/opacity
+    let debounce = 0;
+    const container = document.getElementById('map_container') || document.getElementById('map') || document.body;
+    try {
+      const obs = new MutationObserver(() => {
+        clearTimeout(debounce);
+        debounce = setTimeout(mapApplyFilters, 200);
+      });
+      obs.observe(container, { childList: true, subtree: true });
+    } catch (e) {}
+  }
+
   buildUI();
   try { enhanceUnitsPage(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
   try { unitsScheduleAuto(); } catch (e) { /* silencioso: scheduler é opcional */ }
   try { enhanceIncomingsPage(); } catch (e) { /* silencioso */ }
   try { desviarResumeAll(); } catch (e) { /* silencioso */ }
+  try { enhanceMapPage(); } catch (e) { /* silencioso */ }
 })();

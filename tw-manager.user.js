@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.54.4
+// @version      9.54.5
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.54.4';
+  const VERSION = '9.54.5';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -4489,24 +4489,42 @@
     const pMax = cfg.pointsMax || 0;
     const [tw, th] = mapTileSize();
 
-    // TWMap.pos é a coord central. Só itera aldeias no raio do viewport pra evitar 53k iterações.
-    const pos = T.pos || [500, 500];
-    const rangeX = Math.ceil((overlay.width / tw) / 2) + 3;
-    const rangeY = Math.ceil((overlay.height / th) / 2) + 3;
+    // pixelByCoord retorna pixels no espaço MUNDO. TWMap.map.pos é o offset do canvas nesse espaço.
+    // pixel_canvas = pixelByCoord(x,y) - TWMap.map.pos
+    const mapOffset = T.map.pos || [0, 0];
+
+    // Usa getViewport pra saber quais tiles estão visíveis (mais confiável que range manual)
+    let xMin, xMax, yMin, yMax;
+    try {
+      const vp = T.map.getViewport();
+      xMin = vp.top_left_tile.coord_x - 2;
+      xMax = vp.bottom_right_tile.coord_x + 2;
+      yMin = vp.top_left_tile.coord_y - 2;
+      yMax = vp.bottom_right_tile.coord_y + 2;
+    } catch (e) {
+      // Fallback: usa TWMap.pos + range aproximado
+      const pos = T.pos || [500, 500];
+      const rangeX = Math.ceil((overlay.width / tw) / 2) + 3;
+      const rangeY = Math.ceil((overlay.height / th) / 2) + 3;
+      xMin = pos[0] - rangeX; xMax = pos[0] + rangeX;
+      yMin = pos[1] - rangeY; yMax = pos[1] + rangeY;
+    }
 
     const counts = { mine: 0, tribe: 0, enemy: 0, barb: 0, visible: 0 };
     let drawn = 0;
 
     _mapVilCache.forEach((vil, vid) => {
-      if (Math.abs(vil.x - pos[0]) > rangeX || Math.abs(vil.y - pos[1]) > rangeY) return;
-      let px, py;
+      if (vil.x < xMin || vil.x > xMax || vil.y < yMin || vil.y > yMax) return;
+      let wx, wy;
       try {
         const p = T.map.pixelByCoord(vil.x, vil.y);
-        // pode retornar [x, y] ou {x, y}
-        if (Array.isArray(p)) { px = p[0]; py = p[1]; }
-        else if (p && typeof p === 'object') { px = p.x; py = p.y; }
+        if (Array.isArray(p)) { wx = p[0]; wy = p[1]; }
+        else if (p && typeof p === 'object') { wx = p.x; wy = p.y; }
         else return;
       } catch (e) { return; }
+      // Converte pixel-mundo -> pixel-canvas
+      const px = wx - mapOffset[0];
+      const py = wy - mapOffset[1];
       if (px < -tw || px > overlay.width + tw || py < -th || py > overlay.height + th) return;
 
       const cat = mapCategoryOf(vil);
@@ -4536,12 +4554,12 @@
     if (!_mapLoggedOnce) {
       _mapLoggedOnce = true;
       // eslint-disable-next-line no-console
-      console.log('[TWMgr Mapa] overlay canvas ativo · TWMap.pos:', pos, '· tileSize:', [tw, th], '· desenhadas no viewport:', drawn, '· cache total:', _mapVilCache.size);
+      console.log('[TWMgr Mapa] overlay canvas ativo · mapOffset:', mapOffset, '· viewport:', [xMin, yMin, xMax, yMax], '· tileSize:', [tw, th], '· desenhadas:', drawn, '· cache:', _mapVilCache.size);
     }
 
     const cnt = document.getElementById('twmgr-map-counts');
     if (cnt) {
-      if (drawn === 0) cnt.innerHTML = '<span style="color:#a52020">⚠ nada desenhado (TWMap.pos ou pixelByCoord falharam)</span>';
+      if (drawn === 0) cnt.innerHTML = '<span style="color:#a52020">⚠ 0 aldeias no viewport (ver console)</span>';
       else cnt.textContent = counts.visible + '/' + drawn + ' visíveis · 🟢' + (counts.mine||0) + ' 🔵' + (counts.tribe||0) + ' 🔴' + (counts.enemy||0) + ' ⚪' + (counts.barb||0);
     }
   }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.54.0
+// @version      9.54.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.54.0';
+  const VERSION = '9.54.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -4421,23 +4421,67 @@
   const MAP_CAT_LABELS = { mine: '🟢 Minha', tribe: '🔵 Tribo', enemy: '🔴 Inimigo', barb: '⚪ Bárbaro' };
 
   // Passa por cada .village visível no mapa e aplica opacity/badge
+  // Localiza elementos de aldeia no DOM do mapa. TW moderno usa canvas — as aldeias são desenhadas
+  // pelo próprio jogo. Mas existe uma layer de tooltips com IDs. Vou tentar VÁRIOS seletores.
+  function mapFindVillageElements() {
+    // Tentativas em ordem de compatibilidade
+    const seletores = [
+      '#map_container .village',
+      '#map .village',
+      '.village',
+      'div[id^="map_village_"]',
+      'div[class*="village_"]',
+      '#map_container div[data-id]',
+      '.map-village',
+      'a[href*="screen=info_village"]',   // fallback: links das aldeias (sempre existem no map)
+    ];
+    for (const sel of seletores) {
+      const els = document.querySelectorAll(sel);
+      if (els.length > 0) return { sel, els };
+    }
+    return { sel: null, els: [] };
+  }
+
+  function mapExtractVid(el) {
+    // 1) data-id direto
+    let vid = el.getAttribute && el.getAttribute('data-id');
+    if (vid && /^\d+$/.test(vid)) return vid;
+    // 2) id tipo map_village_123 ou village_123
+    const id = el.id || '';
+    let m = id.match(/village[_-]?(\d+)/i); if (m) return m[1];
+    // 3) className tipo "village_123"
+    const cls = (typeof el.className === 'string' ? el.className : '') || '';
+    m = cls.match(/village[_-]?(\d+)/i); if (m) return m[1];
+    // 4) href contendo id=NNN (para links)
+    const href = el.getAttribute && el.getAttribute('href');
+    if (href) { m = href.match(/[?&]id=(\d+)/); if (m) return m[1]; }
+    return null;
+  }
+
+  let _mapLoggedOnce = false;
+
   function mapApplyFilters() {
     if (!_mapVilCache) return;
     const cfg = config.mapUi;
     const dim = cfg.dimOpacity != null ? cfg.dimOpacity : 0.15;
     const pMin = cfg.pointsMin || 0;
-    const pMax = cfg.pointsMax || 0;   // 0 = sem máximo
-    const counts = { mine: 0, tribe: 0, enemy: 0, barb: 0, visible: 0, hidden: 0 };
-    document.querySelectorAll('#map_container .village, #map .village').forEach((el) => {
-      // vid pode estar em data-id, id="map_village_XXX" ou class
-      let vid = el.getAttribute('data-id');
-      if (!vid) { const m = (el.id || '').match(/(\d+)/); if (m) vid = m[1]; }
-      if (!vid) { const m2 = (el.className || '').match(/village_(\d+)/); if (m2) vid = m2[1]; }
+    const pMax = cfg.pointsMax || 0;
+    const counts = { mine: 0, tribe: 0, enemy: 0, barb: 0, visible: 0, hidden: 0, matched: 0 };
+    const found = mapFindVillageElements();
+    if (!_mapLoggedOnce) {
+      _mapLoggedOnce = true;
+      // eslint-disable-next-line no-console
+      console.log('[TWMgr Mapa] seletor usado:', found.sel, '· elementos DOM:', found.els.length, '· cache aldeias:', _mapVilCache && _mapVilCache.size);
+    }
+    found.els.forEach((el) => {
+      const vid = mapExtractVid(el);
       if (!vid) return;
       const vil = _mapVilCache.get(String(vid));
+      if (!vil) return;   // aldeia não conhecida no village.txt (raro, ignora)
+      counts.matched++;
       const cat = mapCategoryOf(vil);
       const showCat = cfg.show[cat] !== false;
-      const points = vil ? vil.points : 0;
+      const points = vil.points || 0;
       const passesPoints = (!pMin || points >= pMin) && (!pMax || points <= pMax);
       const visible = showCat && passesPoints;
       el.style.opacity = visible ? '' : String(dim);
@@ -4446,12 +4490,12 @@
       counts[cat] = (counts[cat] || 0) + (visible ? 1 : 0);
       // Badge de pontos
       let badge = el.querySelector('.twmgr-map-badge');
-      if (cfg.showBadge && visible && vil) {
+      if (cfg.showBadge && visible) {
         if (!badge) {
           badge = document.createElement('div');
           badge.className = 'twmgr-map-badge';
           badge.style.cssText = 'position:absolute;bottom:0;right:0;background:rgba(0,0,0,.75);color:#ffd76a;font-size:9px;padding:0 2px;border-radius:2px;line-height:1.2;pointer-events:none;font-family:Verdana,sans-serif;z-index:5';
-          el.style.position = el.style.position || 'relative';
+          if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
           el.appendChild(badge);
         }
         const p = vil.points;
@@ -4462,7 +4506,13 @@
     });
     // Atualiza contadores no painel
     const cnt = document.getElementById('twmgr-map-counts');
-    if (cnt) cnt.textContent = counts.visible + ' visíveis · 🟢' + (counts.mine||0) + ' 🔵' + (counts.tribe||0) + ' 🔴' + (counts.enemy||0) + ' ⚪' + (counts.barb||0);
+    if (cnt) {
+      if (counts.matched === 0) {
+        cnt.innerHTML = '<span style="color:#a52020">⚠ nenhuma aldeia detectada no DOM.<br>Este mundo usa mapa canvas (não DOM). Ver console.</span>';
+      } else {
+        cnt.textContent = counts.visible + '/' + counts.matched + ' visíveis · 🟢' + (counts.mine||0) + ' 🔵' + (counts.tribe||0) + ' 🔴' + (counts.enemy||0) + ' ⚪' + (counts.barb||0);
+      }
+    }
   }
 
   function mapBuildPanel() {

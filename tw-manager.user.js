@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.54.3
+// @version      9.54.4
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.54.3';
+  const VERSION = '9.54.4';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -4437,23 +4437,25 @@
   let _mapLoggedOnce = false;
 
   function mapEnsureOverlay() {
-    if (_mapOverlay && document.body.contains(_mapOverlay)) return _mapOverlay;
-    const T = window.TWMap;
-    // Prefere TWMap.map.el, mas cai para #map_container / #map se não for Element válido.
-    let parent = T && T.map && T.map.el;
-    if (!(parent instanceof Element)) parent = document.getElementById('map_container');
-    if (!(parent instanceof Element)) parent = document.getElementById('map');
-    if (!(parent instanceof Element)) { console.warn('[TWMgr Mapa] nenhum container Element encontrado pro overlay'); return null; }
-    const c = document.createElement('canvas');
-    c.id = 'twmgr-map-overlay';
-    c.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:9998';
-    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
-    const size = (T && T.map && T.map.size) || [parent.clientWidth || 800, parent.clientHeight || 600];
-    c.width = size[0]; c.height = size[1];
-    c.style.width = size[0] + 'px'; c.style.height = size[1] + 'px';
-    parent.appendChild(c);
-    _mapOverlay = c;
-    return c;
+    try {
+      if (_mapOverlay && document.body.contains(_mapOverlay)) return _mapOverlay;
+      const T = window.TWMap;
+      // Prefere TWMap.map.el, mas cai para #map_container / #map se não for Element válido.
+      let parent = T && T.map && T.map.el;
+      if (!(parent instanceof Element)) parent = document.getElementById('map_container');
+      if (!(parent instanceof Element)) parent = document.getElementById('map');
+      if (!(parent instanceof Element)) { console.warn('[TWMgr Mapa] nenhum container Element encontrado pro overlay'); return null; }
+      const c = document.createElement('canvas');
+      c.id = 'twmgr-map-overlay';
+      c.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:9998';
+      try { if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative'; } catch (e) {}
+      const size = (T && T.map && T.map.size) || [parent.clientWidth || 800, parent.clientHeight || 600];
+      c.width = size[0]; c.height = size[1];
+      c.style.width = size[0] + 'px'; c.style.height = size[1] + 'px';
+      parent.appendChild(c);
+      _mapOverlay = c;
+      return c;
+    } catch (e) { console.warn('[TWMgr Mapa] mapEnsureOverlay falhou:', e && e.message); return null; }
   }
 
   // Descobre tileSize (tamanho de cada aldeia em pixels). TW usa 53x47 tradicionalmente.

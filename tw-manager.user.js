@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.55.0
+// @version      9.55.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.55.0';
+  const VERSION = '9.55.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -992,7 +992,12 @@
       if (t.color === 'blue') {
         if (defended[t.reportId]) { skip.def++; continue; }
         let defTotal = 0; try { defTotal = await getReportDefenseTotal(t.reportId); } catch (e) {}
-        if (defTotal > 0) { defended[t.reportId] = now; skip.def++; continue; }
+        if (defTotal > 0) {
+          // Registra intel rico (usado depois no mapa) e ALERTA no log.
+          defended[t.reportId] = { at: now, coord: t.coord, x: tx, y: ty, defTotal: defTotal, wall: t.wall };
+          pushLog('⚠ ALERTA: ' + t.coord + ' tem ' + defTotal + ' tropa(s) de defesa (relatório azul) — registrado no intel', 'err', 'farm');
+          skip.def++; continue;
+        }
       }
       const cell = t._cell, mode = cell.mode, qty = Math.max(1, cell.qty || 1);
       const sum = (t.wood || 0) + (t.stone || 0) + (t.iron || 0);
@@ -1050,7 +1055,13 @@
       }
     } else { _farmZeroStreak = 0; }   // 0 por falta de CL/alcance/cooldown = normal, não é bloqueio
     Object.keys(sent).forEach((r) => { if (now - sent[r] > 12 * 3600 * 1000) delete sent[r]; });
-    Object.keys(defended).forEach((r) => { if (now - defended[r] > 12 * 3600 * 1000) delete defended[r]; });
+    // Retenção 30 dias — dados de defesa são intel útil pra guerra (relatório azul não muda tão rápido).
+    // Tolera formato antigo (number) e novo (object com .at).
+    Object.keys(defended).forEach((r) => {
+      const d = defended[r];
+      const at = (typeof d === 'number') ? d : (d && d.at) || 0;
+      if (now - at > 30 * 24 * 3600 * 1000) delete defended[r];
+    });
     cfg.sentReports = sent; cfg.defended = defended;
     // stats dos cards
     const as = cfg.activeSends, vids = {}; as.forEach((s) => { if (s.vid) vids[s.vid] = 1; });
@@ -1066,6 +1077,8 @@
     const farmavel = assistCount + farmCoords.size;
     cfg.stats.farmavel = farmavel;
     cfg.stats.coverage = farmavel > 0 ? Math.min(100, Math.round(farmCoords.size / farmavel * 100)) : null;
+    // Intel de aldeias defendidas (com tropas conhecidas) — usado pelo mapa
+    cfg.stats.defendedCount = Object.values(defended).filter((d) => typeof d === 'object' && d.coord).length;
     cfg.nextAt = now + Math.max(60, cfg.interval || 600) * 1000;
     save();
     refreshCards('farm'); refreshDaily('farm', cfg, 'loot', 'loot_res');

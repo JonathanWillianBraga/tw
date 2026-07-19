@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.55.1
+// @version      9.56.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.55.1';
+  const VERSION = '9.56.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -4377,11 +4377,14 @@
   async function loadMapData(force) {
     const age = Date.now() - (config.mapUi.dataCachedAt || 0);
     if (!force && _mapVilCache && age < 6 * 3600 * 1000) return;
-    try {
-      const [rV, rP] = await Promise.all([
-        fetch('/map/village.txt', { credentials: 'include', cache: 'no-store' }).then((r) => r.text()),
-        fetch('/map/player.txt', { credentials: 'include', cache: 'no-store' }).then((r) => r.text()),
-      ]);
+    // Cada fetch independente — village.txt é essencial, player.txt é opcional (só distingue tribo/inimigo).
+    // TW às vezes rate-limita player.txt (429) — não pode bloquear a feature.
+    const fetchTxt = async (url) => {
+      try { const r = await fetch(url, { credentials: 'include', cache: 'no-store' }); if (!r.ok) return null; return await r.text(); }
+      catch (e) { return null; }
+    };
+    const [rV, rP] = await Promise.all([fetchTxt('/map/village.txt'), fetchTxt('/map/player.txt')]);
+    if (rV) {
       const vils = new Map();
       rV.split('\n').forEach((line) => {
         if (!line.trim()) return;
@@ -4390,6 +4393,11 @@
         if (p.length < 6) return;
         vils.set(p[0], { x: +p[2], y: +p[3], playerId: p[4], points: parseInt(p[5], 10) || 0 });
       });
+      _mapVilCache = vils;
+      config.mapUi.dataCachedAt = Date.now();
+      save();
+    }
+    if (rP) {
       const players = new Map();
       rP.split('\n').forEach((line) => {
         if (!line.trim()) return;
@@ -4398,11 +4406,10 @@
         if (p.length < 4) return;
         players.set(p[0], { name: decodeURIComponent(p[1] || '').replace(/\+/g, ' '), tribeId: p[2] });
       });
-      _mapVilCache = vils;
       _mapPlayerCache = players;
-      config.mapUi.dataCachedAt = Date.now();
-      save();
-    } catch (e) { /* silencioso */ }
+    }
+    if (!rV) console.warn('[TWMgr Mapa] village.txt falhou — feature desabilitada até a proxima recarga');
+    if (!rP) console.warn('[TWMgr Mapa] player.txt falhou (rate limit?) — sem distincao entre tribo/inimigo, categoriza como enemy');
   }
 
   // Categoria da aldeia baseado no dono
@@ -4417,50 +4424,148 @@
 
   const MAP_CAT_LABELS = { mine: '🟢 Minha', tribe: '🔵 Tribo', enemy: '🔴 Inimigo', barb: '⚪ Bárbaro' };
 
-  // Passa por cada .village visível no mapa e aplica opacity/badge
-  function mapApplyFilters() {
+  // ---- Overlay canvas sobre o mapa do TW (mundo br143 usa canvas puro) ----
+  // Cria um <canvas> transparente por cima do mapa e desenha:
+  // - Retângulo escuro sobre aldeias filtradas (efeito atenuar)
+  // - Badge de pontos sobre aldeias visíveis
+  // Usa TWMap.map.pixelByCoord(x,y) pra converter coord de aldeia em pixel na tela.
+  let _mapOverlay = null;
+  let _mapRedrawTimer = null;
+  let _mapLoggedOnce = false;
+
+  function mapEnsureOverlay() {
+    try {
+      if (_mapOverlay && document.body.contains(_mapOverlay)) return _mapOverlay;
+      const T = window.TWMap;
+      // Prefere #map (wrapper visível, ancora estável) — #map_container é o "mundo" gigante que translada.
+      // Fallback pra TWMap.map.el se #map não existir por algum motivo.
+      let parent = document.getElementById('map');
+      if (!(parent instanceof Element)) parent = document.getElementById('map_container');
+      if (!(parent instanceof Element)) parent = T && T.map && T.map.el instanceof Element ? T.map.el : null;
+      if (!(parent instanceof Element)) { console.warn('[TWMgr Mapa] nenhum container Element encontrado pro overlay'); return null; }
+      const c = document.createElement('canvas');
+      c.id = 'twmgr-map-overlay';
+      // Fica ancorado no canto do #map (posição visível do mapa). Sem left/top variável no redraw.
+      c.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:9998';
+      try { if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative'; } catch (e) {}
+      const size = (T && T.map && T.map.size) || [parent.clientWidth || 800, parent.clientHeight || 600];
+      c.width = size[0]; c.height = size[1];
+      c.style.width = size[0] + 'px'; c.style.height = size[1] + 'px';
+      parent.appendChild(c);
+      _mapOverlay = c;
+      console.log('[TWMgr Mapa] overlay criado dentro de #' + parent.id + ' (' + parent.tagName + '), rect:', c.getBoundingClientRect());
+      return c;
+    } catch (e) { console.warn('[TWMgr Mapa] mapEnsureOverlay falhou:', e && e.message); return null; }
+  }
+
+  // Descobre tileSize (tamanho de cada aldeia em pixels). TW usa 53x47 tradicionalmente.
+  function mapTileSize() {
+    const T = window.TWMap;
+    if (T && T.tileSize && T.tileSize.length >= 2) return T.tileSize;
+    if (T && T.tileDimensions && T.tileDimensions.length >= 2) return T.tileDimensions;
+    return [53, 47];   // default histórico
+  }
+
+  function mapCanvasRedraw() {
     if (!_mapVilCache) return;
+    const T = window.TWMap;
+    if (!T || !T.map || typeof T.map.pixelByCoord !== 'function') return;
+    const overlay = mapEnsureOverlay();
+    if (!overlay) return;
+
+    // Sincroniza tamanho se o mapa foi redimensionado
+    const size = T.map.size || [overlay.width, overlay.height];
+    if (overlay.width !== size[0] || overlay.height !== size[1]) {
+      overlay.width = size[0]; overlay.height = size[1];
+      overlay.style.width = size[0] + 'px'; overlay.style.height = size[1] + 'px';
+    }
+    // Overlay é filho de #map (wrapper visível), então left/top: 0 já ancora corretamente.
+
+    const ctx = overlay.getContext('2d');
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
     const cfg = config.mapUi;
     const dim = cfg.dimOpacity != null ? cfg.dimOpacity : 0.15;
     const pMin = cfg.pointsMin || 0;
-    const pMax = cfg.pointsMax || 0;   // 0 = sem máximo
-    const counts = { mine: 0, tribe: 0, enemy: 0, barb: 0, visible: 0, hidden: 0 };
-    document.querySelectorAll('#map_container .village, #map .village').forEach((el) => {
-      // vid pode estar em data-id, id="map_village_XXX" ou class
-      let vid = el.getAttribute('data-id');
-      if (!vid) { const m = (el.id || '').match(/(\d+)/); if (m) vid = m[1]; }
-      if (!vid) { const m2 = (el.className || '').match(/village_(\d+)/); if (m2) vid = m2[1]; }
-      if (!vid) return;
-      const vil = _mapVilCache.get(String(vid));
+    const pMax = cfg.pointsMax || 0;
+    const [tw, th] = mapTileSize();
+
+    // pixelByCoord retorna pixels no espaço MUNDO. TWMap.map.pos é o offset do canvas nesse espaço.
+    // pixel_canvas = pixelByCoord(x,y) - TWMap.map.pos
+    const mapOffset = T.map.pos || [0, 0];
+
+    // Usa getViewport pra saber quais tiles estão visíveis (mais confiável que range manual)
+    let xMin, xMax, yMin, yMax;
+    try {
+      const vp = T.map.getViewport();
+      xMin = vp.top_left_tile.coord_x - 2;
+      xMax = vp.bottom_right_tile.coord_x + 2;
+      yMin = vp.top_left_tile.coord_y - 2;
+      yMax = vp.bottom_right_tile.coord_y + 2;
+    } catch (e) {
+      // Fallback: usa TWMap.pos + range aproximado
+      const pos = T.pos || [500, 500];
+      const rangeX = Math.ceil((overlay.width / tw) / 2) + 3;
+      const rangeY = Math.ceil((overlay.height / th) / 2) + 3;
+      xMin = pos[0] - rangeX; xMax = pos[0] + rangeX;
+      yMin = pos[1] - rangeY; yMax = pos[1] + rangeY;
+    }
+
+    const counts = { mine: 0, tribe: 0, enemy: 0, barb: 0, visible: 0 };
+    let drawn = 0;
+
+    _mapVilCache.forEach((vil, vid) => {
+      if (vil.x < xMin || vil.x > xMax || vil.y < yMin || vil.y > yMax) return;
+      let wx, wy;
+      try {
+        const p = T.map.pixelByCoord(vil.x, vil.y);
+        if (Array.isArray(p)) { wx = p[0]; wy = p[1]; }
+        else if (p && typeof p === 'object') { wx = p.x; wy = p.y; }
+        else return;
+      } catch (e) { return; }
+      // Converte pixel-mundo -> pixel-canvas
+      const px = wx - mapOffset[0];
+      const py = wy - mapOffset[1];
+      if (px < -tw || px > overlay.width + tw || py < -th || py > overlay.height + th) return;
+
       const cat = mapCategoryOf(vil);
       const showCat = cfg.show[cat] !== false;
-      const points = vil ? vil.points : 0;
+      const points = vil.points || 0;
       const passesPoints = (!pMin || points >= pMin) && (!pMax || points <= pMax);
       const visible = showCat && passesPoints;
-      el.style.opacity = visible ? '' : String(dim);
-      el.style.transition = 'opacity 0.15s';
-      if (visible) counts.visible++; else counts.hidden++;
-      counts[cat] = (counts[cat] || 0) + (visible ? 1 : 0);
-      // Badge de pontos
-      let badge = el.querySelector('.twmgr-map-badge');
-      if (cfg.showBadge && visible && vil) {
-        if (!badge) {
-          badge = document.createElement('div');
-          badge.className = 'twmgr-map-badge';
-          badge.style.cssText = 'position:absolute;bottom:0;right:0;background:rgba(0,0,0,.75);color:#ffd76a;font-size:9px;padding:0 2px;border-radius:2px;line-height:1.2;pointer-events:none;font-family:Verdana,sans-serif;z-index:5';
-          el.style.position = el.style.position || 'relative';
-          el.appendChild(badge);
-        }
-        const p = vil.points;
-        badge.textContent = p >= 1000 ? (Math.round(p / 100) / 10).toFixed(1) + 'k' : String(p);
-      } else if (badge) {
-        badge.remove();
+      drawn++;
+      if (visible) { counts.visible++; counts[cat] = (counts[cat] || 0) + 1; }
+
+      if (!visible) {
+        ctx.fillStyle = 'rgba(0,0,0,' + (1 - dim) + ')';
+        ctx.fillRect(px, py, tw, th);
+      } else if (cfg.showBadge) {
+        const label = points >= 1000 ? (Math.round(points / 100) / 10).toFixed(1) + 'k' : String(points);
+        ctx.font = 'bold 9px Verdana';
+        const lw = ctx.measureText(label).width;
+        const bx = px + tw - lw - 4, by = py + th - 12;
+        ctx.fillStyle = 'rgba(0,0,0,.75)';
+        ctx.fillRect(bx, by, lw + 4, 11);
+        ctx.fillStyle = '#ffd76a';
+        ctx.textBaseline = 'top';
+        ctx.fillText(label, bx + 2, by + 1);
       }
     });
-    // Atualiza contadores no painel
+
+    if (!_mapLoggedOnce) {
+      _mapLoggedOnce = true;
+      // eslint-disable-next-line no-console
+      console.log('[TWMgr Mapa] overlay canvas ativo · mapOffset:', mapOffset, '· viewport:', [xMin, yMin, xMax, yMax], '· tileSize:', [tw, th], '· desenhadas:', drawn, '· cache:', _mapVilCache.size);
+    }
+
     const cnt = document.getElementById('twmgr-map-counts');
-    if (cnt) cnt.textContent = counts.visible + ' visíveis · 🟢' + (counts.mine||0) + ' 🔵' + (counts.tribe||0) + ' 🔴' + (counts.enemy||0) + ' ⚪' + (counts.barb||0);
+    if (cnt) {
+      if (drawn === 0) cnt.innerHTML = '<span style="color:#a52020">⚠ 0 aldeias no viewport (ver console)</span>';
+      else cnt.textContent = counts.visible + '/' + drawn + ' visíveis · 🟢' + (counts.mine||0) + ' 🔵' + (counts.tribe||0) + ' 🔴' + (counts.enemy||0) + ' ⚪' + (counts.barb||0);
+    }
   }
+
+  function mapApplyFilters() { try { mapCanvasRedraw(); } catch (e) { console.warn('[TWMgr Mapa] redraw falhou:', e.message || e); } }
 
   function mapBuildPanel() {
     if (document.getElementById('twmgr-map-panel')) return;
@@ -4526,16 +4631,29 @@
     if (!gd || gd.screen !== 'map') return;
     await loadMapData(false);
     mapBuildPanel();
+    // Espera o TWMap estar pronto (as vezes carrega assincrono)
+    const waitTWMap = () => new Promise((resolve) => {
+      const t0 = Date.now();
+      const check = () => {
+        if (window.TWMap && window.TWMap.map && typeof window.TWMap.map.pixelByCoord === 'function') return resolve(true);
+        if (Date.now() - t0 > 8000) return resolve(false);
+        setTimeout(check, 100);
+      };
+      check();
+    });
+    const ok = await waitTWMap();
+    if (!ok) { console.warn('[TWMgr Mapa] TWMap.map.pixelByCoord não disponível — filtros não funcionarão'); return; }
     mapApplyFilters();
-    // O TW re-renderiza aldeias ao scrollar/zoom — MutationObserver com debounce mantém badges/opacity
-    let debounce = 0;
-    const container = document.getElementById('map_container') || document.getElementById('map') || document.body;
+    // Redraw periódico (250ms) — cobre scroll/zoom sem custo perceptivo (só itera aldeias no viewport)
+    clearInterval(_mapRedrawTimer);
+    _mapRedrawTimer = setInterval(mapApplyFilters, 250);
+    // Hook opcional: se o TWMap dispara evento de setPos, redesenha imediato
     try {
-      const obs = new MutationObserver(() => {
-        clearTimeout(debounce);
-        debounce = setTimeout(mapApplyFilters, 200);
-      });
-      obs.observe(container, { childList: true, subtree: true });
+      const origSetPos = window.TWMap.map.setPos;
+      if (typeof origSetPos === 'function' && !window.TWMap.map.__twmgr_hooked) {
+        window.TWMap.map.__twmgr_hooked = true;
+        window.TWMap.map.setPos = function () { const r = origSetPos.apply(this, arguments); try { mapCanvasRedraw(); } catch (e) {} return r; };
+      }
     } catch (e) {}
   }
 

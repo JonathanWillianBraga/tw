@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.56.0
+// @version      9.56.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.56.0';
+  const VERSION = '9.56.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -169,7 +169,9 @@
     pointsMin: 0,              // filtro min de pontos (0 = sem mínimo)
     pointsMax: 0,              // filtro max (0 = sem máximo)
     showBadge: true,           // exibir badge de pontos em cada aldeia
-    dimOpacity: 0.15,          // opacidade das aldeias filtradas
+    showIntel: true,           // exibir ⚠ (defesa conhecida) e ⛰N (muralha) baseado em farm.defended
+    dimMode: 'off',            // 'off' (sem escurecer) | 'dim' (bloco preto sobre filtradas)
+    dimOpacity: 0.15,          // opacidade das aldeias filtradas (só usado quando dimMode = 'dim')
     dataCachedAt: 0,           // ms do último load do village.txt
   });
   const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), reservations: {} });
@@ -353,6 +355,8 @@
     if (c.mapUi.pointsMin == null) c.mapUi.pointsMin = 0;
     if (c.mapUi.pointsMax == null) c.mapUi.pointsMax = 0;
     if (typeof c.mapUi.showBadge !== 'boolean') c.mapUi.showBadge = true;
+    if (typeof c.mapUi.showIntel !== 'boolean') c.mapUi.showIntel = true;
+    if (c.mapUi.dimMode !== 'off' && c.mapUi.dimMode !== 'dim') c.mapUi.dimMode = 'off';
     if (c.mapUi.dimOpacity == null) c.mapUi.dimOpacity = 0.15;
     if (c.mapUi.dataCachedAt == null) c.mapUi.dataCachedAt = 0;
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
@@ -4514,6 +4518,16 @@
     const counts = { mine: 0, tribe: 0, enemy: 0, barb: 0, visible: 0 };
     let drawn = 0;
 
+    // Intel: coord "x|y" -> { defTotal, wall, at } vindo do config.farm.defended (v9.55.1).
+    // Só monta uma vez por redraw pra não iterar 30+ chaves 500x.
+    const intelByCoord = {};
+    if (cfg.showIntel && config.farm && config.farm.defended) {
+      Object.values(config.farm.defended).forEach((d) => {
+        if (d && typeof d === 'object' && d.coord) intelByCoord[d.coord] = d;
+      });
+    }
+    const dimEnabled = cfg.dimMode === 'dim';
+
     _mapVilCache.forEach((vil, vid) => {
       if (vil.x < xMin || vil.x > xMax || vil.y < yMin || vil.y > yMax) return;
       let wx, wy;
@@ -4523,7 +4537,6 @@
         else if (p && typeof p === 'object') { wx = p.x; wy = p.y; }
         else return;
       } catch (e) { return; }
-      // Converte pixel-mundo -> pixel-canvas
       const px = wx - mapOffset[0];
       const py = wy - mapOffset[1];
       if (px < -tw || px > overlay.width + tw || py < -th || py > overlay.height + th) return;
@@ -4537,9 +4550,13 @@
       if (visible) { counts.visible++; counts[cat] = (counts[cat] || 0) + 1; }
 
       if (!visible) {
-        ctx.fillStyle = 'rgba(0,0,0,' + (1 - dim) + ')';
-        ctx.fillRect(px, py, tw, th);
-      } else if (cfg.showBadge) {
+        // Filtrada: só escurece se o usuário optou por 'dim'. Padrão 'off' não desenha nada.
+        if (dimEnabled) { ctx.fillStyle = 'rgba(0,0,0,' + (1 - dim) + ')'; ctx.fillRect(px, py, tw, th); }
+        return;
+      }
+
+      // Badge de pontos (canto inferior direito)
+      if (cfg.showBadge) {
         const label = points >= 1000 ? (Math.round(points / 100) / 10).toFixed(1) + 'k' : String(points);
         ctx.font = 'bold 9px Verdana';
         const lw = ctx.measureText(label).width;
@@ -4549,6 +4566,25 @@
         ctx.fillStyle = '#ffd76a';
         ctx.textBaseline = 'top';
         ctx.fillText(label, bx + 2, by + 1);
+      }
+
+      // Intel (canto superior esquerdo): ⚠ tropa defensora + ⛰N muralha
+      const coordKey = vil.x + '|' + vil.y;
+      const intel = intelByCoord[coordKey];
+      if (intel) {
+        const parts = [];
+        if (intel.defTotal > 0) parts.push('⚠' + intel.defTotal);
+        if (intel.wall != null) parts.push('⛰' + intel.wall);
+        if (parts.length) {
+          const txt = parts.join(' ');
+          ctx.font = 'bold 9px Verdana';
+          const w2 = ctx.measureText(txt).width;
+          ctx.fillStyle = 'rgba(120,0,0,.85)';
+          ctx.fillRect(px, py, w2 + 4, 11);
+          ctx.fillStyle = '#fff';
+          ctx.textBaseline = 'top';
+          ctx.fillText(txt, px + 2, py + 1);
+        }
       }
     });
 
@@ -4591,12 +4627,15 @@
           '<input id="twmgr-map-pmax" type="number" min="0" placeholder="máx" value="' + (cfg.pointsMax || '') + '" style="width:60px;padding:2px 4px;font-size:11px">' +
         '</div>' +
         check('twmgr-map-badge', 'Mostrar pontos na aldeia', cfg.showBadge) +
+        check('twmgr-map-intel', 'Mostrar intel (⚠ tropas · ⛰ muralha)', cfg.showIntel) +
+        check('twmgr-map-dim', 'Escurecer aldeias filtradas (bloco preto)', cfg.dimMode === 'dim') +
         '<div style="margin-top:6px;border-top:1px dashed #b89a5a;padding-top:6px;font-size:10px;color:#5a3c0f">' +
           '<div id="twmgr-map-counts">—</div>' +
-          '<div style="margin-top:4px;display:flex;justify-content:space-between;align-items:center">' +
-            '<span style="color:#8b6d3f;font-size:9px">cache: ' + (cfg.dataCachedAt ? new Date(cfg.dataCachedAt).toLocaleTimeString() : '—') + '</span>' +
+          '<div style="margin-top:4px;display:flex;justify-content:space-between;align-items:center;gap:4px">' +
+            '<button id="twmgr-map-reset" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#e8d29a;cursor:pointer;color:#3b2914" title="Mostra tudo, sem overlay: liga todos os toggles, zera pontos, desliga escurecer">🚫 Desativar tudo</button>' +
             '<button id="twmgr-map-reload" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#e8d29a;cursor:pointer;color:#3b2914">🔄 recarregar</button>' +
           '</div>' +
+          '<div style="margin-top:2px;color:#8b6d3f;font-size:9px">cache: ' + (cfg.dataCachedAt ? new Date(cfg.dataCachedAt).toLocaleTimeString() : '—') + '</div>' +
         '</div>' +
       '</div>';
     document.body.appendChild(panel);
@@ -4617,6 +4656,19 @@
     document.getElementById('twmgr-map-pmin').addEventListener('change', (e) => { cfg.pointsMin = parseInt(e.target.value, 10) || 0; save_(); });
     document.getElementById('twmgr-map-pmax').addEventListener('change', (e) => { cfg.pointsMax = parseInt(e.target.value, 10) || 0; save_(); });
     document.getElementById('twmgr-map-badge').addEventListener('change', (e) => { cfg.showBadge = e.target.checked; save_(); });
+    document.getElementById('twmgr-map-intel').addEventListener('change', (e) => { cfg.showIntel = e.target.checked; save_(); });
+    document.getElementById('twmgr-map-dim').addEventListener('change', (e) => { cfg.dimMode = e.target.checked ? 'dim' : 'off'; save_(); });
+    document.getElementById('twmgr-map-reset').addEventListener('click', () => {
+      cfg.show = { mine: true, tribe: true, enemy: true, barb: true };
+      cfg.pointsMin = 0; cfg.pointsMax = 0;
+      cfg.dimMode = 'off';
+      save_();
+      // Re-render dos checkboxes/inputs pra refletir o reset visualmente
+      ['mine','tribe','enemy','barb'].forEach((k) => { const el = document.getElementById('twmgr-map-show-' + k); if (el) el.checked = true; });
+      const pmin = document.getElementById('twmgr-map-pmin'); if (pmin) pmin.value = '';
+      const pmax = document.getElementById('twmgr-map-pmax'); if (pmax) pmax.value = '';
+      const dim = document.getElementById('twmgr-map-dim'); if (dim) dim.checked = false;
+    });
     document.getElementById('twmgr-map-reload').addEventListener('click', async () => {
       const btn = document.getElementById('twmgr-map-reload');
       btn.disabled = true; btn.textContent = '⏳ carregando…';

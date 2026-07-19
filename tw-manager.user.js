@@ -4437,13 +4437,15 @@
     try {
       if (_mapOverlay && document.body.contains(_mapOverlay)) return _mapOverlay;
       const T = window.TWMap;
-      // Prefere TWMap.map.el, mas cai para #map_container / #map se não for Element válido.
-      let parent = T && T.map && T.map.el;
+      // Prefere #map (wrapper visível, ancora estável) — #map_container é o "mundo" gigante que translada.
+      // Fallback pra TWMap.map.el se #map não existir por algum motivo.
+      let parent = document.getElementById('map');
       if (!(parent instanceof Element)) parent = document.getElementById('map_container');
-      if (!(parent instanceof Element)) parent = document.getElementById('map');
+      if (!(parent instanceof Element)) parent = T && T.map && T.map.el instanceof Element ? T.map.el : null;
       if (!(parent instanceof Element)) { console.warn('[TWMgr Mapa] nenhum container Element encontrado pro overlay'); return null; }
       const c = document.createElement('canvas');
       c.id = 'twmgr-map-overlay';
+      // Fica ancorado no canto do #map (posição visível do mapa). Sem left/top variável no redraw.
       c.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:9998';
       try { if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative'; } catch (e) {}
       const size = (T && T.map && T.map.size) || [parent.clientWidth || 800, parent.clientHeight || 600];
@@ -4451,6 +4453,7 @@
       c.style.width = size[0] + 'px'; c.style.height = size[1] + 'px';
       parent.appendChild(c);
       _mapOverlay = c;
+      console.log('[TWMgr Mapa] overlay criado dentro de #' + parent.id + ' (' + parent.tagName + '), rect:', c.getBoundingClientRect());
       return c;
     } catch (e) { console.warn('[TWMgr Mapa] mapEnsureOverlay falhou:', e && e.message); return null; }
   }
@@ -4476,24 +4479,10 @@
       overlay.width = size[0]; overlay.height = size[1];
       overlay.style.width = size[0] + 'px'; overlay.style.height = size[1] + 'px';
     }
-    // Reposiciona o overlay pra bater com o canto visível do map_container. TWMap.map.pos é a
-    // posição do viewport DENTRO do container gigante (mundo). O overlay é filho do container,
-    // então tem que ficar em [pos[0], pos[1]] pra ficar SOBRE a parte visível do mapa.
-    const mp = T.map.pos || [0, 0];
-    overlay.style.left = mp[0] + 'px';
-    overlay.style.top = mp[1] + 'px';
+    // Overlay é filho de #map (wrapper visível), então left/top: 0 já ancora corretamente.
 
     const ctx = overlay.getContext('2d');
     ctx.clearRect(0, 0, overlay.width, overlay.height);
-
-    // DEBUG: retângulo de teste no canto superior esquerdo pra confirmar que overlay está visível.
-    // Se você vê um quadrado vermelho semi-transparente com "TWMgr" no canto do mapa → overlay OK.
-    ctx.fillStyle = 'rgba(255,0,0,0.5)';
-    ctx.fillRect(2, 2, 120, 30);
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 14px Verdana';
-    ctx.textBaseline = 'top';
-    ctx.fillText('TWMgr overlay OK', 6, 8);
 
     const cfg = config.mapUi;
     const dim = cfg.dimOpacity != null ? cfg.dimOpacity : 0.15;

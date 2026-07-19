@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.56.0
+// @version      9.57.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.56.0';
+  const VERSION = '9.57.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -136,10 +136,16 @@
     homeAvail: {},                         // { [vid]: { unit:N, loadedAt: ms } } — cache do "Carregar tropas"
     rows: [],                              // gerado no plannerStart a partir de perVillage
   });
+  const defBlindagem = () => ({
+    threadUrl: '',        // URL do tópico do fórum da tribo com a tabela de pedidos
+    rows: [],             // [{ id, num, name, coord, x, y, ped:{LANC,ESP,SPY,CP}, originVid, send:{LANC,ESP,SPY,CP}, checked }]
+    lastFetch: 0,         // ms do último fetch bem-sucedido
+  });
   const defPlanner = () => ({
     attacks: [defPlannerAttack('Ataque 1')], // vários ataques independentes, cada um pode ser armado por conta própria
     activeId: null,                        // id do ataque mostrado na UI (setado no load())
     templates: [],                         // templates salvos { id, name, targetX, targetY, arriveLocal, selected, perVillage }
+    blindagem: defBlindagem(),             // sub-módulo: pedidos de blindagem da tribo
   });
   const defUnits = () => ({
     // history[YYYY-MM-DD] = {
@@ -337,6 +343,10 @@
       });
     });
     if (!c.planner.activeId || !c.planner.attacks.some((a) => a.id === c.planner.activeId)) c.planner.activeId = c.planner.attacks[0].id;
+    if (!c.planner.blindagem) c.planner.blindagem = defBlindagem();
+    if (typeof c.planner.blindagem.threadUrl !== 'string') c.planner.blindagem.threadUrl = '';
+    if (!Array.isArray(c.planner.blindagem.rows)) c.planner.blindagem.rows = [];
+    if (c.planner.blindagem.lastFetch == null) c.planner.blindagem.lastFetch = 0;
     if (!c.reservations || typeof c.reservations !== 'object') c.reservations = {};
     if (!c.units) c.units = defUnits();
     if (!c.units.history || typeof c.units.history !== 'object') c.units.history = {};
@@ -2384,6 +2394,137 @@
     pushLog('[' + atk.name + '] limpo.', '', 'planner');
   }
 
+  // ==================== BLINDAGEM (pedidos da tribo do fórum) ====================
+  // Puxa a tabela de pedidos do tópico do fórum e monta lista editável de apoios.
+  // Regras da tribo: N°/LANC/ESP/SPY/CP separado por barra, mínimo 250/250, zero pra tropas não enviadas.
+
+  async function blindagemFetch(threadUrl) {
+    if (!threadUrl) throw new Error('URL do tópico vazia');
+    const res = await fetch(threadUrl, { credentials: 'include', cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    // Procura em TODAS as tabelas — pega as linhas cujo texto tem coord (x|y) e N inicial.
+    const rows = [];
+    doc.querySelectorAll('table tr').forEach((tr) => {
+      const tds = Array.from(tr.querySelectorAll('td'));
+      if (tds.length < 3) return;
+      const numText = (tds[0].textContent || '').trim();
+      if (!/^\d+$/.test(numText)) return;
+      const num = parseInt(numText, 10);
+      // Aldeia + coord: procura em qualquer td, tipicamente o 2º
+      let name = '', coord = null, x = 0, y = 0;
+      for (let i = 1; i < tds.length; i++) {
+        const t = (tds[i].textContent || '').replace(/\s+/g, ' ').trim();
+        const m = t.match(/^(.*?)\((\d{1,3})\|(\d{1,3})\)/);
+        if (m) { name = m[1].trim(); coord = m[2] + '|' + m[3]; x = +m[2]; y = +m[3]; break; }
+      }
+      if (!coord) return;
+      // Quantidades: pega TODOS os tds numéricos seguintes (LANC, ESP, [SPY, CP])
+      const nums = tds.map((td) => {
+        const t = (td.textContent || '').replace(/\D/g, '');
+        return t ? parseInt(t, 10) : null;
+      }).filter((n) => n !== null && n > 0);
+      // O primeiro num é o N do pedido, já usado. Os próximos são LANC/ESP/SPY/CP na ordem.
+      const [_n, LANC, ESP, SPY, CP] = nums;
+      const ped = { LANC: LANC || 0, ESP: ESP || 0, SPY: SPY || 0, CP: CP || 0 };
+      rows.push({
+        id: 'blz' + num + '-' + coord,
+        num: num, name: name, coord: coord, x: x, y: y,
+        ped: ped,
+        originVid: '',
+        send: { LANC: ped.LANC, ESP: ped.ESP, SPY: 0, CP: 0 },
+        checked: false,
+      });
+    });
+    config.planner.blindagem.rows = rows;
+    config.planner.blindagem.lastFetch = Date.now();
+    save();
+    return rows;
+  }
+
+  async function blindagemSend() {
+    const list = (config.planner.blindagem.rows || []).filter((r) => r.checked && r.originVid);
+    if (!list.length) { pushLog('Blindagem: nenhuma linha marcada com origem definida.', 'err'); return; }
+    const results = [];
+    for (const r of list) {
+      const s = r.send || {};
+      const amounts = {};
+      if (s.LANC > 0) amounts.spear = s.LANC;
+      if (s.ESP > 0) amounts.sword = s.ESP;
+      if (s.SPY > 0) amounts.spy = s.SPY;
+      if (s.CP > 0) amounts.heavy = s.CP;
+      const total = (s.LANC || 0) + (s.ESP || 0) + (s.SPY || 0) + (s.CP || 0);
+      if (total === 0) { pushLog('Blindagem #' + r.num + ' (' + r.coord + '): sem tropa a enviar — pulado.', '', 'planner'); continue; }
+      if ((s.LANC || 0) + (s.ESP || 0) < 250) {
+        pushLog('Blindagem #' + r.num + ' (' + r.coord + '): LANC+ESP < 250 (mínimo da tribo) — pulado.', 'err', 'planner');
+        continue;
+      }
+      try {
+        await sendAttack(r.originVid, r.x, r.y, amounts, 'support');
+        results.push(r);
+        pushLog('🛡️ Blindagem #' + r.num + ' → ' + r.coord + ' enviada (' + (s.LANC || 0) + '/' + (s.ESP || 0) + '/' + (s.SPY || 0) + '/' + (s.CP || 0) + ')', 'ok', 'planner');
+        await sleep(400);
+      } catch (e) {
+        pushLog('🛡️ Blindagem #' + r.num + ' FALHOU: ' + (e.message || e), 'err', 'planner');
+      }
+    }
+    // Gera texto do fórum a partir das enviadas
+    const text = results.map((r) => {
+      const s = r.send;
+      return r.num + '/' + (s.LANC || 0) + '/' + (s.ESP || 0) + '/' + (s.SPY || 0) + '/' + (s.CP || 0);
+    }).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      pushLog('🛡️ Blindagem: ' + results.length + '/' + list.length + ' apoios enviados. Texto copiado pro clipboard.', 'ok', 'planner');
+    } catch (e) {
+      pushLog('🛡️ Blindagem: ' + results.length + '/' + list.length + ' apoios enviados. Texto abaixo (copie manualmente):\n' + text, '', 'planner');
+    }
+    return { sent: results.length, total: list.length, text: text };
+  }
+
+  async function renderBlindagemList() {
+    const box = document.getElementById('twmgr-blz-list'); if (!box) return;
+    const rows = config.planner.blindagem.rows || [];
+    if (!rows.length) { box.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— sem pedidos. Cole a URL e clique Buscar. —</div>'; return; }
+    let vils = []; try { vils = await getAllVillages(); } catch (e) {}
+    const opts = '<option value="">— origem —</option>' + vils.map((v) => '<option value="' + v.vid + '">' + esc(v.name) + '</option>').join('');
+    box.innerHTML = rows.map((r) => {
+      const s = r.send || { LANC: 0, ESP: 0, SPY: 0, CP: 0 };
+      const p = r.ped;
+      const originSel = opts.replace('value="' + r.originVid + '"', 'value="' + r.originVid + '" selected');
+      return '<div data-blz-id="' + r.id + '" style="border-bottom:1px dashed #3a2c1a;padding:4px 2px;font-size:10px;color:#d3c299">' +
+        '<div style="display:flex;align-items:center;gap:4px">' +
+          '<input type="checkbox" class="blz-chk"' + (r.checked ? ' checked' : '') + '>' +
+          '<b>#' + r.num + '</b> · ' + esc(r.name) + ' <span style="color:#e6cf7d">(' + r.coord + ')</span>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:4px;margin-top:2px">' +
+          '<span style="color:#8f7d57">origem:</span>' +
+          '<select class="blz-origin" style="flex:1;font-size:10px">' + originSel + '</select>' +
+        '</div>' +
+        '<div style="color:#8f7d57;margin-top:2px">ped: ' + p.LANC + ' LANC / ' + p.ESP + ' ESP / ' + p.SPY + ' SPY / ' + p.CP + ' CP</div>' +
+        '<div style="display:flex;gap:3px;margin-top:2px;flex-wrap:wrap">' +
+          '<label style="display:flex;align-items:center;gap:2px">L <input type="number" min="0" class="blz-send" data-u="LANC" value="' + (s.LANC || 0) + '" style="width:52px;font-size:10px"></label>' +
+          '<label style="display:flex;align-items:center;gap:2px">E <input type="number" min="0" class="blz-send" data-u="ESP" value="' + (s.ESP || 0) + '" style="width:52px;font-size:10px"></label>' +
+          '<label style="display:flex;align-items:center;gap:2px">S <input type="number" min="0" class="blz-send" data-u="SPY" value="' + (s.SPY || 0) + '" style="width:40px;font-size:10px"></label>' +
+          '<label style="display:flex;align-items:center;gap:2px">CP <input type="number" min="0" class="blz-send" data-u="CP" value="' + (s.CP || 0) + '" style="width:52px;font-size:10px"></label>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    // Wire eventos
+    box.querySelectorAll('[data-blz-id]').forEach((el) => {
+      const id = el.getAttribute('data-blz-id');
+      const row = rows.find((r) => r.id === id); if (!row) return;
+      el.querySelector('.blz-chk').addEventListener('change', (e) => { row.checked = e.target.checked; save(); });
+      el.querySelector('.blz-origin').addEventListener('change', (e) => { row.originVid = e.target.value; save(); });
+      el.querySelectorAll('.blz-send').forEach((inp) => inp.addEventListener('change', (e) => {
+        const u = inp.getAttribute('data-u');
+        row.send = row.send || { LANC: 0, ESP: 0, SPY: 0, CP: 0 };
+        row.send[u] = Math.max(0, parseInt(inp.value, 10) || 0);
+        save();
+      }));
+    });
+  }
+
   // ==================== MERCADO (Cunhagem) ====================
   async function getMarketState(vid) {
     const res = await fetch('/game.php?village=' + vid + '&screen=market&mode=send', { credentials: 'include' });
@@ -3849,6 +3990,12 @@
         sec('Templates',
           '<div class="twmgr-row"><span class="twmgr-lbl">Salvar plano atual</span><span><input id="twmgr-pl-tpl-name" class="twmgr-inp" type="text" placeholder="ex: guerra XYZ" style="width:120px"> <button id="twmgr-pl-tpl-save" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">💾</button></span></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Carregar</span><span><select id="twmgr-pl-tpl-load" class="twmgr-inp" style="width:120px"></select> <button id="twmgr-pl-tpl-apply" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">📂</button> <button id="twmgr-pl-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="apagar">🗑</button></span></div>') +
+        sec('🛡️ Blindagem da tribo',
+          '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Puxa a tabela do tópico, escolhe origem por linha, envia apoios e copia o texto no formato do fórum.</div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">URL do tópico</span><input id="twmgr-blz-url" class="twmgr-inp" type="text" placeholder="https://.../screen=forum&mode=view&thread_id=..." style="flex:1;min-width:180px"></div>' +
+          '<div class="twmgr-actions"><button id="twmgr-blz-fetch" class="twmgr-btn twmgr-ghost">🛡️ Buscar pedidos</button><span id="twmgr-blz-status" style="flex:1;font-size:10px;color:#8f7d57;padding-top:4px">—</span></div>' +
+          '<div id="twmgr-blz-list" style="max-height:280px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px;margin-top:4px"></div>' +
+          '<div class="twmgr-actions" style="margin-top:6px"><button id="twmgr-blz-send" class="twmgr-btn twmgr-go">✉️ Enviar marcados</button></div>') +
         modLog('planner') +
       '</div>' +
       '<div id="twmgr-tab-log" style="display:none">' +
@@ -4000,6 +4147,37 @@
     document.getElementById('twmgr-pl-tpl-apply').addEventListener('click', plannerApplyTemplate);
     document.getElementById('twmgr-pl-tpl-del').addEventListener('click', plannerDeleteTemplate);
     plannerRefreshTemplatesList();
+
+    // Blindagem
+    const blzUrlEl = document.getElementById('twmgr-blz-url');
+    if (blzUrlEl) blzUrlEl.value = config.planner.blindagem.threadUrl || '';
+    if (blzUrlEl) blzUrlEl.addEventListener('change', () => { config.planner.blindagem.threadUrl = blzUrlEl.value.trim(); save(); });
+    const blzFetchBtn = document.getElementById('twmgr-blz-fetch');
+    if (blzFetchBtn) blzFetchBtn.addEventListener('click', async () => {
+      const url = (document.getElementById('twmgr-blz-url').value || '').trim();
+      if (!url) { pushLog('Blindagem: cole a URL do tópico primeiro.', 'err'); return; }
+      config.planner.blindagem.threadUrl = url; save();
+      const status = document.getElementById('twmgr-blz-status');
+      blzFetchBtn.disabled = true; if (status) status.textContent = '⏳ buscando…';
+      try {
+        const rows = await blindagemFetch(url);
+        if (status) status.textContent = rows.length + ' pedido(s) · atualizado ' + new Date().toLocaleTimeString();
+        pushLog('🛡️ Blindagem: ' + rows.length + ' pedido(s) carregado(s).', rows.length ? 'ok' : 'err', 'planner');
+      } catch (e) {
+        if (status) status.textContent = '⚠ ' + (e.message || e);
+        pushLog('🛡️ Blindagem: erro ao buscar (' + (e.message || e) + ').', 'err', 'planner');
+      }
+      blzFetchBtn.disabled = false;
+      renderBlindagemList();
+    });
+    const blzSendBtn = document.getElementById('twmgr-blz-send');
+    if (blzSendBtn) blzSendBtn.addEventListener('click', async () => {
+      blzSendBtn.disabled = true;
+      try { await blindagemSend(); } catch (e) { pushLog('🛡️ Blindagem erro: ' + (e.message || e), 'err'); }
+      blzSendBtn.disabled = false;
+      renderBlindagemList();
+    });
+    renderBlindagemList();
 
     document.getElementById('twmgr-mk-coord').value = config.market.destCoord || '';
     document.getElementById('twmgr-mk-reserve').value = config.market.reserve || 0;

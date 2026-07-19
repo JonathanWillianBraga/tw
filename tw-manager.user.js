@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.56.1
+// @version      9.56.2
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.56.1';
+  const VERSION = '9.56.2';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -170,8 +170,11 @@
     pointsMax: 0,              // filtro max (0 = sem máximo)
     showBadge: true,           // exibir badge de pontos em cada aldeia
     showIntel: true,           // exibir ⚠ (defesa conhecida) e ⛰N (muralha) baseado em farm.defended
+    showReservations: true,    // exibir ⌛Xh nas aldeias reservadas pela tribo
     dimMode: 'off',            // 'off' (sem escurecer) | 'dim' (bloco preto sobre filtradas)
     dimOpacity: 0.15,          // opacidade das aldeias filtradas (só usado quando dimMode = 'dim')
+    reservations: {},          // { [coord]: { at, expiresAt, playerName } } — sync manual
+    reservationsAt: 0,         // ms do último sync manual
     dataCachedAt: 0,           // ms do último load do village.txt
   });
   const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), reservations: {} });
@@ -356,8 +359,11 @@
     if (c.mapUi.pointsMax == null) c.mapUi.pointsMax = 0;
     if (typeof c.mapUi.showBadge !== 'boolean') c.mapUi.showBadge = true;
     if (typeof c.mapUi.showIntel !== 'boolean') c.mapUi.showIntel = true;
+    if (typeof c.mapUi.showReservations !== 'boolean') c.mapUi.showReservations = true;
     if (c.mapUi.dimMode !== 'off' && c.mapUi.dimMode !== 'dim') c.mapUi.dimMode = 'off';
     if (c.mapUi.dimOpacity == null) c.mapUi.dimOpacity = 0.15;
+    if (!c.mapUi.reservations || typeof c.mapUi.reservations !== 'object') c.mapUi.reservations = {};
+    if (c.mapUi.reservationsAt == null) c.mapUi.reservationsAt = 0;
     if (c.mapUi.dataCachedAt == null) c.mapUi.dataCachedAt = 0;
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
@@ -4416,6 +4422,53 @@
     if (!rP) console.warn('[TWMgr Mapa] player.txt falhou (rate limit?) — sem distincao entre tribo/inimigo, categoriza como enemy');
   }
 
+  // Sync manual do planner interno da tribo (screen=ally&mode=reservations).
+  // Retorna { count, ok } — count = quantas reservas parseadas, ok = fetch teve sucesso.
+  // Parse é defensivo: procura por (X|Y) em cada linha da tabela + timer HH:MM:SS ou data DD/MM/YYYY.
+  async function loadReservations() {
+    try {
+      const url = '/game.php?village=' + CUR_VID + '&screen=ally&mode=reservations&page=-1&_=' + Date.now();
+      const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      const reservations = {};
+      const now = Date.now();
+      doc.querySelectorAll('table tr').forEach((tr) => {
+        const text = (tr.textContent || '').replace(/\s+/g, ' ');
+        const coordM = text.match(/(\d{1,3})\|(\d{1,3})/);
+        if (!coordM) return;
+        const coord = coordM[1] + '|' + coordM[2];
+        let expiresAt = 0;
+        // Timer relativo tipo "1d 3:45:12" ou "3:45:12"
+        const dTimer = text.match(/(\d+)\s*d\s*(\d{1,2}):(\d{1,2}):(\d{2})/i);
+        if (dTimer) {
+          expiresAt = now + ((+dTimer[1] * 86400) + (+dTimer[2] * 3600) + (+dTimer[3] * 60) + (+dTimer[4])) * 1000;
+        } else {
+          const hTimer = text.match(/(\d{1,3}):(\d{1,2}):(\d{2})(?!\d)/);
+          if (hTimer) expiresAt = now + ((+hTimer[1] * 3600) + (+hTimer[2] * 60) + (+hTimer[3])) * 1000;
+        }
+        // Data absoluta tipo "20/07/2026 15:30"
+        if (!expiresAt) {
+          const dateM = text.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})[^\d]+(\d{1,2}):(\d{2})/);
+          if (dateM) {
+            const d = new Date(+dateM[3], +dateM[2] - 1, +dateM[1], +dateM[4], +dateM[5]);
+            expiresAt = d.getTime();
+          }
+        }
+        const playerLink = tr.querySelector('a[href*="screen=info_player"]');
+        const playerName = playerLink ? (playerLink.textContent || '').trim().slice(0, 30) : '';
+        reservations[coord] = { at: now, expiresAt: expiresAt, playerName: playerName };
+      });
+      config.mapUi.reservations = reservations;
+      config.mapUi.reservationsAt = now;
+      save();
+      return { count: Object.keys(reservations).length, ok: true };
+    } catch (e) {
+      console.warn('[TWMgr Mapa] loadReservations falhou:', e && e.message);
+      return { count: 0, ok: false, error: e && e.message };
+    }
+  }
+
   // Categoria da aldeia baseado no dono
   function mapCategoryOf(vil) {
     if (!vil) return 'unknown';
@@ -4526,6 +4579,8 @@
         if (d && typeof d === 'object' && d.coord) intelByCoord[d.coord] = d;
       });
     }
+    // Reservas da tribo (sync manual): coord -> { expiresAt, playerName }
+    const reservations = (cfg.showReservations && cfg.reservations) || {};
     const dimEnabled = cfg.dimMode === 'dim';
 
     _mapVilCache.forEach((vil, vid) => {
@@ -4586,6 +4641,32 @@
           ctx.fillText(txt, px + 2, py + 1);
         }
       }
+
+      // Reserva da tribo (canto inferior esquerdo): ⌛Xh (horas até expirar)
+      const rsv = reservations[coordKey];
+      if (rsv) {
+        let label = '⌛?';
+        if (rsv.expiresAt) {
+          const restMs = rsv.expiresAt - Date.now();
+          if (restMs > 0) {
+            const h = Math.floor(restMs / 3600000);
+            const m = Math.floor((restMs % 3600000) / 60000);
+            label = '⌛' + (h > 0 ? h + 'h' : m + 'm');
+          } else {
+            label = '⌛venceu';
+          }
+        }
+        // Cor: azul se muito tempo (>24h), amarelo (<24h), vermelho (<6h)
+        const restH = rsv.expiresAt ? (rsv.expiresAt - Date.now()) / 3600000 : 999;
+        const bg = restH < 6 ? 'rgba(180,20,20,.85)' : restH < 24 ? 'rgba(180,140,20,.85)' : 'rgba(40,80,180,.85)';
+        ctx.font = 'bold 9px Verdana';
+        const lw2 = ctx.measureText(label).width;
+        ctx.fillStyle = bg;
+        ctx.fillRect(px, py + th - 22, lw2 + 4, 11);
+        ctx.fillStyle = '#fff';
+        ctx.textBaseline = 'top';
+        ctx.fillText(label, px + 2, py + th - 21);
+      }
     });
 
     if (!_mapLoggedOnce) {
@@ -4628,14 +4709,16 @@
         '</div>' +
         check('twmgr-map-badge', 'Mostrar pontos na aldeia', cfg.showBadge) +
         check('twmgr-map-intel', 'Mostrar intel (⚠ tropas · ⛰ muralha)', cfg.showIntel) +
+        check('twmgr-map-rsv', 'Mostrar reservas da tribo (⌛)', cfg.showReservations) +
         check('twmgr-map-dim', 'Escurecer aldeias filtradas (bloco preto)', cfg.dimMode === 'dim') +
         '<div style="margin-top:6px;border-top:1px dashed #b89a5a;padding-top:6px;font-size:10px;color:#5a3c0f">' +
           '<div id="twmgr-map-counts">—</div>' +
-          '<div style="margin-top:4px;display:flex;justify-content:space-between;align-items:center;gap:4px">' +
+          '<div style="margin-top:4px;display:flex;justify-content:space-between;align-items:center;gap:4px;flex-wrap:wrap">' +
             '<button id="twmgr-map-reset" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#e8d29a;cursor:pointer;color:#3b2914" title="Mostra tudo, sem overlay: liga todos os toggles, zera pontos, desliga escurecer">🚫 Desativar tudo</button>' +
-            '<button id="twmgr-map-reload" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#e8d29a;cursor:pointer;color:#3b2914">🔄 recarregar</button>' +
+            '<button id="twmgr-map-reload" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#e8d29a;cursor:pointer;color:#3b2914">🔄 mapa</button>' +
+            '<button id="twmgr-map-rsv-sync" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#e8d29a;cursor:pointer;color:#3b2914" title="Baixa o planner interno da tribo (screen=ally&mode=reservations) e mostra ⌛Xh nas aldeias reservadas">⌛ sync reservas</button>' +
           '</div>' +
-          '<div style="margin-top:2px;color:#8b6d3f;font-size:9px">cache: ' + (cfg.dataCachedAt ? new Date(cfg.dataCachedAt).toLocaleTimeString() : '—') + '</div>' +
+          '<div style="margin-top:2px;color:#8b6d3f;font-size:9px">cache mapa: ' + (cfg.dataCachedAt ? new Date(cfg.dataCachedAt).toLocaleTimeString() : '—') + ' · reservas: ' + (cfg.reservationsAt ? (new Date(cfg.reservationsAt).toLocaleTimeString() + ' (' + Object.keys(cfg.reservations || {}).length + ')') : '—') + '</div>' +
         '</div>' +
       '</div>';
     document.body.appendChild(panel);
@@ -4657,7 +4740,20 @@
     document.getElementById('twmgr-map-pmax').addEventListener('change', (e) => { cfg.pointsMax = parseInt(e.target.value, 10) || 0; save_(); });
     document.getElementById('twmgr-map-badge').addEventListener('change', (e) => { cfg.showBadge = e.target.checked; save_(); });
     document.getElementById('twmgr-map-intel').addEventListener('change', (e) => { cfg.showIntel = e.target.checked; save_(); });
+    document.getElementById('twmgr-map-rsv').addEventListener('change', (e) => { cfg.showReservations = e.target.checked; save_(); });
     document.getElementById('twmgr-map-dim').addEventListener('change', (e) => { cfg.dimMode = e.target.checked ? 'dim' : 'off'; save_(); });
+    document.getElementById('twmgr-map-rsv-sync').addEventListener('click', async () => {
+      const btn = document.getElementById('twmgr-map-rsv-sync');
+      btn.disabled = true; btn.textContent = '⏳ sincronizando…';
+      const r = await loadReservations();
+      btn.disabled = false; btn.textContent = '⌛ sync reservas';
+      if (r.ok) pushLog('Mapa: ' + r.count + ' reserva(s) sincronizada(s).', 'ok');
+      else pushLog('Mapa: falha ao sincronizar reservas — ' + (r.error || 'erro desconhecido'), 'err');
+      // Re-monta o painel pra atualizar o timestamp na barra de status
+      const p = document.getElementById('twmgr-map-panel'); if (p) p.remove();
+      mapBuildPanel();
+      mapApplyFilters();
+    });
     document.getElementById('twmgr-map-reset').addEventListener('click', () => {
       cfg.show = { mine: true, tribe: true, enemy: true, barb: true };
       cfg.pointsMin = 0; cfg.pointsMax = 0;

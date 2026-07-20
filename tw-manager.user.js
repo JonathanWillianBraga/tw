@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.56.2
+// @version      9.56.3
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -77,7 +77,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.56.2';
+  const VERSION = '9.56.3';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -4687,15 +4687,22 @@
   function mapBuildPanel() {
     if (document.getElementById('twmgr-map-panel')) return;
     const cfg = config.mapUi;
-    const panel = document.createElement('div');
+    // Ancora inline abaixo da tabela "Alterar o tamanho do mapa" (contém #map_chooser_select).
+    // Se não achar (mundo diferente / layout mudou), cai pro fixed antigo no canto.
+    const sizeSel = document.getElementById('map_chooser_select');
+    const sizeTable = sizeSel ? sizeSel.closest('table') : null;
+    const inline = !!sizeTable;
+    const panel = document.createElement(inline ? 'table' : 'div');
     panel.id = 'twmgr-map-panel';
-    panel.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:10000;background:linear-gradient(180deg,#f4e4bc,#e8d29a);border:1px solid #7d510a;border-radius:8px;padding:8px 10px;font-size:11px;color:#3b2914;box-shadow:0 2px 6px rgba(0,0,0,.35);min-width:220px;font-family:Verdana,sans-serif';
+    if (inline) {
+      panel.className = 'vis';
+      panel.setAttribute('width', '100%');
+      panel.style.cssText = 'margin-top:6px;font-size:11px;color:#3b2914;font-family:Verdana,sans-serif';
+    } else {
+      panel.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:10000;background:linear-gradient(180deg,#f4e4bc,#e8d29a);border:1px solid #7d510a;border-radius:8px;padding:8px 10px;font-size:11px;color:#3b2914;box-shadow:0 2px 6px rgba(0,0,0,.35);min-width:220px;font-family:Verdana,sans-serif';
+    }
     const check = (id, label, checked) => '<label style="display:flex;align-items:center;gap:6px;margin:2px 0;cursor:pointer"><input id="' + id + '" type="checkbox"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
-    panel.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-        '<b style="color:#5a3c0f">🗺️ TW Manager · Mapa</b>' +
-        '<span id="twmgr-map-collapse" style="cursor:pointer;padding:0 6px;color:#5a3c0f">' + (cfg.collapsed ? '▲' : '▼') + '</span>' +
-      '</div>' +
+    const bodyHTML =
       '<div id="twmgr-map-body" style="' + (cfg.collapsed ? 'display:none' : '') + '">' +
         check('twmgr-map-show-mine', '🟢 Minhas aldeias', cfg.show.mine) +
         check('twmgr-map-show-tribe', '🔵 Tribo', cfg.show.tribe) +
@@ -4721,14 +4728,29 @@
           '<div style="margin-top:2px;color:#8b6d3f;font-size:9px">cache mapa: ' + (cfg.dataCachedAt ? new Date(cfg.dataCachedAt).toLocaleTimeString() : '—') + ' · reservas: ' + (cfg.reservationsAt ? (new Date(cfg.reservationsAt).toLocaleTimeString() + ' (' + Object.keys(cfg.reservations || {}).length + ')') : '—') + '</div>' +
         '</div>' +
       '</div>';
-    document.body.appendChild(panel);
+    if (inline) {
+      // Estrutura tipo tabela vis nativa: <th> header + <td> corpo (padrão do TW pra sidebar do mapa)
+      panel.innerHTML =
+        '<tr><th colspan="2" style="cursor:pointer" id="twmgr-map-header">🗺️ TW Manager · Mapa <span id="twmgr-map-collapse">' + (cfg.collapsed ? '▲' : '▼') + '</span></th></tr>' +
+        '<tr><td colspan="2" style="padding:6px 8px">' + bodyHTML + '</td></tr>';
+      sizeTable.parentNode.insertBefore(panel, sizeTable.nextSibling);
+    } else {
+      panel.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+          '<b style="color:#5a3c0f">🗺️ TW Manager · Mapa</b>' +
+          '<span id="twmgr-map-collapse" style="cursor:pointer;padding:0 6px;color:#5a3c0f">' + (cfg.collapsed ? '▲' : '▼') + '</span>' +
+        '</div>' + bodyHTML;
+      document.body.appendChild(panel);
+    }
 
     // Wire eventos
     const save_ = () => { save(); mapApplyFilters(); };
-    document.getElementById('twmgr-map-collapse').addEventListener('click', () => {
+    // Colapsar: no modo inline o click é no header todo; no modo fixed, só no span
+    const toggler = document.getElementById('twmgr-map-header') || document.getElementById('twmgr-map-collapse');
+    if (toggler) toggler.addEventListener('click', () => {
       cfg.collapsed = !cfg.collapsed;
-      document.getElementById('twmgr-map-body').style.display = cfg.collapsed ? 'none' : '';
-      document.getElementById('twmgr-map-collapse').textContent = cfg.collapsed ? '▲' : '▼';
+      const body = document.getElementById('twmgr-map-body'); if (body) body.style.display = cfg.collapsed ? 'none' : '';
+      const chevron = document.getElementById('twmgr-map-collapse'); if (chevron) chevron.textContent = cfg.collapsed ? '▲' : '▼';
       save();
     });
     ['mine','tribe','enemy','barb'].forEach((k) => {

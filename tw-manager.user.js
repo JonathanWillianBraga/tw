@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.87.4
+// @version      9.87.5
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.87.4';
+  const VERSION = '9.87.5';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -123,7 +123,7 @@
   // acompanha a pop das tropas, quartel/estábulo -> 20 p/ velocidade de recrutamento. Baixa prioridade no fim: oficina (cerco ATK), mercado, muralha.
   const BB_TPL_F3 = 'wood 12\nstone 12\niron 12\nstorage 22\nfarm 20\nbarracks 10\nstable 18\nsmith 10\nwood 18\nstone 18\niron 18\nstorage 25\nfarm 25\nbarracks 15\nsmith 15\nwood 22\nstone 22\niron 22\nstorage 27\nfarm 27\nstable 20\nbarracks 20\nwood 25\nstone 25\niron 25\nstorage 30\nfarm 30\ngarage 10\nmarket 15\nwall 15';
   const BB_TPL = BB_TPL_F1 + '\n' + BB_TPL_F2 + '\n' + BB_TPL_F3;
-  const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, feedFillPct: 90, gradMain: 20, gradStable: 15, inflight: {} });
+  const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, feedFillPct: 90, feedAllowOverfill: false, gradMain: 20, gradStable: 15, inflight: {} });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
   const defMap = () => ({
     running: false, nextAt: 0,
@@ -300,6 +300,7 @@
     if (c.bb.feedReserve == null) c.bb.feedReserve = 40;
     if (c.bb.feedMaxDist == null) c.bb.feedMaxDist = 15;
     if (c.bb.feedFillPct == null) c.bb.feedFillPct = 90;
+    if (c.bb.feedAllowOverfill == null) c.bb.feedAllowOverfill = false;
     if (c.bb.maxQueue == null) c.bb.maxQueue = 5;
     if (c.bb.interval == null) c.bb.interval = 600;
     if (c.bb.gradMain == null) c.bb.gradMain = 20;
@@ -2934,14 +2935,15 @@
     const inf = bbInflightSum(v.vid);
     const eff = { wood: ms.wood + inf.wood, stone: ms.stone + inf.stone, iron: ms.iron + inf.iron };
     const free = { wood: Math.max(0, ms.storage - eff.wood), stone: Math.max(0, ms.storage - eff.stone), iron: Math.max(0, ms.storage - eff.iron) };
-    // Estoque-alvo PROATIVO: manter a bárbara cheia até feedFillPct% do armazém (default 90%), pra ela seguir
-    // construindo E recrutando entre ciclos sem esperar travar. `needCost` (custo da próxima obra, se houver)
-    // vira PISO: se um nível caro pede mais que o fill, enche até o necessário (limitado pelo armazém livre).
+    // Estoque-alvo PROATIVO: manter a bárbara cheia até feedFillPct% do armazém, pra ela seguir construindo E
+    // recrutando entre ciclos. O teto é RESPEITADO (não passa do %). Só fura se `feedAllowOverfill` estiver
+    // ligado: aí `needCost` (custo da próxima obra) vira piso e enche até bancá-la, evitando travar obra cara.
     const fillTo = ms.storage * ((config.bb.feedFillPct != null ? config.bb.feedFillPct : 90) / 100);
+    const overfill = !!config.bb.feedAllowOverfill;
     const want = {
-      wood: Math.max(fillTo, (needCost && needCost.wood) || 0),
-      stone: Math.max(fillTo, (needCost && needCost.stone) || 0),
-      iron: Math.max(fillTo, (needCost && needCost.iron) || 0),
+      wood: overfill ? Math.max(fillTo, (needCost && needCost.wood) || 0) : fillTo,
+      stone: overfill ? Math.max(fillTo, (needCost && needCost.stone) || 0) : fillTo,
+      iron: overfill ? Math.max(fillTo, (needCost && needCost.iron) || 0) : fillTo,
     };
     const target = {
       wood: Math.max(0, Math.min(want.wood - eff.wood, free.wood)),
@@ -3053,6 +3055,7 @@
     if (g('twmgr-bb-tpl')) c.tpl = g('twmgr-bb-tpl').value;
     if (g('twmgr-bb-def')) c.defCoords = g('twmgr-bb-def').value;
     if (g('twmgr-bb-fill')) c.feedFillPct = Math.max(10, Math.min(100, parseInt(g('twmgr-bb-fill').value, 10) || 90));
+    if (g('twmgr-bb-overfill')) c.feedAllowOverfill = g('twmgr-bb-overfill').checked;
     if (g('twmgr-bb-reserve')) c.feedReserve = Math.max(0, Math.min(90, parseInt(g('twmgr-bb-reserve').value, 10) || 40));
     if (g('twmgr-bb-dist')) c.feedMaxDist = Math.max(1, parseInt(g('twmgr-bb-dist').value, 10) || 15);
     if (g('twmgr-bb-max')) c.maxQueue = Math.max(1, parseInt(g('twmgr-bb-max').value, 10) || 5);
@@ -3976,6 +3979,7 @@
           '<textarea id="twmgr-bb-def" class="twmgr-inp" style="width:100%;height:44px;font-family:monospace;font-size:10px" placeholder="ex: 470|592"></textarea>') +
         sec('Abastecimento',
           '<div class="twmgr-row"><span class="twmgr-lbl" title="Mantém cada bárbara cheia até esse % do armazém dela, todo ciclo (obra + recrutamento). Maior = mais generoso.">Encher aldeia até (%)</span><input id="twmgr-bb-fill" class="twmgr-inp" type="number" min="10" max="100" value="90" style="width:56px"></div>' +
+          '<label class="twmgr-check" style="margin:4px 0" title="Se ligado, o feed fura o teto acima quando um nível de obra custar mais que ele (não trava obra cara). Desligado = respeita o teto sempre."><input id="twmgr-bb-overfill" type="checkbox"> Furar o teto p/ bancar obra cara</label>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Reserva na fonte (%)</span><input id="twmgr-bb-reserve" class="twmgr-inp" type="number" min="0" max="90" value="40" style="width:56px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Dist. máx. fonte (campos)</span><input id="twmgr-bb-dist" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
         sec('Ritmo',
@@ -4255,11 +4259,12 @@
     document.getElementById('twmgr-bb-tpl').value = config.bb.tpl || BB_TPL;
     document.getElementById('twmgr-bb-def').value = config.bb.defCoords || '';
     document.getElementById('twmgr-bb-fill').value = config.bb.feedFillPct != null ? config.bb.feedFillPct : 90;
+    document.getElementById('twmgr-bb-overfill').checked = !!config.bb.feedAllowOverfill;
     document.getElementById('twmgr-bb-reserve').value = config.bb.feedReserve != null ? config.bb.feedReserve : 40;
     document.getElementById('twmgr-bb-dist').value = config.bb.feedMaxDist != null ? config.bb.feedMaxDist : 15;
     document.getElementById('twmgr-bb-max').value = config.bb.maxQueue || 5;
     document.getElementById('twmgr-bb-int').value = Math.round((config.bb.interval || 600) / 60);
-    ['twmgr-bb-group', 'twmgr-bb-tpl', 'twmgr-bb-def', 'twmgr-bb-fill', 'twmgr-bb-reserve', 'twmgr-bb-dist', 'twmgr-bb-max', 'twmgr-bb-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readBBCfg); });
+    ['twmgr-bb-group', 'twmgr-bb-tpl', 'twmgr-bb-def', 'twmgr-bb-fill', 'twmgr-bb-overfill', 'twmgr-bb-reserve', 'twmgr-bb-dist', 'twmgr-bb-max', 'twmgr-bb-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readBBCfg); });
     document.getElementById('twmgr-bb-reload').addEventListener('click', fillGroupSelects);
     document.getElementById('twmgr-bb-tpl-reset').addEventListener('click', () => {
       if (!confirm('Resetar a ladder do Cultivo pro padrão do script?')) return;

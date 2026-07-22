@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.87.1
+// @version      9.87.2
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.87.1';
+  const VERSION = '9.87.2';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -120,7 +120,7 @@
   // FASE 2 (pós-graduação): economia + campos de recurso. (a revisar — ordem pode travar, ver conversa)
   const BB_TPL_F2 = 'barracks 15\nsmith 10\ngarage 5\nfarm 24\nstorage 25\nbarracks 20\nstable 20\ngarage 10\nwood 30\nstone 30\niron 30\nstorage 30\nfarm 27\nmarket 15';
   const BB_TPL = BB_TPL_F1 + '\n' + BB_TPL_F2;
-  const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, gradMain: 20, gradStable: 15, inflight: {} });
+  const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, feedFillPct: 90, gradMain: 20, gradStable: 15, inflight: {} });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
   const defMap = () => ({
     running: false, nextAt: 0,
@@ -296,6 +296,7 @@
     if (c.bb.defCoords == null) c.bb.defCoords = '';
     if (c.bb.feedReserve == null) c.bb.feedReserve = 40;
     if (c.bb.feedMaxDist == null) c.bb.feedMaxDist = 15;
+    if (c.bb.feedFillPct == null) c.bb.feedFillPct = 90;
     if (c.bb.maxQueue == null) c.bb.maxQueue = 5;
     if (c.bb.interval == null) c.bb.interval = 600;
     if (c.bb.gradMain == null) c.bb.gradMain = 20;
@@ -2930,10 +2931,19 @@
     const inf = bbInflightSum(v.vid);
     const eff = { wood: ms.wood + inf.wood, stone: ms.stone + inf.stone, iron: ms.iron + inf.iron };
     const free = { wood: Math.max(0, ms.storage - eff.wood), stone: Math.max(0, ms.storage - eff.stone), iron: Math.max(0, ms.storage - eff.iron) };
+    // Estoque-alvo PROATIVO: manter a bárbara cheia até feedFillPct% do armazém (default 90%), pra ela seguir
+    // construindo E recrutando entre ciclos sem esperar travar. `needCost` (custo da próxima obra, se houver)
+    // vira PISO: se um nível caro pede mais que o fill, enche até o necessário (limitado pelo armazém livre).
+    const fillTo = ms.storage * ((config.bb.feedFillPct != null ? config.bb.feedFillPct : 90) / 100);
+    const want = {
+      wood: Math.max(fillTo, (needCost && needCost.wood) || 0),
+      stone: Math.max(fillTo, (needCost && needCost.stone) || 0),
+      iron: Math.max(fillTo, (needCost && needCost.iron) || 0),
+    };
     const target = {
-      wood: Math.max(0, Math.min((needCost.wood || 0) - eff.wood, free.wood)),
-      stone: Math.max(0, Math.min((needCost.stone || 0) - eff.stone, free.stone)),
-      iron: Math.max(0, Math.min((needCost.iron || 0) - eff.iron, free.iron)),
+      wood: Math.max(0, Math.min(want.wood - eff.wood, free.wood)),
+      stone: Math.max(0, Math.min(want.stone - eff.stone, free.stone)),
+      iron: Math.max(0, Math.min(want.iron - eff.iron, free.iron)),
     };
     if (target.wood + target.stone + target.iron <= 0) return false;
     const cm = (v.coord || '').match(/(\d+)\|(\d+)/); if (!cm) return false;
@@ -2991,9 +3001,13 @@
     let allV = []; try { allV = await getAllVillages(); } catch (e) {}
     const sources = allV.filter((v) => !bbSet[v.vid] && v.coord);
     const srcState = {};
+    // Conserta aldeia do grupo sem coord (getVillagesInGroup às vezes não parseia) — sem isso ela fica órfã
+    // (feed não roda + vira sempre ATK). O getAllVillages traz a coord de todas.
+    const coordByVid = {}; allV.forEach((a) => { if (a.coord) coordByVid[a.vid] = a.coord; });
     let built = 0, recruited = 0, fed = 0, f1 = 0, f2 = 0, f3 = 0;
     const gMain = config.bb.gradMain || 20, gStable = config.bb.gradStable || 15;
     for (const v of vils) {
+      if (!v.coord && coordByVid[v.vid]) v.coord = coordByVid[v.vid];
       let st;
       try { st = await getBuildState(v.vid); }
       catch (e) { pushLog('Cultivo em ' + (v.coord || v.vid) + ': erro ao ler o estado.', 'err', 'bb'); continue; }
@@ -3018,7 +3032,9 @@
           }
         } catch (e) { pushLog('Cultivo (recruta) em ' + (v.coord || v.vid) + ': ' + (e.message || e), 'err', 'bb'); }
       }
-      if (r.demand) { try { if (await feedBB(v, r.demand.cost, sources, srcState)) fed++; } catch (e) {} }
+      // Feed PROATIVO: alimenta toda aldeia todo ciclo (mantém cheia p/ obra + recrutamento), usando o
+      // custo da obra travada como piso quando existir. Antes só rodava quando a obra travava (r.demand).
+      try { if (await feedBB(v, r.demand ? r.demand.cost : null, sources, srcState)) fed++; } catch (e) {}
       await sleep(300);
     }
     config.bb.stats = { total: vils.length, f1: f1, f2: f2, f3: f3 };
@@ -3033,6 +3049,7 @@
     if (g('twmgr-bb-group')) c.group = g('twmgr-bb-group').value || null;
     if (g('twmgr-bb-tpl')) c.tpl = g('twmgr-bb-tpl').value;
     if (g('twmgr-bb-def')) c.defCoords = g('twmgr-bb-def').value;
+    if (g('twmgr-bb-fill')) c.feedFillPct = Math.max(10, Math.min(100, parseInt(g('twmgr-bb-fill').value, 10) || 90));
     if (g('twmgr-bb-reserve')) c.feedReserve = Math.max(0, Math.min(90, parseInt(g('twmgr-bb-reserve').value, 10) || 40));
     if (g('twmgr-bb-dist')) c.feedMaxDist = Math.max(1, parseInt(g('twmgr-bb-dist').value, 10) || 15);
     if (g('twmgr-bb-max')) c.maxQueue = Math.max(1, parseInt(g('twmgr-bb-max').value, 10) || 5);
@@ -3955,6 +3972,7 @@
           '<div style="font-size:10px;color:#8f7d57;margin:4px 0 2px">Aldeias DEF (coords, 1 por linha) — o resto vira ATK</div>' +
           '<textarea id="twmgr-bb-def" class="twmgr-inp" style="width:100%;height:44px;font-family:monospace;font-size:10px" placeholder="ex: 470|592"></textarea>') +
         sec('Abastecimento',
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Mantém cada bárbara cheia até esse % do armazém dela, todo ciclo (obra + recrutamento). Maior = mais generoso.">Encher aldeia até (%)</span><input id="twmgr-bb-fill" class="twmgr-inp" type="number" min="10" max="100" value="90" style="width:56px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Reserva na fonte (%)</span><input id="twmgr-bb-reserve" class="twmgr-inp" type="number" min="0" max="90" value="40" style="width:56px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Dist. máx. fonte (campos)</span><input id="twmgr-bb-dist" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
         sec('Ritmo',
@@ -4233,11 +4251,12 @@
 
     document.getElementById('twmgr-bb-tpl').value = config.bb.tpl || BB_TPL;
     document.getElementById('twmgr-bb-def').value = config.bb.defCoords || '';
+    document.getElementById('twmgr-bb-fill').value = config.bb.feedFillPct != null ? config.bb.feedFillPct : 90;
     document.getElementById('twmgr-bb-reserve').value = config.bb.feedReserve != null ? config.bb.feedReserve : 40;
     document.getElementById('twmgr-bb-dist').value = config.bb.feedMaxDist != null ? config.bb.feedMaxDist : 15;
     document.getElementById('twmgr-bb-max').value = config.bb.maxQueue || 5;
     document.getElementById('twmgr-bb-int').value = Math.round((config.bb.interval || 600) / 60);
-    ['twmgr-bb-group', 'twmgr-bb-tpl', 'twmgr-bb-def', 'twmgr-bb-reserve', 'twmgr-bb-dist', 'twmgr-bb-max', 'twmgr-bb-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readBBCfg); });
+    ['twmgr-bb-group', 'twmgr-bb-tpl', 'twmgr-bb-def', 'twmgr-bb-fill', 'twmgr-bb-reserve', 'twmgr-bb-dist', 'twmgr-bb-max', 'twmgr-bb-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readBBCfg); });
     document.getElementById('twmgr-bb-reload').addEventListener('click', fillGroupSelects);
     document.getElementById('twmgr-bb-tpl-reset').addEventListener('click', () => {
       if (!confirm('Resetar a ladder do Cultivo pro padrão do script?')) return;

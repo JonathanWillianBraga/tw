@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.87.3
+// @version      9.87.4
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.87.3';
+  const VERSION = '9.87.4';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -114,14 +114,15 @@
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
   const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, thresholdPct: 50, maxDist: 15, inflight: {} });
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
-  // Cultivo — fila da FASE 1 (até graduar: main 20 + stable 15). Armazém "lidera" (sobe antes das obras
-  // caras caberem) e quartel 5 + ferreiro 5 vêm cedo pra liberar o estábulo (pré-req: main 10 + quartel 5 + ferreiro 5).
-  const BB_TPL_F1 = 'main 5\nstorage 5\nfarm 5\nbarracks 5\nsmith 5\nmain 10\nstorage 8\nfarm 8\nstable 5\nmain 13\nstorage 12\nfarm 12\nstable 8\nmain 16\nstorage 16\nfarm 15\nstable 11\nmain 18\nstorage 18\nfarm 18\nstable 13\nstorage 20\nmain 20\nstable 15\nfarm 20';
-  // FASE 2 (pós-graduação, aldeia já recrutando): torna a bárbara autossuficiente. Recurso + armazém lideram
-  // (reduz dependência do feed e não trava), fazenda acompanha a pop, quartel/estábulo sobem p/ velocidade de
-  // recrutamento. Rabo de BAIXA PRIORIDADE no fim: oficina (cerco, ATK), mercado e muralha.
-  const BB_TPL_F2 = 'wood 12\nstone 12\niron 12\nstorage 22\nfarm 22\nbarracks 10\nstable 18\nsmith 10\nwood 18\nstone 18\niron 18\nstorage 25\nfarm 25\nbarracks 15\nsmith 15\nwood 22\nstone 22\niron 22\nstorage 27\nfarm 27\nstable 20\nbarracks 20\nwood 25\nstone 25\niron 25\nstorage 30\nfarm 30\ngarage 10\nmarket 15\nwall 15';
-  const BB_TPL = BB_TPL_F1 + '\n' + BB_TPL_F2;
+  // Cultivo — 3 fases (batem com os cards: f1 = main<20 · f2 = main 20 e stable<15 · f3 = graduada/recrutando).
+  // FASE 1: leva o Ed. principal até 20 + o que ele depende (armazém "lidera" p/ bancar os níveis; fazenda leve p/ pop). Sem estábulo.
+  const BB_TPL_F1 = 'main 5\nstorage 5\nfarm 5\nmain 10\nstorage 8\nfarm 8\nmain 14\nstorage 12\nfarm 10\nmain 17\nstorage 18\nmain 20\nstorage 20';
+  // FASE 2: destrava e fecha o Estábulo 15 (quartel 5 + ferreiro 5 = pré-req; depois estábulo até 15). Ao fechar = graduada.
+  const BB_TPL_F2 = 'barracks 5\nsmith 5\nstable 5\nfarm 13\nstable 9\nfarm 15\nstable 12\nstable 15';
+  // FASE 3 (graduada, já recrutando): autossuficiência. Recurso + armazém lideram (reduz feed, sem travar), fazenda
+  // acompanha a pop das tropas, quartel/estábulo -> 20 p/ velocidade de recrutamento. Baixa prioridade no fim: oficina (cerco ATK), mercado, muralha.
+  const BB_TPL_F3 = 'wood 12\nstone 12\niron 12\nstorage 22\nfarm 20\nbarracks 10\nstable 18\nsmith 10\nwood 18\nstone 18\niron 18\nstorage 25\nfarm 25\nbarracks 15\nsmith 15\nwood 22\nstone 22\niron 22\nstorage 27\nfarm 27\nstable 20\nbarracks 20\nwood 25\nstone 25\niron 25\nstorage 30\nfarm 30\ngarage 10\nmarket 15\nwall 15';
+  const BB_TPL = BB_TPL_F1 + '\n' + BB_TPL_F2 + '\n' + BB_TPL_F3;
   const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, feedFillPct: 90, gradMain: 20, gradStable: 15, inflight: {} });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
   const defMap = () => ({

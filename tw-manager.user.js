@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.58.0
+// @version      9.87.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.87.0';
+  const VERSION = '9.87.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -114,7 +114,12 @@
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
   const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, thresholdPct: 50, maxDist: 15, inflight: {} });
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
-  const BB_TPL = 'main 20\nstorage 20\nfarm 22\nstable 15\nbarracks 15\nsmith 10\ngarage 5\nfarm 24\nstorage 25\nbarracks 20\nstable 20\ngarage 10\nwood 30\nstone 30\niron 30\nstorage 30\nfarm 27\nmarket 15';
+  // Cultivo — fila da FASE 1 (até graduar: main 20 + stable 15). Armazém "lidera" (sobe antes das obras
+  // caras caberem) e quartel 5 + ferreiro 5 vêm cedo pra liberar o estábulo (pré-req: main 10 + quartel 5 + ferreiro 5).
+  const BB_TPL_F1 = 'main 5\nstorage 5\nfarm 5\nbarracks 5\nsmith 5\nmain 10\nstorage 8\nfarm 8\nstable 5\nmain 13\nstorage 12\nfarm 12\nstable 8\nmain 16\nstorage 16\nfarm 15\nstable 11\nmain 18\nstorage 18\nfarm 18\nstable 13\nstorage 20\nmain 20\nstable 15\nfarm 20';
+  // FASE 2 (pós-graduação): economia + campos de recurso. (a revisar — ordem pode travar, ver conversa)
+  const BB_TPL_F2 = 'barracks 15\nsmith 10\ngarage 5\nfarm 24\nstorage 25\nbarracks 20\nstable 20\ngarage 10\nwood 30\nstone 30\niron 30\nstorage 30\nfarm 27\nmarket 15';
+  const BB_TPL = BB_TPL_F1 + '\n' + BB_TPL_F2;
   const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, gradMain: 20, gradStable: 15, inflight: {} });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
   const defMap = () => ({
@@ -3946,6 +3951,7 @@
           '<div style="text-align:right;margin-top:2px"><button id="twmgr-bb-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button></div>') +
         sec('Ladder de obra (chave nível, em ordem)',
           '<textarea id="twmgr-bb-tpl" class="twmgr-inp" style="width:100%;height:96px;font-family:monospace;font-size:10px"></textarea>' +
+          '<div style="text-align:right;margin:2px 0 6px"><button id="twmgr-bb-tpl-reset" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="volta pro padrão do script (fase 1 + fase 2)">↺ reset padrão</button></div>' +
           '<div style="font-size:10px;color:#8f7d57;margin:4px 0 2px">Aldeias DEF (coords, 1 por linha) — o resto vira ATK</div>' +
           '<textarea id="twmgr-bb-def" class="twmgr-inp" style="width:100%;height:44px;font-family:monospace;font-size:10px" placeholder="ex: 470|592"></textarea>') +
         sec('Abastecimento',
@@ -4233,6 +4239,12 @@
     document.getElementById('twmgr-bb-int').value = Math.round((config.bb.interval || 600) / 60);
     ['twmgr-bb-group', 'twmgr-bb-tpl', 'twmgr-bb-def', 'twmgr-bb-reserve', 'twmgr-bb-dist', 'twmgr-bb-max', 'twmgr-bb-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readBBCfg); });
     document.getElementById('twmgr-bb-reload').addEventListener('click', fillGroupSelects);
+    document.getElementById('twmgr-bb-tpl-reset').addEventListener('click', () => {
+      if (!confirm('Resetar a ladder do Cultivo pro padrão do script?')) return;
+      config.bb.tpl = BB_TPL; save();
+      document.getElementById('twmgr-bb-tpl').value = BB_TPL;
+      pushLog('Cultivo: ladder resetada pro padrão.', 'ok', 'bb');
+    });
     document.getElementById('twmgr-bb-start').addEventListener('click', bbStart);
     document.getElementById('twmgr-bb-stop').addEventListener('click', bbStop);
     setBBStatus(config.bb.running);

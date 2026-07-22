@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.87.2
+// @version      9.87.3
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.87.2';
+  const VERSION = '9.87.3';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -117,8 +117,10 @@
   // Cultivo — fila da FASE 1 (até graduar: main 20 + stable 15). Armazém "lidera" (sobe antes das obras
   // caras caberem) e quartel 5 + ferreiro 5 vêm cedo pra liberar o estábulo (pré-req: main 10 + quartel 5 + ferreiro 5).
   const BB_TPL_F1 = 'main 5\nstorage 5\nfarm 5\nbarracks 5\nsmith 5\nmain 10\nstorage 8\nfarm 8\nstable 5\nmain 13\nstorage 12\nfarm 12\nstable 8\nmain 16\nstorage 16\nfarm 15\nstable 11\nmain 18\nstorage 18\nfarm 18\nstable 13\nstorage 20\nmain 20\nstable 15\nfarm 20';
-  // FASE 2 (pós-graduação): economia + campos de recurso. (a revisar — ordem pode travar, ver conversa)
-  const BB_TPL_F2 = 'barracks 15\nsmith 10\ngarage 5\nfarm 24\nstorage 25\nbarracks 20\nstable 20\ngarage 10\nwood 30\nstone 30\niron 30\nstorage 30\nfarm 27\nmarket 15';
+  // FASE 2 (pós-graduação, aldeia já recrutando): torna a bárbara autossuficiente. Recurso + armazém lideram
+  // (reduz dependência do feed e não trava), fazenda acompanha a pop, quartel/estábulo sobem p/ velocidade de
+  // recrutamento. Rabo de BAIXA PRIORIDADE no fim: oficina (cerco, ATK), mercado e muralha.
+  const BB_TPL_F2 = 'wood 12\nstone 12\niron 12\nstorage 22\nfarm 22\nbarracks 10\nstable 18\nsmith 10\nwood 18\nstone 18\niron 18\nstorage 25\nfarm 25\nbarracks 15\nsmith 15\nwood 22\nstone 22\niron 22\nstorage 27\nfarm 27\nstable 20\nbarracks 20\nwood 25\nstone 25\niron 25\nstorage 30\nfarm 30\ngarage 10\nmarket 15\nwall 15';
   const BB_TPL = BB_TPL_F1 + '\n' + BB_TPL_F2;
   const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, feedFillPct: 90, gradMain: 20, gradStable: 15, inflight: {} });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });

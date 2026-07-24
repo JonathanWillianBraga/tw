@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.87.5
+// @version      9.88.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.87.5';
+  const VERSION = '9.88.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -112,7 +112,7 @@
     groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
   });
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
-  const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, thresholdPct: 50, maxDist: 15, inflight: {} });
+  const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, mintSources: {}, thresholdPct: 50, maxDist: 15, inflight: {} });
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
   // Cultivo — 3 fases (batem com os cards: f1 = main<20 · f2 = main 20 e stable<15 · f3 = graduada/recrutando).
   // FASE 1: leva o Ed. principal até 20 + o que ele depende (armazém "lidera" p/ bancar os níveis; fazenda leve p/ pop). Sem estábulo.
@@ -276,6 +276,7 @@
     if (c.market.interval == null) c.market.interval = 600;
     if (c.market.reserve == null) c.market.reserve = 0;
     if (!c.market.sources) c.market.sources = {};
+    if (!c.market.mintSources) c.market.mintSources = {};
     if (c.market.destCoord == null) c.market.destCoord = '';
     if (c.market.thresholdPct == null) c.market.thresholdPct = 50;
     if (c.market.maxDist == null) c.market.maxDist = 15;
@@ -2606,6 +2607,7 @@
     if ((config.market.nextAt || 0) > now) { scheduleMarket(); return; }
     try {
       if (config.market.mode === 'equilibrio') await equilibrioPass();
+      else if (config.market.mode === 'cunhar') await cunharPass();
       else await cunhagemPass();
     } catch (e) { pushLog('Mercado: erro no ciclo (' + (e.message || e) + ').', 'err', 'market'); }
     config.market.nextAt = now + Math.max(60, config.market.interval || 600) * 1000;
@@ -2640,6 +2642,61 @@
     }
     config.market.stats = { sending: count, receiving: coord ? 1 : 0, wood: tot.wood, stone: tot.stone, iron: tot.iron };
     pushLog('Cunhagem: ciclo concluído — ' + count + ' aldeia(s) enviaram recurso.', 'ok', 'market');
+  }
+
+  // ---- Cunhar moedas de ouro (Academia / screen=snob) ----
+  // Lê a tela da Academia e parseia o PRÓPRIO formulário de cunhagem (sem hardcode de endpoint),
+  // igual o Mercado faz no confirm de envio. Retorna o form (action+campos), o nome do campo de
+  // quantidade e o máximo cunhável agora (o "(N)" que o jogo já calcula, com custo escalado).
+  async function getSnobState(vid) {
+    const res = await fetch('/game.php?village=' + vid + '&screen=snob', { credentials: 'include' });
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const numOf = (id) => { const el = doc.getElementById(id); return el ? (parseInt((el.textContent || '').replace(/\D/g, ''), 10) || 0) : 0; };
+    const resNow = { wood: numOf('wood'), stone: numOf('stone'), iron: numOf('iron') };
+    // form de cunhagem: o único cujo action contém action=coin (o de nobre é action diferente)
+    const form = doc.querySelector('form[action*="action=coin"]');
+    let action = null, fields = {}, countName = 'count', maxMint = 0;
+    if (form) {
+      action = form.getAttribute('action');
+      form.querySelectorAll('input, select').forEach((el) => { if (el.name && el.type !== 'submit' && el.type !== 'button') fields[el.name] = el.value; });
+      const ci = form.querySelector('input[type="text"], input[type="number"], input:not([type])');
+      if (ci && ci.name) countName = ci.name;
+      // "(N)" = máximo cunhável agora (o jogo já considera o custo por moeda, que escala com nobres)
+      const mm = (form.textContent || '').match(/\((\d+)\)/);
+      if (mm) maxMint = parseInt(mm[1], 10) || 0;
+    }
+    return { resNow: resNow, hasForm: !!form, action: action, fields: fields, countName: countName, maxMint: maxMint };
+  }
+  async function mintCoins(vid) {
+    const st = await getSnobState(vid);
+    if (!st.hasForm) throw new Error('sem formulário de cunhagem (a aldeia tem Academia?)');
+    const n = st.maxMint;
+    if (n < 1) return { minted: 0, res: st.resNow };
+    const body = new URLSearchParams();
+    Object.entries(st.fields).forEach(([k, v]) => body.set(k, v));
+    body.set(st.countName, String(n));
+    if (!body.has('h')) body.set('h', CSRF);
+    const r = await fetch(absUrl(st.action), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+    const t = await r.text();
+    try { const d = new DOMParser().parseFromString(t, 'text/html'); const eb = d.querySelector('.error_box'); if (eb && (eb.textContent || '').trim()) throw new Error('recusado: ' + eb.textContent.trim().replace(/\s+/g, ' ').slice(0, 80)); } catch (e) { if (/^recusado:/.test(e.message)) throw e; }
+    return { minted: n, res: st.resNow };
+  }
+  async function cunharPass() {
+    let vils = [];
+    try { vils = await getAllVillages(); } catch (e) { pushLog('Cunhar: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
+    const sel = config.market.mintSources || {};
+    let count = 0, coins = 0;
+    for (const v of vils) {
+      if (!sel[v.vid]) continue;
+      try {
+        const r = await mintCoins(v.vid);
+        if (r.minted > 0) { count++; coins += r.minted; pushLog('Cunhar: ' + v.name + ' cunhou ' + r.minted + ' moeda(s).', 'ok', 'market'); }
+        else pushLog('Cunhar: ' + v.name + ' — recurso insuficiente p/ 1 moeda.', '', 'market');
+      } catch (e) { pushLog('Cunhar em ' + v.name + ': ' + (e.message || e), 'err', 'market'); }
+      await sleep(400 + Math.floor(Math.random() * 400));
+    }
+    config.market.stats = { sending: count, receiving: 0, wood: coins, stone: 0, iron: 0 };
+    pushLog('Cunhar: ciclo concluído — ' + coins + ' moeda(s) em ' + count + ' aldeia(s).', 'ok', 'market');
   }
 
   function coordDist(a, b) { const pa = a.split('|').map(Number), pb = b.split('|').map(Number); return Math.sqrt((pa[0] - pb[0]) * (pa[0] - pb[0]) + (pa[1] - pb[1]) * (pa[1] - pb[1])); }
@@ -2704,6 +2761,13 @@
     cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-mk-src" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
     cont.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.addEventListener('change', readMarketCfg));
   }
+  async function renderMintSources() {
+    const cont = document.getElementById('twmgr-mk-mint-sources'); if (!cont) return;
+    let vils = []; try { vils = await getAllVillages(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
+    const sel = config.market.mintSources || {};
+    cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-mk-mint" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
+    cont.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.addEventListener('change', readMarketCfg));
+  }
   function readMarketCfg() {
     const c = config.market, g = (id) => document.getElementById(id);
     const mode = document.querySelector('input[name="twmgr-mk-mode"]:checked'); if (mode) c.mode = mode.value;
@@ -2713,6 +2777,7 @@
     if (g('twmgr-mk-thr')) c.thresholdPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-thr').value, 10) || 50));
     if (g('twmgr-mk-dist')) c.maxDist = Math.max(1, parseFloat((g('twmgr-mk-dist').value || '').replace(',', '.')) || 15);
     const src = {}; document.querySelectorAll('.twmgr-mk-src').forEach((cb) => { if (cb.checked) src[cb.getAttribute('data-vid')] = true; }); c.sources = src;
+    const mint = {}; document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => { if (cb.checked) mint[cb.getAttribute('data-vid')] = true; }); c.mintSources = mint;
     save();
   }
   function setMarketStatus(on) { setBtnState('twmgr-mk-start', 'twmgr-mk-stop', on, '● Enviando', '▶ Enviar'); }
@@ -2722,11 +2787,14 @@
       if (!/^\d+\s*\|\s*\d+$/.test(config.market.destCoord || '')) { pushLog('Cunhagem: coordenada de destino inválida (ex.: 464|604).', 'err', 'market'); return; }
       if (!Object.values(config.market.sources).some(Boolean)) { pushLog('Cunhagem: selecione ao menos 1 aldeia de origem.', 'err', 'market'); return; }
     }
+    if (config.market.mode === 'cunhar' && !Object.values(config.market.mintSources).some(Boolean)) { pushLog('Cunhar: selecione ao menos 1 aldeia pra cunhar.', 'err', 'market'); return; }
     config.market.running = true; config.market.nextAt = 0; save();
     setMarketStatus(true);
     pushLog(config.market.mode === 'equilibrio'
       ? 'Equilíbrio iniciado — limiar ' + config.market.thresholdPct + '% do armazém, distância ≤ ' + config.market.maxDist + '.'
-      : 'Cunhagem iniciada — destino ' + config.market.destCoord + ', deixa ' + config.market.reserve + ' de cada recurso.', 'ok', 'market');
+      : config.market.mode === 'cunhar'
+        ? 'Cunhar iniciado — cunhando o máximo nas aldeias marcadas a cada ' + Math.round((config.market.interval || 600) / 60) + ' min.'
+        : 'Cunhagem iniciada — destino ' + config.market.destCoord + ', deixa ' + config.market.reserve + ' de cada recurso.', 'ok', 'market');
     marketTick();
   }
   function marketStop() { readMarketCfg(); config.market.running = false; save(); clearTimeout(marketTimer); setMarketStatus(false); pushLog('Mercado parado.', '', 'market'); }
@@ -3918,9 +3986,9 @@
         modLog('fakes') +
       '</div>' +
       '<div id="twmgr-tab-market" style="display:none">' +
-        hint('Mercado: <b>Cunhagem</b> junta recurso num destino; <b>Equilíbrio</b> nivela as aldeias por % do armazém.') +
+        hint('Mercado: <b>Cunhagem</b> junta recurso num destino; <b>Equilíbrio</b> nivela as aldeias por %; <b>Cunhar</b> cunha moedas de ouro nas aldeias marcadas.') +
         cardsDiv('market') +
-        sec('Modo', '<div class="twmgr-row"><span class="twmgr-lbl">Modo</span><span style="font-size:11px"><label><input type="radio" name="twmgr-mk-mode" value="cunhagem"> 💰 Cunhagem</label> <label><input type="radio" name="twmgr-mk-mode" value="equilibrio"> ⚖️ Equilíbrio</label></span></div>') +
+        sec('Modo', '<div class="twmgr-row"><span class="twmgr-lbl">Modo</span><span style="font-size:11px"><label><input type="radio" name="twmgr-mk-mode" value="cunhagem"> 💰 Cunhagem</label> <label><input type="radio" name="twmgr-mk-mode" value="equilibrio"> ⚖️ Equilíbrio</label> <label><input type="radio" name="twmgr-mk-mode" value="cunhar"> 🪙 Cunhar</label></span></div>') +
         '<div id="twmgr-mk-cunhagem">' +
           sec('Cunhagem',
             '<div class="twmgr-row"><span class="twmgr-lbl">Coordenada destino</span><input id="twmgr-mk-coord" class="twmgr-inp" type="text" placeholder="464|604" style="width:90px"></div>' +
@@ -3933,6 +4001,12 @@
             '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Aldeia acima do limiar doa o excedente pras abaixo, por recurso. Da mais perto primeiro.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Encher armazém até (%)</span><input id="twmgr-mk-thr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="15" style="width:56px"></div>') +
+        '</div>' +
+        '<div id="twmgr-mk-cunhar" style="display:none">' +
+          sec('Cunhar moedas de ouro',
+            '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Cunha o máximo de moedas na Academia das aldeias marcadas, todo ciclo. Não transfere recurso.</div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl">Aldeias que cunham</span><span style="font-size:9px"><a id="twmgr-mk-mint-all" style="cursor:pointer;color:#e6cf7d">todas</a> · <a id="twmgr-mk-mint-none" style="cursor:pointer;color:#e6cf7d">nenhuma</a></span></div>' +
+            '<div id="twmgr-mk-mint-sources" style="max-height:120px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px"></div>') +
         '</div>' +
         sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-mk-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-mk-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-mk-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
@@ -4232,10 +4306,14 @@
       const m = (document.querySelector('input[name="twmgr-mk-mode"]:checked') || {}).value || 'cunhagem';
       document.getElementById('twmgr-mk-cunhagem').style.display = m === 'cunhagem' ? 'block' : 'none';
       document.getElementById('twmgr-mk-equilibrio').style.display = m === 'equilibrio' ? 'block' : 'none';
+      document.getElementById('twmgr-mk-cunhar').style.display = m === 'cunhar' ? 'block' : 'none';
     };
     renderMarketSources();
+    renderMintSources();
     document.getElementById('twmgr-mk-all').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.checked = true); readMarketCfg(); });
     document.getElementById('twmgr-mk-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.checked = false); readMarketCfg(); });
+    document.getElementById('twmgr-mk-mint-all').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.checked = true); readMarketCfg(); });
+    document.getElementById('twmgr-mk-mint-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.checked = false); readMarketCfg(); });
     ['twmgr-mk-coord', 'twmgr-mk-reserve', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
     document.querySelectorAll('input[name="twmgr-mk-mode"]').forEach((r) => r.addEventListener('change', () => { readMarketCfg(); applyMkMode(); }));
     applyMkMode();

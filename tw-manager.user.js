@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.90.1
+// @version      9.91.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.90.1';
+  const VERSION = '9.91.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1108,12 +1108,28 @@
         // Modo dinâmico A/B manda {light: estCL, spy: 1}. Se a origem não tem isso (ex.: aldeia recém-noblada
         // sem CL), o servidor recusa e o log mentia "enviado". Pula pra próxima origem em vez de falso-positivo.
         if (dyn && mode !== 'c') { if ((avail.light || 0) < estCL) continue; if ((avail.spy || 0) < 1) continue; }
+        // Sem template dinâmico o A/B manda a composição fixa do assistente. Antes a gente disparava
+        // e deixava o servidor recusar — 1 requisição jogada fora por origem sem tropa. Agora confere
+        // antes, usando as unidades lidas do próprio template. Se não deu pra ler (mapa vazio), passa
+        // direto e o comportamento fica igual ao de antes.
+        if (!dyn && mode !== 'c') {
+          const need = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {};
+          let falta = false;
+          for (const u in need) { if ((avail[u] || 0) < need[u]) { falta = true; break; } }
+          if (falta) continue;
+        }
         try {
           if (mode === 'c') { await sendFarmC(c.s.vid, t.reportId); did = true; }
           else if (mode === 'a') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum / 80)), spy: 1 }); } else { if (!tpl || !tpl.a) break; await sendFarmB(c.s.vid, t.targetId, tpl.a); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
           else if (mode === 'b') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum * 1.2 / 80)), spy: 1 }); } else { if (!tpl || !tpl.b) break; await sendFarmB(c.s.vid, t.targetId, tpl.b); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
         } catch (e) { did = false; errs++; continue; }   // servidor recusou (origem já tinha tropa) -> pode ser bloqueio/bot-check
-        if (did) { avail.light = Math.max(0, (avail.light || 0) - estCL); usedName = c.s.name; usedDist = c.d; count++; cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break; }
+        if (did) {
+          // Desconta o que saiu, senão a pré-checagem do próximo alvo usa saldo velho e volta a
+          // tentar origem já drenada. Dinâmico/C = estimativa de CL; A/B fixo = unidades do template.
+          if (dyn || mode === 'c') { avail.light = Math.max(0, (avail.light || 0) - estCL); }
+          else { const used = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {}; for (const u in used) avail[u] = Math.max(0, (avail[u] || 0) - used[u]); }
+          usedName = c.s.name; usedDist = c.d; count++; cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break;
+        }
       }
       if (did) { sent[t.coord] = now; pendingCoords.add(t.coord); pushLog('Saque: ' + usedName + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (mode !== 'c' ? ' ×' + qty : '') + ' · ' + (Math.round(usedDist * 10) / 10) + ' campos', 'ok', 'farm'); }
       else skip.semorig++;

@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.90.0
+// @version      9.90.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.90.0';
+  const VERSION = '9.90.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -396,6 +396,7 @@
   let config = load();
   let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, uiTimer = null;
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
+  let _farmBarOpen = null;   // id da barra de progresso do ciclo em andamento (null = nenhuma aberta)
   function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)); }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -426,8 +427,13 @@
   function updateLogLive(id, msg, kind) {
     if (!id) return;
     let arr = []; try { arr = JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) { return; }
-    const l = arr.find((x) => x.id === id); if (!l) return;   // caiu fora das 200 -> ignora
+    const i = arr.findIndex((x) => x.id === id); if (i < 0) return;   // caiu fora das 200 -> ignora
+    const l = arr[i];
     l.m = msg; if (kind != null) l.k = kind;
+    // O log é do mais novo pro mais velho: sem re-flutuar, a barra fica presa na posição em que
+    // nasceu e some embaixo das mensagens do próprio ciclo. Sobe pro topo e atualiza o relógio.
+    l.t = new Date().toLocaleTimeString();
+    if (i > 0) { arr.splice(i, 1); arr.unshift(l); }
     localStorage.setItem(LOGKEY, JSON.stringify(arr));
     renderLog();
     if (l.mod) renderModLog(l.mod);
@@ -1053,7 +1059,13 @@
     // fim, vira o extrato. Throttle de 400ms pra não redesenhar o log a cada aldeia.
     let barId = null, _barAt = 0;
     const barTxt = (done) => 'Saque: ' + progressBar(done, eligible.length) + ' · ' + done + '/' + eligible.length + ' alvos · ✔ ' + count + (errs ? (' · ✖ ' + errs) : '');
-    if (eligible.length) barId = pushLogLive('Saque: ciclo mapeado — ' + eligible.length + ' aldeia(s) pra atacar · ' + progressBar(0, eligible.length), '', 'farm');
+    if (eligible.length) {
+      // Se o ciclo anterior nao fechou a barra (erro no meio, ou dois farmTick sobrepostos), ela
+      // ficaria congelada no log pra sempre. Fecha como interrompida antes de abrir a nova.
+      if (_farmBarOpen) { updateLogLive(_farmBarOpen, 'Saque: ciclo anterior interrompido antes de terminar.', 'err'); _farmBarOpen = null; }
+      barId = pushLogLive('Saque: ciclo mapeado — ' + eligible.length + ' aldeia(s) pra atacar · ' + progressBar(0, eligible.length), '', 'farm');
+      _farmBarOpen = barId;
+    }
     const tickBar = (done, force) => {
       if (!barId) return;
       const ts = Date.now();
@@ -1111,6 +1123,7 @@
     if (barId) {
       const falhas = skip.semorig, pulados = Math.max(0, eligible.length - count - falhas);
       updateLogLive(barId, 'Saque: extrato do ciclo — ✔ ' + count + ' enviado(s) · ✖ ' + falhas + ' falha(s) · ⏭ ' + pulados + ' pulado(s) · ' + eligible.length + ' alvo(s) mapeados' + (errs ? (' · ' + errs + ' recusa(s) do servidor') : ''), count ? 'ok' : 'err');
+      _farmBarOpen = null;
     }
     const parts = ['enviou ' + count];
     if (skip.semorig) parts.push(skip.semorig + ' sem origem c/ CL');

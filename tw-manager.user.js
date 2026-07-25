@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.91.1
+// @version      9.92.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.91.1';
+  const VERSION = '9.92.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -396,7 +396,6 @@
   let config = load();
   let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, uiTimer = null;
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
-  let _farmBarOpen = null;   // id da barra de progresso do ciclo em andamento (null = nenhuma aberta)
   function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)); }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -418,18 +417,19 @@
   function pushLogLive(msg, kind, mod) {
     const id = 'live' + (++_liveSeq) + '_' + Date.now();
     let arr = []; try { arr = JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) {}
-    arr.unshift({ t: new Date().toLocaleTimeString(), m: msg, k: kind || '', mod: mod || '', id: id });
+    arr.unshift({ t: new Date().toLocaleTimeString(), m: msg, k: kind || '', mod: mod || '', id: id, live: true });
     localStorage.setItem(LOGKEY, JSON.stringify(arr.slice(0, 200)));
     renderLog();
     if (mod) renderModLog(mod);
     return id;
   }
-  function updateLogLive(id, msg, kind) {
+  function updateLogLive(id, msg, kind, close) {
     if (!id) return;
     let arr = []; try { arr = JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) { return; }
     const i = arr.findIndex((x) => x.id === id); if (i < 0) return;   // caiu fora das 200 -> ignora
     const l = arr[i];
     l.m = msg; if (kind != null) l.k = kind;
+    if (close) l.live = false;
     // O log é do mais novo pro mais velho: sem re-flutuar, a barra fica presa na posição em que
     // nasceu e some embaixo das mensagens do próprio ciclo. Sobe pro topo e atualiza o relógio.
     l.t = new Date().toLocaleTimeString();
@@ -437,6 +437,24 @@
     localStorage.setItem(LOGKEY, JSON.stringify(arr));
     renderLog();
     if (l.mod) renderModLog(l.mod);
+  }
+  // Fecha barras que ficaram abertas (ciclo morto por reload da página, erro, ou aba fechada). O
+  // estado mora na PRÓPRIA linha do log (flag live), não numa variável — variável some no reload,
+  // que é justamente quando o ciclo morre no meio.
+  function closeStaleLiveLogs() {
+    let arr = []; try { arr = JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) { return; }
+    const mods = {};
+    let n = 0;
+    arr.forEach((l) => {
+      if (!l.live) return;
+      l.live = false; l.k = 'err'; n++;
+      l.m = 'Ciclo interrompido antes de terminar (página recarregada?).';
+      if (l.mod) mods[l.mod] = 1;
+    });
+    if (!n) return;
+    localStorage.setItem(LOGKEY, JSON.stringify(arr));
+    renderLog();
+    Object.keys(mods).forEach(renderModLog);
   }
   // progressBar(35,100) -> "███████░░░░░░░░░░░░░ 35%"
   function progressBar(done, total, width) {
@@ -1054,17 +1072,15 @@
     });
     if ((cfg.order || 'dist') === 'recurso') eligible.sort((a, b) => (b.wood + b.stone + b.iron) - (a.wood + a.stone + a.iron));
     else eligible.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
-    let count = 0, errs = 0;   // errs = envios recusados pelo servidor APÓS a origem passar na pré-checagem de tropa
+    let count = 0, errs = 0;   // errs = envios recusados APÓS a origem passar na pré-checagem de tropa
+    const errReasons = {};     // motivo -> quantas vezes (pra saber POR QUE recusou, não só quantas)
     // Barra de progresso do ciclo: UMA linha de log que se atualiza conforme percorre os alvos e, no
     // fim, vira o extrato. Throttle de 400ms pra não redesenhar o log a cada aldeia.
     let barId = null, _barAt = 0;
     const barTxt = (done) => 'Saque: ' + progressBar(done, eligible.length) + ' · ' + done + '/' + eligible.length + ' alvos · ✔ ' + count + (errs ? (' · ✖ ' + errs) : '');
     if (eligible.length) {
-      // Se o ciclo anterior nao fechou a barra (erro no meio, ou dois farmTick sobrepostos), ela
-      // ficaria congelada no log pra sempre. Fecha como interrompida antes de abrir a nova.
-      if (_farmBarOpen) { updateLogLive(_farmBarOpen, 'Saque: ciclo anterior interrompido antes de terminar.', 'err'); _farmBarOpen = null; }
+      closeStaleLiveLogs();   // fecha barra de ciclo anterior que morreu no meio
       barId = pushLogLive('Saque: ciclo mapeado — ' + eligible.length + ' aldeia(s) pra atacar · ' + progressBar(0, eligible.length), '', 'farm');
-      _farmBarOpen = barId;
     }
     const tickBar = (done, force) => {
       if (!barId) return;
@@ -1122,7 +1138,12 @@
           if (mode === 'c') { await sendFarmC(c.s.vid, t.reportId); did = true; }
           else if (mode === 'a') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum / 80)), spy: 1 }); } else { if (!tpl || !tpl.a) break; await sendFarmB(c.s.vid, t.targetId, tpl.a); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
           else if (mode === 'b') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum * 1.2 / 80)), spy: 1 }); } else { if (!tpl || !tpl.b) break; await sendFarmB(c.s.vid, t.targetId, tpl.b); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
-        } catch (e) { did = false; errs++; continue; }   // servidor recusou (origem já tinha tropa) -> pode ser bloqueio/bot-check
+        } catch (e) {   // envio recusado -> guarda o MOTIVO (antes era engolido e a gente ficava no escuro)
+          did = false; errs++;
+          const em = String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 90);
+          errReasons[em] = (errReasons[em] || 0) + 1;
+          continue;
+        }
         if (did) {
           // Desconta o que saiu, senão a pré-checagem do próximo alvo usa saldo velho e volta a
           // tentar origem já drenada. Dinâmico/C = estimativa de CL; A/B fixo = unidades do template.
@@ -1142,9 +1163,11 @@
     // conseguiu envio; pulado = descartado no meio do caminho (defesa, muralha, alcance, já em rota…).
     if (barId) {
       const falhas = skip.semorig, pulados = Math.max(0, eligible.length - count - falhas);
-      updateLogLive(barId, 'Saque: extrato do ciclo — ✔ ' + count + ' enviado(s) · ✖ ' + falhas + ' falha(s) · ⏭ ' + pulados + ' pulado(s) · ' + eligible.length + ' alvo(s) mapeados' + (errs ? (' · ' + errs + ' recusa(s) do servidor') : ''), count ? 'ok' : 'err');
-      _farmBarOpen = null;
+      updateLogLive(barId, 'Saque: extrato do ciclo — ✔ ' + count + ' enviado(s) · ✖ ' + falhas + ' falha(s) · ⏭ ' + pulados + ' pulado(s) · ' + eligible.length + ' alvo(s) mapeados' + (errs ? (' · ' + errs + ' tentativa(s) recusada(s)') : ''), count ? 'ok' : 'err', true);
     }
+    // Quais foram os motivos das recusas (top 3). Sem isso só dava pra saber QUANTAS, não POR QUÊ.
+    const topErr = Object.keys(errReasons).map((m) => [m, errReasons[m]]).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    if (topErr.length) pushLog('Saque: motivo das recusas — ' + topErr.map((p) => p[1] + '× "' + p[0] + '"').join(' · '), 'err', 'farm');
     const parts = ['enviou ' + count];
     if (skip.semorig) parts.push(skip.semorig + ' sem origem c/ CL');
     if (skip.off) parts.push(skip.off + ' cor sem modo / C indisp.');
@@ -4556,6 +4579,7 @@
       rlog('🎯 Coordenado retomado.', 'planner');
       plannerTick();
     }
+    closeStaleLiveLogs();   // barra de progresso de ciclo que morreu no reload desta página
     installBotHooks();
     startCaptchaWatcher();
     startAutoReload();

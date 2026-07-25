@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.92.0
+// @version      9.93.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.92.0';
+  const VERSION = '9.93.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -722,8 +722,22 @@
     if (dd) dur = parseInt(dd.getAttribute('data-duration'), 10);
     if (!dur) { const txt = doc.body ? doc.body.textContent : t1; const m = txt.match(/dura[çc][aã]o[^0-9]{0,12}(\d{1,2}):([0-5]\d):([0-5]\d)/i); if (m) dur = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]); }
     const p2 = new URLSearchParams();
-    form.querySelectorAll('input, select').forEach((el) => { if (el.name) p2.set(el.name, el.value); });
+    form.querySelectorAll('input, select').forEach((el) => {
+      if (!el.name) return;
+      // Checkbox/radio não marcados o navegador não envia — copiá-los distorcia o formulário.
+      if ((el.type === 'checkbox' || el.type === 'radio') && !el.checked) return;
+      const v = el.value == null ? '' : String(el.value);
+      // Campo VAZIO não pode apagar um valor já lido com o mesmo name: o alvo costuma aparecer duas
+      // vezes (um hidden preenchido e a caixinha de texto vazia) e a vazia vinha por último.
+      if (v === '' && p2.has(el.name) && p2.get(el.name) !== '') return;
+      p2.set(el.name, v);
+    });
     if (!p2.has('h')) p2.set('h', CSRF);
+    // Reafirma o alvo: se ele se perde no repasse, o servidor responde "Por favor, selecione uma
+    // aldeia alvo" e o envio é recusado.
+    if (!p2.get('input')) p2.set('input', x + '|' + y);
+    if (!p2.get('x')) p2.set('x', String(x));
+    if (!p2.get('y')) p2.set('y', String(y));
     const action = form.getAttribute('action') || ('/game.php?village=' + vid + '&screen=place&action=command&h=' + CSRF);
     const r2 = await fetch(absUrl(action), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p2.toString() });
     const t2 = await r2.text();
@@ -1032,6 +1046,12 @@
     cfg.stats = cfg.stats || {}; cfg.stats.mineCount = myV.length; cfg.stats.mineCountRaw = mine.length;
     let pendingCoords = new Set(), saquesAtivos = null, farmCoords = new Set();
     try { const pa = await getPendingAttack(); pendingCoords = pa.coords; saquesAtivos = pa.saques; farmCoords = pa.farmCoords || new Set(); } catch (e) {}
+    // DIAGNÓSTICO: mais comandos de saque em rota do que alvos distintos = tem ataque duplicado no
+    // mesmo alvo. Com "Repetir farm" desligado isso NÃO deveria acontecer, e indica que um envio deu
+    // certo mas foi lido como recusa (aí o ciclo tenta outra origem e manda de novo no mesmo lugar).
+    if (!cfg.repeat && saquesAtivos != null && farmCoords.size && saquesAtivos > farmCoords.size) {
+      pushLog('Saque: ⚠ ' + saquesAtivos + ' comando(s) de saque em rota para apenas ' + farmCoords.size + ' alvo(s) distinto(s) — há ' + (saquesAtivos - farmCoords.size) + ' ataque(s) DUPLICADO(S).', 'err', 'farm');
+    }
     const minW = cfg.minWood || 0, minS = cfg.minStone || 0, minI = cfg.minIron || 0;
     const maxDist = cfg.maxDist != null ? cfg.maxDist : 13;
     const maxWall = cfg.maxWall != null ? cfg.maxWall : 20;

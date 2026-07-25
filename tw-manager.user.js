@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.88.0
+// @version      9.89.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.88.0';
+  const VERSION = '9.89.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -791,6 +791,7 @@
     clearTimeout(scavTimer);
     if (!config.scav.running) return;
     if (lockOther()) { scavTimer = setTimeout(scavTick, 5000); return; }
+    if (captchaBlocked()) { scavTimer = setTimeout(scavTick, 30000); return; }
     claimLock();
     const now = Date.now();
     if ((config.scav.nextAt || 0) > now) { scheduleScav(); return; }
@@ -954,6 +955,7 @@
     clearTimeout(farmTimer);
     if (!config.farm.running) return;
     if (lockOther()) { farmTimer = setTimeout(farmTick, 5000); return; }
+    if (captchaBlocked()) { farmTimer = setTimeout(farmTick, 30000); return; }
     claimLock();
     const now = Date.now();
     if ((config.farm.nextAt || 0) > now) { scheduleFarm(); return; }
@@ -1123,6 +1125,7 @@
     clearTimeout(wallTimer);
     if (!config.wall.running) return;
     if (lockOther()) { wallTimer = setTimeout(wallTick, 5000); return; }
+    if (captchaBlocked()) { wallTimer = setTimeout(wallTick, 30000); return; }
     claimLock();
     const now = Date.now();
     if ((config.wall.nextAt || 0) > now) { scheduleWall(); return; }
@@ -1591,6 +1594,7 @@
     clearTimeout(recruitTimer);
     if (!config.recruit.running) return;
     if (lockOther()) { recruitTimer = setTimeout(recruitTick, 5000); return; }
+    if (captchaBlocked()) { recruitTimer = setTimeout(recruitTick, 30000); return; }
     claimLock();
     const now = Date.now();
     if ((config.recruit.nextAt || 0) > now) { scheduleRecruit(); return; }
@@ -1824,6 +1828,7 @@
     clearTimeout(fakeTimer);
     if (!config.fakes.running) return;
     if (lockOther()) { fakeTimer = setTimeout(fakeTick, 5000); return; }
+    if (captchaBlocked()) { fakeTimer = setTimeout(fakeTick, 30000); return; }
     claimLock();
     const nowS = serverNow();
     for (const f of config.fakes.gen) {
@@ -2024,6 +2029,7 @@
     const attacks = (config.planner && config.planner.attacks) || [];
     if (!attacks.some((a) => a.running)) return;
     if (lockOther()) { plannerTimer = setTimeout(plannerTick, 5000); return; }
+    if (captchaBlocked()) { plannerTimer = setTimeout(plannerTick, 30000); return; }
     claimLock();
     const nowS = serverNow();
     for (const atk of attacks) {
@@ -2602,6 +2608,7 @@
     clearTimeout(marketTimer);
     if (!config.market.running) return;
     if (lockOther()) { marketTimer = setTimeout(marketTick, 5000); return; }
+    if (captchaBlocked()) { marketTimer = setTimeout(marketTick, 30000); return; }
     claimLock();
     const now = Date.now();
     if ((config.market.nextAt || 0) > now) { scheduleMarket(); return; }
@@ -2854,6 +2861,7 @@
     clearTimeout(buildTimer);
     if (!config.build.running) return;
     if (lockOther()) { buildTimer = setTimeout(buildTick, 5000); return; }
+    if (captchaBlocked()) { buildTimer = setTimeout(buildTick, 30000); return; }
     claimLock();
     const now = Date.now();
     if ((config.build.nextAt || 0) > now) { scheduleBuild(); return; }
@@ -3053,6 +3061,7 @@
     clearTimeout(bbTimer);
     if (!config.bb.running) return;
     if (lockOther()) { bbTimer = setTimeout(bbTick, 5000); return; }
+    if (captchaBlocked()) { bbTimer = setTimeout(bbTick, 30000); return; }
     claimLock();
     const now = Date.now();
     if ((config.bb.nextAt || 0) > now) { scheduleBB(); return; }
@@ -3329,6 +3338,7 @@
     clearTimeout(mapTimer);
     if (!config.map.running) return;
     if (lockOther()) { mapTimer = setTimeout(mapTick, 5000); return; }
+    if (captchaBlocked()) { mapTimer = setTimeout(mapTick, 30000); return; }
     claimLock();
     const now = Date.now();
     const cfg = config.map;
@@ -3457,13 +3467,47 @@
     'iframe[src*="recaptcha"]',
     '.captcha_image',
   ];
+  // Elemento realmente na tela? (tamanho > 0 e não escondido por CSS)
+  function _elVisible(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return false;
+    const st = window.getComputedStyle(el);
+    return st.display !== 'none' && st.visibility !== 'hidden';
+  }
+  // Título "Proteção contra Bots" — regex tolerante a acento/caixa/espaço (mesma ideia do scanForBotCheck).
+  function _hasBotTitle(root) {
+    if (!root) return false;
+    for (const h of root.querySelectorAll('h2, h3')) {
+      if (/prote..o contra bots?/i.test((h.textContent || '').trim())) return true;
+    }
+    return false;
+  }
+  // Detecção ESTRUTURAL do bot-check: 3 formatos que o TW usa, cada um exigindo o conjunto completo
+  // (container + elemento interno + título visíveis). Bem mais difícil de dar falso-positivo do que
+  // casar um seletor solto — a lib do hcaptcha vem pré-carregada em página normal.
+  function isBotCheckBlock() {
+    // Formato 1: #bot_protection com #botCheckFunc e #fader
+    const bp = document.querySelector('#bot_protection');
+    if (bp && _elVisible(bp) && _elVisible(bp.querySelector('#botCheckFunc'))
+        && _elVisible(document.querySelector('#fader')) && _hasBotTitle(bp)) return 'bot_protection';
+    // Formato 2: .bot-protection-row + .bot-protection-blur
+    const row = document.querySelector('.bot-protection-row');
+    const blur = document.querySelector('.bot-protection-blur');
+    if (_elVisible(row) && _elVisible(blur) && _hasBotTitle(row)) return 'bot-protection-row';
+    // Formato 3: popup com iframe do hcaptcha dentro
+    for (const pop of document.querySelectorAll('.popup_box_content')) {
+      if (_elVisible(pop) && _hasBotTitle(pop) && pop.querySelector('.captcha iframe[src*="hcaptcha.com"], iframe[src*="hcaptcha.com"]')) return 'bot-popup';
+    }
+    return null;
+  }
   function isCaptchaVisible() {
+    const structural = isBotCheckBlock();
+    if (structural) return structural;
     for (const s of CAPTCHA_SELECTORS) {
       const el = document.querySelector(s);
       if (!el) continue;
-      const r = el.getBoundingClientRect();
-      const style = window.getComputedStyle(el);
-      if (r.width > 0 && r.height > 0 && style.display !== 'none' && style.visibility !== 'hidden') return s;
+      if (_elVisible(el)) return s;
     }
     return null;
   }
@@ -3511,16 +3555,27 @@
       } catch (e) { pushLog('ntfy.sh falhou: ' + (e.message || e), 'err'); }
     }
   }
-  let _captchaCheckLast = 0;
-  function checkCaptchaOnce() {
-    if (!config.captcha || !config.captcha.enabled) return;
-    const now = Date.now();
-    if (now - _captchaCheckLast < 1000) return;   // debounce
-    _captchaCheckLast = now;
+  // ---- ALARME GERAL ----
+  // Quem detectar o bloqueio liga a flag; TODOS os módulos consultam captchaBlocked() antes de rodar
+  // o ciclo. Assim o Manager para inteiro em vez de cada aba/módulo bater na parede e acumular erro.
+  let _captchaBlocked = false;
+  function captchaBlocked() { return _captchaBlocked; }
+  function detectCaptcha() {
     let hit = isCaptchaVisible();
     // "Proteção contra Bots" é uma PÁGINA de texto (sem elementos hcaptcha). Escaneia o texto VISÍVEL
     // (innerText — NÃO textContent, que inclui <script> e dava falso-positivo com a lib hcaptcha).
     if (!hit) { try { const m = scanForBotCheck((document.body && document.body.innerText) || ''); if (m) hit = 'dom:' + m; } catch (e) {} }
+    if (hit && !_captchaBlocked) { _captchaBlocked = true; pushLog('⛔ Bot-check na tela [' + hit + '] — módulos pausados até resolver.', 'err'); }
+    else if (!hit && _captchaBlocked) { _captchaBlocked = false; pushLog('✔ Bot-check resolvido — módulos liberados.', 'ok'); }
+    return hit;
+  }
+  let _captchaCheckLast = 0;
+  function checkCaptchaOnce() {
+    const now = Date.now();
+    if (now - _captchaCheckLast < 1000) return;   // debounce
+    _captchaCheckLast = now;
+    const hit = detectCaptcha();   // sempre roda: a pausa não depende do alerta estar ligado
+    if (!config.captcha || !config.captcha.enabled) return;
     if (hit) fireCaptchaNotification(hit, false);
   }
   function startCaptchaWatcher() {

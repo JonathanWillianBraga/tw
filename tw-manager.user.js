@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.89.0
+// @version      9.90.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.89.0';
+  const VERSION = '9.90.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -410,6 +410,34 @@
     localStorage.setItem(LOGKEY, JSON.stringify(arr.slice(0, 200)));
     renderLog();
     if (mod) renderModLog(mod);
+  }
+  // ---- Linha de log VIVA: uma entrada que se atualiza no lugar (barra de progresso), em vez de
+  // empilhar uma linha por evento. pushLogLive devolve um id; updateLogLive reescreve aquela linha.
+  let _liveSeq = 0;
+  function pushLogLive(msg, kind, mod) {
+    const id = 'live' + (++_liveSeq) + '_' + Date.now();
+    let arr = []; try { arr = JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) {}
+    arr.unshift({ t: new Date().toLocaleTimeString(), m: msg, k: kind || '', mod: mod || '', id: id });
+    localStorage.setItem(LOGKEY, JSON.stringify(arr.slice(0, 200)));
+    renderLog();
+    if (mod) renderModLog(mod);
+    return id;
+  }
+  function updateLogLive(id, msg, kind) {
+    if (!id) return;
+    let arr = []; try { arr = JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) { return; }
+    const l = arr.find((x) => x.id === id); if (!l) return;   // caiu fora das 200 -> ignora
+    l.m = msg; if (kind != null) l.k = kind;
+    localStorage.setItem(LOGKEY, JSON.stringify(arr));
+    renderLog();
+    if (l.mod) renderModLog(l.mod);
+  }
+  // progressBar(35,100) -> "███████░░░░░░░░░░░░░ 35%"
+  function progressBar(done, total, width) {
+    const w = width || 20;
+    const pct = total > 0 ? Math.max(0, Math.min(100, Math.round(done / total * 100))) : 0;
+    const fill = Math.round(w * pct / 100);
+    return '█'.repeat(fill) + '░'.repeat(Math.max(0, w - fill)) + ' ' + pct + '%';
   }
   function logLineHTML(l) {
     const c = l.k === 'err' ? '#ff7568' : l.k === 'ok' ? '#8fe39a' : '#cbb98f';
@@ -1007,7 +1035,7 @@
     if (!dyn) { try { tpl = await getFarmTemplates(CUR_VID); } catch (e) { tpl = null; } }
     const availCache = {};
     const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
-    const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, mur: 0, pend: 0, semorig: 0 };
+    const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, mur: 0, pend: 0, semorig: 0, dist: 0 };
     const eligible = [];
     targets.forEach((t) => {
       if (!t.reportId) { skip.norep++; return; }
@@ -1021,7 +1049,20 @@
     if ((cfg.order || 'dist') === 'recurso') eligible.sort((a, b) => (b.wood + b.stone + b.iron) - (a.wood + a.stone + a.iron));
     else eligible.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
     let count = 0, errs = 0;   // errs = envios recusados pelo servidor APÓS a origem passar na pré-checagem de tropa
-    for (const t of eligible) {
+    // Barra de progresso do ciclo: UMA linha de log que se atualiza conforme percorre os alvos e, no
+    // fim, vira o extrato. Throttle de 400ms pra não redesenhar o log a cada aldeia.
+    let barId = null, _barAt = 0;
+    const barTxt = (done) => 'Saque: ' + progressBar(done, eligible.length) + ' · ' + done + '/' + eligible.length + ' alvos · ✔ ' + count + (errs ? (' · ✖ ' + errs) : '');
+    if (eligible.length) barId = pushLogLive('Saque: ciclo mapeado — ' + eligible.length + ' aldeia(s) pra atacar · ' + progressBar(0, eligible.length), '', 'farm');
+    const tickBar = (done, force) => {
+      if (!barId) return;
+      const ts = Date.now();
+      if (!force && ts - _barAt < 400) return;
+      _barAt = ts;
+      updateLogLive(barId, barTxt(done));
+    };
+    for (const [idx, t] of eligible.entries()) {
+      tickBar(idx);   // idx = quantos JÁ terminaram
       const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
       const tx = +cm[1], ty = +cm[2];
       if (t.color === 'blue') {
@@ -1064,6 +1105,12 @@
       }
       if (did) { sent[t.coord] = now; pendingCoords.add(t.coord); pushLog('Saque: ' + usedName + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (mode !== 'c' ? ' ×' + qty : '') + ' · ' + (Math.round(usedDist * 10) / 10) + ' campos', 'ok', 'farm'); }
       else skip.semorig++;
+    }
+    // Fecha a barra: a MESMA linha vira o extrato (não empilha outra). Falha = alvo elegível que não
+    // conseguiu envio; pulado = descartado no meio do caminho (defesa, muralha, alcance, já em rota…).
+    if (barId) {
+      const falhas = skip.semorig, pulados = Math.max(0, eligible.length - count - falhas);
+      updateLogLive(barId, 'Saque: extrato do ciclo — ✔ ' + count + ' enviado(s) · ✖ ' + falhas + ' falha(s) · ⏭ ' + pulados + ' pulado(s) · ' + eligible.length + ' alvo(s) mapeados' + (errs ? (' · ' + errs + ' recusa(s) do servidor') : ''), count ? 'ok' : 'err');
     }
     const parts = ['enviou ' + count];
     if (skip.semorig) parts.push(skip.semorig + ' sem origem c/ CL');

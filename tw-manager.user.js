@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.29.2
+// @version      9.29.3
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.29.2';
+  const VERSION = '9.29.3';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -953,7 +953,10 @@
     { chave: 'total',    re: /^total$/i },                           // inclui apoio de terceiros
   ];
   async function ccLerTropas() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
+    // type=complete é obrigatório: own_home devolve UMA linha por aldeia (só o que está em casa),
+    // sem "fora" nem "em trânsito". Era por isso que as duas fontes davam o mesmo número.
+    // Conferido no jogo: own_home = 11 células por aldeia; complete = 55 (5 linhas × 11 unidades).
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=complete&page=-1', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const tabela = doc.querySelector('#units_table') || doc.querySelector('table.overview_table');
     if (!tabela) throw new Error('não achei #units_table');
@@ -1010,6 +1013,11 @@
       };
     });
     if (!Object.keys(out).length) throw new Error('nenhuma aldeia lida da tabela');
+    // Se só veio um tipo de linha, a página não é a completa e "fora/trânsito" seriam sempre
+    // zero — exatamente a falha silenciosa que fazia as duas fontes darem o mesmo número.
+    const alguma = out[Object.keys(out)[0]];
+    const temDetalhe = Object.keys(alguma.fora).length > 0 || Object.keys(alguma.transito).length > 0;
+    if (!temDetalhe) pushLog('Tropas: página sem as linhas "fora"/"em trânsito" — a fonte "suas próprias" vai igualar a de casa.', 'err', 'cmd');
     return { aldeias: out, unidades: ordem };
   }
 

@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.97.0
+// @version      9.98.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.97.0';
+  const VERSION = '9.98.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1173,7 +1173,7 @@
       const cands = myV.map((s) => ({ s: s, d: fieldDist(s.x, s.y, tx, ty) })).filter((o) => o.d <= maxDist).sort((a, b) => a.d - b.d);
       if (!cands.length) { skip.dist++; continue; }
       const estCL = Math.max(1, Math.ceil((mode === 'b' ? sum * 1.2 : sum) / 80));   // CL estimada do envio (p/ descontar da origem)
-      let did = false, usedName = '', usedDist = 0, incerto = false, usedCalc = false;
+      let did = false, usedName = '', usedDist = 0, incerto = false, usedCalc = false, usedCalcInfo = '';
       for (const c of cands) {
         // Origem reprovada no limite de fake: em vez de pular, manda quantidade CALCULADA que cumpre
         // o mínimo do mundo (fallback). Só pula de vez se não der pra calcular (sem pontos da aldeia).
@@ -1199,12 +1199,27 @@
           for (const u in need) { if ((avail[u] || 0) < need[u]) { falta = true; break; } }
           if (falta) continue;
         }
-        // Cavalaria do envio calculado: o maior entre carregar o saque e cumprir o piso de fake.
-        const calcCL = Math.max(1, Math.ceil((mode === 'b' ? sum * 1.2 : sum) / 80), Math.ceil(minPopC / (FAKE_POP.light || 4)));
-        if (useCalc) { if ((avail.light || 0) < calcCL) continue; if ((avail.spy || 0) < 1) continue; }
+        // Envio calculado = O TEMPLATE DO USUÁRIO subido até o mínimo do mundo. Mantém as unidades que
+        // ele escolheu no assistente e só multiplica a quantidade o suficiente pra passar. O saque do
+        // alvo NÃO entra aqui: quem decide a composição é o template, não o script.
+        let calcAmounts = null;
+        if (useCalc) {
+          const base = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {};
+          const basePop = tplPop[mode] || 0;
+          if (basePop > 0) {
+            const k = Math.max(1, Math.ceil(minPopC / basePop));
+            calcAmounts = {};
+            for (const u in base) { const n = (parseInt(base[u], 10) || 0) * k; if (n > 0) calcAmounts[u] = n; }
+          } else {
+            calcAmounts = { light: Math.ceil(minPopC / (FAKE_POP.light || 4)) };   // template ilegível: só cavalaria
+          }
+          let falta = false;
+          for (const u in calcAmounts) { if ((avail[u] || 0) < calcAmounts[u]) { falta = true; break; } }
+          if (falta || !Object.keys(calcAmounts).length) continue;
+        }
         try {
           if (mode === 'c') { await sendFarmC(c.s.vid, t.reportId); did = true; }
-          else if (useCalc) { await sendAttack(c.s.vid, tx, ty, { light: calcCL, spy: 1 }); did = true; }
+          else if (useCalc) { await sendAttack(c.s.vid, tx, ty, calcAmounts); did = true; }
           else if (mode === 'a') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum / 80)), spy: 1 }); } else { if (!tpl || !tpl.a) break; await sendFarmB(c.s.vid, t.targetId, tpl.a); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
           else if (mode === 'b') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum * 1.2 / 80)), spy: 1 }); } else { if (!tpl || !tpl.b) break; await sendFarmB(c.s.vid, t.targetId, tpl.b); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
         } catch (e) {   // envio recusado -> guarda o MOTIVO (antes era engolido e a gente ficava no escuro)
@@ -1230,11 +1245,12 @@
           // Dinâmico manda {light: estCL, spy: 1} — o explorador TAMBÉM tem que ser abatido, senão a
           // origem parece ter spy pra sempre, passa na pré-checagem e o servidor recusa. Era a causa
           // das recusas que sobravam: aldeia reusada 3x no ciclo com 2 exploradores.
-          if (useCalc) { avail.light = Math.max(0, (avail.light || 0) - calcCL); avail.spy = Math.max(0, (avail.spy || 0) - 1); }
+          if (useCalc) { for (const u in calcAmounts) avail[u] = Math.max(0, (avail[u] || 0) - calcAmounts[u]); }
           else if (dyn && mode !== 'c') { avail.light = Math.max(0, (avail.light || 0) - estCL); avail.spy = Math.max(0, (avail.spy || 0) - 1); }
           else if (mode === 'c') { avail.light = Math.max(0, (avail.light || 0) - estCL); }
           else { const used = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {}; for (const u in used) avail[u] = Math.max(0, (avail[u] || 0) - used[u]); }
-          usedName = c.s.name; usedDist = c.d; usedCalc = useCalc; count++; if (useCalc) calcCount++;
+          usedName = c.s.name; usedDist = c.d; usedCalc = useCalc; count++;
+          if (useCalc) { calcCount++; usedCalcInfo = Object.keys(calcAmounts).map((u) => calcAmounts[u] + ' ' + u).join(' + '); }
           cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break;
         }
       }
@@ -1245,7 +1261,7 @@
         // "Repetir a cada". Throttle de 2s pra não escrever no disco a cada envio.
         const _ts = Date.now();
         if (_ts - _farmSaveAt > 2000) { _farmSaveAt = _ts; save(); }
-        pushLog('Saque: ' + usedName + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (usedCalc ? ' calculado' : (mode !== 'c' ? ' ×' + qty : '')) + ' · ' + (Math.round(usedDist * 10) / 10) + ' campos', 'ok', 'farm');
+        pushLog('Saque: ' + usedName + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (usedCalc ? ' subido ao mínimo do mundo (' + usedCalcInfo + ')' : (mode !== 'c' ? ' ×' + qty : '')) + ' · ' + (Math.round(usedDist * 10) / 10) + ' campos', 'ok', 'farm');
       }
       else if (incerto) {
         // Não sabemos se saiu. Carimba como enviado pra NÃO reenviar; o próximo ciclo lê a lista de

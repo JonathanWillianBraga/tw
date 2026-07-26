@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.27.0
+// @version      9.27.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.27.0';
+  const VERSION = '9.27.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1120,6 +1120,15 @@
     return m ? { x: m[1], y: m[2], coord: m[1] + '|' + m[2] } : null;
   }
 
+  // Uma origem "tem tropa" se atende TODAS as quantidades pedidas e, para as unidades
+  // marcadas como "tudo", tem pelo menos 1. Critério único, usado pela lista e pelo botão.
+  function ccTemTropa(v, comp) {
+    const av = v.avail || {};
+    for (const u in comp.amounts) { if ((av[u] || 0) < comp.amounts[u]) return false; }
+    for (const u in comp.max) { if (!(av[u] > 0)) return false; }
+    return true;
+  }
+
   // Lista de origens: cada aldeia sua com distância, tempo de viagem pela unidade mais lenta
   // e se tem tropa suficiente. É o que permite escolher de onde sai o quê.
   let CCVILAS = [];
@@ -1151,24 +1160,29 @@
     const linhas = CCVILAS.map((v) => {
       const d = (alvo && v.x != null) ? fieldDist(v.x, v.y, +alvo.x, +alvo.y) : null;
       const t = (alvo && temComp && v.x != null) ? ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, compVel) : null;
-      // Tem tropa pro que foi pedido? (o "max" sempre tem, por definição)
-      let falta = null;
-      Object.entries(comp.amounts).forEach(([u, n]) => { if ((v.avail[u] || 0) < n) falta = (falta || 0) + 1; });
-      Object.keys(comp.max).forEach((u) => { if (!(v.avail[u] > 0)) falta = (falta || 0) + 1; });
-      return { v: v, d: d, t: t, falta: falta };
+      const temTropa = temComp ? ccTemTropa(v, comp) : true;
+      // Dá tempo? Só dá pra saber com alvo, chegada e composição definidos.
+      const ch = ccChegadaMs();
+      const daTempo = (t == null || !ch) ? null : ((ch - t) > srvNowP());
+      return { v: v, d: d, t: t, temTropa: temTropa, daTempo: daTempo };
     });
     linhas.sort((a, b) => (a.d == null ? 1e9 : a.d) - (b.d == null ? 1e9 : b.d));
 
+    const ch = ccChegadaMs();
     cont.innerHTML = linhas.map((L) => {
       const v = L.v, on = !!sel[v.vid];
-      const cor = L.falta ? '#ff7568' : '#8fe39a';
+      let sit, cor;
+      if (!L.temTropa) { sit = '⚠ sem tropa'; cor = '#ff7568'; }
+      else if (L.daTempo === false) { sit = '⚠ longe demais'; cor = '#ff7568'; }
+      else if (L.t != null && ch) { sit = 'sai ' + srvClockMs(ch - L.t); cor = '#8fe39a'; }
+      else { sit = ''; cor = '#8f7d57'; }
       return '<label style="display:grid;grid-template-columns:18px 74px 52px 78px 1fr;gap:6px;align-items:center;' +
              'padding:2px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px;cursor:pointer">' +
         '<input type="checkbox" data-cc-org="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
         '<span style="color:#e6cf7d">' + esc(v.coord || v.vid) + '</span>' +
         '<span style="color:#8f7d57">' + (L.d == null ? '—' : L.d.toFixed(1) + ' c') + '</span>' +
         '<span style="color:#cbb98f">' + (L.t == null ? '—' : fmt(L.t)) + '</span>' +
-        '<span style="color:' + cor + '">' + (L.falta ? '⚠ sem tropa' : (L.t == null ? '' : 'sai ' + srvClockMs(ccChegadaMs() - L.t))) + '</span>' +
+        '<span style="color:' + cor + '">' + sit + '</span>' +
       '</label>';
     }).join('') || '<div style="color:#8f7d57;padding:6px;font-size:10px">— nenhuma aldeia —</div>';
 
@@ -1214,11 +1228,20 @@
       const vo = CCVILAS.find((z) => String(z.vid) === String(c.origin));
       const org = vo ? (vo.coord || vo.vid) : c.origin;
       const rot = { support: 'apoio', fake: 'fake', nobre: 'nobre' }[c.tipo] || 'ataque';
-      return '<div style="display:grid;grid-template-columns:44px 66px 66px 1fr 74px 62px 20px;gap:4px;align-items:center;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px">' +
+      // Horário de saída: já confirmado pelo servidor (c.sendAt) ou, antes do preparo,
+      // a estimativa local. A estimativa aparece com "~" pra não passar por certeza.
+      let saiTxt = '—', saiCor = '#8f7d57';
+      if (c.sendAt) { saiTxt = srvClockMs(c.sendAt); saiCor = '#8fe39a'; }
+      else {
+        const est = ccEstimaDeComando(c);
+        if (est != null && c.arriveAt) { saiTxt = '~' + srvClockMs(c.arriveAt - est); saiCor = '#cbb98f'; }
+      }
+      return '<div style="display:grid;grid-template-columns:42px 60px 60px 1fr 78px 78px 56px 18px;gap:4px;align-items:center;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px">' +
         '<span style="color:' + (c.tipo === 'support' ? '#7fc8ff' : '#ffb08a') + '">' + rot + (c.ondas ? ' ' + c.onda + '/' + c.ondas : '') + '</span>' +
         '<span style="color:#8f7d57" title="origem">' + esc(String(org)) + '</span>' +
         '<span style="color:#e6cf7d">' + esc(c.x + '|' + c.y) + '</span>' +
         '<span style="color:' + (corDe[c.state] || '#cbb98f') + '">' + esc(c.state) + (c.erro ? ' · ' + esc(c.erro.slice(0, 40)) : '') + '</span>' +
+        '<span style="color:' + saiCor + '" title="horário de saída">' + saiTxt + '</span>' +
         '<span style="color:#cbb98f">' + (c.arriveAt ? srvClockMs(c.arriveAt) : '—') + '</span>' +
         '<span style="text-align:right;color:' + (dev ? erroCor(Math.abs(c.desvioMs)) : '#8f7d57') + '">' + (dev || (falta > 0 ? fmt(falta) : '—')) + '</span>' +
         (c.state === 'novo' || c.state === 'preparado' || c.state === 'armado'
@@ -1316,7 +1339,7 @@
           '<span style="font-size:10px">' +
             '<a id="cc-org-todas" style="cursor:pointer;color:#e6cf7d">todas</a> · ' +
             '<a id="cc-org-nenhuma" style="cursor:pointer;color:#e6cf7d">nenhuma</a> · ' +
-            '<a id="cc-org-viaveis" style="cursor:pointer;color:#e6cf7d">só as que dão tempo</a> · ' +
+            '<a id="cc-org-viaveis" style="cursor:pointer;color:#8fe39a" title="marca só as aldeias que têm a tropa pedida E ainda dão tempo de chegar">✓ só as viáveis</a> · ' +
             '<a id="cc-org-recarregar" style="cursor:pointer;color:#e6cf7d">↻</a>' +
           '</span>' +
         '</div>' +
@@ -1335,8 +1358,8 @@
       '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
       '<div style="margin-top:8px;border-top:1px solid #3a2e1b;padding-top:6px">' +
         '<div style="font-size:10px;color:#e8d29a;font-weight:600;margin-bottom:3px">Fila</div>' +
-        '<div style="display:grid;grid-template-columns:44px 66px 66px 1fr 74px 62px 20px;gap:4px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
-          '<span>tipo</span><span>de</span><span>para</span><span>estado</span><span>chegada</span><span>falta</span><span></span></div>' +
+        '<div style="display:grid;grid-template-columns:42px 60px 60px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
+          '<span>tipo</span><span>de</span><span>para</span><span>estado</span><span>sai</span><span>chegada</span><span>falta</span><span></span></div>' +
         '<div id="cc-fila" style="max-height:180px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
       '</div>';
     host.insertBefore(d, host.firstChild);
@@ -1414,16 +1437,31 @@
     document.getElementById('cc-org-todas').onclick = () => { CCVILAS.forEach((v) => config.cmd.origens[v.vid] = true); save(); ccRenderOrigens(); };
     document.getElementById('cc-org-nenhuma').onclick = () => { config.cmd.origens = {}; save(); ccRenderOrigens(); };
     document.getElementById('cc-org-recarregar').onclick = () => ccCarregarOrigens(true);
+    // Marca só as origens que atendem os DOIS critérios: têm a tropa pedida E ainda dá tempo.
     document.getElementById('cc-org-viaveis').onclick = () => {
-      const alvo = ccAlvo(), ch = ccChegadaMs(), comp = ccCompParaVelocidade(ccComposicao());
-      if (!alvo || !ch) return;
+      const alvo = ccAlvo(), ch = ccChegadaMs(), comp = ccComposicao();
+      const msg = document.getElementById('cc-msg');
+      if (!alvo || !ch) {
+        if (msg) { msg.style.color = '#ff7568'; msg.textContent = 'Preencha o alvo e a chegada primeiro.'; }
+        return;
+      }
+      const compVel = ccCompParaVelocidade(comp);
+      let ok = 0, semTropa = 0, semTempo = 0;
       config.cmd.origens = {};
       CCVILAS.forEach((v) => {
         if (v.x == null) return;
-        const t = ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, comp);
-        if (t != null && (ch - t) > srvNowP()) config.cmd.origens[v.vid] = true;
+        if (!ccTemTropa(v, comp)) { semTropa++; return; }
+        const t = ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, compVel);
+        if (t == null || (ch - t) <= srvNowP()) { semTempo++; return; }
+        config.cmd.origens[v.vid] = true; ok++;
       });
       save(); ccRenderOrigens();
+      if (msg) {
+        msg.style.color = ok ? '#8fe39a' : '#ff7568';
+        msg.textContent = ok + ' origem(ns) marcada(s)' +
+          (semTropa ? ' · ' + semTropa + ' sem tropa' : '') +
+          (semTempo ? ' · ' + semTempo + ' longe demais' : '');
+      }
     };
 
     ccCarregarOrigens(false);

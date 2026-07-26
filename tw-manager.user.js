@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.5.1
+// @version      10.6.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.5.1';
+  const VERSION = '10.6.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -470,11 +470,17 @@
         { v: fmtN(lt.today), l: 'saqueado hoje', br: true },
         { v: fmtN(lt.estimate), l: 'estimativa fim do dia' },
         { v: fmtN((s.dailyCap || {}).cap), l: 'capacidade enviada hoje' },
-        { v: (function () {
-          const cap = (s.dailyCap || {}).cap || 0;
-          if (!cap || lt.today == null) return '—';
-          return Math.round(lt.today / cap * 100) + '%';
-        }()), l: 'eficiência (saque ÷ capacidade)', hl: true, wide: true },
+        // Só vale comparar com o "saqueado hoje" se a contagem cobrir o dia inteiro. Se o script foi
+        // instalado/aberto no meio do dia, a capacidade está incompleta e a conta estoura 100%.
+        (function () {
+          const dc = s.dailyCap || {}, cap = dc.cap || 0;
+          const parcial = (dc.startSec || 0) > 900;
+          if (!cap || lt.today == null) return { v: '—', l: 'eficiência (saque ÷ capacidade)', hl: true, wide: true };
+          const pct = Math.round(lt.today / cap * 100) + '%';
+          return parcial
+            ? { v: pct, l: 'eficiência — parcial, vale só a partir de amanhã', wide: true }
+            : { v: pct, l: 'eficiência (saque ÷ capacidade)', hl: true, wide: true };
+        }()),
       ];
     } else if (mod === 'wall') {
       const s = (config.wall.stats || {});
@@ -954,9 +960,11 @@
   // Soma a capacidade de carga enviada hoje, pra comparar com o saque obtido (eficiência real).
   function addDailyCap(cfg, cap, atks) {
     const sec = serverSecOfDay();
-    const d = cfg.dailyCap || { sec: sec, cap: 0, atks: 0 };
-    if (sec != null && d.sec != null && sec < d.sec) { d.cap = 0; d.atks = 0; }   // virou o dia no servidor
+    const d = cfg.dailyCap || { sec: sec, startSec: sec, cap: 0, atks: 0 };
+    // virou o dia no servidor -> zera e marca que agora a contagem cobre o dia desde o começo
+    if (sec != null && d.sec != null && sec < d.sec) { d.cap = 0; d.atks = 0; d.startSec = sec; }
     d.sec = (sec != null ? sec : d.sec);
+    if (d.startSec == null) d.startSec = sec;
     d.cap = (d.cap || 0) + (cap || 0);
     d.atks = (d.atks || 0) + (atks || 0);
     cfg.dailyCap = d;

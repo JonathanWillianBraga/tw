@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.94.0
+// @version      9.95.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.94.0';
+  const VERSION = '9.95.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1082,7 +1082,8 @@
     if (!dyn) {
       const nA = (tpl && tpl.unitsA) ? Object.keys(tpl.unitsA).length : 0;
       const nB = (tpl && tpl.unitsB) ? Object.keys(tpl.unitsB).length : 0;
-      if (!nA && !nB) pushLog('Saque: ⚠ não li as unidades dos templates A/B do assistente — sem pré-checagem de tropa. Espere muitas recusas de "unidades insuficientes".', 'err', 'farm');
+      if (!nA && !nB) pushLog('Saque: ⚠ não li as unidades dos templates A/B do assistente — sem pré-checagem de tropa. Espere muitas recusas de "unidades insuficientes". [ids: A=' + ((tpl && tpl.a) || '?') + ' B=' + ((tpl && tpl.b) || '?') + ' · como achei: ' + (((tpl && tpl.debug) || []).join(', ') || 'nada') + ']', 'err', 'farm');
+      else if (!nA || !nB) pushLog('Saque: ⚠ li as unidades de só um template (A=' + nA + ' unid., B=' + nB + ' unid.) — o outro fica sem pré-checagem.', 'err', 'farm');
     }
     const availCache = {};
     const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
@@ -1101,6 +1102,10 @@
     else eligible.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
     let count = 0, errs = 0;   // errs = envios recusados APÓS a origem passar na pré-checagem de tropa
     let _farmSaveAt = 0;       // throttle da gravação imediata do carimbo de envio
+    // Limite de fake do mundo: o ataque precisa ter no mínimo (pontos da ORIGEM × pct)% de população.
+    // Quem estoura isso é a origem grande, não o alvo — então o bloqueio é por origem+modo e vale pro
+    // ciclo todo. Assim uma aldeia grande demais pro template B é descartada após UM erro, não a cada alvo.
+    const fakeBlock = {};
     const errReasons = {};     // motivo -> quantas vezes (pra saber POR QUE recusou, não só quantas)
     // Barra de progresso do ciclo: UMA linha de log que se atualiza conforme percorre os alvos e, no
     // fim, vira o extrato. Throttle de 400ms pra não redesenhar o log a cada aldeia.
@@ -1147,6 +1152,7 @@
       const estCL = Math.max(1, Math.ceil((mode === 'b' ? sum * 1.2 : sum) / 80));   // CL estimada do envio (p/ descontar da origem)
       let did = false, usedName = '', usedDist = 0;
       for (const c of cands) {
+        if (fakeBlock[c.s.vid + '|' + mode]) continue;   // origem já reprovada no limite de fake neste ciclo
         const avail = await getAvail(c.s.vid);
         if (minCL > 0 && (avail.light || 0) < minCL) continue;   // origem drenada -> tenta a próxima mais próxima
         // Modo dinâmico A/B manda {light: estCL, spy: 1}. Se a origem não tem isso (ex.: aldeia recém-noblada
@@ -1170,6 +1176,13 @@
           did = false; errs++;
           const em = String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 90);
           errReasons[em] = (errReasons[em] || 0) + 1;
+          // Limite de fake: o template é pequeno demais PRA ESSA ORIGEM (vale pra qualquer alvo).
+          // Marca e não tenta de novo no ciclo — antes gastava uma requisição por alvo.
+          const fl = em.match(/m[ií]nimo de (\d+) habitantes/i);
+          if (fl) {
+            fakeBlock[c.s.vid + '|' + mode] = true;
+            pushLog('Saque: ' + c.s.name + ' não pode mandar ' + mode.toUpperCase() + ' — o mundo exige ' + fl[1] + ' de população (1% dos pontos dela) e o template é menor. Origem pulada neste ciclo.', 'err', 'farm');
+          }
           continue;
         }
         if (did) {

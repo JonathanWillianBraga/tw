@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.95.0
+// @version      9.96.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.95.0';
+  const VERSION = '9.96.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1085,6 +1085,20 @@
       if (!nA && !nB) pushLog('Saque: ⚠ não li as unidades dos templates A/B do assistente — sem pré-checagem de tropa. Espere muitas recusas de "unidades insuficientes". [ids: A=' + ((tpl && tpl.a) || '?') + ' B=' + ((tpl && tpl.b) || '?') + ' · como achei: ' + (((tpl && tpl.debug) || []).join(', ') || 'nada') + ']', 'err', 'farm');
       else if (!nA || !nB) pushLog('Saque: ⚠ li as unidades de só um template (A=' + nA + ' unid., B=' + nB + ' unid.) — o outro fica sem pré-checagem.', 'err', 'farm');
     }
+    // População de cada template + pontos das aldeias = dá pra saber ANTES quais origens são grandes
+    // demais pro template (limite de fake do mundo). 0 = desconhecido -> checagem proativa desligada,
+    // e sobra só o freio reativo (que aprende com o primeiro erro).
+    const tplPop = { a: 0, b: 0 };
+    let vPoints = null;
+    const fakePct = (config.fakes && config.fakes.pct) || 1;
+    if (!dyn && tpl) {
+      const popOf = (u) => Object.keys(u || {}).reduce((s, k) => s + (parseInt(u[k], 10) || 0) * (FAKE_POP[k] || 1), 0);
+      tplPop.a = popOf(tpl.unitsA); tplPop.b = popOf(tpl.unitsB);
+      if (tplPop.a || tplPop.b) {
+        try { vPoints = await getVillagePoints(); } catch (e) { vPoints = null; }
+        pushLog('Saque: limite de fake ativo — template A=' + tplPop.a + ' pop, B=' + tplPop.b + ' pop; origem precisa de ' + fakePct + '% dos pontos dela.', '', 'farm');
+      }
+    }
     const availCache = {};
     const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
     const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, mur: 0, pend: 0, semorig: 0, dist: 0 };
@@ -1153,6 +1167,11 @@
       let did = false, usedName = '', usedDist = 0;
       for (const c of cands) {
         if (fakeBlock[c.s.vid + '|' + mode]) continue;   // origem já reprovada no limite de fake neste ciclo
+        // Proativo: origem grande demais pro template nem é tentada (economiza a requisição do erro).
+        if (!dyn && mode !== 'c' && vPoints && tplPop[mode] > 0) {
+          const pts = parseInt(vPoints[String(c.s.vid)], 10) || 0;
+          if (pts > 0 && tplPop[mode] < Math.ceil((fakePct / 100) * pts)) { fakeBlock[c.s.vid + '|' + mode] = true; continue; }
+        }
         const avail = await getAvail(c.s.vid);
         if (minCL > 0 && (avail.light || 0) < minCL) continue;   // origem drenada -> tenta a próxima mais próxima
         // Modo dinâmico A/B manda {light: estCL, spy: 1}. Se a origem não tem isso (ex.: aldeia recém-noblada
@@ -3343,18 +3362,24 @@
     if (!out.b && orderedIds[1]) { out.b = orderedIds[1]; out.debug.push('B via forms'); }
 
     // Estratégia 3: inline JS Accountmanager.farm.templates = [...]
-    if (!out.a || !out.b) {
+    // Roda também quando os IDs já foram achados: é a ÚNICA fonte das UNIDADES de cada template, e
+    // antes ficava de fora sempre que as estratégias 1/2 davam certo (ids ok, unidades vazias).
+    if (!out.a || !out.b || !Object.keys(out.unitsA).length || !Object.keys(out.unitsB).length) {
       const m = html.match(/templates\s*[:=]\s*(\[[\s\S]{0,4000}?\])/);
+      if (!m) out.debug.push('inline JS: bloco templates não encontrado');
       if (m) {
         try {
           const parsed = JSON.parse(m[1].replace(/(\w+):/g, '"$1":').replace(/'/g, '"'));
           if (Array.isArray(parsed) && parsed.length) {
-            if (!out.a && parsed[0] && parsed[0].id) { out.a = String(parsed[0].id); out.debug.push('A via inline JS'); }
-            if (!out.b && parsed[1] && parsed[1].id) { out.b = String(parsed[1].id); out.debug.push('B via inline JS'); }
-            if (parsed[0] && parsed[0].units) out.unitsA = Object.assign({}, out.unitsA, parsed[0].units);
-            if (parsed[1] && parsed[1].units) out.unitsB = Object.assign({}, out.unitsB, parsed[1].units);
+            // Casa pelo ID quando ele já é conhecido; só cai na ordem [0]=A,[1]=B se não achar.
+            const byId = (id) => (id ? parsed.find((t) => t && String(t.id) === String(id)) : null);
+            const pa = byId(out.a) || parsed[0], pb = byId(out.b) || parsed[1];
+            if (!out.a && pa && pa.id) { out.a = String(pa.id); out.debug.push('A via inline JS'); }
+            if (!out.b && pb && pb.id) { out.b = String(pb.id); out.debug.push('B via inline JS'); }
+            if (pa && pa.units) { out.unitsA = Object.assign({}, out.unitsA, pa.units); out.debug.push('unidades A via inline JS'); }
+            if (pb && pb.units) { out.unitsB = Object.assign({}, out.unitsB, pb.units); out.debug.push('unidades B via inline JS'); }
           }
-        } catch (e) { /* JSON não parseável */ }
+        } catch (e) { out.debug.push('inline JS: JSON não parseável'); }
       }
     }
 

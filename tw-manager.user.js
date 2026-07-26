@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.93.0
+// @version      9.94.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.93.0';
+  const VERSION = '9.94.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1077,6 +1077,13 @@
     catch (e) { pushLog('Saque: erro ao ler os alvos do assistente (' + (e.message || e) + ').', 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
     let tpl = null;
     if (!dyn) { try { tpl = await getFarmTemplates(CUR_VID); } catch (e) { tpl = null; } }
+    // Sem as unidades dos templates não dá pra saber se a origem tem tropa, e o ciclo cai no
+    // "tenta e deixa o servidor recusar" — o que enche o log de recusa e gasta requisição à toa.
+    if (!dyn) {
+      const nA = (tpl && tpl.unitsA) ? Object.keys(tpl.unitsA).length : 0;
+      const nB = (tpl && tpl.unitsB) ? Object.keys(tpl.unitsB).length : 0;
+      if (!nA && !nB) pushLog('Saque: ⚠ não li as unidades dos templates A/B do assistente — sem pré-checagem de tropa. Espere muitas recusas de "unidades insuficientes".', 'err', 'farm');
+    }
     const availCache = {};
     const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
     const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, mur: 0, pend: 0, semorig: 0, dist: 0 };
@@ -1093,6 +1100,7 @@
     if ((cfg.order || 'dist') === 'recurso') eligible.sort((a, b) => (b.wood + b.stone + b.iron) - (a.wood + a.stone + a.iron));
     else eligible.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
     let count = 0, errs = 0;   // errs = envios recusados APÓS a origem passar na pré-checagem de tropa
+    let _farmSaveAt = 0;       // throttle da gravação imediata do carimbo de envio
     const errReasons = {};     // motivo -> quantas vezes (pra saber POR QUE recusou, não só quantas)
     // Barra de progresso do ciclo: UMA linha de log que se atualiza conforme percorre os alvos e, no
     // fim, vira o extrato. Throttle de 400ms pra não redesenhar o log a cada aldeia.
@@ -1176,7 +1184,15 @@
           usedName = c.s.name; usedDist = c.d; count++; cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break;
         }
       }
-      if (did) { sent[t.coord] = now; pendingCoords.add(t.coord); pushLog('Saque: ' + usedName + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (mode !== 'c' ? ' ×' + qty : '') + ' · ' + (Math.round(usedDist * 10) / 10) + ' campos', 'ok', 'farm'); }
+      if (did) {
+        sent[t.coord] = Date.now(); cfg.sentReports = sent; pendingCoords.add(t.coord);
+        // GRAVA JÁ. O save() do fim do ciclo não basta: a página recarrega no meio (visto no log) e
+        // todos os carimbos "mandei nesse alvo" iam junto — aí o alvo era reatacado muito antes do
+        // "Repetir a cada". Throttle de 2s pra não escrever no disco a cada envio.
+        const _ts = Date.now();
+        if (_ts - _farmSaveAt > 2000) { _farmSaveAt = _ts; save(); }
+        pushLog('Saque: ' + usedName + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (mode !== 'c' ? ' ×' + qty : '') + ' · ' + (Math.round(usedDist * 10) / 10) + ' campos', 'ok', 'farm');
+      }
       else skip.semorig++;
     }
     // Fecha a barra: a MESMA linha vira o extrato (não empilha outra). Falha = alvo elegível que não

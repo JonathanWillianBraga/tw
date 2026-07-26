@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.90.0
+// @version      10.8.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -44,7 +44,7 @@
   };
 
   const SCAV_UNITS = [['spear', 'Lanc.'], ['sword', 'Espad.'], ['axe', 'Bárb.'], ['light', 'C.leve'], ['heavy', 'C.pes.'], ['knight', 'Palad.']];
-  const CARRY = { spear: 25, sword: 15, axe: 10, light: 80, heavy: 50, knight: 100 };
+  const CARRY = { spear: 25, sword: 15, axe: 10, archer: 10, spy: 0, light: 80, marcher: 50, heavy: 50, ram: 0, catapult: 0, knight: 100, snob: 0 };
   const POP = { spear: 1, sword: 1, axe: 1, light: 4, heavy: 6, knight: 10 };
   const LOOT_FACTOR = { 1: 0.1, 2: 0.25, 3: 0.5, 4: 0.75 };
   const MIN_POP = 10;
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.90.0';
+  const VERSION = '10.8.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -424,6 +424,24 @@
     renderLog();
     if (mod) renderModLog(mod);
   }
+  // Limpa "linhas vivas" gravadas por versões anteriores: até a 9.99.0 a barra de progresso morava no
+  // log e podia ficar congelada se a página recarregasse no meio do ciclo. Agora a barra vive na aba
+  // do módulo; isto fica só pra faxina de quem está atualizando.
+  function closeStaleLiveLogs() {
+    let arr = []; try { arr = JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) { return; }
+    const mods = {};
+    let n = 0;
+    arr.forEach((l) => {
+      if (!l.live) return;
+      l.live = false; l.k = 'err'; n++;
+      l.m = 'Ciclo interrompido antes de terminar (página recarregada?).';
+      if (l.mod) mods[l.mod] = 1;
+    });
+    if (!n) return;
+    localStorage.setItem(LOGKEY, JSON.stringify(arr));
+    renderLog();
+    Object.keys(mods).forEach(renderModLog);
+  }
   function logLineHTML(l) {
     const c = l.k === 'err' ? '#ff7568' : l.k === 'ok' ? '#8fe39a' : '#cbb98f';
     return '<div style="color:' + c + ';border-bottom:1px solid rgba(255,255,255,.05);padding:2px 0">[' + esc(l.t) + '] ' + esc(l.m) + '</div>';
@@ -464,7 +482,18 @@
         { v: fmtN(s.a), l: 'A' }, { v: fmtN(s.b), l: 'B' }, { v: fmtN(s.c), l: 'C' },
         { v: fmtN(lt.today), l: 'saqueado hoje', br: true },
         { v: fmtN(lt.estimate), l: 'estimativa fim do dia' },
-        { v: (s.coverage == null ? '—' : s.coverage + '%'), l: 'eficiência (cobertura)', hl: true },
+        { v: fmtN((s.dailyCap || {}).cap), l: 'capacidade enviada hoje' },
+        // Só vale comparar com o "saqueado hoje" se a contagem cobrir o dia inteiro. Se o script foi
+        // instalado/aberto no meio do dia, a capacidade está incompleta e a conta estoura 100%.
+        (function () {
+          const dc = s.dailyCap || {}, cap = dc.cap || 0;
+          const parcial = (dc.startSec || 0) > 900;
+          if (!cap || lt.today == null) return { v: '—', l: 'eficiência (saque ÷ capacidade)', hl: true, wide: true };
+          const pct = Math.round(lt.today / cap * 100) + '%';
+          return parcial
+            ? { v: pct, l: 'eficiência — parcial, vale só a partir de amanhã', wide: true }
+            : { v: pct, l: 'eficiência (saque ÷ capacidade)', hl: true, wide: true };
+        }()),
       ];
     } else if (mod === 'wall') {
       const s = (config.wall.stats || {});
@@ -696,13 +725,35 @@
     if (dd) dur = parseInt(dd.getAttribute('data-duration'), 10);
     if (!dur) { const txt = doc.body ? doc.body.textContent : t1; const m = txt.match(/dura[çc][aã]o[^0-9]{0,12}(\d{1,2}):([0-5]\d):([0-5]\d)/i); if (m) dur = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]); }
     const p2 = new URLSearchParams();
-    form.querySelectorAll('input, select').forEach((el) => { if (el.name) p2.set(el.name, el.value); });
+    form.querySelectorAll('input, select').forEach((el) => {
+      if (!el.name) return;
+      // Checkbox/radio não marcados o navegador não envia — copiá-los distorcia o formulário.
+      if ((el.type === 'checkbox' || el.type === 'radio') && !el.checked) return;
+      const v = el.value == null ? '' : String(el.value);
+      // Campo VAZIO não pode apagar um valor já lido com o mesmo name: o alvo costuma aparecer duas
+      // vezes (um hidden preenchido e a caixinha de texto vazia) e a vazia vinha por último.
+      if (v === '' && p2.has(el.name) && p2.get(el.name) !== '') return;
+      p2.set(el.name, v);
+    });
     if (!p2.has('h')) p2.set('h', CSRF);
+    // Reafirma o alvo: se ele se perde no repasse, o servidor responde "Por favor, selecione uma
+    // aldeia alvo" e o envio é recusado.
+    if (!p2.get('input')) p2.set('input', x + '|' + y);
+    if (!p2.get('x')) p2.set('x', String(x));
+    if (!p2.get('y')) p2.set('y', String(y));
     const action = form.getAttribute('action') || ('/game.php?village=' + vid + '&screen=place&action=command&h=' + CSRF);
     const r2 = await fetch(absUrl(action), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p2.toString() });
     const t2 = await r2.text();
     // Só considera enviado se NÃO veio caixa de erro nem mensagem de recusa (senão o log logava falso "enviado").
-    try { const d2 = new DOMParser().parseFromString(t2, 'text/html'); const eb = d2.querySelector('.error_box'); if (eb && (eb.textContent || '').trim()) throw new Error('recusado: ' + eb.textContent.trim().replace(/\s+/g, ' ').slice(0, 80)); } catch (e) { if (/^recusado:/.test(e.message)) throw e; }
+    // "Selecione uma aldeia alvo" também é o texto PADRÃO da praça sem alvo escolhido — que é o estado
+    // da tela logo após um envio dar certo. Então essa mensagem é AMBÍGUA: pode ser recusa ou sucesso.
+    // Marcada à parte pra quem chama não reenviar por outra origem e acabar mandando ataque dobrado.
+    try {
+      const d2 = new DOMParser().parseFromString(t2, 'text/html');
+      const eb = d2.querySelector('.error_box');
+      const et = eb ? (eb.textContent || '').trim().replace(/\s+/g, ' ') : '';
+      if (et) throw new Error((/selecione uma aldeia alvo/i.test(et) ? 'ambiguo: ' : 'recusado: ') + et.slice(0, 80));
+    } catch (e) { if (/^(recusado|ambiguo):/.test(e.message)) throw e; }
     if (/n[aã]o (tem|h[aá]) (tropas|unidades)|insuficient|not enough/i.test(t2)) throw new Error('Servidor recusou: tropas insuficientes.');
     return dur && dur > 0 ? dur : null;
   }
@@ -862,12 +913,17 @@
   }
   function scheduleScav() { clearTimeout(scavTimer); if (!config.scav.running) return; scavTimer = setTimeout(scavTick, Math.min(Math.max((config.scav.nextAt || 0) - Date.now(), 1000), 60000)); }
 
+  let _farmPagesInfo = null;   // diagnóstico: quantas páginas do assistente foram lidas no último ciclo
   async function getFarmTargets(vid) {
-    const res = await fetch('/game.php?village=' + vid + '&screen=am_farm', { credentials: 'include' });
-    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    const rows = [];
+    const rows = [], seen = {};
+    const fetchPage = async (n) => {
+      const res = await fetch('/game.php?village=' + vid + '&screen=am_farm' + (n > 0 ? ('&Farm_page=' + n) : ''), { credentials: 'include' });
+      return new DOMParser().parseFromString(await res.text(), 'text/html');
+    };
+    const parseDoc = (doc) => {
     doc.querySelectorAll('#plunder_list tr[id^="village_"]').forEach((tr) => {
       const targetId = tr.id.replace('village_', '');
+      if (seen[targetId]) return;   // mesma aldeia repetida entre páginas
       const rl = tr.querySelector('a[href*="view="]');
       let reportId = null, coord = '';
       if (rl) { const m = rl.getAttribute('href').match(/view=(\d+)/); if (m) reportId = m[1]; const cmm = (rl.textContent || '').match(/(\d+)\|(\d+)/); if (cmm) coord = cmm[1] + '|' + cmm[2]; }   // normaliza p/ "x|y" (o texto vem "(x|y) Kxx")
@@ -892,8 +948,25 @@
       const mlImg = tr.querySelector('img[src*="/max_loot/"]');
       const mm = mlImg ? (mlImg.getAttribute('src') || '').match(/max_loot\/(\d)/) : null;
       const full = mm ? (mm[1] === '1') : false;                        // true = cheio, false = vazio
+      seen[targetId] = 1;
       rows.push({ targetId: targetId, reportId: reportId, reportAt: reportAt, wood: nums[0] || 0, stone: nums[1] || 0, iron: nums[2] || 0, wall: wall, dist: dist, cEnabled: cEnabled, aEnabled: aEnabled, bEnabled: bEnabled, color: color, full: full, coord: coord });
     });
+    };
+    // O assistente PAGINA (teto de 100 linhas por página). Lendo só a primeira, os alvos das páginas
+    // seguintes ficavam invisíveis e a tropa sobrava parada. Segue a paginação até o fim.
+    const doc0 = await fetchPage(0);
+    parseDoc(doc0);
+    const pages = new Set();
+    doc0.querySelectorAll('a[href*="Farm_page="]').forEach((a) => {
+      const m = (a.getAttribute('href') || '').match(/Farm_page=(\d+)/);
+      if (m) { const p = parseInt(m[1], 10); if (p > 0) pages.add(p); }
+    });
+    const extras = Array.from(pages).sort((a, b) => a - b).slice(0, 14);   // teto de segurança
+    let lidas = 1;
+    for (const p of extras) {
+      try { parseDoc(await fetchPage(p)); lidas++; await sleep(200); } catch (e) { break; }
+    }
+    _farmPagesInfo = { pages: lidas, achadas: extras.length + 1, alvos: rows.length };
     return rows;
   }
 
@@ -924,6 +997,25 @@
   function _dailyWrite(type, entry) {
     _dailyCache[type] = entry;
     try { const all = JSON.parse(localStorage.getItem(DAILYKEY) || '{}'); all[type] = entry; localStorage.setItem(DAILYKEY, JSON.stringify(all)); } catch (e) {}
+  }
+  // Segundos desde a meia-noite DO SERVIDOR. Usado pra zerar o acumulador diário exatamente quando o
+  // jogo zera o "saqueado hoje" — quando o relógio anda pra trás, virou o dia.
+  function serverSecOfDay() {
+    const et = document.querySelector('#serverTime');
+    const tm = et ? (et.textContent || '').match(/(\d{2}):(\d{2}):(\d{2})/) : null;
+    return tm ? ((+tm[1]) * 3600 + (+tm[2]) * 60 + (+tm[3])) : null;
+  }
+  // Soma a capacidade de carga enviada hoje, pra comparar com o saque obtido (eficiência real).
+  function addDailyCap(cfg, cap, atks) {
+    const sec = serverSecOfDay();
+    const d = cfg.dailyCap || { sec: sec, startSec: sec, cap: 0, atks: 0 };
+    // virou o dia no servidor -> zera e marca que agora a contagem cobre o dia desde o começo
+    if (sec != null && d.sec != null && sec < d.sec) { d.cap = 0; d.atks = 0; d.startSec = sec; }
+    d.sec = (sec != null ? sec : d.sec);
+    if (d.startSec == null) d.startSec = sec;
+    d.cap = (d.cap || 0) + (cap || 0);
+    d.atks = (d.atks || 0) + (atks || 0);
+    cfg.dailyCap = d;
   }
   async function getDailyLootStats(type) {
     const c = _dailyRead(type);
@@ -1006,6 +1098,12 @@
     cfg.stats = cfg.stats || {}; cfg.stats.mineCount = myV.length; cfg.stats.mineCountRaw = mine.length;
     let pendingCoords = new Set(), saquesAtivos = null, farmCoords = new Set();
     try { const pa = await getPendingAttack(); pendingCoords = pa.coords; saquesAtivos = pa.saques; farmCoords = pa.farmCoords || new Set(); } catch (e) {}
+    // DIAGNÓSTICO: mais comandos de saque em rota do que alvos distintos = tem ataque duplicado no
+    // mesmo alvo. Com "Repetir farm" desligado isso NÃO deveria acontecer, e indica que um envio deu
+    // certo mas foi lido como recusa (aí o ciclo tenta outra origem e manda de novo no mesmo lugar).
+    if (!cfg.repeat && saquesAtivos != null && farmCoords.size && saquesAtivos > farmCoords.size) {
+      pushLog('Saque: ⚠ ' + saquesAtivos + ' comando(s) de saque em rota para apenas ' + farmCoords.size + ' alvo(s) distinto(s) — há ' + (saquesAtivos - farmCoords.size) + ' ataque(s) DUPLICADO(S).', 'err', 'farm');
+    }
     const minW = cfg.minWood || 0, minS = cfg.minStone || 0, minI = cfg.minIron || 0;
     const maxDist = cfg.maxDist != null ? cfg.maxDist : 13;
     const maxWall = cfg.maxWall != null ? cfg.maxWall : 20;
@@ -1029,11 +1127,40 @@
     let targets;
     try { targets = await getFarmTargets(CUR_VID); }
     catch (e) { pushLog('Saque: erro ao ler os alvos do assistente (' + (e.message || e) + ').', 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
+    if (_farmPagesInfo && _farmPagesInfo.pages > 1) pushLog('Saque: assistente tem ' + _farmPagesInfo.pages + ' página(s) — ' + _farmPagesInfo.alvos + ' alvo(s) no total.', '', 'farm');
     let tpl = null;
     if (!dyn) { try { tpl = await getFarmTemplates(CUR_VID); } catch (e) { tpl = null; } }
+    // Sem as unidades dos templates não dá pra saber se a origem tem tropa, e o ciclo cai no
+    // "tenta e deixa o servidor recusar" — o que enche o log de recusa e gasta requisição à toa.
+    if (!dyn) {
+      const nA = (tpl && tpl.unitsA) ? Object.keys(tpl.unitsA).length : 0;
+      const nB = (tpl && tpl.unitsB) ? Object.keys(tpl.unitsB).length : 0;
+      if (!nA && !nB) pushLog('Saque: ⚠ não li as unidades dos templates A/B do assistente — sem pré-checagem de tropa. Espere muitas recusas de "unidades insuficientes". [ids: A=' + ((tpl && tpl.a) || '?') + ' B=' + ((tpl && tpl.b) || '?') + ' · como achei: ' + (((tpl && tpl.debug) || []).join(', ') || 'nada') + ']', 'err', 'farm');
+      else if (!nA || !nB) pushLog('Saque: ⚠ li as unidades de só um template (A=' + nA + ' unid., B=' + nB + ' unid.) — o outro fica sem pré-checagem.', 'err', 'farm');
+    }
+    // População de cada template + pontos das aldeias = dá pra saber ANTES quais origens são grandes
+    // demais pro template (limite de fake do mundo). 0 = desconhecido -> checagem proativa desligada,
+    // e sobra só o freio reativo (que aprende com o primeiro erro).
+    const tplPop = { a: 0, b: 0 };
+    // Ataque SÓ de explorador é isento do limite de fake (regra do jogo: olheiro sozinho sempre pode
+    // sair, não importa o tamanho da origem). Sem isso o script "consertava" um template de
+    // reconhecimento somando cavalaria que o jogo nem exigia.
+    const tplOnlySpy = { a: false, b: false };
+    let vPoints = null;
+    const fakePct = (config.fakes && config.fakes.pct) || 1;
+    if (!dyn && tpl) {
+      const popOf = (u) => Object.keys(u || {}).reduce((s, k) => s + (parseInt(u[k], 10) || 0) * (FAKE_POP[k] || 1), 0);
+      const soSpy = (u) => { const ks = Object.keys(u || {}).filter((k) => (parseInt(u[k], 10) || 0) > 0); return ks.length > 0 && ks.every((k) => k === 'spy'); };
+      tplPop.a = popOf(tpl.unitsA); tplPop.b = popOf(tpl.unitsB);
+      tplOnlySpy.a = soSpy(tpl.unitsA); tplOnlySpy.b = soSpy(tpl.unitsB);
+      if (tplPop.a || tplPop.b) {
+        try { vPoints = await getVillagePoints(); } catch (e) { vPoints = null; }
+        pushLog('Saque: limite de fake ativo — template A=' + tplPop.a + ' pop' + (tplOnlySpy.a ? ' (só explorador: isento)' : '') + ', B=' + tplPop.b + ' pop' + (tplOnlySpy.b ? ' (só explorador: isento)' : '') + '; origem precisa de ' + fakePct + '% dos pontos dela.', '', 'farm');
+      }
+    }
     const availCache = {};
     const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
-    const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, mur: 0, pend: 0, semorig: 0 };
+    const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, mur: 0, pend: 0, semorig: 0, dist: 0 };
     const eligible = [];
     targets.forEach((t) => {
       if (!t.reportId) { skip.norep++; return; }
@@ -1046,8 +1173,29 @@
     });
     if ((cfg.order || 'dist') === 'recurso') eligible.sort((a, b) => (b.wood + b.stone + b.iron) - (a.wood + a.stone + a.iron));
     else eligible.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
-    let count = 0, errs = 0;   // errs = envios recusados pelo servidor APÓS a origem passar na pré-checagem de tropa
-    for (const t of eligible) {
+    let count = 0, errs = 0;   // errs = envios recusados APÓS a origem passar na pré-checagem de tropa
+    let _farmSaveAt = 0;       // throttle da gravação imediata do carimbo de envio
+    let incertos = 0, calcCount = 0;   // envios de resultado ambíguo · envios subidos ao mínimo do mundo
+    let lastCalcTxt = '';              // último envio no mínimo (mostrado no painel como amostra)
+    let capCycle = 0;                  // capacidade de carga total despachada neste ciclo
+    // Limite de fake do mundo: o ataque precisa ter no mínimo (pontos da ORIGEM × pct)% de população.
+    // Quem estoura isso é a origem grande, não o alvo — então o bloqueio é por origem+modo e vale pro
+    // ciclo todo. Assim uma aldeia grande demais pro template B é descartada após UM erro, não a cada alvo.
+    const fakeBlock = {};
+    const errReasons = {};     // motivo -> quantas vezes (pra saber POR QUE recusou, não só quantas)
+    // Barra de progresso do ciclo: UMA linha de log que se atualiza conforme percorre os alvos e, no
+    // fim, vira o extrato. Throttle de 400ms pra não redesenhar o log a cada aldeia.
+    let _barAt = 0;
+    if (eligible.length) setFarmProg(farmProgHTML(0, eligible.length, 'mapeados ' + eligible.length + ' alvo(s)'));
+    const tickBar = (done, force) => {
+      if (!eligible.length) return;
+      const ts = Date.now();
+      if (!force && ts - _barAt < 400) return;
+      _barAt = ts;
+      setFarmProg(farmProgHTML(done, eligible.length, '✔ ' + count + ' enviado(s)' + (errs ? (' · ✖ ' + errs + ' recusa(s)') : '')));
+    };
+    for (const [idx, t] of eligible.entries()) {
+      tickBar(idx);   // idx = quantos JÁ terminaram
       const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
       const tx = +cm[1], ty = +cm[2];
       if (t.color === 'blue') {
@@ -1074,33 +1222,142 @@
       const cands = myV.map((s) => ({ s: s, d: fieldDist(s.x, s.y, tx, ty) })).filter((o) => o.d <= maxDist).sort((a, b) => a.d - b.d);
       if (!cands.length) { skip.dist++; continue; }
       const estCL = Math.max(1, Math.ceil((mode === 'b' ? sum * 1.2 : sum) / 80));   // CL estimada do envio (p/ descontar da origem)
-      let did = false, usedName = '', usedDist = 0;
+      let did = false, usedName = '', usedDist = 0, incerto = false, usedCalc = false, usedCalcInfo = '';
       for (const c of cands) {
+        // Origem reprovada no limite de fake: em vez de pular, manda quantidade CALCULADA que cumpre
+        // o mínimo do mundo (fallback). Só pula de vez se não der pra calcular (sem pontos da aldeia).
+        let useCalc = false;
+        const ptsC = vPoints ? (parseInt(vPoints[String(c.s.vid)], 10) || 0) : 0;
+        const minPopC = ptsC > 0 ? Math.ceil((fakePct / 100) * ptsC) : 0;
+        if (mode !== 'c' && !tplOnlySpy[mode] && (fakeBlock[c.s.vid + '|' + mode] || (!dyn && tplPop[mode] > 0 && minPopC > 0 && tplPop[mode] < minPopC))) {
+          if (!minPopC) continue;   // sem os pontos da origem não dá pra calcular o piso -> pula
+          useCalc = true;
+        }
         const avail = await getAvail(c.s.vid);
         if (minCL > 0 && (avail.light || 0) < minCL) continue;   // origem drenada -> tenta a próxima mais próxima
         // Modo dinâmico A/B manda {light: estCL, spy: 1}. Se a origem não tem isso (ex.: aldeia recém-noblada
         // sem CL), o servidor recusa e o log mentia "enviado". Pula pra próxima origem em vez de falso-positivo.
         if (dyn && mode !== 'c') { if ((avail.light || 0) < estCL) continue; if ((avail.spy || 0) < 1) continue; }
+        // Sem template dinâmico o A/B manda a composição fixa do assistente. Antes a gente disparava
+        // e deixava o servidor recusar — 1 requisição jogada fora por origem sem tropa. Agora confere
+        // antes, usando as unidades lidas do próprio template. Se não deu pra ler (mapa vazio), passa
+        // direto e o comportamento fica igual ao de antes.
+        if (!dyn && !useCalc && mode !== 'c') {
+          const need = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {};
+          let falta = false;
+          for (const u in need) { if ((avail[u] || 0) < need[u]) { falta = true; break; } }
+          if (falta) continue;
+        }
+        // Envio calculado = O TEMPLATE DO USUÁRIO subido até o mínimo do mundo. Mantém as unidades que
+        // ele escolheu no assistente e só multiplica a quantidade o suficiente pra passar. O saque do
+        // alvo NÃO entra aqui: quem decide a composição é o template, não o script.
+        let calcAmounts = null;
+        if (useCalc) {
+          // COMPLETA o template, não substitui: manda tudo que o usuário configurou e soma só a
+          // cavalaria que falta pra bater o mínimo do mundo. O script não presume pra que serve cada
+          // template (o A daqui é 5 exploradores; noutra conta pode ser 25 cavalarias) — quem decide
+          // a composição é o usuário, e o piso de fake é uma exigência do mundo, não uma opinião.
+          const base = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {};
+          calcAmounts = {};
+          for (const u in base) { const n = parseInt(base[u], 10) || 0; if (n > 0) calcAmounts[u] = n; }
+          const falta = Math.max(0, minPopC - (tplPop[mode] || 0));
+          if (falta > 0) calcAmounts.light = (calcAmounts.light || 0) + Math.ceil(falta / (FAKE_POP.light || 4));
+          if (!Object.keys(calcAmounts).length) continue;
+          let semTropa = false;
+          for (const u in calcAmounts) { if ((avail[u] || 0) < calcAmounts[u]) { semTropa = true; break; } }
+          if (semTropa) continue;   // origem não tem o template + o complemento -> tenta a próxima
+        }
         try {
           if (mode === 'c') { await sendFarmC(c.s.vid, t.reportId); did = true; }
+          else if (useCalc) { await sendAttack(c.s.vid, tx, ty, calcAmounts); did = true; }
           else if (mode === 'a') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum / 80)), spy: 1 }); } else { if (!tpl || !tpl.a) break; await sendFarmB(c.s.vid, t.targetId, tpl.a); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
           else if (mode === 'b') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum * 1.2 / 80)), spy: 1 }); } else { if (!tpl || !tpl.b) break; await sendFarmB(c.s.vid, t.targetId, tpl.b); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
-        } catch (e) { did = false; errs++; continue; }   // servidor recusou (origem já tinha tropa) -> pode ser bloqueio/bot-check
-        if (did) { avail.light = Math.max(0, (avail.light || 0) - estCL); usedName = c.s.name; usedDist = c.d; count++; cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break; }
+        } catch (e) {   // envio recusado -> guarda o MOTIVO (antes era engolido e a gente ficava no escuro)
+          did = false;
+          const em = String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 90);
+          // Resposta ambígua: pode ter enviado. Assume que SIM e para de tentar este alvo — errar pra
+          // menos (deixar de mandar) é muito mais barato que errar pra mais (ataque dobrado).
+          if (/^ambiguo:/.test(em)) { incerto = true; break; }
+          errs++;
+          errReasons[em] = (errReasons[em] || 0) + 1;
+          // Limite de fake: o template é pequeno demais PRA ESSA ORIGEM (vale pra qualquer alvo).
+          // Marca e não tenta de novo no ciclo — antes gastava uma requisição por alvo.
+          const fl = em.match(/m[ií]nimo de (\d+) habitantes/i);
+          if (fl) {
+            fakeBlock[c.s.vid + '|' + mode] = true;
+            pushLog('Saque: ' + c.s.name + ' não pode mandar ' + mode.toUpperCase() + ' — o mundo exige ' + fl[1] + ' de população (1% dos pontos dela) e o template é menor. Origem pulada neste ciclo.', 'err', 'farm');
+          }
+          continue;
+        }
+        if (did) {
+          // Desconta o que saiu, senão a pré-checagem do próximo alvo usa saldo velho e volta a
+          // tentar origem já drenada. Dinâmico/C = estimativa de CL; A/B fixo = unidades do template.
+          // Dinâmico manda {light: estCL, spy: 1} — o explorador TAMBÉM tem que ser abatido, senão a
+          // origem parece ter spy pra sempre, passa na pré-checagem e o servidor recusa. Era a causa
+          // das recusas que sobravam: aldeia reusada 3x no ciclo com 2 exploradores.
+          if (useCalc) { for (const u in calcAmounts) avail[u] = Math.max(0, (avail[u] || 0) - calcAmounts[u]); }
+          else if (dyn && mode !== 'c') { avail.light = Math.max(0, (avail.light || 0) - estCL); avail.spy = Math.max(0, (avail.spy || 0) - 1); }
+          else if (mode === 'c') { avail.light = Math.max(0, (avail.light || 0) - estCL); }
+          else { const used = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {}; for (const u in used) avail[u] = Math.max(0, (avail[u] || 0) - used[u]); }
+          usedName = c.s.name; usedDist = c.d; usedCalc = useCalc; count++;
+          if (useCalc) { calcCount++; usedCalcInfo = Object.keys(calcAmounts).map((u) => calcAmounts[u] + ' ' + u).join(' + '); }
+          // Capacidade de carga despachada. No C quem monta a tropa é o jogo (dimensiona pelo saque
+          // do relatório), então usa o próprio saque estimado como capacidade — é aproximação.
+          capCycle += useCalc ? carryOf(calcAmounts)
+            : mode === 'c' ? sum
+            : dyn ? estCL * (CARRY.light || 80)
+            : carryOf(mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB));
+          cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break;
+        }
       }
-      if (did) { sent[t.coord] = now; pendingCoords.add(t.coord); pushLog('Saque: ' + usedName + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (mode !== 'c' ? ' ×' + qty : '') + ' · ' + (Math.round(usedDist * 10) / 10) + ' campos', 'ok', 'farm'); }
+      if (did) {
+        sent[t.coord] = Date.now(); cfg.sentReports = sent; pendingCoords.add(t.coord);
+        // GRAVA JÁ. O save() do fim do ciclo não basta: a página recarrega no meio (visto no log) e
+        // todos os carimbos "mandei nesse alvo" iam junto — aí o alvo era reatacado muito antes do
+        // "Repetir a cada". Throttle de 2s pra não escrever no disco a cada envio.
+        const _ts = Date.now();
+        if (_ts - _farmSaveAt > 2000) { _farmSaveAt = _ts; save(); }
+        // Envio individual NÃO vai mais pro log (enchia 50 linhas por ciclo). O andamento fica na
+        // barra da aba e o resultado no resumo do fim do ciclo.
+        if (usedCalc) lastCalcTxt = usedName + ' → ' + t.coord + ' (' + usedCalcInfo + ')';
+      }
+      else if (incerto) {
+        // Não sabemos se saiu. Carimba como enviado pra NÃO reenviar; o próximo ciclo lê a lista de
+        // comandos do jogo e corrige sozinho se não tiver saído.
+        sent[t.coord] = Date.now(); cfg.sentReports = sent; pendingCoords.add(t.coord); incertos++;
+      }
       else skip.semorig++;
     }
-    const parts = ['enviou ' + count];
-    if (skip.semorig) parts.push(skip.semorig + ' sem origem c/ CL');
+    // "Sem origem c/ tropa" NÃO é falha: é teto de tropa, situação normal quando há mais alvo do que
+    // cavalaria. Falha de verdade é envio recusado pelo servidor (errs) ou de resultado incerto.
+    const naoEnviados = Math.max(0, eligible.length - count - incertos);
+    const topErr = Object.keys(errReasons).map((m) => [m, errReasons[m]]).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    // PAINEL fica com o detalhe (tem espaço e é status, não histórico).
+    const parts = [];
+    if (skip.pend) parts.push(skip.pend + ' já em rota');
+    if (skip.semorig) parts.push(skip.semorig + ' sem origem c/ tropa');
     if (skip.off) parts.push(skip.off + ' cor sem modo / C indisp.');
     if (skip.azul) parts.push(skip.azul + ' azul c/ muralha');
     if (skip.def) parts.push(skip.def + ' azul c/ defesa');
     if (skip.dist) parts.push(skip.dist + ' fora do alcance');
     if (skip.mur) parts.push(skip.mur + ' muralha alta');
-    if (skip.pend) parts.push(skip.pend + ' já c/ ataque a caminho');
     if (skip.norep) parts.push(skip.norep + ' sem relatório');
-    pushLog('Saque: ' + parts.join(' · '), '', 'farm');
+    if (eligible.length) {
+      setFarmProg(farmProgHTML(eligible.length, eligible.length,
+        '✔ <b>' + count + '</b> enviado(s)' + (calcCount ? (' · ' + calcCount + ' completado(s) ao mínimo') : '') +
+        (incertos ? (' · ? ' + incertos + ' incerto(s)') : '') +
+        (naoEnviados ? (' · ⏭ ' + naoEnviados + ' não enviado(s)') : '') +
+        (parts.length ? ('<br><span style="opacity:.7">' + parts.join(' · ') + '</span>') : '') +
+        (lastCalcTxt ? ('<br><span style="opacity:.7">completado: ' + lastCalcTxt + '</span>') : '')));
+    } else setFarmProg('Nenhum alvo elegível neste ciclo.');
+    // LOG enxuto: o resumo sai mais abaixo ("ciclo concluído"). Aqui, só problema DE VERDADE —
+    // recusa do servidor ou envio incerto. Falta de tropa não entra: é teto, não defeito.
+    if (errs || incertos || topErr.length) {
+      pushLog('Saque: ' + (errs ? errs + ' recusa(s)' : '') + (incertos ? ((errs ? ' · ' : '') + incertos + ' incerto(s)') : '') +
+        (topErr.length ? (' — ' + topErr.map((p) => p[1] + '× "' + p[0] + '"').join(' · ')) : ''), 'err', 'farm');
+    }
+    // Tropa esgotada é informação útil (dá pra decidir intervalo/ordem), mas em tom neutro.
+    if (skip.semorig) pushLog('Saque: ' + skip.semorig + ' alvo(s) sem origem com tropa — acabou a cavalaria antes dos alvos.', '', 'farm');
     // Detecção de BLOQUEIO por efeito (pega bot-check enquanto você está AFK). Só conta como suspeito o
     // que é sintoma REAL de bloqueio: servidor RECUSOU envios (errs) OU o assistente voltou VAZIO
     // (0 alvos, degradado). "0 enviados por falta de CL / fora de alcance / cooldown" é NORMAL e ZERA o
@@ -1138,12 +1395,16 @@
     const farmavel = assistCount + farmCoords.size;
     cfg.stats.farmavel = farmavel;
     cfg.stats.coverage = farmavel > 0 ? Math.min(100, Math.round(farmCoords.size / farmavel * 100)) : null;
+    // Eficiência REAL: saque obtido hoje ÷ capacidade de carga despachada hoje. Diz se a tropa está
+    // voltando cheia (intervalo bem calibrado) ou meio vazia (batendo cedo demais no mesmo alvo).
+    addDailyCap(cfg, capCycle, count);
+    cfg.stats.dailyCap = cfg.dailyCap;
     // Intel de aldeias defendidas (com tropas conhecidas) — usado pelo mapa
     cfg.stats.defendedCount = Object.values(defended).filter((d) => typeof d === 'object' && d.coord).length;
     cfg.nextAt = now + Math.max(60, cfg.interval || 600) * 1000;
     save();
     refreshCards('farm'); refreshDaily('farm', cfg, 'loot', 'loot_res');
-    pushLog('Saque: ciclo concluído — ' + count + ' comando(s) enviado(s). Próximo em ' + Math.round((cfg.interval || 600) / 60) + ' min.', 'ok', 'farm');
+    pushLog('Saque: ciclo concluído — ' + count + ' saque(s) enviado(s)' + (calcCount ? (', ' + calcCount + ' completado(s) ao mínimo') : '') + '. Próximo em ' + Math.round((cfg.interval || 600) / 60) + ' min.', 'ok', 'farm');
     scheduleFarm();
   }
   function scheduleFarm() { clearTimeout(farmTimer); if (!config.farm.running) return; farmTimer = setTimeout(farmTick, Math.min(Math.max((config.farm.nextAt || 0) - Date.now(), 1000), 60000)); }
@@ -1751,6 +2012,8 @@
   }
   const attackPrepare = fakePrepare, attackFire = fakeFire;
   const FAKE_POP = { spear: 1, sword: 1, axe: 1, archer: 1, spy: 2, light: 4, marcher: 5, heavy: 6, ram: 5, catapult: 8, knight: 10, snob: 100 };
+  // Capacidade de carga de um conjunto de unidades (usa o CARRY declarado lá no topo).
+  const carryOf = (units) => Object.keys(units || {}).reduce((s, u) => s + (parseInt(units[u], 10) || 0) * (CARRY[u] || 0), 0);
   function parseCoords(raw) {
     const out = [], seen = {};
     (raw || '').split(/[\s,;]+/).forEach((tok) => { const m = tok.match(/^(\d{1,3})\|(\d{1,3})$/); if (m) { const c = m[1] + '|' + m[2]; if (!seen[c]) { seen[c] = 1; out.push({ x: m[1], y: m[2] }); } } });
@@ -3441,19 +3704,72 @@
     if (!out.b && orderedIds[1]) { out.b = orderedIds[1]; out.debug.push('B via forms'); }
 
     // Estratégia 3: inline JS Accountmanager.farm.templates = [...]
-    if (!out.a || !out.b) {
-      const m = html.match(/templates\s*[:=]\s*(\[[\s\S]{0,4000}?\])/);
+    // Roda também quando os IDs já foram achados: é a ÚNICA fonte das UNIDADES de cada template, e
+    // antes ficava de fora sempre que as estratégias 1/2 davam certo (ids ok, unidades vazias).
+    if (!out.a || !out.b || !Object.keys(out.unitsA).length || !Object.keys(out.unitsB).length) {
+      // Aceita templates:[…] · "templates":[…] · templates = {…}. E em vez de regex não-gulosa (que
+      // parava no primeiro ] e quebrava com aninhamento), varre contando colchetes/chaves.
+      const anchor = html.search(new RegExp('[\'"]?templates[\'"]?\\s*[:=]\\s*[[{]'));
+      let raw = null;
+      if (anchor >= 0) {
+        let i = anchor; while (i < html.length && html[i] !== '[' && html[i] !== '{') i++;
+        const open = html[i], close = open === '[' ? ']' : '}';
+        let depth = 0, j = i, q = null;
+        for (; j < html.length && j - i < 20000; j++) {
+          const ch = html[j];
+          if (q) { if (ch === '\\') j++; else if (ch === q) q = null; continue; }
+          if (ch === '"' || ch === "'") { q = ch; continue; }
+          if (ch === open) depth++;
+          else if (ch === close) { depth--; if (!depth) { raw = html.slice(i, j + 1); break; } }
+        }
+      }
+      const m = raw ? [null, raw] : null;
+      if (!m) out.debug.push('inline JS: bloco templates não encontrado');
       if (m) {
         try {
-          const parsed = JSON.parse(m[1].replace(/(\w+):/g, '"$1":').replace(/'/g, '"'));
+          let parsed = JSON.parse(m[1].replace(new RegExp('([{,]\\s*)(\\w+)\\s*:', 'g'), '$1"$2":').replace(/'/g, '"'));
+          if (parsed && !Array.isArray(parsed)) parsed = Object.keys(parsed).map((k) => Object.assign({ id: k }, parsed[k]));
           if (Array.isArray(parsed) && parsed.length) {
-            if (!out.a && parsed[0] && parsed[0].id) { out.a = String(parsed[0].id); out.debug.push('A via inline JS'); }
-            if (!out.b && parsed[1] && parsed[1].id) { out.b = String(parsed[1].id); out.debug.push('B via inline JS'); }
-            if (parsed[0] && parsed[0].units) out.unitsA = Object.assign({}, out.unitsA, parsed[0].units);
-            if (parsed[1] && parsed[1].units) out.unitsB = Object.assign({}, out.unitsB, parsed[1].units);
+            // Casa pelo ID quando ele já é conhecido; só cai na ordem [0]=A,[1]=B se não achar.
+            const byId = (id) => (id ? parsed.find((t) => t && String(t.id) === String(id)) : null);
+            const pa = byId(out.a) || parsed[0], pb = byId(out.b) || parsed[1];
+            if (!out.a && pa && pa.id) { out.a = String(pa.id); out.debug.push('A via inline JS'); }
+            if (!out.b && pb && pb.id) { out.b = String(pb.id); out.debug.push('B via inline JS'); }
+            if (pa && pa.units) { out.unitsA = Object.assign({}, out.unitsA, pa.units); out.debug.push('unidades A via inline JS'); }
+            if (pb && pb.units) { out.unitsB = Object.assign({}, out.unitsB, pb.units); out.debug.push('unidades B via inline JS'); }
           }
-        } catch (e) { /* JSON não parseável */ }
+        } catch (e) { out.debug.push('inline JS: JSON não parseável'); }
       }
+    }
+    // Estratégia 4 (a que funciona no br143): os campos são nomeados unidade[templateId] — light[965],
+    // spear[2770]… O id vive DENTRO do name, e não num input template_id separado. Por isso as
+    // estratégias que procuravam template_id não achavam nada.
+    const readByTplId = (id, bucket, tag) => {
+      if (!id) return;
+      let achou = 0;
+      UNITS.forEach((p) => {
+        const inp = doc.querySelector('input[name="' + p[0] + '[' + id + ']"]');
+        if (!inp) return;
+        const n = parseInt(inp.value, 10);
+        if (n > 0) { bucket[p[0]] = n; achou++; }
+      });
+      if (achou) out.debug.push('unidades ' + tag + ' via name[id]');
+    };
+    if (!Object.keys(out.unitsA).length) readByTplId(out.a, out.unitsA, 'A');
+    if (!Object.keys(out.unitsB).length) readByTplId(out.b, out.unitsB, 'B');
+
+    // Se AINDA não temos as unidades, registra a "cara" da página pra saber onde elas moram de fato,
+    // em vez de tentar seletor no escuro. Sai uma vez, junto do aviso do ciclo.
+    if (!Object.keys(out.unitsA).length && !Object.keys(out.unitsB).length) {
+      const pat = {};
+      doc.querySelectorAll('input[name]').forEach((i) => {
+        const n = i.getAttribute('name') || '';
+        if (UNITS.some((p) => n.indexOf(p[0]) !== -1)) pat[n.replace(/\d+/g, '#')] = 1;
+      });
+      out.debug.push('página: ' + doc.querySelectorAll('form').length + ' form(s), ' +
+        doc.querySelectorAll('input[name="template_id"]').length + ' template_id, campos de unidade: ' +
+        (Object.keys(pat).slice(0, 6).join(' ') || 'nenhum') +
+        (/Accountmanager|AccountManager/.test(html) ? ' · tem Accountmanager' : ' · sem Accountmanager'));
     }
 
     // Extrai unidades dos forms de configuração de cada template
@@ -4059,9 +4375,20 @@
     });
     save();
   }
-  function farmStart() { readFarmCfg(); config.farm.running = true; config.farm.nextAt = 0; save(); setFarmStatus(true); pushLog('Saque iniciado — modo ' + config.farm.mode + ', ordem por ' + config.farm.order + (config.farm.dynTemplate ? ', template dinâmico' : '') + '.', 'ok', 'farm'); farmTick(); }
-  function farmStop() { readFarmCfg(); config.farm.running = false; save(); clearTimeout(farmTimer); setFarmStatus(false); pushLog('Saque parado.', '', 'farm'); }
+  function farmStart() { readFarmCfg(); config.farm.running = true; config.farm.nextAt = 0; save(); setFarmStatus(true); setFarmProg('Lendo o assistente…'); pushLog('Saque iniciado — modo ' + config.farm.mode + ', ordem por ' + config.farm.order + (config.farm.dynTemplate ? ', template dinâmico' : '') + '.', 'ok', 'farm'); farmTick(); }
+  function farmStop() { readFarmCfg(); config.farm.running = false; save(); clearTimeout(farmTimer); setFarmStatus(false); setFarmProg('Saque parado.'); pushLog('Saque parado.', '', 'farm'); }
   function setFarmStatus(on) { setBtnState('twmgr-farm-start', 'twmgr-farm-stop', on, '● Saqueando', '▶ Saquear'); }
+  // Barra de progresso do ciclo DENTRO da aba Saque (substituiu a linha viva no log, que empurrava
+  // as outras mensagens e só cabia em texto). Aqui dá pra desenhar barra de verdade.
+  function setFarmProg(html) { const el = document.getElementById('twmgr-farm-prog'); if (el) el.innerHTML = html; }
+  function farmProgHTML(done, total, right) {
+    const pct = total > 0 ? Math.max(0, Math.min(100, Math.round(done / total * 100))) : 0;
+    return '<div style="display:flex;align-items:center;gap:8px">' +
+      '<div style="flex:1;height:9px;background:rgba(255,255,255,.09);border-radius:5px;overflow:hidden">' +
+        '<div style="width:' + pct + '%;height:100%;background:#8fe39a;transition:width .25s"></div></div>' +
+      '<span style="white-space:nowrap;font-variant-numeric:tabular-nums">' + done + '/' + total + '</span></div>' +
+      (right ? ('<div style="margin-top:3px;opacity:.85">' + right + '</div>') : '');
+  }
   function readWallCfg() {
     const wn = document.getElementById('twmgr-wall-min'); if (wn) { config.wall.wallMin = parseInt(wn.value, 10); if (isNaN(config.wall.wallMin)) config.wall.wallMin = 1; }
     const wx = document.getElementById('twmgr-wall-max'); if (wx) { config.wall.wallMax = parseInt(wx.value, 10); if (isNaN(config.wall.wallMax)) config.wall.wallMax = 6; }
@@ -4221,7 +4548,7 @@
         modLog('scav') +
       '</div>' +
       '<div id="twmgr-tab-farm" style="display:none">' +
-        hint('FarmGod: por <b>cor</b>, escolha <b>um</b> modo (A, B ou C). Vermelho nunca; azul até a <b>muralha máx. do azul</b> e sem defesa. Nunca empilha no mesmo alvo.') +
+        '<div id="twmgr-farm-prog" class="twmgr-hint">Saque parado.</div>' +
         cardsDiv('farm') +
         sec('Ataque por cor (marque 1 por linha)',
           '<table class="twmgr-fmtable"><tr><th style="text-align:left">cor</th><th>A</th><th>B</th><th>C</th></tr>' +
@@ -4759,6 +5086,7 @@
       plannerTick();
     }
     if (config.paladin && config.paladin.running) { rlog('Paladino retomado.', 'paladin'); paladinTick(); }
+    closeStaleLiveLogs();   // barra de progresso de ciclo que morreu no reload desta página
     installBotHooks();
     startCaptchaWatcher();
     startAutoReload();

@@ -2581,9 +2581,15 @@
   }
 
   // ==================== PALADINO (treino por XP) ====================
-  // Regime de treino escolhido: id 41 = 4h (34.000 XP, ~8.500 XP/h — melhor taxa de todos os regimes,
-  // confirmado contra os outros 4 disponíveis: 42=8h/6000/h, 43=16h/4375/h, 44=24h/3750/h, 45=48h/2500/h).
-  const PALADIN_REGIMEN_4H = 41;
+  // O regime de treino escolhido é sempre o de 4h — melhor taxa de XP/hora entre os disponíveis.
+  // IMPORTANTE: o id do regime NÃO é fixo — varia por paladino/conta (confirmado: um paladino tinha
+  // 4h=id 41, outro tinha 4h=id 36). Por isso nunca hardcodar o id: cada knight traz `usable_regimens`
+  // (lista de {id, duration, xp_payout, res_cost}) e escolhemos ali o item com duration === 14400s (4h).
+  const PALADIN_REGIMEN_DURATION_S = 14400;
+  function paladinPick4hRegimen(k) {
+    const opts = (k && k.usable_regimens) || [];
+    return opts.find((r) => r.duration === PALADIN_REGIMEN_DURATION_S) || null;
+  }
 
   // Extrai um bloco JSON balanceado (objeto ou array) começando em text[startIdx]. Necessário porque
   // o payload de BuildingStatue.receiveKnightsData tem chaves aninhadas (skills, home_village, etc.) —
@@ -2624,12 +2630,26 @@
     return knights;   // { "<knightId>": { id, name, level, xp, home_village:{id,...}, activity:{type,finish_time}, ... } }
   }
 
+  // getKnightsData depende da aldeia consultada ter Estátua construída — mas CUR_VID é "onde o
+  // usuário está navegando agora" no jogo, não necessariamente uma aldeia com paladino. Tenta
+  // CUR_VID primeiro e, se falhar, cai pras aldeias marcadas no ciclo (que por definição têm
+  // paladino, logo têm Estátua), evitando que o ciclo pare só porque o usuário trocou de aldeia.
+  async function getKnightsDataResilient() {
+    const tried = {};
+    const candidates = [CUR_VID].concat(Object.keys(config.paladin.villages || {})).filter((v) => v && !tried[v] && (tried[v] = 1));
+    let lastErr;
+    for (const vid of candidates) {
+      try { return await getKnightsData(vid); } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('nenhuma aldeia disponível para leitura');
+  }
+
   // Manda o paladino `knightId` (da aldeia vid) pro regime de treino. Retorna o knight ATUALIZADO
   // (já com o novo activity.finish_time), direto da resposta — sem precisar reconsultar depois.
   async function paladinSendRegimen(vid, knightId, regimenId) {
     const b = new URLSearchParams();
     b.set('knight', String(knightId));
-    b.set('regimen', String(regimenId != null ? regimenId : PALADIN_REGIMEN_4H));
+    b.set('regimen', String(regimenId));
     b.set('cheap', '0');
     b.set('h', CSRF);
     const res = await fetch('/game.php?village=' + vid + '&screen=statue&ajaxaction=regimen', {
@@ -2666,7 +2686,7 @@
     const villages = onlyVid ? [String(onlyVid)] : Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]);
     if (!villages.length) return 0;
     let knights;
-    try { knights = await getKnightsData(CUR_VID); }
+    try { knights = await getKnightsDataResilient(); }
     catch (e) { pushLog('Paladino: erro ao ler status (' + (e.message || e) + ').', 'err', 'paladin'); return 0; }
     const byVid = {};
     Object.values(knights).forEach((k) => { if (k && k.home_village) byVid[String(k.home_village.id)] = k; });
@@ -2685,10 +2705,19 @@
         if (st.finishAt) paladinSchedulePrecise(vid, st.finishAt);
         continue;
       }
-      if (activity.type && activity.type !== 'home') { st.finishAt = null; continue; }   // viajando/recrutando -> aguarda
-      // livre em casa -> manda pro regime de 4h
+      if (activity.type && activity.type !== 'home') {
+        // ocupado (atacando/apoiando/viajando/recrutando etc.) -> pula pro próximo, mas se o jogo
+        // informar finish_time, mostra a contagem regressiva e agenda o recheck de precisão pra
+        // retomar o treino assim que o paladino ficar livre de novo (ida+volta do ataque, etc.).
+        st.finishAt = activity.finish_time ? (+activity.finish_time) * 1000 : null;
+        if (st.finishAt) paladinSchedulePrecise(vid, st.finishAt);
+        continue;
+      }
+      // livre em casa -> manda pro regime de 4h (id varia por paladino, resolvido via usable_regimens)
+      const regimen4h = paladinPick4hRegimen(k);
+      if (!regimen4h) { st.status = 'sem-regime-4h'; pushLog('Paladino: ' + (k.name || vid) + ' (' + vid + ') não tem regime de 4h disponível agora.', 'err', 'paladin'); continue; }
       try {
-        const upd = await paladinSendRegimen(vid, k.id, PALADIN_REGIMEN_4H);
+        const upd = await paladinSendRegimen(vid, k.id, regimen4h.id);
         st.status = (upd.activity && upd.activity.type) || 'training';
         st.finishAt = (upd.activity && upd.activity.finish_time) ? (+upd.activity.finish_time) * 1000 : null;
         pushLog('Paladino: ' + (k.name || vid) + ' (' + vid + ') → treino 4h' + (st.finishAt ? (', chega ' + new Date(st.finishAt).toLocaleTimeString()) : '') + '.', 'ok', 'paladin');
@@ -2744,9 +2773,10 @@
     const cont = document.getElementById('twmgr-pd-villages'); if (!cont) return;
     cont.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">carregando…</div>';
     let vils = []; try { vils = await getAllVillages(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
-    let knights = {};
-    try { knights = await getKnightsData(CUR_VID); }
-    catch (e) { cont.innerHTML = '<div style="font-size:10px;color:#ff7568;padding:6px;text-align:center">Erro ao ler paladinos (' + esc(e.message || String(e)) + ')</div>'; return; }
+    let knights = null, lastErr = null;
+    const order = [CUR_VID].concat(vils.map((v) => v.vid)).filter((v, i, arr) => v && arr.indexOf(v) === i);
+    for (const vid of order) { try { knights = await getKnightsData(vid); break; } catch (e) { lastErr = e; } }
+    if (!knights) { cont.innerHTML = '<div style="font-size:10px;color:#ff7568;padding:6px;text-align:center">Erro ao ler paladinos (' + esc((lastErr && lastErr.message) || String(lastErr)) + ')</div>'; return; }
     const withKnight = {};
     Object.values(knights).forEach((k) => { if (k && k.home_village) withKnight[String(k.home_village.id)] = true; });
     vils = vils.filter((v) => withKnight[v.vid]);   // só aldeias com paladino entram na lista de seleção
@@ -2755,7 +2785,7 @@
     cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-pd-vil" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
     cont.querySelectorAll('.twmgr-pd-vil').forEach((cb) => cb.addEventListener('change', readPaladinCfg));
   }
-  const PALADIN_STATUS_LABEL = { home: '🟢 livre', training: '⏳ treinando', travel: '🚶 viajando', recruiting: '🐣 recrutando', 'sem-paladino': '— sem paladino' };
+  const PALADIN_STATUS_LABEL = { home: '🟢 livre', training: '⏳ treinando', travel: '🚶 viajando', recruiting: '🐣 recrutando', attack: '⚔️ atacando', attacking: '⚔️ atacando', support: '🛡️ apoiando', 'sem-paladino': '— sem paladino', 'sem-regime-4h': '⚠️ sem regime 4h' };
   function renderPaladinStatus() {
     const cont = document.getElementById('twmgr-pd-status-list'); if (!cont) return;
     const villages = Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]);
@@ -2763,7 +2793,9 @@
     const now = Date.now();
     cont.innerHTML = villages.map((vid) => {
       const st = (config.paladin.state && config.paladin.state[vid]) || {};
-      const label = PALADIN_STATUS_LABEL[st.status] || (st.status || '—');
+      // status desconhecido (tipo de activity que ainda não vimos) -> mostra genérico "ocupado" em
+      // vez de esconder, já que o código já garante que ele será pulado até ficar livre de novo.
+      const label = PALADIN_STATUS_LABEL[st.status] || (st.status ? ('⚔️ ocupado (' + st.status + ')') : '—');
       const rest = st.finishAt && st.finishAt > now ? fmt(st.finishAt - now) : '';
       return '<div style="display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#d3c299;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.05)">' +
         '<span>' + esc(st.name || ('ID ' + vid)) + (st.level != null ? (' (nv.' + st.level + ')') : '') + '</span>' +

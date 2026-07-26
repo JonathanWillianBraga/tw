@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.7.1
+// @version      10.8.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.7.1';
+  const VERSION = '10.8.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -193,7 +193,14 @@
     reservationsAt: 0,         // ms do último sync manual
     dataCachedAt: 0,           // ms do último load do village.txt
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), reservations: {} });
+  const defPaladin = () => ({
+    running: false,
+    villages: {},          // { [vid]: true } — 1ª entrada: quais aldeias ficam no ciclo de treino
+    checkIntervalMin: 240, // 2ª entrada: intervalo do check periódico (padrão 4h em minutos)
+    sendDelayMs: 500,      // 3ª entrada: delay entre envios sucessivos (não manda todos de uma vez)
+    state: {},             // { [vid]: { knightId, name, level, status, finishAt } } — cache p/ UI
+  });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -388,15 +395,21 @@
     if (!c.mapUi.reservations || typeof c.mapUi.reservations !== 'object') c.mapUi.reservations = {};
     if (c.mapUi.reservationsAt == null) c.mapUi.reservationsAt = 0;
     if (c.mapUi.dataCachedAt == null) c.mapUi.dataCachedAt = 0;
+    if (!c.paladin) c.paladin = defPaladin();
+    if (!c.paladin.villages || typeof c.paladin.villages !== 'object') c.paladin.villages = {};
+    if (c.paladin.checkIntervalMin == null) c.paladin.checkIntervalMin = 240;
+    if (c.paladin.sendDelayMs == null) c.paladin.sendDelayMs = 500;
+    if (!c.paladin.state || typeof c.paladin.state !== 'object') c.paladin.state = {};
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, uiTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, uiTimer = null;
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)); }
+  const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running); }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
@@ -546,6 +559,19 @@
         { v: fmtN(armed), l: 'ondas pendentes' },
         { v: fmtN(sent), l: 'enviadas' },
         { v: fmtN(err), l: 'erros' },
+      ];
+    } else if (mod === 'paladin') {
+      const st = (config.paladin && config.paladin.state) || {};
+      const villages = Object.keys((config.paladin && config.paladin.villages) || {}).filter((v) => config.paladin.villages[v]);
+      const vals = villages.map((v) => st[v] || {});
+      const training = vals.filter((s) => s.status === 'training').length;
+      const home = vals.filter((s) => s.status === 'home').length;
+      const other = vals.length - training - home;
+      arr = [
+        { v: fmtN(villages.length), l: 'aldeias no ciclo', hl: true },
+        { v: fmtN(training), l: 'treinando' },
+        { v: fmtN(home), l: 'livres (aguard.)' },
+        { v: fmtN(other), l: 'outros/sem palad.' },
       ];
     }
     renderCards(mod, arr);
@@ -2817,6 +2843,230 @@
     });
   }
 
+  // ==================== PALADINO (treino por XP) ====================
+  // O regime de treino escolhido é sempre o de 4h — melhor taxa de XP/hora entre os disponíveis.
+  // IMPORTANTE: o id do regime NÃO é fixo — varia por paladino/conta (confirmado: um paladino tinha
+  // 4h=id 41, outro tinha 4h=id 36). Por isso nunca hardcodar o id: cada knight traz `usable_regimens`
+  // (lista de {id, duration, xp_payout, res_cost}) e escolhemos ali o item com duration === 14400s (4h).
+  const PALADIN_REGIMEN_DURATION_S = 14400;
+  function paladinPick4hRegimen(k) {
+    const opts = (k && k.usable_regimens) || [];
+    return opts.find((r) => r.duration === PALADIN_REGIMEN_DURATION_S) || null;
+  }
+
+  // Extrai um bloco JSON balanceado (objeto ou array) começando em text[startIdx]. Necessário porque
+  // o payload de BuildingStatue.receiveKnightsData tem chaves aninhadas (skills, home_village, etc.) —
+  // uma regex com profundidade fixa quebraria com paladinos de árvore de habilidade mais cheia.
+  function extractBalancedJSON(text, startIdx) {
+    const open = text[startIdx]; if (open !== '{' && open !== '[') return null;
+    const close = open === '{' ? '}' : ']';
+    let depth = 0, inStr = false, strChar = '', esc = false;
+    for (let i = startIdx; i < text.length; i++) {
+      const c = text[i];
+      if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === strChar) inStr = false; continue; }
+      if (c === '"' || c === "'") { inStr = true; strChar = c; continue; }
+      if (c === open) depth++;
+      else if (c === close) { depth--; if (depth === 0) return text.slice(startIdx, i + 1); }
+    }
+    return null;
+  }
+
+  // Uma única página screen=statue (de QUALQUER aldeia) já embute, via
+  // BuildingStatue.receiveKnightsData(pendentes, porId, ativoId), o status de TODOS os paladinos da
+  // conta — id, aldeia dona, nível/XP, e activity{type,finish_time}. 1 fetch cobre a conta inteira.
+  async function getKnightsData(vid) {
+    const res = await fetch('/game.php?village=' + (vid || CUR_VID) + '&screen=statue', { credentials: 'include' });
+    const html = await res.text();
+    const marker = 'BuildingStatue.receiveKnightsData(';
+    const idx = html.indexOf(marker);
+    if (idx < 0) throw new Error('receiveKnightsData não encontrado (Estátua ainda não construída?)');
+    let i = idx + marker.length;
+    while (/\s/.test(html[i])) i++;
+    const arg1 = extractBalancedJSON(html, i);
+    if (!arg1) throw new Error('parse do 1º argumento falhou');
+    i += arg1.length;
+    while (html[i] === ',' || /\s/.test(html[i])) i++;
+    const arg2 = extractBalancedJSON(html, i);
+    if (!arg2) throw new Error('parse do 2º argumento falhou');
+    let knights;
+    try { knights = JSON.parse(arg2); } catch (e) { throw new Error('JSON inválido: ' + (e.message || e)); }
+    return knights;   // { "<knightId>": { id, name, level, xp, home_village:{id,...}, activity:{type,finish_time}, ... } }
+  }
+
+  // getKnightsData depende da aldeia consultada ter Estátua construída — mas CUR_VID é "onde o
+  // usuário está navegando agora" no jogo, não necessariamente uma aldeia com paladino. Tenta
+  // CUR_VID primeiro e, se falhar, cai pras aldeias marcadas no ciclo (que por definição têm
+  // paladino, logo têm Estátua), evitando que o ciclo pare só porque o usuário trocou de aldeia.
+  async function getKnightsDataResilient() {
+    const tried = {};
+    const candidates = [CUR_VID].concat(Object.keys(config.paladin.villages || {})).filter((v) => v && !tried[v] && (tried[v] = 1));
+    let lastErr;
+    for (const vid of candidates) {
+      try { return await getKnightsData(vid); } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('nenhuma aldeia disponível para leitura');
+  }
+
+  // Manda o paladino `knightId` (da aldeia vid) pro regime de treino. Retorna o knight ATUALIZADO
+  // (já com o novo activity.finish_time), direto da resposta — sem precisar reconsultar depois.
+  async function paladinSendRegimen(vid, knightId, regimenId) {
+    const b = new URLSearchParams();
+    b.set('knight', String(knightId));
+    b.set('regimen', String(regimenId));
+    b.set('cheap', '0');
+    b.set('h', CSRF);
+    const res = await fetch('/game.php?village=' + vid + '&screen=statue&ajaxaction=regimen', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'TribalWars-Ajax': '1', 'X-Requested-With': 'XMLHttpRequest' },
+      body: b.toString(),
+    });
+    const txt = await res.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (!j || !j.response || !j.response.knight) throw new Error('resposta inesperada (' + (txt || '').slice(0, 100).replace(/\s+/g, ' ') + ')');
+    return j.response.knight;
+  }
+
+  // Timer de PRECISÃO: agenda um recheck exatamente duração+30s depois do fim do treino atual dessa
+  // aldeia — independente de onde o check periódico (2ª entrada) está no próprio ciclo. É o 2º dos
+  // "2 checks" pedidos: garante reenvio quase imediato ao terminar, sem depender só do polling genérico.
+  function paladinSchedulePrecise(vid, finishAtMs) {
+    if (!finishAtMs) return;
+    const cur = paladinPreciseTimers[vid];
+    if (cur && cur.finishAt === finishAtMs) return;   // já agendado pra esse horário exato
+    if (cur) clearTimeout(cur.id);
+    const fireAt = finishAtMs + 30000;   // +30s de buffer (cobre o delay entre envios da 3ª entrada)
+    const delay = Math.max(1000, fireAt - Date.now());
+    const id = setTimeout(() => { delete paladinPreciseTimers[vid]; paladinCheckAndSend(vid); }, delay);
+    paladinPreciseTimers[vid] = { id: id, finishAt: finishAtMs };
+  }
+
+  // Rotina central: lê o status de todos os paladinos (1 fetch) e, pra cada aldeia SELECIONADA, ou
+  // manda treinar (se livre) ou agenda o timer de precisão (se já treinando). Aceita `onlyVid` pra
+  // rodar só numa aldeia específica (chamado pelo próprio timer de precisão).
+  async function paladinCheckAndSend(onlyVid) {
+    if (!config.paladin.running) return 0;
+    if (lockOther() || captchaBlocked()) return 0;
+    const villages = onlyVid ? [String(onlyVid)] : Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]);
+    if (!villages.length) return 0;
+    let knights;
+    try { knights = await getKnightsDataResilient(); }
+    catch (e) { pushLog('Paladino: erro ao ler status (' + (e.message || e) + ').', 'err', 'paladin'); return 0; }
+    const byVid = {};
+    Object.values(knights).forEach((k) => { if (k && k.home_village) byVid[String(k.home_village.id)] = k; });
+    config.paladin.state = config.paladin.state || {};
+    let sent = 0;
+    for (let idx = 0; idx < villages.length; idx++) {
+      const vid = villages[idx];
+      const k = byVid[vid];
+      const st = config.paladin.state[vid] = config.paladin.state[vid] || {};
+      if (!k) { st.status = 'sem-paladino'; st.finishAt = null; continue; }
+      st.knightId = k.id; st.name = k.name; st.level = k.level;
+      const activity = k.activity || {};
+      st.status = activity.type || 'home';
+      if (activity.type === 'training') {
+        st.finishAt = activity.finish_time ? (+activity.finish_time) * 1000 : null;
+        if (st.finishAt) paladinSchedulePrecise(vid, st.finishAt);
+        continue;
+      }
+      if (activity.type && activity.type !== 'home') {
+        // ocupado (atacando/apoiando/viajando/recrutando etc.) -> pula pro próximo, mas se o jogo
+        // informar finish_time, mostra a contagem regressiva e agenda o recheck de precisão pra
+        // retomar o treino assim que o paladino ficar livre de novo (ida+volta do ataque, etc.).
+        st.finishAt = activity.finish_time ? (+activity.finish_time) * 1000 : null;
+        if (st.finishAt) paladinSchedulePrecise(vid, st.finishAt);
+        continue;
+      }
+      // livre em casa -> manda pro regime de 4h (id varia por paladino, resolvido via usable_regimens)
+      const regimen4h = paladinPick4hRegimen(k);
+      if (!regimen4h) { st.status = 'sem-regime-4h'; pushLog('Paladino: ' + (k.name || vid) + ' (' + vid + ') não tem regime de 4h disponível agora.', 'err', 'paladin'); continue; }
+      try {
+        const upd = await paladinSendRegimen(vid, k.id, regimen4h.id);
+        st.status = (upd.activity && upd.activity.type) || 'training';
+        st.finishAt = (upd.activity && upd.activity.finish_time) ? (+upd.activity.finish_time) * 1000 : null;
+        pushLog('Paladino: ' + (k.name || vid) + ' (' + vid + ') → treino 4h' + (st.finishAt ? (', chega ' + new Date(st.finishAt).toLocaleTimeString()) : '') + '.', 'ok', 'paladin');
+        if (st.finishAt) paladinSchedulePrecise(vid, st.finishAt);
+        sent++;
+      } catch (e) { pushLog('Paladino em ' + (k.name || vid) + ': ' + (e.message || e), 'err', 'paladin'); }
+      if (idx < villages.length - 1) await sleep(Math.max(0, config.paladin.sendDelayMs || 500));
+    }
+    save();
+    refreshCards('paladin'); renderPaladinStatus();
+    return sent;
+  }
+
+  // Check periódico genérico (2ª entrada) — rede de segurança ampla, independente do timer de precisão.
+  async function paladinTick() {
+    clearTimeout(paladinTimer);
+    if (!config.paladin.running) return;
+    if (lockOther()) { paladinTimer = setTimeout(paladinTick, 5000); return; }
+    if (captchaBlocked()) { paladinTimer = setTimeout(paladinTick, 30000); return; }
+    claimLock();
+    let sent = 0;
+    try { sent = await paladinCheckAndSend(); } catch (e) { pushLog('Paladino: erro no ciclo (' + (e.message || e) + ').', 'err', 'paladin'); }
+    const intervalMs = Math.max(1, config.paladin.checkIntervalMin || 240) * 60000;
+    pushLog('Paladino: ciclo concluído — ' + sent + ' envio(s). Próximo check em ' + Math.round(intervalMs / 60000) + ' min.', 'ok', 'paladin');
+    paladinTimer = setTimeout(paladinTick, intervalMs);
+  }
+  function readPaladinCfg() {
+    const c = config.paladin, g = (id) => document.getElementById(id);
+    if (g('twmgr-pd-interval')) c.checkIntervalMin = Math.max(1, parseInt(g('twmgr-pd-interval').value, 10) || 240);
+    if (g('twmgr-pd-delay')) { const v = parseInt(g('twmgr-pd-delay').value, 10); c.sendDelayMs = (isNaN(v) || v < 0) ? 500 : v; }
+    const vs = {}; document.querySelectorAll('.twmgr-pd-vil').forEach((cb) => { if (cb.checked) vs[cb.getAttribute('data-vid')] = true; });
+    c.villages = vs;
+    save();
+  }
+  function setPaladinStatus(on) { setBtnState('twmgr-pd-start', 'twmgr-pd-stop', on, '● Ativo', '▶ Iniciar ciclo'); }
+  function paladinStart() {
+    readPaladinCfg();
+    if (!Object.keys(config.paladin.villages).length) { pushLog('Paladino: marque ao menos 1 aldeia.', 'err', 'paladin'); return; }
+    config.paladin.running = true; save();
+    setPaladinStatus(true);
+    pushLog('Paladino: ciclo iniciado — ' + Object.keys(config.paladin.villages).length + ' aldeia(s), check a cada ' + config.paladin.checkIntervalMin + ' min, delay ' + config.paladin.sendDelayMs + 'ms.', 'ok', 'paladin');
+    paladinTick();
+  }
+  function paladinStop() {
+    readPaladinCfg();
+    config.paladin.running = false; save();
+    clearTimeout(paladinTimer);
+    Object.keys(paladinPreciseTimers).forEach((vid) => { clearTimeout(paladinPreciseTimers[vid].id); delete paladinPreciseTimers[vid]; });
+    setPaladinStatus(false);
+    pushLog('Paladino: ciclo parado.', '', 'paladin');
+  }
+  async function renderPaladinVillages() {
+    const cont = document.getElementById('twmgr-pd-villages'); if (!cont) return;
+    cont.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">carregando…</div>';
+    let vils = []; try { vils = await getAllVillages(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
+    let knights = null, lastErr = null;
+    const order = [CUR_VID].concat(vils.map((v) => v.vid)).filter((v, i, arr) => v && arr.indexOf(v) === i);
+    for (const vid of order) { try { knights = await getKnightsData(vid); break; } catch (e) { lastErr = e; } }
+    if (!knights) { cont.innerHTML = '<div style="font-size:10px;color:#ff7568;padding:6px;text-align:center">Erro ao ler paladinos (' + esc((lastErr && lastErr.message) || String(lastErr)) + ')</div>'; return; }
+    const withKnight = {};
+    Object.values(knights).forEach((k) => { if (k && k.home_village) withKnight[String(k.home_village.id)] = true; });
+    vils = vils.filter((v) => withKnight[v.vid]);   // só aldeias com paladino entram na lista de seleção
+    if (!vils.length) { cont.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— nenhuma aldeia com paladino —</div>'; return; }
+    const sel = config.paladin.villages || {};
+    cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-pd-vil" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
+    cont.querySelectorAll('.twmgr-pd-vil').forEach((cb) => cb.addEventListener('change', readPaladinCfg));
+  }
+  const PALADIN_STATUS_LABEL = { home: '🟢 livre', training: '⏳ treinando', travel: '🚶 viajando', recruiting: '🐣 recrutando', attack: '⚔️ atacando', attacking: '⚔️ atacando', support: '🛡️ apoiando', 'sem-paladino': '— sem paladino', 'sem-regime-4h': '⚠️ sem regime 4h' };
+  function renderPaladinStatus() {
+    const cont = document.getElementById('twmgr-pd-status-list'); if (!cont) return;
+    const villages = Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]);
+    if (!villages.length) { cont.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— marque aldeias acima —</div>'; return; }
+    const now = Date.now();
+    cont.innerHTML = villages.map((vid) => {
+      const st = (config.paladin.state && config.paladin.state[vid]) || {};
+      // status desconhecido (tipo de activity que ainda não vimos) -> mostra genérico "ocupado" em
+      // vez de esconder, já que o código já garante que ele será pulado até ficar livre de novo.
+      const label = PALADIN_STATUS_LABEL[st.status] || (st.status ? ('⚔️ ocupado (' + st.status + ')') : '—');
+      const rest = st.finishAt && st.finishAt > now ? fmt(st.finishAt - now) : '';
+      return '<div style="display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#d3c299;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.05)">' +
+        '<span>' + esc(st.name || ('ID ' + vid)) + (st.level != null ? (' (nv.' + st.level + ')') : '') + '</span>' +
+        '<span>' + label + (rest ? ' · ' + rest : '') + '</span>' +
+      '</div>';
+    }).join('');
+  }
+
   // ==================== MERCADO (Cunhagem) ====================
   async function getMarketState(vid) {
     const res = await fetch('/game.php?village=' + vid + '&screen=market&mode=send', { credentials: 'include' });
@@ -4017,6 +4267,13 @@
     }
     if (document.getElementById('twmgr-cards-planner')) refreshCards('planner');
     if (document.getElementById('twmgr-pl-queue')) { try { renderPlannerQueue(plActive()); } catch (e) {} }
+    const pds = document.getElementById('twmgr-pd-status');
+    if (pds) {
+      if (!config.paladin.running) { pds.textContent = ''; }
+      else if (lockOther()) { pds.textContent = '⏸ outra aba'; pds.style.color = '#ff7568'; }
+      else { pds.style.color = '#8fe39a'; pds.textContent = '● ' + Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]).length + ' aldeia(s) no ciclo'; }
+    }
+    if (document.getElementById('twmgr-pd-status-list')) renderPaladinStatus();
     // Atualiza só o indicador (●) de cada aba de ataque, sem reconstruir a lista (evita "roubar" cliques).
     document.querySelectorAll('.twmgr-pl-tab').forEach((el) => {
       const atk = (config.planner.attacks || []).find((a) => a.id === el.getAttribute('data-id'));
@@ -4034,6 +4291,7 @@
     ring('twmgr-btab-market', config.market.running);
     ring('twmgr-btab-build', config.build.running);
     ring('twmgr-btab-planner', config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running));
+    ring('twmgr-btab-paladin', config.paladin && config.paladin.running);
     const dot = document.getElementById('twmgr-dot'); if (dot) dot.classList.toggle('on', anyRunning() && !lockOther());
   }
 
@@ -4256,7 +4514,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'log'].forEach((n) => {
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'paladin', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -4279,7 +4537,7 @@
     const modLog = (mod) => '<div class="twmgr-modlog"><div class="twmgr-modlog-head" data-modlog="' + mod + '">▸ Log do módulo (<span id="twmgr-modlog-count-' + mod + '">0</span>)</div><div id="twmgr-modlog-body-' + mod + '" class="twmgr-modlog-body" style="display:none"></div></div>';
     p.innerHTML =
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
@@ -4497,6 +4755,20 @@
           '<div class="twmgr-actions" style="margin-top:6px"><button id="twmgr-blz-send" class="twmgr-btn twmgr-go">✉️ Enviar marcados</button></div>') +
         modLog('planner') +
       '</div>' +
+      '<div id="twmgr-tab-paladin" style="display:none">' +
+        hint('🐴 Treina o(s) Paladino(s) por XP em ciclo — sempre no regime de <b>4h</b> (melhor XP/hora dos 5 disponíveis). Além do check periódico, cada envio arma um timer de precisão pra 4h+30s depois, garantindo reenvio quase imediato.') +
+        cardsDiv('paladin') +
+        sec('1. Aldeias no ciclo',
+          '<div id="twmgr-pd-villages" style="max-height:130px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px"></div>') +
+        sec('2. Verificação periódica',
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Rede de segurança ampla — roda independente do timer de precisão de cada envio.">Nova verificação (min)</span><input id="twmgr-pd-interval" class="twmgr-inp" type="number" min="1" value="240" style="width:66px"></div>') +
+        sec('3. Ritmo de envio',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Delay entre envios (ms)</span><input id="twmgr-pd-delay" class="twmgr-inp" type="number" min="0" step="100" value="500" style="width:66px"></div>') +
+        '<div class="twmgr-actions"><button id="twmgr-pd-start" class="twmgr-btn twmgr-go">▶ Iniciar ciclo</button><button id="twmgr-pd-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+        '<div id="twmgr-pd-status" class="twmgr-cstatus"></div>' +
+        sec('Status por aldeia', '<div id="twmgr-pd-status-list"></div>') +
+        modLog('paladin') +
+      '</div>' +
       '<div id="twmgr-tab-log" style="display:none">' +
       '<div class="twmgr-hint">🤖 Alerta de CAPTCHA: avisa (navegador + ntfy) quando a tela de verificação aparece. O bot-check só surge num F5 — por isso o <b>Auto-F5 AFK</b>: se você ficar X min sem mexer, recarrega a página pra forçar a verificação a aparecer e te chamar.</div>' +
       '<label class="twmgr-check"><input id="twmgr-cap-en" type="checkbox"> Detectar CAPTCHA</label>' +
@@ -4678,6 +4950,16 @@
     });
     renderBlindagemList();
 
+    // ---- Paladino (treino por XP) ----
+    document.getElementById('twmgr-pd-interval').value = config.paladin.checkIntervalMin != null ? config.paladin.checkIntervalMin : 240;
+    document.getElementById('twmgr-pd-delay').value = config.paladin.sendDelayMs != null ? config.paladin.sendDelayMs : 500;
+    renderPaladinVillages();
+    renderPaladinStatus();
+    ['twmgr-pd-interval', 'twmgr-pd-delay'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readPaladinCfg); });
+    document.getElementById('twmgr-pd-start').addEventListener('click', paladinStart);
+    document.getElementById('twmgr-pd-stop').addEventListener('click', paladinStop);
+    setPaladinStatus(config.paladin.running);
+
     document.getElementById('twmgr-mk-coord').value = config.market.destCoord || '';
     document.getElementById('twmgr-mk-reserve').value = config.market.reserve || 0;
     document.getElementById('twmgr-mk-int').value = Math.round((config.market.interval || 600) / 60);
@@ -4763,7 +5045,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'paladin'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -4803,6 +5085,7 @@
       rlog('🎯 Coordenado retomado.', 'planner');
       plannerTick();
     }
+    if (config.paladin && config.paladin.running) { rlog('Paladino retomado.', 'paladin'); paladinTick(); }
     closeStaleLiveLogs();   // barra de progresso de ciclo que morreu no reload desta página
     installBotHooks();
     startCaptchaWatcher();

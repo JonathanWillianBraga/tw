@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.32.0
+// @version      9.33.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.32.0';
+  const VERSION = '9.33.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -125,7 +125,14 @@
     ondas: [],              // [{id, origem, amounts, max, offsetMs, rot}]
     filaOrdem: 'chegada',   // como listar a fila: 'chegada' | 'saida'
     passoMs: 50,            // passo dos botões de ajuste fino na fila
+    modelos: null,          // modelos de tropa do usuário (null = ainda não semeado)
   });
+  // Semente: os antigos atalhos fixos viram modelos editáveis, pra ninguém perder o atalho.
+  const MODELOS_PADRAO = () => ([
+    { id: genId(), nome: 'Tudo', amounts: {}, max: UNITS.map((u) => u[0]).filter((u) => u !== 'snob').reduce((o, u) => (o[u] = true, o), {}) },
+    { id: genId(), nome: 'Nobre', amounts: { snob: 1 }, max: {} },
+    { id: genId(), nome: 'Fake', amounts: { ram: 1, spy: 1 }, max: {} },
+  ]);
   const defMap = () => ({
     running: false, nextAt: 0,
     maxDist: 20, minDaysSinceScout: 2,
@@ -282,6 +289,7 @@
     if (!Array.isArray(c.cmd.ondas)) c.cmd.ondas = [];
     if (!c.cmd.filaOrdem) c.cmd.filaOrdem = 'chegada';
     if (c.cmd.passoMs == null) c.cmd.passoMs = 50;
+    if (!Array.isArray(c.cmd.modelos)) c.cmd.modelos = MODELOS_PADRAO();
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -1300,6 +1308,72 @@
     }
   }
 
+  // ---- Modelos de tropa ----
+  function ccModelos() { return (config.cmd.modelos = config.cmd.modelos || MODELOS_PADRAO()); }
+  function ccModeloAplicar(m) {
+    UNITS.forEach(([u]) => {
+      const inp = document.getElementById('cc-u-' + u), chk = document.getElementById('cc-max-' + u);
+      if (chk) chk.checked = !!m.max[u];
+      if (inp) { inp.value = m.amounts[u] || ''; inp.disabled = !!m.max[u]; }
+    });
+    ccRenderOrigens();
+    if (ccTipo() === 'fake') ccPreviaFake();
+  }
+  function ccModeloTxt(m) {
+    const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+    const p = Object.entries(m.amounts).filter(([, n]) => n > 0).map(([u, n]) => (rot[u] || u) + ' ' + fmtN(n));
+    Object.keys(m.max).forEach((u) => p.push((rot[u] || u) + ' tudo'));
+    return p.join(', ') || '(vazio)';
+  }
+  function ccModelosRender() {
+    const box = document.getElementById('cc-modelos'); if (!box) return;
+    const M = ccModelos();
+    box.innerHTML = M.length ? M.map((m) =>
+      '<span data-mod="' + m.id + '" title="' + esc(ccModeloTxt(m)) + '" ' +
+      'style="display:inline-flex;align-items:center;gap:3px;background:#1a130c;border:1px solid #4a3b28;' +
+      'border-radius:10px;padding:2px 4px 2px 8px;font-size:10px;color:#e6cf7d;cursor:pointer">' +
+        esc(m.nome) +
+        '<a data-mod-rn="' + m.id + '" title="renomear" style="color:#8f7d57;padding:0 1px">✎</a>' +
+        '<a data-mod-rm="' + m.id + '" title="apagar" style="color:#ff7568;padding:0 2px">✕</a>' +
+      '</span>').join('')
+      : '<span style="font-size:10px;color:#8f7d57">sem modelos — monte a composição e clique em "salvar como modelo"</span>';
+    box.querySelectorAll('[data-mod]').forEach((el) => el.onclick = (ev) => {
+      if (ev.target.hasAttribute('data-mod-rm') || ev.target.hasAttribute('data-mod-rn')) return;
+      const m = ccModelos().find((z) => z.id === el.getAttribute('data-mod'));
+      if (m) ccModeloAplicar(m);
+    });
+    box.querySelectorAll('[data-mod-rm]').forEach((el) => el.onclick = (ev) => {
+      ev.stopPropagation();
+      config.cmd.modelos = ccModelos().filter((z) => z.id !== el.getAttribute('data-mod-rm'));
+      save(); ccModelosRender();
+    });
+    box.querySelectorAll('[data-mod-rn]').forEach((el) => el.onclick = (ev) => {
+      ev.stopPropagation();
+      const m = ccModelos().find((z) => z.id === el.getAttribute('data-mod-rn')); if (!m) return;
+      let nome = null;
+      try { nome = window.prompt('Novo nome do modelo:', m.nome); } catch (e) {}
+      if (nome && nome.trim()) { m.nome = nome.trim().slice(0, 24); save(); ccModelosRender(); }
+    });
+  }
+  function ccModeloSalvar() {
+    const comp = ccComposicao();
+    const msg = document.getElementById('cc-msg');
+    if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) {
+      if (msg) { msg.style.color = '#ff7568'; msg.textContent = 'Preencha as tropas antes de salvar o modelo.'; }
+      return;
+    }
+    let nome = null;
+    try { nome = window.prompt('Nome do modelo:', ''); } catch (e) {}
+    if (!nome || !nome.trim()) return;
+    nome = nome.trim().slice(0, 24);
+    const M = ccModelos();
+    const existe = M.find((z) => z.nome.toLowerCase() === nome.toLowerCase());
+    if (existe) { existe.amounts = comp.amounts; existe.max = comp.max; }   // mesmo nome = atualiza
+    else M.push({ id: genId(), nome: nome, amounts: comp.amounts, max: comp.max });
+    save(); ccModelosRender();
+    if (msg) { msg.style.color = '#8fe39a'; msg.textContent = 'Modelo "' + nome + '" ' + (existe ? 'atualizado' : 'salvo') + '.'; }
+  }
+
   // ---- Editor de ondas (NT / divisão) ----
   function ccOndas() { return (config.cmd.ondas = config.cmd.ondas || []); }
   function ccGap() { return Math.max(50, parseInt((document.getElementById('cc-trem-gap') || {}).value, 10) || 150); }
@@ -1871,12 +1945,11 @@
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
           '<span style="font-size:10px;color:#e8d29a;font-weight:600">Tropas por origem</span>' +
           '<span style="font-size:10px">' +
-            '<a id="cc-tpl-tudo" style="cursor:pointer;color:#e6cf7d">tudo</a> · ' +
-            '<a id="cc-tpl-nobre" style="cursor:pointer;color:#e6cf7d">nobre</a> · ' +
-            '<a id="cc-tpl-fake" style="cursor:pointer;color:#e6cf7d">fake</a> · ' +
+            '<a id="cc-tpl-salvar" style="cursor:pointer;color:#8fe39a">+ salvar como modelo</a> · ' +
             '<a id="cc-tpl-limpar" style="cursor:pointer;color:#e6cf7d">limpar</a>' +
           '</span>' +
         '</div>' +
+        '<div id="cc-modelos" style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:5px"></div>' +
         '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px">' +
           UNITS.map(([u, n]) =>
             '<div style="text-align:center">' +
@@ -2029,14 +2102,9 @@
         if (m) m.checked = false;
       });
     };
-    const marcarMax = (lista) => { limpar(); lista.forEach((u) => {
-      const m = document.getElementById('cc-max-' + u), i = document.getElementById('cc-u-' + u);
-      if (m) m.checked = true; if (i) i.disabled = true;
-    }); };
     document.getElementById('cc-tpl-limpar').onclick = () => { limpar(); recalc(); };
-    document.getElementById('cc-tpl-tudo').onclick = () => { marcarMax(UNITS.map((u) => u[0]).filter((u) => u !== 'snob')); recalc(); };
-    document.getElementById('cc-tpl-nobre').onclick = () => { limpar(); const s = document.getElementById('cc-u-snob'); if (s) s.value = '1'; recalc(); };
-    document.getElementById('cc-tpl-fake').onclick = () => { limpar(); const r = document.getElementById('cc-u-ram'); if (r) r.value = '1'; const e = document.getElementById('cc-u-spy'); if (e) e.value = '1'; recalc(); };
+    document.getElementById('cc-tpl-salvar').onclick = ccModeloSalvar;
+    ccModelosRender();
 
     // Seleção de origens
     // Fake: prévia ao vivo de quantos comandos a combinação atual geraria.

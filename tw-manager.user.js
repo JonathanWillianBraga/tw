@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.29.0
+// @version      9.29.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.29.0';
+  const VERSION = '9.29.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1403,14 +1403,21 @@
       else if (L.daTempo === false) { sit = '⚠ longe demais'; cor = '#ff7568'; }
       else if (L.t != null && ch) { sit = 'sai ' + srvClockMs(ch - L.t); cor = '#8fe39a'; }
       else { sit = ''; cor = '#8f7d57'; }
-      // Estoque de cada unidade, pra dar a visão geral sem abrir aldeia por aldeia.
-      const tropas = UNITS.map(([u, n]) => {
+      // Estoque por unidade. Mostra o número em uso e, entre parênteses, o que está fora/voltando —
+      // assim dá pra ver a diferença sem precisar alternar a fonte.
+      const listaU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
+      const tropas = listaU.map((u) => {
         const q = (v.avail && v.avail[u]) || 0;
-        if (!q) return '';
+        const foraT = ((v.fora && v.fora[u]) || 0) + ((v.transito && v.transito[u]) || 0);
+        if (!q && !foraT) return '';
+        const rot = rotUn[u] || u;
         const pedida = (comp.amounts[u] != null) || comp.max[u];
         const falta = comp.amounts[u] != null && q < comp.amounts[u];
-        return '<span title="' + esc(n) + '" style="color:' + (falta ? '#ff7568' : pedida ? '#ffd76a' : '#6b5c3f') + '">' +
-               unitIcon(u, n) + fmtN(q) + '</span>';
+        const extra = (foraT && (config.cmd.fonteTropa || 'casa') === 'casa')
+          ? '<span style="color:#7fc8ff">+' + fmtN(foraT) + '</span>' : '';
+        return '<span title="' + esc(rot) + (foraT ? ' · ' + fmtN(foraT) + ' fora/voltando' : '') +
+               '" style="color:' + (falta ? '#ff7568' : pedida ? '#ffd76a' : '#6b5c3f') + '">' +
+               unitIcon(u, rot) + fmtN(q) + extra + '</span>';
       }).filter(Boolean).join(' ');
       return '<label style="display:block;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer">' +
         '<span style="display:grid;grid-template-columns:18px 74px 52px 78px 52px 1fr;gap:6px;align-items:center;font-size:10px">' +
@@ -1537,7 +1544,7 @@
     const row = (l, inner) => '<div class="twmgr-row" style="display:flex;align-items:center;gap:6px;margin:3px 0"><span style="min-width:120px;color:#cbb98f">' + l + '</span>' + inner + '</div>';
     d.innerHTML =
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
-        '<b style="color:#d4af37;font-size:13px">🚀 Centro de Comando</b>' +
+        '<b style="color:#d4af37;font-size:13px">🚀 Centro de Comando <span style="color:#8f7d57;font-size:10px;font-weight:400">v' + VERSION + '</span></b>' +
         '<b id="cc-clock" style="color:#ffd76a;font-size:16px;font-variant-numeric:tabular-nums">--:--:--.---</b>' +
       '</div>' +
       '<div id="cc-saude" style="font-size:10px;color:#cbb98f;margin-bottom:4px"></div>' +
@@ -1723,7 +1730,8 @@
         if (!r.checked) return;
         config.cmd.fonteTropa = r.value; save();
         // Não precisa rebuscar: a leitura já traz as duas linhas, só troca qual delas usar.
-        ccCarregarOrigens(false);
+        // Recarrega CCVILAS (é ele que carrega o 'avail' da fonte escolhida) e redesenha.
+        ccCarregarOrigens(false).then(ccRenderOrigens);
       });
     });
     // Marca só as origens que atendem os DOIS critérios: têm a tropa pedida E ainda dá tempo.

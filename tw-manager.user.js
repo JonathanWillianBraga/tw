@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.31.0
+// @version      9.32.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.31.0';
+  const VERSION = '9.32.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -123,6 +123,8 @@
     // Ondas do NT: cada uma com origem, composição e defasagem próprias. É o que permite
     // "nuke na frente, nobres atrás" e "dividir a tropa de uma aldeia em N ataques".
     ondas: [],              // [{id, origem, amounts, max, offsetMs, rot}]
+    filaOrdem: 'chegada',   // como listar a fila: 'chegada' | 'saida'
+    passoMs: 50,            // passo dos botões de ajuste fino na fila
   });
   const defMap = () => ({
     running: false, nextAt: 0,
@@ -278,6 +280,8 @@
     if (!c.cmd.fakeDist) c.cmd.fakeDist = 'rodizio';
     if (!c.cmd.tipo) c.cmd.tipo = 'attack';
     if (!Array.isArray(c.cmd.ondas)) c.cmd.ondas = [];
+    if (!c.cmd.filaOrdem) c.cmd.filaOrdem = 'chegada';
+    if (c.cmd.passoMs == null) c.cmd.passoMs = 50;
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -1681,13 +1685,50 @@
     el.textContent = base;
   }
 
+  // Só dá pra mexer no tempo antes do disparo fino assumir. Depois de 'armado' o spin
+  // já está rodando com o horário capturado, e mudar ali sairia pela culatra.
+  function ccEditavel(c) { return c.state === 'novo' || c.state === 'preparado'; }
+  // Desloca a chegada e recalcula saída/disparo a partir da duração que o servidor deu.
+  function ccAjustar(id, deltaMs) {
+    const c = cmdFila().find((z) => z.id === id);
+    if (!c || !ccEditavel(c)) return;
+    c.arriveAt += deltaMs;
+    if (c.durMs != null) cmdRecalc(c);
+    save(); ccRender(); cmdTick();
+  }
+  // Troca a chegada com o vizinho na ordem exibida — é assim que "reordenar" faz sentido:
+  // a ordem de um trem é definida pela hora de chegada, não pela posição na lista.
+  function ccTrocar(id, dir) {
+    const lista = ccFilaOrdenada();
+    const i = lista.findIndex((z) => z.id === id), j = i + dir;
+    if (i < 0 || j < 0 || j >= lista.length) return;
+    const a = lista[i], b = lista[j];
+    if (!ccEditavel(a) || !ccEditavel(b)) return;
+    const t = a.arriveAt; a.arriveAt = b.arriveAt; b.arriveAt = t;
+    if (a.durMs != null) cmdRecalc(a);
+    if (b.durMs != null) cmdRecalc(b);
+    save(); ccRender(); cmdTick();
+  }
+  function ccFilaOrdenada() {
+    const porSaida = (config.cmd.filaOrdem === 'saida');
+    return cmdFila().slice().sort((a, b) => {
+      // Antes do preparo não há saída conhecida; cai pra chegada pra não embaralhar.
+      const va = porSaida ? (a.sendAt || a.arriveAt || 0) : (a.arriveAt || 0);
+      const vb = porSaida ? (b.sendAt || b.arriveAt || 0) : (b.arriveAt || 0);
+      return va - vb;
+    });
+  }
+
   function ccRender() {
     const box = document.getElementById('cc-fila'); if (!box) return;
     const f = cmdFila();
+    const ord = document.getElementById('cc-fila-ordem');
+    if (ord && ord.value !== config.cmd.filaOrdem) ord.value = config.cmd.filaOrdem;
     if (!f.length) { box.innerHTML = '<div style="color:#8f7d57;padding:6px;font-size:10px">— nenhum comando armado —</div>'; return; }
     const agora = serverNow();
+    const passo = Math.max(1, config.cmd.passoMs || 50);
     const corDe = { novo: '#cbb98f', preparado: '#ffd76a', armado: '#8fe39a', enviado: '#8fe39a', erro: '#ff7568', abortado: '#8f7d57' };
-    box.innerHTML = f.slice().sort((a, b) => (a.arriveAt || 0) - (b.arriveAt || 0)).map((c) => {
+    box.innerHTML = ccFilaOrdenada().map((c) => {
       const falta = c.fireAt ? (c.fireAt - agora) : (c.arriveAt - agora);
       const dev = (c.desvioMs == null) ? '' : ((c.desvioMs >= 0 ? '+' : '') + c.desvioMs + 'ms');
       const vo = CCVILAS.find((z) => String(z.vid) === String(c.origin));
@@ -1715,8 +1756,25 @@
         '<span style="text-align:right;color:' + (dev ? erroCor(Math.abs(c.desvioMs)) : '#8f7d57') + '">' + (dev || (falta > 0 ? fmt(falta) : '—')) + '</span>' +
         (c.state === 'novo' || c.state === 'preparado' || c.state === 'armado'
           ? '<span data-cc-ab="' + c.id + '" style="cursor:pointer;color:#ff7568" title="abortar">✕</span>' : '<span></span>') +
+        // Ajuste fino: mexe na CHEGADA e o horário de saída se recalcula sozinho.
+        // Some depois que o comando entra no disparo, quando mudar já não é seguro.
+        (ccEditavel(c)
+          ? '<span style="grid-column:1/-1;text-align:right;font-size:9px;color:#8f7d57;padding-top:1px">' +
+              '<a data-aj="' + c.id + '" data-d="' + (-passo * 10) + '" style="cursor:pointer;color:#e6cf7d" title="−' + (passo * 10) + 'ms">≪</a> ' +
+              '<a data-aj="' + c.id + '" data-d="' + (-passo) + '" style="cursor:pointer;color:#e6cf7d" title="−' + passo + 'ms">‹</a> ' +
+              '<span style="color:#6b5c3f">ajuste</span> ' +
+              '<a data-aj="' + c.id + '" data-d="' + passo + '" style="cursor:pointer;color:#e6cf7d" title="+' + passo + 'ms">›</a> ' +
+              '<a data-aj="' + c.id + '" data-d="' + (passo * 10) + '" style="cursor:pointer;color:#e6cf7d" title="+' + (passo * 10) + 'ms">≫</a>' +
+              ' &nbsp;<a data-sw="' + c.id + '" data-dir="-1" style="cursor:pointer;color:#8fe39a" title="trocar de lugar com o de cima">▲</a>' +
+              ' <a data-sw="' + c.id + '" data-dir="1" style="cursor:pointer;color:#8fe39a" title="trocar de lugar com o de baixo">▼</a>' +
+            '</span>'
+          : '') +
         '</div>';
     }).join('');
+    box.querySelectorAll('[data-aj]').forEach((e) => e.onclick = () =>
+      ccAjustar(e.getAttribute('data-aj'), parseInt(e.getAttribute('data-d'), 10)));
+    box.querySelectorAll('[data-sw]').forEach((e) => e.onclick = () =>
+      ccTrocar(e.getAttribute('data-sw'), parseInt(e.getAttribute('data-dir'), 10)));
     box.querySelectorAll('[data-cc-ab]').forEach((el) => el.onclick = () => cmdAbortar(el.getAttribute('data-cc-ab')));
   }
 
@@ -1860,7 +1918,14 @@
       '<div id="cc-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
       '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
       '<div style="margin-top:8px;border-top:1px solid #3a2e1b;padding-top:6px">' +
-        '<div style="font-size:10px;color:#e8d29a;font-weight:600;margin-bottom:3px">Fila</div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
+          '<span style="font-size:10px;color:#e8d29a;font-weight:600">Fila</span>' +
+          '<span style="font-size:10px;color:#8f7d57">ordenar por ' +
+            '<select id="cc-fila-ordem" class="twmgr-inp" style="width:auto;font-size:10px;padding:1px">' +
+              '<option value="chegada">chegada</option><option value="saida">saída</option></select>' +
+            ' · passo <input id="cc-passo" class="twmgr-inp" type="number" min="1" step="10" style="width:52px;font-size:10px;padding:1px">ms' +
+          '</span>' +
+        '</div>' +
         '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
           '<span>tipo</span><span>de</span><span>para</span><span>estado</span><span>sai</span><span>chegada</span><span>falta</span><span></span></div>' +
         '<div id="cc-fila" style="max-height:180px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
@@ -1881,6 +1946,14 @@
       ccOndas().push(ccOndaNova(comp.amounts, comp.max)); save(); ccOndasRender();
     };
     document.getElementById('cc-nt-limpar').onclick = () => { config.cmd.ondas = []; save(); ccOndasRender(); };
+    const ordEl = document.getElementById('cc-fila-ordem');
+    ordEl.value = config.cmd.filaOrdem || 'chegada';
+    ordEl.addEventListener('change', () => { config.cmd.filaOrdem = ordEl.value; save(); ccRender(); });
+    const passoEl = document.getElementById('cc-passo');
+    passoEl.value = config.cmd.passoMs || 50;
+    passoEl.addEventListener('change', () => {
+      config.cmd.passoMs = Math.max(1, parseInt(passoEl.value, 10) || 50); save(); ccRender();
+    });
     const gapEl2 = document.getElementById('cc-trem-gap');
     if (gapEl2) gapEl2.addEventListener('input', () => { ccOndasRender(); });
     // Mostra os campos do trem só quando o tipo é trem, e avisa quando o intervalo pedido

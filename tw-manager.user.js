@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.99.0
+// @version      10.0.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.99.0';
+  const VERSION = '10.0.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -411,36 +411,9 @@
     renderLog();
     if (mod) renderModLog(mod);
   }
-  // ---- Linha de log VIVA: uma entrada que se atualiza no lugar (barra de progresso), em vez de
-  // empilhar uma linha por evento. pushLogLive devolve um id; updateLogLive reescreve aquela linha.
-  let _liveSeq = 0;
-  function pushLogLive(msg, kind, mod) {
-    const id = 'live' + (++_liveSeq) + '_' + Date.now();
-    let arr = []; try { arr = JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) {}
-    arr.unshift({ t: new Date().toLocaleTimeString(), m: msg, k: kind || '', mod: mod || '', id: id, live: true });
-    localStorage.setItem(LOGKEY, JSON.stringify(arr.slice(0, 200)));
-    renderLog();
-    if (mod) renderModLog(mod);
-    return id;
-  }
-  function updateLogLive(id, msg, kind, close) {
-    if (!id) return;
-    let arr = []; try { arr = JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) { return; }
-    const i = arr.findIndex((x) => x.id === id); if (i < 0) return;   // caiu fora das 200 -> ignora
-    const l = arr[i];
-    l.m = msg; if (kind != null) l.k = kind;
-    if (close) l.live = false;
-    // O log é do mais novo pro mais velho: sem re-flutuar, a barra fica presa na posição em que
-    // nasceu e some embaixo das mensagens do próprio ciclo. Sobe pro topo e atualiza o relógio.
-    l.t = new Date().toLocaleTimeString();
-    if (i > 0) { arr.splice(i, 1); arr.unshift(l); }
-    localStorage.setItem(LOGKEY, JSON.stringify(arr));
-    renderLog();
-    if (l.mod) renderModLog(l.mod);
-  }
-  // Fecha barras que ficaram abertas (ciclo morto por reload da página, erro, ou aba fechada). O
-  // estado mora na PRÓPRIA linha do log (flag live), não numa variável — variável some no reload,
-  // que é justamente quando o ciclo morre no meio.
+  // Limpa "linhas vivas" gravadas por versões anteriores: até a 9.99.0 a barra de progresso morava no
+  // log e podia ficar congelada se a página recarregasse no meio do ciclo. Agora a barra vive na aba
+  // do módulo; isto fica só pra faxina de quem está atualizando.
   function closeStaleLiveLogs() {
     let arr = []; try { arr = JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) { return; }
     const mods = {};
@@ -455,13 +428,6 @@
     localStorage.setItem(LOGKEY, JSON.stringify(arr));
     renderLog();
     Object.keys(mods).forEach(renderModLog);
-  }
-  // progressBar(35,100) -> "███████░░░░░░░░░░░░░ 35%"
-  function progressBar(done, total, width) {
-    const w = width || 20;
-    const pct = total > 0 ? Math.max(0, Math.min(100, Math.round(done / total * 100))) : 0;
-    const fill = Math.round(w * pct / 100);
-    return '█'.repeat(fill) + '░'.repeat(Math.max(0, w - fill)) + ' ' + pct + '%';
   }
   function logLineHTML(l) {
     const c = l.k === 'err' ? '#ff7568' : l.k === 'ok' ? '#8fe39a' : '#cbb98f';
@@ -1124,7 +1090,8 @@
     else eligible.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
     let count = 0, errs = 0;   // errs = envios recusados APÓS a origem passar na pré-checagem de tropa
     let _farmSaveAt = 0;       // throttle da gravação imediata do carimbo de envio
-    let incertos = 0, calcCount = 0;   // envios de resultado ambíguo · envios por quantidade calculada
+    let incertos = 0, calcCount = 0;   // envios de resultado ambíguo · envios subidos ao mínimo do mundo
+    let lastCalcTxt = '';              // último envio no mínimo (mostrado no painel como amostra)
     // Limite de fake do mundo: o ataque precisa ter no mínimo (pontos da ORIGEM × pct)% de população.
     // Quem estoura isso é a origem grande, não o alvo — então o bloqueio é por origem+modo e vale pro
     // ciclo todo. Assim uma aldeia grande demais pro template B é descartada após UM erro, não a cada alvo.
@@ -1132,18 +1099,14 @@
     const errReasons = {};     // motivo -> quantas vezes (pra saber POR QUE recusou, não só quantas)
     // Barra de progresso do ciclo: UMA linha de log que se atualiza conforme percorre os alvos e, no
     // fim, vira o extrato. Throttle de 400ms pra não redesenhar o log a cada aldeia.
-    let barId = null, _barAt = 0;
-    const barTxt = (done) => 'Saque: ' + progressBar(done, eligible.length) + ' · ' + done + '/' + eligible.length + ' alvos · ✔ ' + count + (errs ? (' · ✖ ' + errs) : '');
-    if (eligible.length) {
-      closeStaleLiveLogs();   // fecha barra de ciclo anterior que morreu no meio
-      barId = pushLogLive('Saque: ciclo mapeado — ' + eligible.length + ' aldeia(s) pra atacar · ' + progressBar(0, eligible.length), '', 'farm');
-    }
+    let _barAt = 0;
+    if (eligible.length) setFarmProg(farmProgHTML(0, eligible.length, 'mapeados ' + eligible.length + ' alvo(s)'));
     const tickBar = (done, force) => {
-      if (!barId) return;
+      if (!eligible.length) return;
       const ts = Date.now();
       if (!force && ts - _barAt < 400) return;
       _barAt = ts;
-      updateLogLive(barId, barTxt(done));
+      setFarmProg(farmProgHTML(done, eligible.length, '✔ ' + count + ' enviado(s)' + (errs ? (' · ✖ ' + errs + ' recusa(s)') : '')));
     };
     for (const [idx, t] of eligible.entries()) {
       tickBar(idx);   // idx = quantos JÁ terminaram
@@ -1255,35 +1218,42 @@
         // "Repetir a cada". Throttle de 2s pra não escrever no disco a cada envio.
         const _ts = Date.now();
         if (_ts - _farmSaveAt > 2000) { _farmSaveAt = _ts; save(); }
-        pushLog('Saque: ' + usedName + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (usedCalc ? ' → mínimo do mundo (' + usedCalcInfo + ')' : (mode !== 'c' ? ' ×' + qty : '')) + ' · ' + (Math.round(usedDist * 10) / 10) + ' campos', 'ok', 'farm');
+        // Envio individual NÃO vai mais pro log (enchia 50 linhas por ciclo). O andamento fica na
+        // barra da aba e o resultado no resumo do fim do ciclo.
+        if (usedCalc) lastCalcTxt = usedName + ' → ' + t.coord + ' (' + usedCalcInfo + ')';
       }
       else if (incerto) {
         // Não sabemos se saiu. Carimba como enviado pra NÃO reenviar; o próximo ciclo lê a lista de
         // comandos do jogo e corrige sozinho se não tiver saído.
         sent[t.coord] = Date.now(); cfg.sentReports = sent; pendingCoords.add(t.coord); incertos++;
-        pushLog('Saque: ' + t.coord + ' — resposta ambígua do servidor, pode ter enviado. Não vou repetir por outra origem.', '', 'farm');
       }
       else skip.semorig++;
     }
-    // Fecha a barra: a MESMA linha vira o extrato (não empilha outra). Falha = alvo elegível que não
-    // conseguiu envio; pulado = descartado no meio do caminho (defesa, muralha, alcance, já em rota…).
-    if (barId) {
-      const falhas = skip.semorig, pulados = Math.max(0, eligible.length - count - falhas - incertos);
-      updateLogLive(barId, 'Saque: extrato do ciclo — ✔ ' + count + ' enviado(s)' + (calcCount ? (' (' + calcCount + ' calculado)') : '') + ' · ✖ ' + falhas + ' falha(s) · ⏭ ' + pulados + ' pulado(s)' + (incertos ? (' · ? ' + incertos + ' incerto(s)') : '') + ' · ' + eligible.length + ' alvo(s) mapeados' + (errs ? (' · ' + errs + ' tentativa(s) recusada(s)') : ''), count ? 'ok' : 'err', true);
-    }
-    // Quais foram os motivos das recusas (top 3). Sem isso só dava pra saber QUANTAS, não POR QUÊ.
+    const falhas = skip.semorig, pulados = Math.max(0, eligible.length - count - falhas - incertos);
     const topErr = Object.keys(errReasons).map((m) => [m, errReasons[m]]).sort((a, b) => b[1] - a[1]).slice(0, 3);
-    if (topErr.length) pushLog('Saque: motivo das recusas — ' + topErr.map((p) => p[1] + '× "' + p[0] + '"').join(' · '), 'err', 'farm');
-    const parts = ['enviou ' + count];
-    if (skip.semorig) parts.push(skip.semorig + ' sem origem c/ CL');
+    // PAINEL fica com o detalhe (tem espaço e é status, não histórico).
+    const parts = [];
+    if (skip.pend) parts.push(skip.pend + ' já em rota');
+    if (skip.semorig) parts.push(skip.semorig + ' sem origem c/ tropa');
     if (skip.off) parts.push(skip.off + ' cor sem modo / C indisp.');
     if (skip.azul) parts.push(skip.azul + ' azul c/ muralha');
     if (skip.def) parts.push(skip.def + ' azul c/ defesa');
     if (skip.dist) parts.push(skip.dist + ' fora do alcance');
     if (skip.mur) parts.push(skip.mur + ' muralha alta');
-    if (skip.pend) parts.push(skip.pend + ' já c/ ataque a caminho');
     if (skip.norep) parts.push(skip.norep + ' sem relatório');
-    pushLog('Saque: ' + parts.join(' · '), '', 'farm');
+    if (eligible.length) {
+      setFarmProg(farmProgHTML(eligible.length, eligible.length,
+        '✔ <b>' + count + '</b> enviado(s)' + (calcCount ? (' · ' + calcCount + ' no mínimo do mundo') : '') +
+        (falhas ? (' · ✖ ' + falhas + ' falha(s)') : '') + (incertos ? (' · ? ' + incertos + ' incerto(s)') : '') +
+        (pulados ? (' · ⏭ ' + pulados + ' pulado(s)') : '') +
+        (parts.length ? ('<br><span style="opacity:.7">' + parts.join(' · ') + '</span>') : '') +
+        (lastCalcTxt ? ('<br><span style="opacity:.7">mínimo: ' + lastCalcTxt + '</span>') : '')));
+    } else setFarmProg('Nenhum alvo elegível neste ciclo.');
+    // LOG fica enxuto: só o resumo (mais abaixo, "ciclo concluído") e, se falhou, o motivo.
+    if (falhas || incertos || topErr.length) {
+      pushLog('Saque: ' + (falhas ? falhas + ' falha(s)' : '') + (incertos ? ((falhas ? ' · ' : '') + incertos + ' incerto(s)') : '') +
+        (topErr.length ? (' — ' + topErr.map((p) => p[1] + '× "' + p[0] + '"').join(' · ')) : ''), 'err', 'farm');
+    }
     // Detecção de BLOQUEIO por efeito (pega bot-check enquanto você está AFK). Só conta como suspeito o
     // que é sintoma REAL de bloqueio: servidor RECUSOU envios (errs) OU o assistente voltou VAZIO
     // (0 alvos, degradado). "0 enviados por falta de CL / fora de alcance / cooldown" é NORMAL e ZERA o
@@ -1326,7 +1296,7 @@
     cfg.nextAt = now + Math.max(60, cfg.interval || 600) * 1000;
     save();
     refreshCards('farm'); refreshDaily('farm', cfg, 'loot', 'loot_res');
-    pushLog('Saque: ciclo concluído — ' + count + ' comando(s) enviado(s). Próximo em ' + Math.round((cfg.interval || 600) / 60) + ' min.', 'ok', 'farm');
+    pushLog('Saque: ciclo concluído — ' + count + ' saque(s) enviado(s)' + (calcCount ? (', ' + calcCount + ' no mínimo do mundo') : '') + '. Próximo em ' + Math.round((cfg.interval || 600) / 60) + ' min.', 'ok', 'farm');
     scheduleFarm();
   }
   function scheduleFarm() { clearTimeout(farmTimer); if (!config.farm.running) return; farmTimer = setTimeout(farmTick, Math.min(Math.max((config.farm.nextAt || 0) - Date.now(), 1000), 60000)); }
@@ -4016,9 +3986,20 @@
     });
     save();
   }
-  function farmStart() { readFarmCfg(); config.farm.running = true; config.farm.nextAt = 0; save(); setFarmStatus(true); pushLog('Saque iniciado — modo ' + config.farm.mode + ', ordem por ' + config.farm.order + (config.farm.dynTemplate ? ', template dinâmico' : '') + '.', 'ok', 'farm'); farmTick(); }
-  function farmStop() { readFarmCfg(); config.farm.running = false; save(); clearTimeout(farmTimer); setFarmStatus(false); pushLog('Saque parado.', '', 'farm'); }
+  function farmStart() { readFarmCfg(); config.farm.running = true; config.farm.nextAt = 0; save(); setFarmStatus(true); setFarmProg('Lendo o assistente…'); pushLog('Saque iniciado — modo ' + config.farm.mode + ', ordem por ' + config.farm.order + (config.farm.dynTemplate ? ', template dinâmico' : '') + '.', 'ok', 'farm'); farmTick(); }
+  function farmStop() { readFarmCfg(); config.farm.running = false; save(); clearTimeout(farmTimer); setFarmStatus(false); setFarmProg('Saque parado.'); pushLog('Saque parado.', '', 'farm'); }
   function setFarmStatus(on) { setBtnState('twmgr-farm-start', 'twmgr-farm-stop', on, '● Saqueando', '▶ Saquear'); }
+  // Barra de progresso do ciclo DENTRO da aba Saque (substituiu a linha viva no log, que empurrava
+  // as outras mensagens e só cabia em texto). Aqui dá pra desenhar barra de verdade.
+  function setFarmProg(html) { const el = document.getElementById('twmgr-farm-prog'); if (el) el.innerHTML = html; }
+  function farmProgHTML(done, total, right) {
+    const pct = total > 0 ? Math.max(0, Math.min(100, Math.round(done / total * 100))) : 0;
+    return '<div style="display:flex;align-items:center;gap:8px">' +
+      '<div style="flex:1;height:9px;background:rgba(255,255,255,.09);border-radius:5px;overflow:hidden">' +
+        '<div style="width:' + pct + '%;height:100%;background:#8fe39a;transition:width .25s"></div></div>' +
+      '<span style="white-space:nowrap;font-variant-numeric:tabular-nums">' + done + '/' + total + '</span></div>' +
+      (right ? ('<div style="margin-top:3px;opacity:.85">' + right + '</div>') : '');
+  }
   function readWallCfg() {
     const wn = document.getElementById('twmgr-wall-min'); if (wn) { config.wall.wallMin = parseInt(wn.value, 10); if (isNaN(config.wall.wallMin)) config.wall.wallMin = 1; }
     const wx = document.getElementById('twmgr-wall-max'); if (wx) { config.wall.wallMax = parseInt(wx.value, 10); if (isNaN(config.wall.wallMax)) config.wall.wallMax = 6; }
@@ -4178,7 +4159,7 @@
         modLog('scav') +
       '</div>' +
       '<div id="twmgr-tab-farm" style="display:none">' +
-        hint('FarmGod: por <b>cor</b>, escolha <b>um</b> modo (A, B ou C). Vermelho nunca; azul até a <b>muralha máx. do azul</b> e sem defesa. Nunca empilha no mesmo alvo.') +
+        '<div id="twmgr-farm-prog" class="twmgr-hint">Saque parado.</div>' +
         cardsDiv('farm') +
         sec('Ataque por cor (marque 1 por linha)',
           '<table class="twmgr-fmtable"><tr><th style="text-align:left">cor</th><th>A</th><th>B</th><th>C</th></tr>' +

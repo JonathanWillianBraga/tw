@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.33.0
+// @version      9.34.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.33.0';
+  const VERSION = '9.34.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1137,7 +1137,7 @@
   // { amounts: {unidade:n}, max: {unidade:true} } — "max" = mandar tudo o que a origem tiver.
   function ccComposicao() {
     const amounts = {}, max = {};
-    UNITS.forEach(([u]) => {
+    ccUnidadesUI().forEach(([u]) => {
       const inp = document.getElementById('cc-u-' + u);
       const chk = document.getElementById('cc-max-' + u);
       if (chk && chk.checked) { max[u] = true; return; }
@@ -1306,6 +1306,64 @@
       msg.textContent = ok ? 'Diagnóstico copiado — é só colar aqui no chat.'
                            : 'Não consegui copiar; o relatório saiu no console (F12).';
     }
+  }
+
+  // ---- Grade de tropas ----
+  // Uma "carta" por unidade: ícone em cima (clicar = mandar tudo), número embaixo.
+  // O checkbox separado dobrava a altura da grade e poluía a leitura.
+  function ccUnidadesUI() {
+    const doMundo = CC_UNIDADES_MUNDO && CC_UNIDADES_MUNDO.length ? CC_UNIDADES_MUNDO : UNITS.map((u) => u[0]);
+    const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+    return doMundo.filter((u) => u !== 'militia').map((u) => [u, rot[u] || u]);   // milícia não sai da aldeia
+  }
+  function ccRenderTropas() {
+    const grade = document.getElementById('cc-tropas-grade'); if (!grade) return;
+    const antes = ccComposicao();   // preserva o que já estava digitado ao reconstruir
+    grade.innerHTML = ccUnidadesUI().map(([u, n]) =>
+      '<div data-un="' + u + '" style="flex:1 1 62px;min-width:56px;text-align:center;background:#1a130c;' +
+      'border:1px solid #3a2e1b;border-radius:6px;padding:3px 2px">' +
+        '<div data-maxbtn="' + u + '" title="' + esc(n) + ' — clique para mandar TUDO" ' +
+             'style="cursor:pointer;height:18px;line-height:18px;border-radius:4px">' + unitIcon(u, n) + '</div>' +
+        '<input id="cc-u-' + u + '" class="twmgr-inp cc-un" type="number" min="0" ' +
+               'style="width:100%;padding:1px;text-align:center;font-size:11px" placeholder="0">' +
+        '<input id="cc-max-' + u + '" class="cc-mx" type="checkbox" style="display:none">' +
+      '</div>').join('');
+    // Restaura os valores e religa os eventos
+    ccUnidadesUI().forEach(([u]) => {
+      const inp = document.getElementById('cc-u-' + u), chk = document.getElementById('cc-max-' + u);
+      if (chk) chk.checked = !!antes.max[u];
+      if (inp) { inp.value = antes.amounts[u] || ''; inp.disabled = !!antes.max[u]; }
+    });
+    grade.querySelectorAll('[data-maxbtn]').forEach((el) => el.onclick = () => {
+      const u = el.getAttribute('data-maxbtn');
+      const chk = document.getElementById('cc-max-' + u);
+      chk.checked = !chk.checked;
+      const inp = document.getElementById('cc-u-' + u);
+      if (inp) { inp.disabled = chk.checked; if (chk.checked) inp.value = ''; }
+      ccPintarTropas(); ccRenderOrigens();
+      if (ccTipo() === 'fake') ccPreviaFake();
+    });
+    grade.querySelectorAll('.cc-un').forEach((el) => el.addEventListener('input', () => {
+      ccPintarTropas(); ccRenderOrigens();
+      if (ccTipo() === 'fake') ccPreviaFake();
+    }));
+    ccPintarTropas();
+  }
+  // Realce visual: unidade com "tudo" fica dourada; com número, acesa.
+  function ccPintarTropas() {
+    const grade = document.getElementById('cc-tropas-grade'); if (!grade) return;
+    ccUnidadesUI().forEach(([u]) => {
+      const cel = grade.querySelector('[data-un="' + u + '"]');
+      const btn = grade.querySelector('[data-maxbtn="' + u + '"]');
+      const chk = document.getElementById('cc-max-' + u);
+      const inp = document.getElementById('cc-u-' + u);
+      if (!cel || !btn) return;
+      const max = chk && chk.checked, tem = inp && (parseInt(inp.value, 10) > 0);
+      cel.style.borderColor = max ? '#d4af37' : (tem ? '#7a6438' : '#3a2e1b');
+      cel.style.background = max ? '#2a2016' : '#1a130c';
+      btn.style.background = max ? 'rgba(212,175,55,.22)' : 'transparent';
+      if (inp) inp.placeholder = max ? 'tudo' : '0';
+    });
   }
 
   // ---- Modelos de tropa ----
@@ -1658,8 +1716,14 @@
     } catch (e) {
       pushLog('Centro de Comando: não li as tropas das aldeias (' + (e.message || e) + ').', 'err', 'cmd');
     }
+    // Só aqui sabemos quais unidades este mundo tem — reconstrói a grade preservando o digitado.
+    if (CC_UNIDADES_MUNDO && _ccUnidadesDesenhadas !== CC_UNIDADES_MUNDO.join(',')) {
+      _ccUnidadesDesenhadas = CC_UNIDADES_MUNDO.join(',');
+      ccRenderTropas();
+    }
     ccRenderOrigens();
   }
+  let _ccUnidadesDesenhadas = '';
   function ccRenderOrigens() {
     const cont = document.getElementById('cc-origens'); if (!cont) return;
     const alvo = ccAlvo();
@@ -1946,19 +2010,14 @@
           '<span style="font-size:10px;color:#e8d29a;font-weight:600">Tropas por origem</span>' +
           '<span style="font-size:10px">' +
             '<a id="cc-tpl-salvar" style="cursor:pointer;color:#8fe39a">+ salvar como modelo</a> · ' +
-            '<a id="cc-tpl-limpar" style="cursor:pointer;color:#e6cf7d">limpar</a>' +
+            '<a id="cc-tpl-limpar" style="cursor:pointer;color:#e6cf7d">limpar</a> · ' +
+            '<a id="cc-tpl-restaurar" style="cursor:pointer;color:#8f7d57" title="repõe Tudo/Nobre/Fake">padrão</a>' +
           '</span>' +
         '</div>' +
         '<div id="cc-modelos" style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:5px"></div>' +
-        '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px">' +
-          UNITS.map(([u, n]) =>
-            '<div style="text-align:center">' +
-              '<div style="font-size:9px;color:#cbb98f;height:14px">' + unitIcon(u, n) + '</div>' +
-              '<input id="cc-u-' + u + '" class="twmgr-inp cc-un" type="number" min="0" style="width:100%;padding:2px;text-align:center" placeholder="0">' +
-              '<label style="font-size:9px;color:#8f7d57;display:block;cursor:pointer">' +
-                '<input id="cc-max-' + u + '" class="cc-mx" type="checkbox"> tudo</label>' +
-            '</div>').join('') +
-        '</div>' +
+        // Montada em ccRenderTropas() a partir das unidades que ESTE mundo tem — a lista fixa
+        // de 12 mostrava arqueiro e arqueiro a cavalo em mundos que não os têm.
+        '<div id="cc-tropas-grade" style="display:flex;flex-wrap:wrap;gap:4px"></div>' +
       '</div>' +
       // Origens: cada aldeia com distância e tempo já calculados pela unidade mais lenta.
       '<div style="margin:8px 0 4px;border-top:1px solid #3a2e1b;padding-top:6px">' +
@@ -2075,14 +2134,8 @@
       recalc();
     });
     document.getElementById('cc-chegada').addEventListener('input', recalc);
-    document.querySelectorAll('.cc-un').forEach((el) => el.addEventListener('input', recalc));
-    // Marcar "tudo" desabilita a caixa de número da mesma unidade — os dois juntos confundem.
-    document.querySelectorAll('.cc-mx').forEach((el) => el.addEventListener('change', () => {
-      const u = el.id.replace('cc-max-', '');
-      const inp = document.getElementById('cc-u-' + u);
-      if (inp) { inp.disabled = el.checked; if (el.checked) inp.value = ''; }
-      recalc();
-    }));
+    // Os eventos das caixas de tropa são religados dentro de ccRenderTropas(), porque a grade
+    // é reconstruída quando descobrimos as unidades reais do mundo.
 
     // Atalho: chegada = agora + 10 min, já no formato que o campo aceita.
     document.getElementById('cc-ch-agora').addEventListener('click', () => {
@@ -2096,14 +2149,19 @@
 
     // Modelos de tropa
     const limpar = () => {
-      UNITS.forEach(([u]) => {
+      ccUnidadesUI().forEach(([u]) => {
         const i = document.getElementById('cc-u-' + u), m = document.getElementById('cc-max-' + u);
         if (i) { i.value = ''; i.disabled = false; }
         if (m) m.checked = false;
       });
+      ccPintarTropas();
     };
     document.getElementById('cc-tpl-limpar').onclick = () => { limpar(); recalc(); };
     document.getElementById('cc-tpl-salvar').onclick = ccModeloSalvar;
+    document.getElementById('cc-tpl-restaurar').onclick = () => {
+      config.cmd.modelos = MODELOS_PADRAO(); save(); ccModelosRender();
+    };
+    ccRenderTropas();
     ccModelosRender();
 
     // Seleção de origens

@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.4.0
+// @version      10.5.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.4.0';
+  const VERSION = '10.5.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -469,7 +469,12 @@
         { v: fmtN(s.a), l: 'A' }, { v: fmtN(s.b), l: 'B' }, { v: fmtN(s.c), l: 'C' },
         { v: fmtN(lt.today), l: 'saqueado hoje', br: true },
         { v: fmtN(lt.estimate), l: 'estimativa fim do dia' },
-        { v: (s.coverage == null ? '—' : s.coverage + '%'), l: 'eficiência (cobertura)', hl: true },
+        { v: fmtN((s.dailyCap || {}).cap), l: 'capacidade enviada hoje' },
+        { v: (function () {
+          const cap = (s.dailyCap || {}).cap || 0;
+          if (!cap || lt.today == null) return '—';
+          return Math.round(lt.today / cap * 100) + '%';
+        }()), l: 'eficiência (saque ÷ capacidade)', hl: true, wide: true },
       ];
     } else if (mod === 'wall') {
       const s = (config.wall.stats || {});
@@ -939,6 +944,23 @@
     _dailyCache[type] = entry;
     try { const all = JSON.parse(localStorage.getItem(DAILYKEY) || '{}'); all[type] = entry; localStorage.setItem(DAILYKEY, JSON.stringify(all)); } catch (e) {}
   }
+  // Segundos desde a meia-noite DO SERVIDOR. Usado pra zerar o acumulador diário exatamente quando o
+  // jogo zera o "saqueado hoje" — quando o relógio anda pra trás, virou o dia.
+  function serverSecOfDay() {
+    const et = document.querySelector('#serverTime');
+    const tm = et ? (et.textContent || '').match(/(\d{2}):(\d{2}):(\d{2})/) : null;
+    return tm ? ((+tm[1]) * 3600 + (+tm[2]) * 60 + (+tm[3])) : null;
+  }
+  // Soma a capacidade de carga enviada hoje, pra comparar com o saque obtido (eficiência real).
+  function addDailyCap(cfg, cap, atks) {
+    const sec = serverSecOfDay();
+    const d = cfg.dailyCap || { sec: sec, cap: 0, atks: 0 };
+    if (sec != null && d.sec != null && sec < d.sec) { d.cap = 0; d.atks = 0; }   // virou o dia no servidor
+    d.sec = (sec != null ? sec : d.sec);
+    d.cap = (d.cap || 0) + (cap || 0);
+    d.atks = (d.atks || 0) + (atks || 0);
+    cfg.dailyCap = d;
+  }
   async function getDailyLootStats(type) {
     const c = _dailyRead(type);
     if (c && (Date.now() - c.at) < 300000) return c.data;
@@ -1098,6 +1120,7 @@
     let _farmSaveAt = 0;       // throttle da gravação imediata do carimbo de envio
     let incertos = 0, calcCount = 0;   // envios de resultado ambíguo · envios subidos ao mínimo do mundo
     let lastCalcTxt = '';              // último envio no mínimo (mostrado no painel como amostra)
+    let capCycle = 0;                  // capacidade de carga total despachada neste ciclo
     // Limite de fake do mundo: o ataque precisa ter no mínimo (pontos da ORIGEM × pct)% de população.
     // Quem estoura isso é a origem grande, não o alvo — então o bloqueio é por origem+modo e vale pro
     // ciclo todo. Assim uma aldeia grande demais pro template B é descartada após UM erro, não a cada alvo.
@@ -1221,6 +1244,12 @@
           else { const used = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {}; for (const u in used) avail[u] = Math.max(0, (avail[u] || 0) - used[u]); }
           usedName = c.s.name; usedDist = c.d; usedCalc = useCalc; count++;
           if (useCalc) { calcCount++; usedCalcInfo = Object.keys(calcAmounts).map((u) => calcAmounts[u] + ' ' + u).join(' + '); }
+          // Capacidade de carga despachada. No C quem monta a tropa é o jogo (dimensiona pelo saque
+          // do relatório), então usa o próprio saque estimado como capacidade — é aproximação.
+          capCycle += useCalc ? carryOf(calcAmounts)
+            : mode === 'c' ? sum
+            : dyn ? estCL * (CARRY.light || 80)
+            : carryOf(mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB));
           cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break;
         }
       }
@@ -1304,6 +1333,10 @@
     const farmavel = assistCount + farmCoords.size;
     cfg.stats.farmavel = farmavel;
     cfg.stats.coverage = farmavel > 0 ? Math.min(100, Math.round(farmCoords.size / farmavel * 100)) : null;
+    // Eficiência REAL: saque obtido hoje ÷ capacidade de carga despachada hoje. Diz se a tropa está
+    // voltando cheia (intervalo bem calibrado) ou meio vazia (batendo cedo demais no mesmo alvo).
+    addDailyCap(cfg, capCycle, count);
+    cfg.stats.dailyCap = cfg.dailyCap;
     // Intel de aldeias defendidas (com tropas conhecidas) — usado pelo mapa
     cfg.stats.defendedCount = Object.values(defended).filter((d) => typeof d === 'object' && d.coord).length;
     cfg.nextAt = now + Math.max(60, cfg.interval || 600) * 1000;
@@ -1917,6 +1950,9 @@
   }
   const attackPrepare = fakePrepare, attackFire = fakeFire;
   const FAKE_POP = { spear: 1, sword: 1, axe: 1, archer: 1, spy: 2, light: 4, marcher: 5, heavy: 6, ram: 5, catapult: 8, knight: 10, snob: 100 };
+  // Quanto cada unidade CARREGA de recurso (base do cálculo de eficiência do Saque).
+  const CARRY = { spear: 25, sword: 15, axe: 10, archer: 10, spy: 0, light: 80, marcher: 50, heavy: 50, ram: 0, catapult: 0, knight: 100, snob: 0 };
+  const carryOf = (units) => Object.keys(units || {}).reduce((s, u) => s + (parseInt(units[u], 10) || 0) * (CARRY[u] || 0), 0);
   function parseCoords(raw) {
     const out = [], seen = {};
     (raw || '').split(/[\s,;]+/).forEach((tok) => { const m = tok.match(/^(\d{1,3})\|(\d{1,3})$/); if (m) { const c = m[1] + '|' + m[2]; if (!seen[c]) { seen[c] = 1; out.push({ x: m[1], y: m[2] }); } } });

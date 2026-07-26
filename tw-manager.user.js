@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.29.3
+// @version      9.30.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.29.3';
+  const VERSION = '9.30.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -119,6 +119,7 @@
     fonteTropa: 'casa',     // 'casa' = só o que está na aldeia | 'total' = casa + o que volta
     fakeAlvos: '',          // lista de alvos colada (modo fake)
     fakeDist: 'rodizio',    // 'rodizio' = 1 por aldeia alternando | 'todos' = cada aldeia p/ cada alvo
+    tipo: 'attack',         // aba ativa: attack | support | nobre | fake
   });
   const defMap = () => ({
     running: false, nextAt: 0,
@@ -272,6 +273,7 @@
     if (!c.cmd.fonteTropa) c.cmd.fonteTropa = 'casa';
     if (c.cmd.fakeAlvos == null) c.cmd.fakeAlvos = '';
     if (!c.cmd.fakeDist) c.cmd.fakeDist = 'rodizio';
+    if (!c.cmd.tipo) c.cmd.tipo = 'attack';
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -1105,6 +1107,13 @@
   }
 
   // ==================== CENTRO DE COMANDO (praça de reunião) ====================
+  const CC_TIPOS = [
+    { id: 'attack',  ico: '⚔', rot: 'Ataque',  hint: 'Um ataque por origem marcada, todos chegando no mesmo instante.' },
+    { id: 'support', ico: '🛡', rot: 'Apoio',   hint: 'Apoio de várias aldeias pousando junto no mesmo alvo.' },
+    { id: 'nobre',   ico: '👑', rot: 'Trem',    hint: 'Nobres em sequência da MESMA origem, colados no intervalo escolhido.' },
+    { id: 'fake',    ico: '🎭', rot: 'Fake',    hint: 'Vários alvos de uma vez; o alvo único acima é ignorado.' },
+  ];
+  function ccTipo() { return (config.cmd && config.cmd.tipo) || 'attack'; }
   function telaAtual() {
     try { return new URLSearchParams(location.search).get('screen') || (window.game_data && window.game_data.screen) || ''; } catch (e) { return ''; }
   }
@@ -1334,7 +1343,7 @@
   function ccArmar() {
     const msg = document.getElementById('cc-msg');
     const dizer = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#ff7568'; } };
-    const tipo = (document.querySelector('input[name="cc-tipo"]:checked') || {}).value || 'attack';
+    const tipo = ccTipo();
 
     const arriveAt0 = ccChegadaMs();
     // Fake tem caminho próprio: vários alvos de uma vez, com distribuição escolhida.
@@ -1529,8 +1538,14 @@
     const n = Object.keys(config.cmd.origens || {}).filter((k) => config.cmd.origens[k]).length;
     const alvo = ccAlvo();
     const ch = ccChegadaMs();
-    el.textContent = n + ' origem(ns) marcada(s)' + (alvo ? ' → ' + alvo.coord : '') +
-                     (ch ? ' · chegando ' + srvClockMs(ch) : '');
+    const base = n + ' origem(ns) marcada(s)' + (alvo ? ' → ' + alvo.coord : '') +
+                 (ch ? ' · chegando ' + srvClockMs(ch) : '');
+    // O trem sai todo da mesma aldeia; avisar aqui evita a surpresa só na hora de armar.
+    if (ccTipo() === 'nobre' && n !== 1) {
+      el.innerHTML = esc(base) + ' · <b style="color:#ffd76a">o trem exige exatamente 1 origem</b>';
+      return;
+    }
+    el.textContent = base;
   }
 
   function ccRender() {
@@ -1620,11 +1635,16 @@
       row('Chegada (servidor)',
         '<input id="cc-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:230px">' +
         '<button id="cc-ch-agora" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="preenche com a hora do servidor + 10 min">+10min</button>') +
-      row('Tipo',
-        '<label style="margin-right:10px"><input type="radio" name="cc-tipo" value="attack" checked> ⚔ Ataque</label>' +
-        '<label style="margin-right:10px"><input type="radio" name="cc-tipo" value="support"> 🛡 Apoio</label>' +
-        '<label style="margin-right:10px"><input type="radio" name="cc-tipo" value="nobre"> 👑 Trem</label>' +
-        '<label><input type="radio" name="cc-tipo" value="fake"> 🎭 Fake</label>') +
+      // Abas em vez de rádios: cada tipo tem configuração própria, e a aba deixa claro
+      // qual conjunto de campos está valendo.
+      '<div id="cc-abas" style="display:flex;gap:2px;margin:8px 0 0">' +
+        CC_TIPOS.map((t) =>
+          '<div class="cc-aba" data-tipo="' + t.id + '" style="flex:1;text-align:center;padding:6px 4px;cursor:pointer;' +
+          'border:1px solid #4a3b28;border-bottom:none;border-radius:6px 6px 0 0;font-size:11px;user-select:none">' +
+          t.ico + ' ' + t.rot + '</div>').join('') +
+      '</div>' +
+      '<div id="cc-aba-corpo" style="border:1px solid #4a3b28;border-radius:0 6px 6px 6px;padding:8px;margin-bottom:8px">' +
+        '<div id="cc-aba-hint" style="font-size:10px;color:#8f7d57;margin-bottom:6px"></div>' +
       // Fake: dezenas de alvos de uma vez, com duas distribuições possíveis.
       '<div id="cc-fake-cfg" style="display:none">' +
         '<div style="font-size:10px;color:#cbb98f;margin:4px 0 2px">Alvos do fake (cole vários)</div>' +
@@ -1644,6 +1664,7 @@
           '<span style="color:#8f7d57">ms</span>') +
         '<div id="cc-trem-aviso" style="font-size:10px;color:#ffd76a;margin:2px 0 6px"></div>' +
       '</div>' +
+      '</div>' +   // fim de #cc-aba-corpo
       // Tropas digitadas AQUI, não nas caixas do jogo. "tudo" = manda o estoque inteiro daquela origem.
       '<div style="margin:8px 0 4px;border-top:1px solid #3a2e1b;padding-top:6px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
@@ -1710,7 +1731,19 @@
     // Mostra os campos do trem só quando o tipo é trem, e avisa quando o intervalo pedido
     // fica abaixo do jitter medido — aí a ORDEM das ondas vira sorteio.
     const attTrem = () => {
-      const tipo = (document.querySelector('input[name="cc-tipo"]:checked') || {}).value;
+      const tipo = ccTipo();
+      const def = CC_TIPOS.find((t) => t.id === tipo) || CC_TIPOS[0];
+      // Aba ativa: só ela fica acesa e emendada no corpo.
+      document.querySelectorAll('.cc-aba').forEach((el) => {
+        const on = el.getAttribute('data-tipo') === tipo;
+        el.style.background = on ? 'linear-gradient(180deg,#3a2c1a,#2a2016)' : '#1a130c';
+        el.style.color = on ? '#ffd76a' : '#8f7d57';
+        el.style.borderBottom = on ? '1px solid #2a2016' : '1px solid #4a3b28';
+        el.style.marginBottom = on ? '-1px' : '0';
+        el.style.fontWeight = on ? '600' : '400';
+      });
+      const hint = document.getElementById('cc-aba-hint');
+      if (hint) hint.textContent = def.hint;
       const cfg = document.getElementById('cc-trem-cfg');
       if (cfg) cfg.style.display = (tipo === 'nobre') ? 'block' : 'none';
       const fk = document.getElementById('cc-fake-cfg');
@@ -1718,6 +1751,8 @@
       // O campo de alvo único não serve pro fake (que usa a lista) — deixa claro.
       const al = document.getElementById('cc-alvo');
       if (al) { al.disabled = (tipo === 'fake'); al.style.opacity = (tipo === 'fake') ? '.4' : '1'; }
+      const btn = document.getElementById('cc-armar');
+      if (btn) btn.textContent = '▶ Armar ' + def.rot.toLowerCase();
       if (tipo === 'fake') ccPreviaFake();
       const av = document.getElementById('cc-trem-aviso');
       if (av && tipo === 'nobre') {
@@ -1727,8 +1762,13 @@
           ? '⚠ intervalo de ' + gap + 'ms está perto do erro estimado (±' + e + 'ms) — as ondas podem trocar de ordem.'
           : '';
       }
+      ccRenderOrigens();   // origens dependem do tipo (trem exige uma origem só)
     };
-    document.querySelectorAll('input[name="cc-tipo"]').forEach((r) => r.addEventListener('change', attTrem));
+    document.querySelectorAll('.cc-aba').forEach((el) => {
+      el.addEventListener('click', () => { config.cmd.tipo = el.getAttribute('data-tipo'); save(); attTrem(); });
+      el.addEventListener('mouseenter', () => { if (el.getAttribute('data-tipo') !== ccTipo()) el.style.color = '#cbb98f'; });
+      el.addEventListener('mouseleave', attTrem);
+    });
     const gapEl = document.getElementById('cc-trem-gap'); if (gapEl) gapEl.addEventListener('input', attTrem);
     attTrem();
 

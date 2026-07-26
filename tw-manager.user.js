@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.26.0
+// @version      9.27.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.26.0';
+  const VERSION = '9.27.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -114,6 +114,8 @@
     suporteOkAt: 0,         // quando o autoteste de apoio passou (0 = nunca)
     hist: [],               // últimos envios com o desvio medido
     calib: { biasMs: 0, n: 0 },   // laço fechado: erro medido -> correção do lead
+    mundo: { speed: null, unitSpeed: null, unidades: null, at: 0, confiavel: false },
+    origens: {},            // vid -> true (origens marcadas)
   });
   const defMap = () => ({
     running: false, nextAt: 0,
@@ -262,6 +264,8 @@
     if (!c.cmd.suporteParam) c.cmd.suporteParam = 'support';
     if (c.cmd.suporteOkAt == null) c.cmd.suporteOkAt = 0;
     if (!c.cmd.calib) c.cmd.calib = { biasMs: 0, n: 0 };
+    if (!c.cmd.mundo) c.cmd.mundo = { speed: null, unitSpeed: null, unidades: null, at: 0, confiavel: false };
+    if (!c.cmd.origens) c.cmd.origens = {};
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -722,6 +726,20 @@
       const p = await cmdPrepare(c.origin, c.x, c.y, c.amounts, ehApoio ? 'support' : 'attack');
       if (!p.dur) throw new Error('servidor não devolveu a duração');
       ancorar();                                    // reancora o relógio junto do preparo
+      // O servidor é a verdade. Se a estimativa local divergir, corrige o fator do mundo —
+      // assim a UI para de mentir mesmo que /interface.php tenha falhado.
+      const est = ccEstimaDeComando(c);
+      if (est && p.dur) {
+        const razao = est / (p.dur * 1000);
+        if (razao > 1.02 || razao < 0.98) {
+          const m = config.cmd.mundo;
+          m.fatorAjuste = (m.fatorAjuste || 1) * razao;
+          m.confiavel = false;
+          pushLog('Tempo local divergia ' + Math.round((razao - 1) * 100) + '% do servidor — fator do mundo corrigido.', 'err', 'cmd');
+        } else if (!config.cmd.mundo.confiavel) {
+          config.cmd.mundo.confiavel = true;
+        }
+      }
       c.durMs = p.dur * 1000;
       c.prep = { action: p.action, params: p.params, body: p.body };   // body pré-serializado
       c.tipoConfirmado = p.tipoDetectado;
@@ -855,22 +873,125 @@
     cmdTick();
   }
 
+  // ==================== TEMPO DE VIAGEM (cálculo local) ====================
+  // Sem isso, saber o horário de saída exigiria um "confirmar" por origem/composição.
+  // Com isso a UI mostra o tempo de todas as origens na hora; o servidor continua sendo a
+  // verdade final no preparo, e se divergir a gente avisa.
+  const SPEED_BASE = {   // minutos por campo em mundo velocidade 1 — reserva se /interface.php falhar
+    spear: 18, sword: 22, axe: 18, archer: 18, spy: 9, light: 10,
+    marcher: 10, heavy: 11, ram: 30, catapult: 30, knight: 10, snob: 35,
+  };
+  async function ccMundo(forcar) {
+    const m = config.cmd.mundo || (config.cmd.mundo = {});
+    if (!forcar && m.at && (Date.now() - m.at) < 7 * 864e5 && m.unidades) return m;
+    const px = (t) => new DOMParser().parseFromString(t, 'text/xml');
+    try {
+      const cfg = px(await (await fetch('/interface.php?func=get_config', { credentials: 'include' })).text());
+      const num = (q) => { const e = cfg.querySelector(q); return e ? parseFloat(e.textContent) : null; };
+      m.speed = num('config > speed') || num('speed') || 1;
+      m.unitSpeed = num('config > unit_speed') || num('unit_speed') || 1;
+      const ui = px(await (await fetch('/interface.php?func=get_unit_info', { credentials: 'include' })).text());
+      const un = {};
+      UNITS.forEach(([u]) => { const e = ui.querySelector(u + ' > speed'); un[u] = e ? parseFloat(e.textContent) : SPEED_BASE[u]; });
+      m.unidades = un; m.at = Date.now(); m.confiavel = true;
+    } catch (e) {
+      m.speed = m.speed || 1; m.unitSpeed = m.unitSpeed || 1;
+      m.unidades = m.unidades || Object.assign({}, SPEED_BASE);
+      m.at = Date.now(); m.confiavel = false;
+      pushLog('Não li /interface.php — usando a tabela de velocidades embutida.', 'err', 'cmd');
+    }
+    save();
+    return m;
+  }
+  // O comando anda na velocidade da unidade MAIS LENTA que vai junto.
+  function ccUnidadeLenta(amounts) {
+    const un = (config.cmd.mundo && config.cmd.mundo.unidades) || SPEED_BASE;
+    let lenta = null, v = -1;
+    Object.entries(amounts || {}).forEach(([u, n]) => { if (n > 0 && (un[u] || 0) > v) { v = un[u]; lenta = u; } });
+    return lenta;
+  }
+  function ccTempoViagemMs(ox, oy, tx, ty, amounts) {
+    const m = config.cmd.mundo || {}, un = m.unidades || SPEED_BASE;
+    const lenta = ccUnidadeLenta(amounts);
+    if (!lenta) return null;
+    const d = fieldDist(+ox, +oy, +tx, +ty);
+    if (!d) return null;
+    // fatorAjuste sai da comparação com o servidor no preparo: conserta a estimativa
+    // mesmo quando /interface.php falhou e a tabela de reserva está errada.
+    const fator = (m.speed || 1) * (m.unitSpeed || 1) * (m.fatorAjuste || 1);
+    const minPorCampo = un[lenta] / fator;
+    return Math.round(d * minPorCampo * 60) * 1000;
+  }
+  // Estimativa local para um comando já montado (usa a origem real dele).
+  function ccEstimaDeComando(c) {
+    const v = CCVILAS.find((z) => String(z.vid) === String(c.origin));
+    if (!v || v.x == null) return null;
+    return ccTempoViagemMs(v.x, v.y, c.x, c.y, c.amounts);
+  }
+
+  // Tropas de TODAS as aldeias numa requisição só (em vez de uma por aldeia).
+  let _tropasCache = null, _tropasCacheAt = 0;
+  async function ccTropasTodasAldeias(forcar) {
+    if (!forcar && _tropasCache && Date.now() - _tropasCacheAt < 60000) return _tropasCache;
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    // Descobre a ordem das colunas pelo cabeçalho (varia por mundo: com/sem arqueiro, paladino…)
+    const ordem = [];
+    doc.querySelectorAll('th img[src*="unit_"], th [class*="unit-item-"]').forEach((el) => {
+      const s = el.getAttribute('src') || el.className || '';
+      const mm = s.match(/unit[_-](\w+?)(?:\.png|\b)/);
+      if (mm && !ordem.includes(mm[1])) ordem.push(mm[1]);
+    });
+    const out = {};
+    doc.querySelectorAll('tr').forEach((tr) => {
+      const q = tr.querySelector('span.quickedit-vn[data-id], .quickedit-out[data-id]');
+      if (!q) return;
+      const vid = q.getAttribute('data-id'); if (!vid) return;
+      const lbl = tr.querySelector('.quickedit-label');
+      const cm = lbl ? (lbl.textContent || '').match(/(\d{1,3})\|(\d{1,3})/) : null;
+      const nums = Array.from(tr.querySelectorAll('td.unit-item')).map((td) => parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0);
+      if (!nums.length) return;
+      const avail = {};
+      (ordem.length ? ordem : UNITS.map((u) => u[0])).forEach((u, i) => { if (nums[i] != null) avail[u] = nums[i]; });
+      out[vid] = { vid: vid, x: cm ? +cm[1] : null, y: cm ? +cm[2] : null, coord: cm ? (cm[1] + '|' + cm[2]) : null, avail: avail };
+    });
+    _tropasCache = out; _tropasCacheAt = Date.now();
+    return out;
+  }
+
   // ==================== CENTRO DE COMANDO (praça de reunião) ====================
   function telaAtual() {
     try { return new URLSearchParams(location.search).get('screen') || (window.game_data && window.game_data.screen) || ''; } catch (e) { return ''; }
   }
-  // Lê as caixas de tropa da própria praça — o que o usuário já digitou na tela.
-  function tropasDaTela() {
-    const a = {};
+  // Composição digitada no PRÓPRIO centro de comando (não nas caixas do jogo).
+  // { amounts: {unidade:n}, max: {unidade:true} } — "max" = mandar tudo o que a origem tiver.
+  function ccComposicao() {
+    const amounts = {}, max = {};
     UNITS.forEach(([u]) => {
-      const el = document.querySelector('#unit_input_' + u);
-      const n = el ? (parseInt(el.value, 10) || 0) : 0;
-      if (n > 0) a[u] = n;
+      const inp = document.getElementById('cc-u-' + u);
+      const chk = document.getElementById('cc-max-' + u);
+      if (chk && chk.checked) { max[u] = true; return; }
+      const n = inp ? (parseInt(inp.value, 10) || 0) : 0;
+      if (n > 0) amounts[u] = n;
     });
+    return { amounts: amounts, max: max };
+  }
+  // Resolve a composição para UMA origem: o "max" vira o estoque real daquela aldeia.
+  function ccResolverPara(comp, avail) {
+    const a = {};
+    Object.entries(comp.amounts).forEach(([u, n]) => { a[u] = n; });
+    Object.keys(comp.max).forEach((u) => { const t = (avail && avail[u]) || 0; if (t > 0) a[u] = t; });
     return a;
   }
-  function cmdAdicionar(tipo, x, y, amounts, arriveAt) {
-    const c = { id: genId(), tipo: tipo, origin: CUR_VID, x: String(x), y: String(y),
+  // Serve só pra estimar o tempo antes de saber o estoque: "max" conta como 1 unidade,
+  // porque o que importa pra velocidade é QUAL unidade vai, não quantas.
+  function ccCompParaVelocidade(comp) {
+    const a = Object.assign({}, comp.amounts);
+    Object.keys(comp.max).forEach((u) => { if (!a[u]) a[u] = 1; });
+    return a;
+  }
+  function cmdAdicionar(tipo, x, y, amounts, arriveAt, origem) {
+    const c = { id: genId(), tipo: tipo, origin: origem || CUR_VID, x: String(x), y: String(y),
                 amounts: amounts, arriveAt: arriveAt, durMs: null, sendAt: 0, fireAt: 0,
                 prep: null, state: 'novo', erro: null, sentAt: null, desvioMs: null };
     config.cmd.fila.push(c); save();
@@ -880,11 +1001,11 @@
   // Trem de nobres: N comandos da MESMA origem pro MESMO alvo, chegando colados.
   // Como origem, destino e composição são iguais, a duração é a mesma — então o intervalo
   // entre as chegadas é exatamente o intervalo entre os disparos.
-  function cmdTrem(x, y, amounts, chegaEm, n, gapMs) {
+  function cmdTrem(x, y, amounts, chegaEm, n, gapMs, origem) {
     const g = Math.max(0, gapMs || config.cmd.trainGapMs || 150);
     const criados = [];
     for (let i = 0; i < n; i++) {
-      const c = { id: genId(), tipo: 'nobre', origin: CUR_VID, x: String(x), y: String(y),
+      const c = { id: genId(), tipo: 'nobre', origin: origem || CUR_VID, x: String(x), y: String(y),
                   amounts: amounts, arriveAt: chegaEm + i * g, onda: i + 1, ondas: n,
                   durMs: null, sendAt: 0, fireAt: 0, prep: null,
                   state: 'novo', erro: null, sentAt: null, desvioMs: null };
@@ -945,31 +1066,140 @@
     diz(linhas.join('<br>'));
   }
 
+  // Arma um comando POR ORIGEM marcada, todos com a MESMA chegada — é isso que faz
+  // apoio/ataque de várias aldeias pousar junto.
   function ccArmar() {
-    const x = (document.getElementById('cc-x').value || '').trim();
-    const y = (document.getElementById('cc-y').value || '').trim();
-    const arr = (document.getElementById('cc-arr').value || '').trim();
-    const tipo = (document.querySelector('input[name="cc-tipo"]:checked') || {}).value || 'attack';
     const msg = document.getElementById('cc-msg');
     const dizer = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#ff7568'; } };
-    if (!/^\d{1,3}$/.test(x) || !/^\d{1,3}$/.test(y)) return dizer('Coordenada inválida.');
-    if (!arr) return dizer('Defina o horário de chegada.');
-    const arriveAt = arrivalToServerMs(arr);
-    if (!arriveAt) return dizer('Horário de chegada inválido.');
+    const tipo = (document.querySelector('input[name="cc-tipo"]:checked') || {}).value || 'attack';
+
+    const alvo = ccAlvo();
+    if (!alvo) return dizer('Alvo inválido. Use 478|586.');
+    const arriveAt = ccChegadaMs();
+    if (!arriveAt) return dizer('Defina o horário de chegada.');
     if (arriveAt <= srvNowP()) return dizer('Esse horário já passou.');
-    const amounts = tropasDaTela();
-    if (!Object.keys(amounts).length) return dizer('Digite as tropas nas caixas da praça de reunião.');
     if (tipo === 'support' && !config.cmd.suporteOkAt) {
       return dizer('Rode o teste de apoio antes — o parâmetro ainda não foi confirmado neste mundo.');
     }
-    if (tipo === 'nobre') {
-      const n = Math.max(2, Math.min(8, parseInt(document.getElementById('cc-trem-n').value, 10) || 4));
-      const gap = Math.max(50, parseInt(document.getElementById('cc-trem-gap').value, 10) || 150);
-      cmdTrem(x, y, amounts, arriveAt, n, gap);
-      return dizer(n + ' ondas armadas, ' + gap + 'ms entre elas, a primeira em ' + srvClockMs(arriveAt) + '.', '#8fe39a');
+    const comp = ccComposicao();
+    if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) {
+      return dizer('Escolha as tropas aqui em cima.');
     }
-    cmdAdicionar(tipo, x, y, amounts, arriveAt);
-    dizer('Comando armado para ' + srvClockMs(arriveAt) + '.', '#8fe39a');
+    const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid]);
+    if (!marcadas.length) return dizer('Marque ao menos uma origem.');
+
+    // Trem de nobres só faz sentido de uma origem só (as ondas têm que sair da mesma aldeia).
+    if (tipo === 'nobre') {
+      if (marcadas.length !== 1) return dizer('O trem sai de uma origem só — marque apenas uma.');
+      const n = Math.max(2, Math.min(8, parseInt((document.getElementById('cc-trem-n') || {}).value, 10) || 4));
+      const gap = Math.max(50, parseInt((document.getElementById('cc-trem-gap') || {}).value, 10) || 150);
+      const amounts = ccResolverPara(comp, marcadas[0].avail);
+      cmdTrem(alvo.x, alvo.y, amounts, arriveAt, n, gap, marcadas[0].vid);
+      return dizer(n + ' ondas armadas de ' + (marcadas[0].coord || marcadas[0].vid) + ', ' + gap + 'ms entre elas.', '#8fe39a');
+    }
+
+    let armados = 0, pulados = [];
+    marcadas.forEach((v) => {
+      const amounts = ccResolverPara(comp, v.avail);
+      if (!Object.keys(amounts).length) { pulados.push(v.coord || v.vid); return; }
+      // Checa se dá tempo: se a viagem é mais longa que o tempo até a chegada, é impossível.
+      const t = (v.x != null) ? ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, amounts) : null;
+      if (t != null && (arriveAt - t) <= srvNowP()) { pulados.push((v.coord || v.vid) + ' (longe demais)'); return; }
+      cmdAdicionar(tipo, alvo.x, alvo.y, amounts, arriveAt, v.vid);
+      armados++;
+    });
+    if (!armados) return dizer('Nenhum comando armado. ' + (pulados.length ? 'Pulados: ' + pulados.join(', ') : ''));
+    dizer(armados + ' comando(s) armado(s) chegando ' + srvClockMs(arriveAt) +
+          (pulados.length ? ' · pulados: ' + pulados.join(', ') : ''), '#8fe39a');
+  }
+
+  // Alvo: aceita "478|586", "478 586", "478|586:1" etc.
+  function ccAlvo() {
+    const raw = ((document.getElementById('cc-alvo') || {}).value || '').trim();
+    const m = raw.match(/(\d{1,3})\s*[|\s.,;:-]\s*(\d{1,3})/);
+    return m ? { x: m[1], y: m[2], coord: m[1] + '|' + m[2] } : null;
+  }
+
+  // Lista de origens: cada aldeia sua com distância, tempo de viagem pela unidade mais lenta
+  // e se tem tropa suficiente. É o que permite escolher de onde sai o quê.
+  let CCVILAS = [];
+  async function ccCarregarOrigens(forcar) {
+    const cont = document.getElementById('cc-origens');
+    if (cont && !CCVILAS.length) cont.innerHTML = '<div style="color:#8f7d57;padding:6px;font-size:10px">carregando aldeias…</div>';
+    try {
+      await ccMundo(false);
+      const tropas = await ccTropasTodasAldeias(forcar);
+      CCVILAS = Object.values(tropas).filter((v) => v.coord);
+      if (!CCVILAS.length) {   // conta de 1 aldeia ou parser não pegou: cai pro básico
+        const st = await getVillageState(CUR_VID);
+        CCVILAS = [{ vid: CUR_VID, coord: null, x: null, y: null, avail: st.avail }];
+      }
+    } catch (e) {
+      pushLog('Centro de Comando: não li as tropas das aldeias (' + (e.message || e) + ').', 'err', 'cmd');
+    }
+    ccRenderOrigens();
+  }
+  function ccRenderOrigens() {
+    const cont = document.getElementById('cc-origens'); if (!cont) return;
+    const alvo = ccAlvo();
+    const comp = ccComposicao();
+    const compVel = ccCompParaVelocidade(comp);
+    const temComp = Object.keys(compVel).length > 0;
+    const lenta = ccUnidadeLenta(compVel);
+    const sel = config.cmd.origens || {};
+
+    const linhas = CCVILAS.map((v) => {
+      const d = (alvo && v.x != null) ? fieldDist(v.x, v.y, +alvo.x, +alvo.y) : null;
+      const t = (alvo && temComp && v.x != null) ? ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, compVel) : null;
+      // Tem tropa pro que foi pedido? (o "max" sempre tem, por definição)
+      let falta = null;
+      Object.entries(comp.amounts).forEach(([u, n]) => { if ((v.avail[u] || 0) < n) falta = (falta || 0) + 1; });
+      Object.keys(comp.max).forEach((u) => { if (!(v.avail[u] > 0)) falta = (falta || 0) + 1; });
+      return { v: v, d: d, t: t, falta: falta };
+    });
+    linhas.sort((a, b) => (a.d == null ? 1e9 : a.d) - (b.d == null ? 1e9 : b.d));
+
+    cont.innerHTML = linhas.map((L) => {
+      const v = L.v, on = !!sel[v.vid];
+      const cor = L.falta ? '#ff7568' : '#8fe39a';
+      return '<label style="display:grid;grid-template-columns:18px 74px 52px 78px 1fr;gap:6px;align-items:center;' +
+             'padding:2px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px;cursor:pointer">' +
+        '<input type="checkbox" data-cc-org="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
+        '<span style="color:#e6cf7d">' + esc(v.coord || v.vid) + '</span>' +
+        '<span style="color:#8f7d57">' + (L.d == null ? '—' : L.d.toFixed(1) + ' c') + '</span>' +
+        '<span style="color:#cbb98f">' + (L.t == null ? '—' : fmt(L.t)) + '</span>' +
+        '<span style="color:' + cor + '">' + (L.falta ? '⚠ sem tropa' : (L.t == null ? '' : 'sai ' + srvClockMs(ccChegadaMs() - L.t))) + '</span>' +
+      '</label>';
+    }).join('') || '<div style="color:#8f7d57;padding:6px;font-size:10px">— nenhuma aldeia —</div>';
+
+    cont.querySelectorAll('[data-cc-org]').forEach((el) => {
+      el.onchange = () => {
+        config.cmd.origens[el.getAttribute('data-cc-org')] = el.checked;
+        if (!el.checked) delete config.cmd.origens[el.getAttribute('data-cc-org')];
+        save(); ccResumo();
+      };
+    });
+    // Aviso quando a velocidade vier da tabela de reserva em vez do servidor.
+    const av = document.getElementById('cc-vel-aviso');
+    if (av) {
+      const m = config.cmd.mundo || {};
+      av.innerHTML = !temComp ? '<span style="color:#8f7d57">digite as tropas pra ver os tempos</span>'
+        : ('unidade mais lenta: <b>' + (lenta || '—') + '</b> · mundo ' + (m.speed || 1) + '×/' + (m.unitSpeed || 1) + '×' +
+           (m.confiavel ? '' : ' · <span style="color:#ffd76a">velocidades de reserva (o servidor confirma no preparo)</span>'));
+    }
+    ccResumo();
+  }
+  function ccChegadaMs() {
+    const el = document.getElementById('cc-chegada');
+    return arrivalToServerMs((el && el.value) || '') || 0;
+  }
+  function ccResumo() {
+    const el = document.getElementById('cc-resumo'); if (!el) return;
+    const n = Object.keys(config.cmd.origens || {}).filter((k) => config.cmd.origens[k]).length;
+    const alvo = ccAlvo();
+    const ch = ccChegadaMs();
+    el.textContent = n + ' origem(ns) marcada(s)' + (alvo ? ' → ' + alvo.coord : '') +
+                     (ch ? ' · chegando ' + srvClockMs(ch) : '');
   }
 
   function ccRender() {
@@ -981,8 +1211,12 @@
     box.innerHTML = f.slice().sort((a, b) => (a.arriveAt || 0) - (b.arriveAt || 0)).map((c) => {
       const falta = c.fireAt ? (c.fireAt - agora) : (c.arriveAt - agora);
       const dev = (c.desvioMs == null) ? '' : ((c.desvioMs >= 0 ? '+' : '') + c.desvioMs + 'ms');
-      return '<div style="display:grid;grid-template-columns:44px 66px 1fr 74px 62px 20px;gap:4px;align-items:center;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px">' +
-        '<span style="color:' + (c.tipo === 'support' ? '#7fc8ff' : '#ffb08a') + '">' + (c.tipo === 'support' ? 'apoio' : c.tipo === 'fake' ? 'fake' : 'ataque') + '</span>' +
+      const vo = CCVILAS.find((z) => String(z.vid) === String(c.origin));
+      const org = vo ? (vo.coord || vo.vid) : c.origin;
+      const rot = { support: 'apoio', fake: 'fake', nobre: 'nobre' }[c.tipo] || 'ataque';
+      return '<div style="display:grid;grid-template-columns:44px 66px 66px 1fr 74px 62px 20px;gap:4px;align-items:center;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px">' +
+        '<span style="color:' + (c.tipo === 'support' ? '#7fc8ff' : '#ffb08a') + '">' + rot + (c.ondas ? ' ' + c.onda + '/' + c.ondas : '') + '</span>' +
+        '<span style="color:#8f7d57" title="origem">' + esc(String(org)) + '</span>' +
         '<span style="color:#e6cf7d">' + esc(c.x + '|' + c.y) + '</span>' +
         '<span style="color:' + (corDe[c.state] || '#cbb98f') + '">' + esc(c.state) + (c.erro ? ' · ' + esc(c.erro.slice(0, 40)) : '') + '</span>' +
         '<span style="color:#cbb98f">' + (c.arriveAt ? srvClockMs(c.arriveAt) : '—') + '</span>' +
@@ -1036,10 +1270,12 @@
       '</div>' +
       '<div id="cc-saude" style="font-size:10px;color:#cbb98f;margin-bottom:4px"></div>' +
       '<div id="cc-silencio" style="font-size:10px;color:#ffd76a;margin-bottom:8px;min-height:12px"></div>' +
-      row('Alvo (X | Y)',
-        '<input id="cc-x" class="twmgr-inp" type="number" min="1" max="999" style="width:64px" placeholder="X">' +
-        '<input id="cc-y" class="twmgr-inp" type="number" min="1" max="999" style="width:64px" placeholder="Y">') +
-      row('Chegada (servidor)', '<input id="cc-arr" class="twmgr-inp" type="datetime-local" step="0.001" style="width:230px">') +
+      row('Alvo',
+        '<input id="cc-alvo" class="twmgr-inp" style="width:130px;font-variant-numeric:tabular-nums" placeholder="478|586">' +
+        '<span id="cc-alvo-ok" style="font-size:10px;color:#8f7d57"></span>') +
+      row('Chegada (servidor)',
+        '<input id="cc-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:230px">' +
+        '<button id="cc-ch-agora" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="preenche com a hora do servidor + 10 min">+10min</button>') +
       row('Tipo',
         '<label style="margin-right:10px"><input type="radio" name="cc-tipo" value="attack" checked> ⚔ Ataque</label>' +
         '<label style="margin-right:10px"><input type="radio" name="cc-tipo" value="support"> 🛡 Apoio</label>' +
@@ -1052,7 +1288,44 @@
           '<span style="color:#8f7d57">ms</span>') +
         '<div id="cc-trem-aviso" style="font-size:10px;color:#ffd76a;margin:2px 0 6px"></div>' +
       '</div>' +
-      '<div style="font-size:10px;color:#8f7d57;margin:4px 0 8px">As tropas são as que você digitar nas caixas da praça, aqui embaixo.</div>' +
+      // Tropas digitadas AQUI, não nas caixas do jogo. "tudo" = manda o estoque inteiro daquela origem.
+      '<div style="margin:8px 0 4px;border-top:1px solid #3a2e1b;padding-top:6px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
+          '<span style="font-size:10px;color:#e8d29a;font-weight:600">Tropas por origem</span>' +
+          '<span style="font-size:10px">' +
+            '<a id="cc-tpl-tudo" style="cursor:pointer;color:#e6cf7d">tudo</a> · ' +
+            '<a id="cc-tpl-nobre" style="cursor:pointer;color:#e6cf7d">nobre</a> · ' +
+            '<a id="cc-tpl-fake" style="cursor:pointer;color:#e6cf7d">fake</a> · ' +
+            '<a id="cc-tpl-limpar" style="cursor:pointer;color:#e6cf7d">limpar</a>' +
+          '</span>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px">' +
+          UNITS.map(([u, n]) =>
+            '<div style="text-align:center">' +
+              '<div style="font-size:9px;color:#cbb98f;height:14px">' + unitIcon(u, n) + '</div>' +
+              '<input id="cc-u-' + u + '" class="twmgr-inp cc-un" type="number" min="0" style="width:100%;padding:2px;text-align:center" placeholder="0">' +
+              '<label style="font-size:9px;color:#8f7d57;display:block;cursor:pointer">' +
+                '<input id="cc-max-' + u + '" class="cc-mx" type="checkbox"> tudo</label>' +
+            '</div>').join('') +
+        '</div>' +
+      '</div>' +
+      // Origens: cada aldeia com distância e tempo já calculados pela unidade mais lenta.
+      '<div style="margin:8px 0 4px;border-top:1px solid #3a2e1b;padding-top:6px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
+          '<span style="font-size:10px;color:#e8d29a;font-weight:600">Origens</span>' +
+          '<span style="font-size:10px">' +
+            '<a id="cc-org-todas" style="cursor:pointer;color:#e6cf7d">todas</a> · ' +
+            '<a id="cc-org-nenhuma" style="cursor:pointer;color:#e6cf7d">nenhuma</a> · ' +
+            '<a id="cc-org-viaveis" style="cursor:pointer;color:#e6cf7d">só as que dão tempo</a> · ' +
+            '<a id="cc-org-recarregar" style="cursor:pointer;color:#e6cf7d">↻</a>' +
+          '</span>' +
+        '</div>' +
+        '<div id="cc-vel-aviso" style="font-size:10px;color:#8f7d57;margin-bottom:3px"></div>' +
+        '<div style="display:grid;grid-template-columns:18px 74px 52px 78px 1fr;gap:6px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
+          '<span></span><span>aldeia</span><span>dist.</span><span>viagem</span><span>saída</span></div>' +
+        '<div id="cc-origens" style="max-height:170px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
+        '<div id="cc-resumo" style="font-size:10px;color:#cbb98f;margin-top:3px"></div>' +
+      '</div>' +
       '<div style="display:flex;gap:6px;align-items:center">' +
         '<button id="cc-armar" class="twmgr-btn twmgr-go" style="flex:1">▶ Armar comando</button>' +
         '<button id="cc-teste" class="twmgr-btn twmgr-ghost" title="faz só o confirmar, não envia">🔍 Testar apoio</button>' +
@@ -1062,6 +1335,8 @@
       '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
       '<div style="margin-top:8px;border-top:1px solid #3a2e1b;padding-top:6px">' +
         '<div style="font-size:10px;color:#e8d29a;font-weight:600;margin-bottom:3px">Fila</div>' +
+        '<div style="display:grid;grid-template-columns:44px 66px 66px 1fr 74px 62px 20px;gap:4px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
+          '<span>tipo</span><span>de</span><span>para</span><span>estado</span><span>chegada</span><span>falta</span><span></span></div>' +
         '<div id="cc-fila" style="max-height:180px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
       '</div>';
     host.insertBefore(d, host.firstChild);
@@ -1088,6 +1363,70 @@
     document.querySelectorAll('input[name="cc-tipo"]').forEach((r) => r.addEventListener('change', attTrem));
     const gapEl = document.getElementById('cc-trem-gap'); if (gapEl) gapEl.addEventListener('input', attTrem);
     attTrem();
+
+    // Qualquer mudança em alvo/tropa/chegada recalcula os tempos das origens.
+    const recalc = () => { ccRenderOrigens(); };
+    const alvoEl = document.getElementById('cc-alvo');
+    alvoEl.addEventListener('input', () => {
+      const a = ccAlvo();
+      const ok = document.getElementById('cc-alvo-ok');
+      if (ok) { ok.textContent = a ? '✓ ' + a.coord : (alvoEl.value ? '✗ formato' : ''); ok.style.color = a ? '#8fe39a' : '#ff7568'; }
+      recalc();
+    });
+    document.getElementById('cc-chegada').addEventListener('input', recalc);
+    document.querySelectorAll('.cc-un').forEach((el) => el.addEventListener('input', recalc));
+    // Marcar "tudo" desabilita a caixa de número da mesma unidade — os dois juntos confundem.
+    document.querySelectorAll('.cc-mx').forEach((el) => el.addEventListener('change', () => {
+      const u = el.id.replace('cc-max-', '');
+      const inp = document.getElementById('cc-u-' + u);
+      if (inp) { inp.disabled = el.checked; if (el.checked) inp.value = ''; }
+      recalc();
+    }));
+
+    // Atalho: chegada = agora + 10 min, já no formato que o campo aceita.
+    document.getElementById('cc-ch-agora').addEventListener('click', () => {
+      const alvoMs = serverNow() + 600000 - wallToServerOffset();
+      const d = new Date(alvoMs), p = (n, w) => String(n).padStart(w || 2, '0');
+      document.getElementById('cc-chegada').value =
+        d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' +
+        p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + '.' + p(d.getMilliseconds(), 3);
+      recalc();
+    });
+
+    // Modelos de tropa
+    const limpar = () => {
+      UNITS.forEach(([u]) => {
+        const i = document.getElementById('cc-u-' + u), m = document.getElementById('cc-max-' + u);
+        if (i) { i.value = ''; i.disabled = false; }
+        if (m) m.checked = false;
+      });
+    };
+    const marcarMax = (lista) => { limpar(); lista.forEach((u) => {
+      const m = document.getElementById('cc-max-' + u), i = document.getElementById('cc-u-' + u);
+      if (m) m.checked = true; if (i) i.disabled = true;
+    }); };
+    document.getElementById('cc-tpl-limpar').onclick = () => { limpar(); recalc(); };
+    document.getElementById('cc-tpl-tudo').onclick = () => { marcarMax(UNITS.map((u) => u[0]).filter((u) => u !== 'snob')); recalc(); };
+    document.getElementById('cc-tpl-nobre').onclick = () => { limpar(); const s = document.getElementById('cc-u-snob'); if (s) s.value = '1'; recalc(); };
+    document.getElementById('cc-tpl-fake').onclick = () => { limpar(); const r = document.getElementById('cc-u-ram'); if (r) r.value = '1'; const e = document.getElementById('cc-u-spy'); if (e) e.value = '1'; recalc(); };
+
+    // Seleção de origens
+    document.getElementById('cc-org-todas').onclick = () => { CCVILAS.forEach((v) => config.cmd.origens[v.vid] = true); save(); ccRenderOrigens(); };
+    document.getElementById('cc-org-nenhuma').onclick = () => { config.cmd.origens = {}; save(); ccRenderOrigens(); };
+    document.getElementById('cc-org-recarregar').onclick = () => ccCarregarOrigens(true);
+    document.getElementById('cc-org-viaveis').onclick = () => {
+      const alvo = ccAlvo(), ch = ccChegadaMs(), comp = ccCompParaVelocidade(ccComposicao());
+      if (!alvo || !ch) return;
+      config.cmd.origens = {};
+      CCVILAS.forEach((v) => {
+        if (v.x == null) return;
+        const t = ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, comp);
+        if (t != null && (ch - t) > srvNowP()) config.cmd.origens[v.vid] = true;
+      });
+      save(); ccRenderOrigens();
+    };
+
+    ccCarregarOrigens(false);
     setInterval(ccTick, 100);        // relógio com milésimos precisa de tick rápido
     ccTick();
     netProbe(5);

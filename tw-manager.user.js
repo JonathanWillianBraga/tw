@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.0.0
+// @version      10.1.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.0.0';
+  const VERSION = '10.1.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -3373,11 +3373,28 @@
     // Roda também quando os IDs já foram achados: é a ÚNICA fonte das UNIDADES de cada template, e
     // antes ficava de fora sempre que as estratégias 1/2 davam certo (ids ok, unidades vazias).
     if (!out.a || !out.b || !Object.keys(out.unitsA).length || !Object.keys(out.unitsB).length) {
-      const m = html.match(/templates\s*[:=]\s*(\[[\s\S]{0,4000}?\])/);
+      // Aceita templates:[…] · "templates":[…] · templates = {…}. E em vez de regex não-gulosa (que
+      // parava no primeiro ] e quebrava com aninhamento), varre contando colchetes/chaves.
+      const anchor = html.search(new RegExp('[\'"]?templates[\'"]?\\s*[:=]\\s*[[{]'));
+      let raw = null;
+      if (anchor >= 0) {
+        let i = anchor; while (i < html.length && html[i] !== '[' && html[i] !== '{') i++;
+        const open = html[i], close = open === '[' ? ']' : '}';
+        let depth = 0, j = i, q = null;
+        for (; j < html.length && j - i < 20000; j++) {
+          const ch = html[j];
+          if (q) { if (ch === '\\') j++; else if (ch === q) q = null; continue; }
+          if (ch === '"' || ch === "'") { q = ch; continue; }
+          if (ch === open) depth++;
+          else if (ch === close) { depth--; if (!depth) { raw = html.slice(i, j + 1); break; } }
+        }
+      }
+      const m = raw ? [null, raw] : null;
       if (!m) out.debug.push('inline JS: bloco templates não encontrado');
       if (m) {
         try {
-          const parsed = JSON.parse(m[1].replace(/(\w+):/g, '"$1":').replace(/'/g, '"'));
+          let parsed = JSON.parse(m[1].replace(new RegExp('([{,]\\s*)(\\w+)\\s*:', 'g'), '$1"$2":').replace(/'/g, '"'));
+          if (parsed && !Array.isArray(parsed)) parsed = Object.keys(parsed).map((k) => Object.assign({ id: k }, parsed[k]));
           if (Array.isArray(parsed) && parsed.length) {
             // Casa pelo ID quando ele já é conhecido; só cai na ordem [0]=A,[1]=B se não achar.
             const byId = (id) => (id ? parsed.find((t) => t && String(t.id) === String(id)) : null);
@@ -3389,6 +3406,19 @@
           }
         } catch (e) { out.debug.push('inline JS: JSON não parseável'); }
       }
+    }
+    // Se AINDA não temos as unidades, registra a "cara" da página pra saber onde elas moram de fato,
+    // em vez de tentar seletor no escuro. Sai uma vez, junto do aviso do ciclo.
+    if (!Object.keys(out.unitsA).length && !Object.keys(out.unitsB).length) {
+      const pat = {};
+      doc.querySelectorAll('input[name]').forEach((i) => {
+        const n = i.getAttribute('name') || '';
+        if (UNITS.some((p) => n.indexOf(p[0]) !== -1)) pat[n.replace(/\d+/g, '#')] = 1;
+      });
+      out.debug.push('página: ' + doc.querySelectorAll('form').length + ' form(s), ' +
+        doc.querySelectorAll('input[name="template_id"]').length + ' template_id, campos de unidade: ' +
+        (Object.keys(pat).slice(0, 6).join(' ') || 'nenhum') +
+        (/Accountmanager|AccountManager/.test(html) ? ' · tem Accountmanager' : ' · sem Accountmanager'));
     }
 
     // Extrai unidades dos forms de configuração de cada template

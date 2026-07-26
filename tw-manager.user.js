@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.25.5
+// @version      9.26.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,13 +61,14 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.25.5';
+  const VERSION = '9.26.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
+  const FREEZEKEY = KEY + '_freeze';   // modo silêncio, compartilhado entre abas
   const CSRF = window.game_data.csrf;
   const CUR_VID = String(window.game_data.village.id);
   const CUR_NAME = window.game_data.village.name || ('ID ' + CUR_VID);
@@ -99,6 +100,21 @@
   const BB_TPL = 'main 20\nstorage 20\nfarm 22\nstable 15\nbarracks 15\nsmith 10\ngarage 5\nfarm 24\nstorage 25\nbarracks 20\nstable 20\ngarage 10\nwood 30\nstone 30\niron 30\nstorage 30\nfarm 27\nmarket 15';
   const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, gradMain: 20, gradStable: 15 });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0 });
+  // Centro de Comando (praça de reunião): envios coordenados com precisão de milésimos.
+  const defCmd = () => ({
+    enabled: true,          // interruptor de emergência do módulo inteiro
+    fila: [],               // comandos armados (sobrevivem ao F5)
+    prepLeadSec: 60,        // quanto antes do disparo rodar o "confirmar"
+    silenceLeadSec: 10,     // quanto antes ligar o modo silêncio
+    silenceTailSec: 10,     // quanto tempo sem comando antes de religar os módulos
+    ajusteMs: 0,            // ajuste fino manual por cima da latência medida
+    trainGapMs: 150,        // intervalo alvo entre nobres do trem
+    avancado: false,        // modo fácil x avançado na UI
+    suporteParam: 'support',// parâmetro do apoio — confirmado pelo teste da UI
+    suporteOkAt: 0,         // quando o autoteste de apoio passou (0 = nunca)
+    hist: [],               // últimos envios com o desvio medido
+    calib: { biasMs: 0, n: 0 },   // laço fechado: erro medido -> correção do lead
+  });
   const defMap = () => ({
     running: false, nextAt: 0,
     maxDist: 20, minDaysSinceScout: 2,
@@ -110,7 +126,7 @@
     sentAt: {},                           // vid do bárbaro -> timestamp do último scout nosso
     lastPreview: [],                      // lista mostrada na tabela
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha() });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), wall: defWall(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), cmd: defCmd() });
   function load() {
     let c = def();
     try {
@@ -233,6 +249,19 @@
     if (c.captcha.ntfyTopic == null) c.captcha.ntfyTopic = '';
     if (c.captcha.cooldownSec == null) c.captcha.cooldownSec = 300;
     if (c.captcha.lastNotifiedAt == null) c.captcha.lastNotifiedAt = 0;
+    if (!c.cmd) c.cmd = defCmd();
+    if (c.cmd.enabled == null) c.cmd.enabled = true;
+    if (!Array.isArray(c.cmd.fila)) c.cmd.fila = [];
+    if (!Array.isArray(c.cmd.hist)) c.cmd.hist = [];
+    if (c.cmd.prepLeadSec == null) c.cmd.prepLeadSec = 60;
+    if (c.cmd.silenceLeadSec == null) c.cmd.silenceLeadSec = 10;
+    if (c.cmd.silenceTailSec == null) c.cmd.silenceTailSec = 10;
+    if (c.cmd.ajusteMs == null) c.cmd.ajusteMs = 0;
+    if (c.cmd.trainGapMs == null) c.cmd.trainGapMs = 150;
+    if (c.cmd.avancado == null) c.cmd.avancado = false;
+    if (!c.cmd.suporteParam) c.cmd.suporteParam = 'support';
+    if (c.cmd.suporteOkAt == null) c.cmd.suporteOkAt = 0;
+    if (!c.cmd.calib) c.cmd.calib = { biasMs: 0, n: 0 };
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -244,7 +273,16 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
-  function lockOther() { const l = readLock(); return !!(l && l.id !== TAB_ID && (Date.now() - l.ts) < 12000); }
+  // Congelamento entre abas: todo módulo já consulta lockOther() antes de agir, então basta
+  // esta linha pra que o modo silêncio de UMA aba cale as outras também.
+  function congeladoAgora() {
+    try { const f = JSON.parse(localStorage.getItem(FREEZEKEY) || 'null');
+          return !!(f && f.by !== TAB_ID && Date.now() < f.until); } catch (e) { return false; }
+  }
+  function lockOther() {
+    if (congeladoAgora()) return true;
+    const l = readLock(); return !!(l && l.id !== TAB_ID && (Date.now() - l.ts) < 12000);
+  }
   function claimLock() { localStorage.setItem(LOCKKEY, JSON.stringify({ id: TAB_ID, ts: Date.now() })); }
 
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -398,20 +436,679 @@
   function absUrl(raw) { try { return new URL(raw, location.href).href; } catch (e) { return raw; } }
 
   function serverNow() { try { return window.Timing.getCurrentServerTime(); } catch (e) { return Date.now(); } }
+  // Arredonda pro minuto de propósito. O jogo mostra #serverTime truncado no segundo, então
+  // "serverNow() - wallLocal" carregava um resto aleatório de 0-999ms, diferente a cada leitura —
+  // o que inviabiliza precisão de milésimos. A diferença real entre o fuso do servidor e o do
+  // navegador é sempre um número inteiro de minutos, então arredondar mata o resto por construção.
+  function roundToMinute(ms) { return Math.round(ms / 60000) * 60000; }
   function wallToServerOffset() {
     const ed = document.querySelector('#serverDate'), et = document.querySelector('#serverTime');
-    if (!ed || !et) return serverNow() - Date.now();
+    if (!ed || !et) return roundToMinute(serverNow() - Date.now());
     const dm = (ed.textContent || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
     const tm = (et.textContent || '').match(/(\d{2}):(\d{2}):(\d{2})/);
-    if (!dm || !tm) return serverNow() - Date.now();
+    if (!dm || !tm) return roundToMinute(serverNow() - Date.now());
     const wallLocal = new Date(+dm[3], +dm[2] - 1, +dm[1], +tm[1], +tm[2], +tm[3]).getTime();
-    return serverNow() - wallLocal;
+    return roundToMinute(serverNow() - wallLocal);
   }
   function arrivalToServerMs(dtLocal) {
     if (!dtLocal) return 0;
-    const localMs = new Date(dtLocal).getTime();
+    const localMs = new Date(dtLocal).getTime();   // preserva os milésimos do datetime-local
     if (isNaN(localMs)) return 0;
     return localMs + wallToServerOffset();
+  }
+  // Hora do servidor como relógio de parede, com milésimos: "14:30:07.123"
+  function srvClockMs(ms) {
+    const d = new Date((ms == null ? serverNow() : ms) - wallToServerOffset());
+    const p = (n, w) => String(n).padStart(w || 2, '0');
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + '.' + p(d.getMilliseconds(), 3);
+  }
+  // Mede a latência até o servidor. Usa o MENOR RTT das amostras: é o caminho mais limpo,
+  // sem enfileiramento, e é o que melhor estima o tempo de ida real de um request isolado.
+  let NETLAT = { rttMin: 0, rttMed: 0, jitter: 0, at: 0 };
+  async function netProbe(n) {
+    const s = [];
+    // Alvo minúsculo de propósito: medir /game.php baixaria ~150KB de página renderizada e
+    // o RTT viria inflado, fazendo o comando sair CEDO demais.
+    const alvo = (IMG_BASE ? IMG_BASE + 'graphic/dots/green.png' : '/favicon.ico');
+    for (let i = 0; i < (n || 7); i++) {
+      const t0 = performance.now();
+      try { await fetch(alvo + '?_p=' + Date.now() + '_' + i, { cache: 'no-store', credentials: 'omit' }); } catch (e) {}
+      s.push(performance.now() - t0);
+      await new Promise((r) => setTimeout(r, 60));   // espaça pra não medir a própria fila
+    }
+    s.sort((a, b) => a - b);
+    NETLAT = {
+      rttMin: s[0] || 0,
+      rttMed: s[Math.floor(s.length / 2)] || 0,
+      jitter: (s[Math.floor(s.length * 0.9)] || 0) - (s[0] || 0),   // p90, não o pior caso solto
+      at: Date.now(),
+    };
+    return NETLAT;
+  }
+
+  // ==================== MOTOR DE PRECISÃO ====================
+  // Meta: o comando chegar ao servidor no milésimo exato. Cada camada aqui mata uma fonte
+  // de erro diferente — sozinha nenhuma delas resolve.
+
+  // (1) Antichoke. Em aba de segundo plano o navegador estrangula setTimeout pra ~1 Hz, o que
+  // sozinho já estoura a meta em mais de 1s. Um oscilador mudo mantém a aba classificada como
+  // "tocando áudio", e aí o estrangulamento não se aplica.
+  let _wakeCtx = null, _wakeOsc = null;
+  function keepAwake(on) {
+    try {
+      if (on) {
+        if (!_wakeCtx) _wakeCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (_wakeCtx.state === 'suspended') _wakeCtx.resume();
+        if (!_wakeOsc) {
+          const g = _wakeCtx.createGain(); g.gain.value = 0;   // ganho zero: inaudível
+          const o = _wakeCtx.createOscillator();
+          o.connect(g); g.connect(_wakeCtx.destination); o.start();
+          _wakeOsc = o;
+        }
+      } else if (_wakeOsc) {
+        try { _wakeOsc.stop(); } catch (e) {}
+        _wakeOsc = null;
+      }
+    } catch (e) { /* sem áudio disponível: segue com o worker + spin */ }
+  }
+  // O AudioContext nasce 'suspended' e só sai disso dentro de um gesto do usuário. Chamado de um
+  // timer ele fica inerte — por isso keepAwake(true) tem que rodar no clique, e por isso a UI
+  // precisa saber se ele realmente pegou.
+  function awakeAtivo() { return !!(_wakeCtx && _wakeCtx.state === 'running' && _wakeOsc); }
+
+  // (2) Timer grosso num Web Worker (Blob URL, compatível com @grant none). Worker sofre bem
+  // menos estrangulamento que a thread principal.
+  const TICKER_SRC = 'let t=null;onmessage=function(e){if(e.data&&e.data.cmd==="start"){clearInterval(t);t=setInterval(function(){postMessage(0);},e.data.ms||25);}else{clearInterval(t);t=null;}};';
+  function makeTicker(ms, cb) {
+    try {
+      const w = new Worker(URL.createObjectURL(new Blob([TICKER_SRC], { type: 'text/javascript' })));
+      w.onmessage = cb;
+      w.postMessage({ cmd: 'start', ms: ms });
+      return { stop: function () { try { w.postMessage({ cmd: 'stop' }); w.terminate(); } catch (e) {} } };
+    } catch (e) {
+      const id = setInterval(cb, ms);            // degrada pro timer normal
+      return { stop: function () { clearInterval(id); } };
+    }
+  }
+
+  // (3) Espera fina. MessageChannel cede o controle sem passar pela fila de timers
+  // (que tem piso de ~4ms e é estrangulada); os últimos 2ms são laço puro.
+  const _mchan = (typeof MessageChannel !== 'undefined') ? new MessageChannel() : null;
+  function yieldNow() {
+    if (!_mchan) return new Promise((r) => setTimeout(r, 0));
+    return new Promise((r) => { _mchan.port1.onmessage = () => r(); _mchan.port2.postMessage(0); });
+  }
+  // Âncora monotônica. serverNow() é Date.now()+offset: o NTP do sistema pode dar um salto no
+  // meio do spin, e ainda por cima entraríamos no código do jogo milhares de vezes por disparo.
+  // performance.now() nunca anda pra trás. Lemos serverNow() só nas âncoras.
+  const CLK = { perf: 0, srv: 0, driftMs: 0, at: 0 };
+  function ancorar() {
+    const p = performance.now(), s = serverNow();
+    if (CLK.at) CLK.driftMs = (CLK.srv + (p - CLK.perf)) - s;   // quanto o modelo errou desde a última âncora
+    CLK.perf = p; CLK.srv = s; CLK.at = Date.now();
+    return CLK.driftMs;
+  }
+  function srvNowP() { return CLK.at ? (CLK.srv + (performance.now() - CLK.perf)) : serverNow(); }
+  async function spinUntil(alvoSrvMs) {
+    const falta = alvoSrvMs - srvNowP();
+    if (falta > 250) await new Promise((r) => setTimeout(r, falta - 250));   // fase grossa
+    while (srvNowP() < alvoSrvMs - 2) await yieldNow();                      // fase fina
+    while (srvNowP() < alvoSrvMs) { /* laço puro, últimos ~2ms */ }
+    return srvNowP();
+  }
+
+  // (4) Compensação de latência: o request precisa CHEGAR ao servidor em sendAt, então sai antes.
+  // rttMin/2 estima o tempo de ida. Substitui o antigo "offset" fixo de 150ms, que era chute.
+  function fireAtFor(sendAtSrvMs, ajusteManualMs) {
+    const ida = (NETLAT.rttMin || 300) / 2;
+    // biasMs vem do laço fechado (ccMedir): é o erro real medido nos envios anteriores.
+    // Modelar o relógio sozinho dá ~±50ms; corrigir pelo resultado medido é o que leva a ±10ms.
+    const bias = (config.cmd && config.cmd.calib && config.cmd.calib.biasMs) || 0;
+    const lead = ida + bias + (ajusteManualMs || 0);
+    return sendAtSrvMs - Math.max(0, Math.min(lead, 3000));   // teto de 3s por segurança
+  }
+
+  // (5) Orçamento de erro honesto, calculado ANTES de armar. O usuário decidiu: se estourar,
+  // avisa em vermelho mas dispara assim mesmo.
+  function erroEstimadoMs() {
+    const jitterRede = (NETLAT.jitter || 0) / 2;
+    // Aba escondida é de longe a maior fonte de erro. Com o oscilador ativo cai muito; sem ele,
+    // o navegador estrangula os timers e o erro vai pra centenas de ms.
+    const jitterTimer = document.hidden ? (awakeAtivo() ? 25 : 300) : 4;
+    const relogio = Math.max(Math.abs(CLK.driftMs || 0), window.Timing ? 5 : 60);
+    // Somados em quadratura: são fontes independentes, somar linearmente exageraria.
+    return Math.round(Math.sqrt(jitterRede * jitterRede + jitterTimer * jitterTimer + relogio * relogio));
+  }
+  function erroCor(ms) { return ms < 50 ? '#8fe39a' : (ms < 150 ? '#ffd76a' : '#ff7568'); }
+
+  // ==================== MODO SILÊNCIO ====================
+  // Reserva a linha em volta de um disparo coordenado: congela os outros módulos pra que nenhum
+  // request nem trabalho de CPU concorra com o milésimo exato. Autorizado explicitamente.
+  const SILENCE = { on: false, era: null, desde: 0, guarda: null };
+  let _captchaPausado = false;   // declarado aqui (e não junto do detector) pra não cair em TDZ
+  function silenceOn(motivo) {
+    if (SILENCE.on) return;
+    SILENCE.on = true;
+    SILENCE.desde = Date.now();
+    SILENCE.era = {
+      scav: !!(config.scav && config.scav.running), farm: !!(config.farm && config.farm.running),
+      wall: !!(config.wall && config.wall.running), recruit: !!(config.recruit && config.recruit.running),
+      market: !!(config.market && config.market.running), build: !!(config.build && config.build.running),
+      bb: !!(config.bb && config.bb.running), map: !!(config.map && config.map.running),
+      alvos: !!config.running,
+    };
+    clearTimeout(scavTimer); clearTimeout(farmTimer); clearTimeout(wallTimer); clearTimeout(recruitTimer);
+    clearTimeout(marketTimer); clearTimeout(buildTimer); clearTimeout(bbTimer); clearTimeout(mapTimer);
+    clearTimeout(sendTimer);
+    if (uiTimer) { clearInterval(uiTimer); uiTimer = null; }   // o tick de 1s vira jitter durante o spin
+    _captchaPausado = true;   // o MutationObserver dele varre o body inteiro a cada mutação
+    // Avisa as outras abas. Elas respeitam via lockOther(), sem precisar de código por módulo.
+    try { localStorage.setItem(FREEZEKEY, JSON.stringify({ by: TAB_ID, until: Date.now() + 60000 })); } catch (e) {}
+    ancorar();   // reancora o relógio monotônico logo antes do disparo
+    // Rede de segurança: se algo der errado no disparo, ninguém fica morto pra sempre.
+    clearTimeout(SILENCE.guarda);
+    SILENCE.guarda = setTimeout(() => { if (SILENCE.on) { pushLog('Modo silêncio passou de 2 min — religando por segurança.', 'err', 'cmd'); silenceOff(); } }, 120000);
+    pushLog('Modo silêncio ligado' + (motivo ? ' (' + motivo + ')' : '') + ' — linha reservada.', '', 'cmd');
+  }
+  function silenceOff() {
+    if (!SILENCE.on) return;
+    const era = SILENCE.era || {};
+    SILENCE.on = false; SILENCE.era = null;
+    clearTimeout(SILENCE.guarda); SILENCE.guarda = null;
+    _captchaPausado = false;
+    try { localStorage.removeItem(FREEZEKEY); } catch (e) {}
+    try { if (era.scav) scheduleScav(); } catch (e) {}
+    try { if (era.farm) scheduleFarm(); } catch (e) {}
+    try { if (era.wall) scheduleWall(); } catch (e) {}
+    try { if (era.recruit) scheduleRecruit(); } catch (e) {}
+    try { if (era.market) scheduleMarket(); } catch (e) {}
+    try { if (era.build) scheduleBuild(); } catch (e) {}
+    try { if (era.bb) scheduleBB(); } catch (e) {}
+    try { if (era.map) scheduleMap(); } catch (e) {}
+    try { if (era.alvos) scheduleWake(); } catch (e) {}
+    if (!uiTimer) uiTimer = setInterval(tickUI, 1000);
+    pushLog('Modo silêncio desligado — módulos religados.', 'ok', 'cmd');
+  }
+
+  // ==================== COMANDOS COORDENADOS ====================
+  // Passo 1 (confirmar): valida tropa/alvo no servidor e devolve a duração real da viagem
+  // + o formulário já montado. Genérico: 'attack' ou 'support'.
+  async function cmdPrepare(vid, x, y, amounts, tipo) {
+    const p1 = new URLSearchParams();
+    Object.entries(amounts).forEach(([u, a]) => { if (a > 0) p1.set(u, String(a)); });
+    p1.set('x', String(x)); p1.set('y', String(y)); p1.set('input', x + '|' + y);
+    // A praça tem dois botões de submit: "attack" e "support". Só o nome muda.
+    if (tipo === 'support') p1.set(config.cmd.suporteParam || 'support', 'l');
+    else p1.set('attack', 'l');
+    p1.set('h', CSRF);
+    const r1 = await fetch('/game.php?village=' + vid + '&screen=place&try=confirm', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p1.toString(),
+    });
+    let t1 = await r1.text();
+    try { const j = JSON.parse(t1); t1 = (j.response && j.response.dialog) || j.dialog || t1; } catch (e) {}
+    const doc = new DOMParser().parseFromString(t1, 'text/html');
+    const form = doc.querySelector('#command-data-form') || doc.querySelector('form[action*="action=command"]');
+    if (!form) {
+      const errEl = doc.querySelector('.error, .autoHideBox, #command_confirmation_error');
+      throw new Error(errEl ? errEl.textContent.trim().slice(0, 90) : 'confirmação falhou (tropa/alvo)');
+    }
+    let dur = null;
+    const dd = doc.querySelector('[data-duration]');
+    if (dd) dur = parseInt(dd.getAttribute('data-duration'), 10);
+    if (!dur) { const txt = doc.body ? doc.body.textContent : t1; const m = txt.match(/dura[çc][aã]o[^0-9]{0,12}(\d{1,2}):([0-5]\d):([0-5]\d)/i); if (m) dur = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]); }
+    // Colher o form como o navegador colheria. O laço ingênuo (todo input com name) mandava
+    // checkbox DESMARCADO e, pior, os DOIS botões de submit — o que pode virar apoio em ataque.
+    const params = {};
+    const nomeTipo = (tipo === 'support') ? (config.cmd.suporteParam || 'support') : 'attack';
+    form.querySelectorAll('input, select, textarea').forEach((el) => {
+      if (!el.name) return;
+      const t = (el.type || '').toLowerCase();
+      if ((t === 'checkbox' || t === 'radio') && !el.checked) return;
+      if (t === 'submit' || t === 'button' || t === 'image') {
+        if ((el.name === 'attack' || el.name === 'support') && el.name !== nomeTipo) return;
+      }
+      params[el.name] = el.value;
+    });
+    if (!params.h) params.h = CSRF;
+    params[nomeTipo] = params[nomeTipo] || 'l';   // garante o tipo no corpo do passo 2
+    const action = form.getAttribute('action') || ('/game.php?village=' + vid + '&screen=place&action=command&h=' + CSRF);
+    return {
+      action: absUrl(action), params: params, dur: dur,
+      body: new URLSearchParams(params).toString(),   // pré-serializado: nada de string na hora do disparo
+      tipoDetectado: detectaTipo(form, params),
+    };
+  }
+  // Estrutural, não textual: procurar "apoio|ataque" no texto casava sempre os dois e devolvia '?'.
+  function detectaTipo(form, params) {
+    if (params.support != null) return 'support';
+    if (params.attack != null) return 'attack';
+    if (form.querySelector('#target_support, input[name="support"]')) return 'support';
+    if (form.querySelector('#target_attack, input[name="attack"]')) return 'attack';
+    return '?';
+  }
+  // Passo 2 (executar): só re-POSTa o que já veio montado. Nada é calculado aqui —
+  // é o que sai no milésimo exato.
+  async function cmdFire(prep) {
+    const r2 = await fetch(prep.action, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: prep.body || new URLSearchParams(prep.params).toString(),
+    });
+    const t2 = await r2.text();
+    if (/n[aã]o tem tropas suficientes|not enough/i.test(t2)) throw new Error('recusado: tropas insuficientes');
+    return true;
+  }
+
+  // ---- Despachante ----
+  let cmdTimer = null, cmdTicker = null, cmdEmVoo = false;
+  function cmdFila() { return (config.cmd && config.cmd.fila) || []; }
+  function cmdPendentes() { return cmdFila().filter((c) => c.state !== 'enviado' && c.state !== 'erro' && c.state !== 'abortado'); }
+  function cmdRecalc(c) {
+    if (!c.arriveAt || c.durMs == null) return;
+    c.sendAt = c.arriveAt - c.durMs;
+    c.fireAt = fireAtFor(c.sendAt, config.cmd.ajusteMs);
+  }
+  function cmdFalha(c, msg) {
+    c.state = 'erro'; c.erro = String(msg).slice(0, 120); save();
+    pushLog('Comando ' + c.x + '|' + c.y + ': ' + c.erro, 'err', 'cmd');
+  }
+
+  // Roda o "confirmar" e guarda o formulário pronto. Quanto mais cedo melhor —
+  // mas não tão cedo que a tropa mude no meio do caminho.
+  async function cmdPreparar(c) {
+    try {
+      const ehApoio = (c.tipo === 'support' || c.tipo === 'snipe');
+      const p = await cmdPrepare(c.origin, c.x, c.y, c.amounts, ehApoio ? 'support' : 'attack');
+      if (!p.dur) throw new Error('servidor não devolveu a duração');
+      ancorar();                                    // reancora o relógio junto do preparo
+      c.durMs = p.dur * 1000;
+      c.prep = { action: p.action, params: p.params, body: p.body };   // body pré-serializado
+      c.tipoConfirmado = p.tipoDetectado;
+      cmdRecalc(c);
+      if (c.fireAt - srvNowP() < -1500) { cmdFalha(c, 'horário já passou'); return false; }
+      c.state = 'preparado'; c.erro = null; save();
+      return true;
+    } catch (e) { cmdFalha(c, e.message || e); return false; }
+  }
+
+  // O disparo: ticker grosso até 40ms do alvo, spin fino até o milésimo, fetch.
+  async function cmdDisparar(c) {
+    if (c.state === 'armado') return;   // já entregue ao disparo; não duplica
+    c.state = 'armado'; save();
+    await new Promise((resolve) => {
+      if (srvNowP() >= c.fireAt - 350) return resolve();
+      const t = makeTicker(20, () => { if (srvNowP() >= c.fireAt - 350) { t.stop(); resolve(); } });
+      cmdTicker = t;
+    });
+    cmdTicker = null;
+    await spinUntil(c.fireAt);
+    // Dispara e NÃO espera a resposta. Num trem de 150ms, aguardar o HTTP (300ms+) faria a
+    // onda seguinte perder o próprio horário. A linha é liberada assim que o POST parte.
+    const saiuEm = srvNowP();
+    const voo = cmdFire(c.prep);
+    c.state = 'enviado'; c.sentAt = saiuEm;
+    c.desvioMs = Math.round(saiuEm - c.fireAt);
+    const rot = c.ondas ? (' [onda ' + c.onda + '/' + c.ondas + ']') : '';
+    pushLog('⚔ ' + (c.tipo === 'support' ? 'Apoio' : c.tipo === 'nobre' ? 'Nobre' : 'Ataque') + ' → ' + c.x + '|' + c.y + rot +
+            ' · saiu ' + srvClockMs(saiuEm) + ' (desvio ' + (c.desvioMs >= 0 ? '+' : '') + c.desvioMs + 'ms)', 'ok', 'cmd');
+    config.cmd.hist.unshift({ t: srvClockMs(saiuEm), alvo: c.x + '|' + c.y, tipo: c.tipo, desvio: c.desvioMs });
+    config.cmd.hist = config.cmd.hist.slice(0, 50);
+    save();
+    // A resposta é tratada depois, sem segurar a próxima onda.
+    voo.then(() => { setTimeout(() => ccMedir(c), 20000); })
+       .catch((e) => { cmdFalha(c, e.message || e); });
+  }
+
+  // Mede o erro REAL: lê a chegada que o jogo registrou e compara com a que pedimos.
+  // O servidor carimba o comando quando PROCESSA o POST, então erroMs é exatamente o atraso
+  // entre o nosso disparo e o processamento — sinal limpo, sem modelagem.
+  async function ccMedir(c) {
+    try {
+      const res = await fetch('/game.php?village=' + c.origin + '&screen=place', { credentials: 'include' });
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      let href = null;
+      doc.querySelectorAll('tr.command-row').forEach((tr) => {
+        const lbl = tr.querySelector('.quickedit-label');
+        const mc = lbl ? (lbl.textContent || '').match(/(\d{1,3})\|(\d{1,3})/) : null;
+        if (!mc || mc[1] !== String(c.x) || mc[2] !== String(c.y)) return;
+        const a = tr.querySelector('a[href*="screen=info_command"]');
+        if (a) href = a.href;
+      });
+      if (!href) return;
+      const d2 = new DOMParser().parseFromString(await (await fetch(href, { credentials: 'include' })).text(), 'text/html');
+      const m = (d2.body.textContent || '').match(/(\d{2})\/(\d{2})\/(\d{4})[^\d]{0,6}(\d{2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/);
+      if (!m) return;
+      const parede = new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6], +(m[7] || 0)).getTime();
+      const chegouEm = parede + wallToServerOffset();
+      const erroMs = chegouEm - c.arriveAt;              // positivo = chegou atrasado
+      const temMs = (m[7] != null);
+      c.medido = { chegouEm: chegouEm, erroMs: erroMs, temMs: temMs };
+      // Só amostra com milésimos entra na correção — sem isso o sinal é quantizado em 1s.
+      if (temMs) {
+        const k = config.cmd.calib;
+        const alpha = (k.n < 3) ? 0.6 : 0.25;           // aprende rápido no começo, estável depois
+        k.biasMs = Math.max(-1500, Math.min(1500, (k.biasMs || 0) + erroMs * alpha));
+        k.n = (k.n || 0) + 1;
+      }
+      pushLog('📏 ' + c.x + '|' + c.y + ' chegou com desvio de ' + (erroMs > 0 ? '+' : '') + erroMs + 'ms' +
+              (temMs ? '' : ' (sem milésimos — ative nas configurações do jogo)'),
+              Math.abs(erroMs) <= 50 ? 'ok' : 'err', 'cmd');
+      save(); ccRender();
+    } catch (e) { /* medir é diagnóstico: nunca derruba o envio */ }
+  }
+
+  // Driver de 1s: decide o que preparar, quando silenciar e quando entregar ao disparo fino.
+  async function cmdTick() {
+    clearTimeout(cmdTimer);
+    if (!config.cmd || !config.cmd.enabled) return;
+    const pend = cmdPendentes();
+    if (!pend.length) {
+      if (SILENCE.on) silenceOff();
+      keepAwake(false);
+      cmdTimer = setTimeout(cmdTick, 1000);
+      return;
+    }
+    const prepLead = (config.cmd.prepLeadSec || 60) * 1000;
+    const silLead = (config.cmd.silenceLeadSec || 10) * 1000;
+
+    // Preparo: um por vez, pra não sair request em rajada.
+    for (const c of pend) {
+      if (c.state !== 'novo' || !c.arriveAt) continue;
+      const estimado = (c.durMs != null) ? (c.arriveAt - c.durMs) : c.arriveAt;
+      if (estimado - srvNowP() <= prepLead) { await cmdPreparar(c); break; }
+    }
+
+    // Silêncio, guiado pelo disparo mais próximo.
+    const prox = pend.filter((c) => c.fireAt).sort((a, b) => a.fireAt - b.fireAt)[0];
+    if (prox && prox.fireAt - srvNowP() <= silLead) {
+      if (!SILENCE.on) { silenceOn('comando ' + prox.x + '|' + prox.y); netProbe(3); }
+    } else if (SILENCE.on) {
+      const tail = (config.cmd.silenceTailSec || 10) * 1000;
+      if (!prox || prox.fireAt - srvNowP() > silLead + tail) silenceOff();
+    }
+
+    // Entrega ao disparo fino tudo que está a menos de 2s.
+    // UM de cada vez, sempre o mais próximo. Dois spins simultâneos brigariam pela mesma thread
+    // e ainda dependeriam da ordem em que o servidor processa POSTs concorrentes — o que
+    // embaralharia o trem de nobres.
+    if (!cmdEmVoo) {
+      const pronto = pend.filter((c) => c.state === 'preparado' && c.fireAt)
+                         .sort((a, b) => a.fireAt - b.fireAt)[0];
+      if (pronto && pronto.fireAt - srvNowP() <= 2000) {
+        cmdEmVoo = true;
+        // Libera a linha e re-avalia NA HORA: num trem de 150ms, esperar o próximo tick de 1s
+        // faria a onda seguinte sair quase um segundo atrasada.
+        cmdDisparar(pronto).catch(() => {}).then(() => { cmdEmVoo = false; cmdTick(); });
+      }
+    }
+    cmdTimer = setTimeout(cmdTick, 1000);
+  }
+
+  // Ao carregar: setTimeout não sobrevive ao F5. Quem estava armado volta pra preparado; quem
+  // perdeu a janela de preparo é re-preparado na hora, em vez de ser descartado.
+  function cmdBoot() {
+    if (!config.cmd || !config.cmd.enabled) return;
+    ancorar();   // primeira âncora do relógio monotônico
+    cmdFila().forEach((c) => { if (c.state === 'armado') c.state = c.prep ? 'preparado' : 'novo'; });
+    save();
+    cmdTick();
+  }
+
+  // ==================== CENTRO DE COMANDO (praça de reunião) ====================
+  function telaAtual() {
+    try { return new URLSearchParams(location.search).get('screen') || (window.game_data && window.game_data.screen) || ''; } catch (e) { return ''; }
+  }
+  // Lê as caixas de tropa da própria praça — o que o usuário já digitou na tela.
+  function tropasDaTela() {
+    const a = {};
+    UNITS.forEach(([u]) => {
+      const el = document.querySelector('#unit_input_' + u);
+      const n = el ? (parseInt(el.value, 10) || 0) : 0;
+      if (n > 0) a[u] = n;
+    });
+    return a;
+  }
+  function cmdAdicionar(tipo, x, y, amounts, arriveAt) {
+    const c = { id: genId(), tipo: tipo, origin: CUR_VID, x: String(x), y: String(y),
+                amounts: amounts, arriveAt: arriveAt, durMs: null, sendAt: 0, fireAt: 0,
+                prep: null, state: 'novo', erro: null, sentAt: null, desvioMs: null };
+    config.cmd.fila.push(c); save();
+    cmdTick(); ccRender();
+    return c;
+  }
+  // Trem de nobres: N comandos da MESMA origem pro MESMO alvo, chegando colados.
+  // Como origem, destino e composição são iguais, a duração é a mesma — então o intervalo
+  // entre as chegadas é exatamente o intervalo entre os disparos.
+  function cmdTrem(x, y, amounts, chegaEm, n, gapMs) {
+    const g = Math.max(0, gapMs || config.cmd.trainGapMs || 150);
+    const criados = [];
+    for (let i = 0; i < n; i++) {
+      const c = { id: genId(), tipo: 'nobre', origin: CUR_VID, x: String(x), y: String(y),
+                  amounts: amounts, arriveAt: chegaEm + i * g, onda: i + 1, ondas: n,
+                  durMs: null, sendAt: 0, fireAt: 0, prep: null,
+                  state: 'novo', erro: null, sentAt: null, desvioMs: null };
+      config.cmd.fila.push(c); criados.push(c);
+    }
+    save(); cmdTick(); ccRender();
+    return criados;
+  }
+  function cmdAbortar(id) {
+    const c = cmdFila().find((z) => z.id === id); if (!c) return;
+    c.state = 'abortado'; save(); ccRender();
+    pushLog('Comando ' + c.x + '|' + c.y + ' abortado.', '', 'cmd');
+  }
+  function cmdLimpar() {
+    config.cmd.fila = cmdFila().filter((c) => c.state === 'novo' || c.state === 'preparado' || c.state === 'armado');
+    save(); ccRender();
+  }
+
+  // Teste do parâmetro de apoio: faz só o "confirmar" (não envia) e mostra o que o servidor
+  // entendeu. É o portão da Fase 3 — sem isso, apoio é suposição.
+  // Autoteste do apoio. Só faz o "confirmar" — não envia tropa. É o portão do apoio/snipe:
+  // sem ele passar, mandar apoio é suposição.
+  async function ccTestarApoio() {
+    const out = document.getElementById('cc-teste-out');
+    const diz = (h) => { if (out) out.innerHTML = h; };
+    const linhas = [];
+    diz('testando…');
+    try {
+      // 1) O que a praça REALMENTE tem no DOM. Se o nome do parâmetro for outro, corrige sozinho.
+      const bA = document.querySelector('#target_attack, input[name="attack"]');
+      const bS = document.querySelector('#target_support, input[name="support"]');
+      linhas.push('botões na praça → ataque: <b>' + (bA ? esc(bA.name || bA.id) : 'ausente') +
+                  '</b> · apoio: <b>' + (bS ? esc(bS.name || bS.id) : 'ausente') + '</b>');
+      if (bS && bS.name && bS.name !== config.cmd.suporteParam) {
+        config.cmd.suporteParam = bS.name; save();
+        linhas.push('<span style="color:#ffd76a">parâmetro do apoio ajustado para "' + esc(bS.name) + '"</span>');
+      }
+      // 2) Confirma 1 lanceiro para OUTRA aldeia sua (não dá pra atacar aldeia própria).
+      const minhas = await getAllVillages();
+      const destino = minhas.filter((v) => String(v.vid) !== String(CUR_VID) && v.coord)[0];
+      if (!destino) { linhas.push('<span style="color:#ff7568">preciso de ao menos 2 aldeias suas pra testar</span>'); return diz(linhas.join('<br>')); }
+      const [dx, dy] = destino.coord.split('|');
+      const p = await cmdPrepare(CUR_VID, dx, dy, { spear: 1 }, 'support');
+      const ok = (p.tipoDetectado === 'support');
+      linhas.push('confirm em ' + esc(destino.coord) + ' → tipo <b style="color:' + (ok ? '#8fe39a' : '#ff7568') + '">' +
+                  esc(p.tipoDetectado) + '</b> · duração ' + (p.dur ? fmt(p.dur * 1000) : '?'));
+      linhas.push('<span style="font-size:9px;color:#8f7d57">campos: ' + esc(Object.keys(p.params).join(', ').slice(0, 200)) + '</span>');
+      if (ok) {
+        config.cmd.suporteOkAt = Date.now(); save();
+        linhas.push('<span style="color:#8fe39a">✔ apoio liberado (nada foi enviado)</span>');
+      } else {
+        linhas.push('<span style="color:#ff7568">✖ apoio NÃO liberado — o servidor não confirmou como apoio</span>');
+      }
+      pushLog('Teste de apoio: tipo "' + p.tipoDetectado + '".', ok ? 'ok' : 'err', 'cmd');
+    } catch (e) {
+      linhas.push('<span style="color:#ff7568">falhou: ' + esc(e.message || e) + '</span>');
+    }
+    diz(linhas.join('<br>'));
+  }
+
+  function ccArmar() {
+    const x = (document.getElementById('cc-x').value || '').trim();
+    const y = (document.getElementById('cc-y').value || '').trim();
+    const arr = (document.getElementById('cc-arr').value || '').trim();
+    const tipo = (document.querySelector('input[name="cc-tipo"]:checked') || {}).value || 'attack';
+    const msg = document.getElementById('cc-msg');
+    const dizer = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#ff7568'; } };
+    if (!/^\d{1,3}$/.test(x) || !/^\d{1,3}$/.test(y)) return dizer('Coordenada inválida.');
+    if (!arr) return dizer('Defina o horário de chegada.');
+    const arriveAt = arrivalToServerMs(arr);
+    if (!arriveAt) return dizer('Horário de chegada inválido.');
+    if (arriveAt <= srvNowP()) return dizer('Esse horário já passou.');
+    const amounts = tropasDaTela();
+    if (!Object.keys(amounts).length) return dizer('Digite as tropas nas caixas da praça de reunião.');
+    if (tipo === 'support' && !config.cmd.suporteOkAt) {
+      return dizer('Rode o teste de apoio antes — o parâmetro ainda não foi confirmado neste mundo.');
+    }
+    if (tipo === 'nobre') {
+      const n = Math.max(2, Math.min(8, parseInt(document.getElementById('cc-trem-n').value, 10) || 4));
+      const gap = Math.max(50, parseInt(document.getElementById('cc-trem-gap').value, 10) || 150);
+      cmdTrem(x, y, amounts, arriveAt, n, gap);
+      return dizer(n + ' ondas armadas, ' + gap + 'ms entre elas, a primeira em ' + srvClockMs(arriveAt) + '.', '#8fe39a');
+    }
+    cmdAdicionar(tipo, x, y, amounts, arriveAt);
+    dizer('Comando armado para ' + srvClockMs(arriveAt) + '.', '#8fe39a');
+  }
+
+  function ccRender() {
+    const box = document.getElementById('cc-fila'); if (!box) return;
+    const f = cmdFila();
+    if (!f.length) { box.innerHTML = '<div style="color:#8f7d57;padding:6px;font-size:10px">— nenhum comando armado —</div>'; return; }
+    const agora = serverNow();
+    const corDe = { novo: '#cbb98f', preparado: '#ffd76a', armado: '#8fe39a', enviado: '#8fe39a', erro: '#ff7568', abortado: '#8f7d57' };
+    box.innerHTML = f.slice().sort((a, b) => (a.arriveAt || 0) - (b.arriveAt || 0)).map((c) => {
+      const falta = c.fireAt ? (c.fireAt - agora) : (c.arriveAt - agora);
+      const dev = (c.desvioMs == null) ? '' : ((c.desvioMs >= 0 ? '+' : '') + c.desvioMs + 'ms');
+      return '<div style="display:grid;grid-template-columns:44px 66px 1fr 74px 62px 20px;gap:4px;align-items:center;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px">' +
+        '<span style="color:' + (c.tipo === 'support' ? '#7fc8ff' : '#ffb08a') + '">' + (c.tipo === 'support' ? 'apoio' : c.tipo === 'fake' ? 'fake' : 'ataque') + '</span>' +
+        '<span style="color:#e6cf7d">' + esc(c.x + '|' + c.y) + '</span>' +
+        '<span style="color:' + (corDe[c.state] || '#cbb98f') + '">' + esc(c.state) + (c.erro ? ' · ' + esc(c.erro.slice(0, 40)) : '') + '</span>' +
+        '<span style="color:#cbb98f">' + (c.arriveAt ? srvClockMs(c.arriveAt) : '—') + '</span>' +
+        '<span style="text-align:right;color:' + (dev ? erroCor(Math.abs(c.desvioMs)) : '#8f7d57') + '">' + (dev || (falta > 0 ? fmt(falta) : '—')) + '</span>' +
+        (c.state === 'novo' || c.state === 'preparado' || c.state === 'armado'
+          ? '<span data-cc-ab="' + c.id + '" style="cursor:pointer;color:#ff7568" title="abortar">✕</span>' : '<span></span>') +
+        '</div>';
+    }).join('');
+    box.querySelectorAll('[data-cc-ab]').forEach((el) => el.onclick = () => cmdAbortar(el.getAttribute('data-cc-ab')));
+  }
+
+  // Relógio a 100ms; a fila só 1x por segundo. Redesenhar a lista 10x/s atrapalharia o clique
+  // no botão de abortar e ainda somaria trabalho de CPU bem na hora do spin.
+  let _ccLastRender = 0;
+  function ccTick() {
+    const clk = document.getElementById('cc-clock');
+    if (clk) clk.textContent = srvClockMs();
+    const sil = document.getElementById('cc-silencio');
+    if (sil) sil.textContent = SILENCE.on ? '🔇 modo silêncio — outros módulos congelados' : '';
+    if (SILENCE.on) return;                    // durante o silêncio, nem DOM a gente toca
+    const st = document.getElementById('cc-saude');
+    if (st) {
+      const e = erroEstimadoMs();
+      const partes = [
+        'latência <b>' + Math.round(NETLAT.rttMin || 0) + 'ms</b>',
+        'erro estimado <b style="color:' + erroCor(e) + '">±' + e + 'ms</b>',
+        'aba <b>' + (document.hidden ? 'em 2º plano' : 'visível') + '</b>',
+      ];
+      // Sem o oscilador ativo, uma aba escondida perde centenas de ms. O usuário precisa ver isso.
+      if (document.hidden && !awakeAtivo()) partes.push('<b style="color:#ff7568">antichoke inativo — clique em Armar</b>');
+      if (Math.abs(CLK.driftMs || 0) > 50) partes.push('<b style="color:#ffd76a">relógio oscilando ' + Math.round(CLK.driftMs) + 'ms</b>');
+      if (!window.Timing) partes.push('<b style="color:#ff7568">sem relógio do jogo!</b>');
+      st.innerHTML = partes.join(' · ');
+    }
+    const agora = Date.now();
+    if (agora - _ccLastRender >= 1000) { _ccLastRender = agora; ccRender(); }
+  }
+
+  function mountCmdCenter() {
+    if (!config.cmd || !config.cmd.enabled) return;
+    if (document.getElementById('cc-painel')) return;
+    const host = document.querySelector('#content_value') || document.querySelector('#contentContainer') || document.body;
+    const d = document.createElement('div');
+    d.id = 'cc-painel';
+    d.style.cssText = 'background:linear-gradient(180deg,#2a2016,#201810);border:1px solid #4a3b28;border-radius:10px;padding:10px;margin:0 0 12px;color:#e8d29a;font-size:11px';
+    const row = (l, inner) => '<div class="twmgr-row" style="display:flex;align-items:center;gap:6px;margin:3px 0"><span style="min-width:120px;color:#cbb98f">' + l + '</span>' + inner + '</div>';
+    d.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+        '<b style="color:#d4af37;font-size:13px">🚀 Centro de Comando</b>' +
+        '<b id="cc-clock" style="color:#ffd76a;font-size:16px;font-variant-numeric:tabular-nums">--:--:--.---</b>' +
+      '</div>' +
+      '<div id="cc-saude" style="font-size:10px;color:#cbb98f;margin-bottom:4px"></div>' +
+      '<div id="cc-silencio" style="font-size:10px;color:#ffd76a;margin-bottom:8px;min-height:12px"></div>' +
+      row('Alvo (X | Y)',
+        '<input id="cc-x" class="twmgr-inp" type="number" min="1" max="999" style="width:64px" placeholder="X">' +
+        '<input id="cc-y" class="twmgr-inp" type="number" min="1" max="999" style="width:64px" placeholder="Y">') +
+      row('Chegada (servidor)', '<input id="cc-arr" class="twmgr-inp" type="datetime-local" step="0.001" style="width:230px">') +
+      row('Tipo',
+        '<label style="margin-right:10px"><input type="radio" name="cc-tipo" value="attack" checked> ⚔ Ataque</label>' +
+        '<label style="margin-right:10px"><input type="radio" name="cc-tipo" value="support"> 🛡 Apoio</label>' +
+        '<label><input type="radio" name="cc-tipo" value="nobre"> 👑 Trem</label>') +
+      '<div id="cc-trem-cfg" style="display:none">' +
+        row('Ondas do trem',
+          '<input id="cc-trem-n" class="twmgr-inp" type="number" min="2" max="8" value="4" style="width:56px">' +
+          '<span style="color:#8f7d57;margin-left:8px">intervalo</span>' +
+          '<input id="cc-trem-gap" class="twmgr-inp" type="number" min="50" max="2000" step="10" value="150" style="width:70px">' +
+          '<span style="color:#8f7d57">ms</span>') +
+        '<div id="cc-trem-aviso" style="font-size:10px;color:#ffd76a;margin:2px 0 6px"></div>' +
+      '</div>' +
+      '<div style="font-size:10px;color:#8f7d57;margin:4px 0 8px">As tropas são as que você digitar nas caixas da praça, aqui embaixo.</div>' +
+      '<div style="display:flex;gap:6px;align-items:center">' +
+        '<button id="cc-armar" class="twmgr-btn twmgr-go" style="flex:1">▶ Armar comando</button>' +
+        '<button id="cc-teste" class="twmgr-btn twmgr-ghost" title="faz só o confirmar, não envia">🔍 Testar apoio</button>' +
+        '<button id="cc-limpar" class="twmgr-btn twmgr-ghost" title="remove enviados/erros da lista">🧹</button>' +
+      '</div>' +
+      '<div id="cc-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
+      '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
+      '<div style="margin-top:8px;border-top:1px solid #3a2e1b;padding-top:6px">' +
+        '<div style="font-size:10px;color:#e8d29a;font-weight:600;margin-bottom:3px">Fila</div>' +
+        '<div id="cc-fila" style="max-height:180px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
+      '</div>';
+    host.insertBefore(d, host.firstChild);
+    // keepAwake PRECISA ser chamado sincronamente dentro do gesto, antes de qualquer await,
+    // senão o AudioContext fica 'suspended' e o antichoke não vale nada.
+    document.getElementById('cc-armar').addEventListener('click', () => { keepAwake(true); ccArmar(); });
+    document.getElementById('cc-teste').addEventListener('click', ccTestarApoio);
+    document.getElementById('cc-limpar').addEventListener('click', cmdLimpar);
+    // Mostra os campos do trem só quando o tipo é trem, e avisa quando o intervalo pedido
+    // fica abaixo do jitter medido — aí a ORDEM das ondas vira sorteio.
+    const attTrem = () => {
+      const tipo = (document.querySelector('input[name="cc-tipo"]:checked') || {}).value;
+      const cfg = document.getElementById('cc-trem-cfg');
+      if (cfg) cfg.style.display = (tipo === 'nobre') ? 'block' : 'none';
+      const av = document.getElementById('cc-trem-aviso');
+      if (av && tipo === 'nobre') {
+        const gap = parseInt((document.getElementById('cc-trem-gap') || {}).value, 10) || 150;
+        const e = erroEstimadoMs();
+        av.textContent = (gap < e * 2)
+          ? '⚠ intervalo de ' + gap + 'ms está perto do erro estimado (±' + e + 'ms) — as ondas podem trocar de ordem.'
+          : '';
+      }
+    };
+    document.querySelectorAll('input[name="cc-tipo"]').forEach((r) => r.addEventListener('change', attTrem));
+    const gapEl = document.getElementById('cc-trem-gap'); if (gapEl) gapEl.addEventListener('input', attTrem);
+    attTrem();
+    setInterval(ccTick, 100);        // relógio com milésimos precisa de tick rápido
+    ccTick();
+    netProbe(5);
+    // Punho de diagnóstico. Mede o motor de tempo SEM rede, que é o jeito de separar
+    // jitter de timer de jitter de conexão.
+    window.__cc = {
+      // __cc.testSpin(3000) -> quanto o spin errou o alvo, em ms (rode também com a aba escondida)
+      testSpin: async (emMs) => {
+        keepAwake(true); ancorar();
+        const alvo = srvNowP() + (emMs || 3000);
+        await spinUntil(alvo);
+        const err = srvNowP() - alvo;
+        console.log('[cc] erro do spin: ' + err.toFixed(2) + 'ms · aba ' +
+                    (document.hidden ? 'escondida' : 'visível') + ' · antichoke ' + (awakeAtivo() ? 'on' : 'OFF'));
+        return err;
+      },
+      probe: () => netProbe(7).then((r) => (console.log('[cc] rtt min/med/jitter:', r), r)),
+      relogio: () => ({ offset: wallToServerOffset(), drift: ancorar(), agora: srvClockMs() }),
+      silencio: (ms) => { silenceOn('teste'); setTimeout(silenceOff, ms || 5000); },
+      estado: () => ({ fila: cmdFila(), calib: config.cmd.calib, lat: NETLAT, silencio: SILENCE.on }),
+    };
   }
 
   function parseCommands(doc) {
@@ -2172,6 +2869,7 @@
   }
   let _captchaCheckLast = 0;
   function checkCaptchaOnce() {
+    if (_captchaPausado) return;   // durante o modo silêncio: a varredura do DOM viraria jitter
     if (!config.captcha || !config.captcha.enabled) return;
     const now = Date.now();
     if (now - _captchaCheckLast < 1000) return;   // debounce
@@ -2210,7 +2908,7 @@
     const fs = document.getElementById('twmgr-farm-status'); if (fs) { if (!config.farm.running) { fs.textContent = ''; } else if (lockOther()) { fs.textContent = '⏸ outra aba está ativa'; fs.style.color = '#ff7568'; } else { fs.style.color = '#8fe39a'; fs.textContent = (config.farm.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.farm.nextAt - now) : '● saqueando…'; } }
     const ws = document.getElementById('twmgr-wall-status'); if (ws) { if (!config.wall.running) { ws.textContent = ''; } else if (lockOther()) { ws.textContent = '⏸ outra aba está ativa'; ws.style.color = '#ff7568'; } else { ws.style.color = '#8fe39a'; ws.textContent = (config.wall.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.wall.nextAt - now) : '● quebrando…'; } }
     const rs = document.getElementById('twmgr-recruit-status'); if (rs) { if (!config.recruit.running) { rs.textContent = ''; } else if (lockOther()) { rs.textContent = '⏸ outra aba está ativa'; rs.style.color = '#ff7568'; } else { rs.style.color = '#8fe39a'; rs.textContent = (config.recruit.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.recruit.nextAt - now) : '● recrutando…'; } }
-    const clk = document.getElementById('twmgr-srvclock'); if (clk) { try { clk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
+    const clk = document.getElementById('twmgr-srvclock'); if (clk) { try { clk.textContent = srvClockMs(); } catch (e) {} }
     const fks = document.getElementById('twmgr-fk-status');
     if (fks) {
       if (!config.fakes.running) { fks.textContent = ''; }
@@ -2554,7 +3252,7 @@
         sec('Alvos e chegada',
           '<div class="twmgr-row"><span class="twmgr-lbl">Relógio do servidor</span><b id="twmgr-srvclock" style="color:#ffd76a">--:--:--</b></div>' +
           '<label class="twmgr-lbl">Alvos (cole vários)</label><textarea id="twmgr-fk-targets" class="twmgr-inp" style="width:100%;height:52px;margin:2px 0 6px" placeholder="430|522 428|524 430|520 …"></textarea>' +
-          '<label class="twmgr-lbl">Chegada</label><input id="twmgr-fk-arr" class="twmgr-inp" type="datetime-local" step="1" style="width:100%;margin:2px 0 0">') +
+          '<label class="twmgr-lbl">Chegada</label><input id="twmgr-fk-arr" class="twmgr-inp" type="datetime-local" step="0.001" style="width:100%;margin:2px 0 0">') +
         sec('Origens',
           '<div class="twmgr-row"><span class="twmgr-lbl">Origens que enviam</span><span style="font-size:9px"><a id="twmgr-fk-all" style="cursor:pointer;color:#e6cf7d">todas</a> · <a id="twmgr-fk-none" style="cursor:pointer;color:#e6cf7d">nenhuma</a></span></div>' +
           '<div id="twmgr-fk-origins" style="max-height:96px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px"></div>' +
@@ -2864,6 +3562,9 @@
     if (config.bb && config.bb.running) { if (!lockOther()) pushLog('Cultivo retomado.', 'ok', 'bb'); scheduleBB(); }
     if (config.map && config.map.running) { if (!lockOther()) pushLog('Mapa retomado.', 'ok', 'map'); scheduleMap(); }
     startCaptchaWatcher();
+    // Centro de Comando: só monta na praça de reunião, dentro do conteúdo do jogo.
+    if (telaAtual() === 'place') { try { mountCmdCenter(); } catch (e) { pushLog('Centro de Comando não montou: ' + (e.message || e), 'err', 'cmd'); } }
+    cmdBoot();   // comandos armados sobrevivem ao F5 e são re-armados aqui
   }
 
   function makeDraggable(panel, handle) {

@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.2.0
+// @version      10.3.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.2.0';
+  const VERSION = '10.3.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1167,12 +1167,19 @@
         // alvo NÃO entra aqui: quem decide a composição é o template, não o script.
         let calcAmounts = null;
         if (useCalc) {
-          // Cavalaria pura que cobre o mínimo, + 1 explorador (pro relatório continuar fresco). Não
-          // multiplica o template: isso levaria explorador a mais junto e mandaria mais do que precisa.
-          const cl = Math.ceil(minPopC / (FAKE_POP.light || 4));
-          if ((avail.light || 0) < cl) continue;
-          calcAmounts = { light: cl };
-          if ((avail.spy || 0) >= 1) calcAmounts.spy = 1;   // sem explorador o envio ainda passa no mínimo
+          // COMPLETA o template, não substitui: manda tudo que o usuário configurou e soma só a
+          // cavalaria que falta pra bater o mínimo do mundo. O script não presume pra que serve cada
+          // template (o A daqui é 5 exploradores; noutra conta pode ser 25 cavalarias) — quem decide
+          // a composição é o usuário, e o piso de fake é uma exigência do mundo, não uma opinião.
+          const base = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {};
+          calcAmounts = {};
+          for (const u in base) { const n = parseInt(base[u], 10) || 0; if (n > 0) calcAmounts[u] = n; }
+          const falta = Math.max(0, minPopC - (tplPop[mode] || 0));
+          if (falta > 0) calcAmounts.light = (calcAmounts.light || 0) + Math.ceil(falta / (FAKE_POP.light || 4));
+          if (!Object.keys(calcAmounts).length) continue;
+          let semTropa = false;
+          for (const u in calcAmounts) { if ((avail[u] || 0) < calcAmounts[u]) { semTropa = true; break; } }
+          if (semTropa) continue;   // origem não tem o template + o complemento -> tenta a próxima
         }
         try {
           if (mode === 'c') { await sendFarmC(c.s.vid, t.reportId); did = true; }
@@ -1243,11 +1250,11 @@
     if (skip.norep) parts.push(skip.norep + ' sem relatório');
     if (eligible.length) {
       setFarmProg(farmProgHTML(eligible.length, eligible.length,
-        '✔ <b>' + count + '</b> enviado(s)' + (calcCount ? (' · ' + calcCount + ' no mínimo do mundo') : '') +
+        '✔ <b>' + count + '</b> enviado(s)' + (calcCount ? (' · ' + calcCount + ' completado(s) ao mínimo') : '') +
         (falhas ? (' · ✖ ' + falhas + ' falha(s)') : '') + (incertos ? (' · ? ' + incertos + ' incerto(s)') : '') +
         (pulados ? (' · ⏭ ' + pulados + ' pulado(s)') : '') +
         (parts.length ? ('<br><span style="opacity:.7">' + parts.join(' · ') + '</span>') : '') +
-        (lastCalcTxt ? ('<br><span style="opacity:.7">mínimo: ' + lastCalcTxt + '</span>') : '')));
+        (lastCalcTxt ? ('<br><span style="opacity:.7">completado: ' + lastCalcTxt + '</span>') : '')));
     } else setFarmProg('Nenhum alvo elegível neste ciclo.');
     // LOG fica enxuto: só o resumo (mais abaixo, "ciclo concluído") e, se falhou, o motivo.
     if (falhas || incertos || topErr.length) {
@@ -1296,7 +1303,7 @@
     cfg.nextAt = now + Math.max(60, cfg.interval || 600) * 1000;
     save();
     refreshCards('farm'); refreshDaily('farm', cfg, 'loot', 'loot_res');
-    pushLog('Saque: ciclo concluído — ' + count + ' saque(s) enviado(s)' + (calcCount ? (', ' + calcCount + ' no mínimo do mundo') : '') + '. Próximo em ' + Math.round((cfg.interval || 600) / 60) + ' min.', 'ok', 'farm');
+    pushLog('Saque: ciclo concluído — ' + count + ' saque(s) enviado(s)' + (calcCount ? (', ' + calcCount + ' completado(s) ao mínimo') : '') + '. Próximo em ' + Math.round((cfg.interval || 600) / 60) + ' min.', 'ok', 'farm');
     scheduleFarm();
   }
   function scheduleFarm() { clearTimeout(farmTimer); if (!config.farm.running) return; farmTimer = setTimeout(farmTick, Math.min(Math.max((config.farm.nextAt || 0) - Date.now(), 1000), 60000)); }

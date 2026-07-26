@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.27.1
+// @version      9.28.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.27.1';
+  const VERSION = '9.28.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -116,6 +116,9 @@
     calib: { biasMs: 0, n: 0 },   // laço fechado: erro medido -> correção do lead
     mundo: { speed: null, unitSpeed: null, unidades: null, at: 0, confiavel: false },
     origens: {},            // vid -> true (origens marcadas)
+    fonteTropa: 'casa',     // 'casa' = só o que está na aldeia | 'total' = casa + o que volta
+    fakeAlvos: '',          // lista de alvos colada (modo fake)
+    fakeDist: 'rodizio',    // 'rodizio' = 1 por aldeia alternando | 'todos' = cada aldeia p/ cada alvo
   });
   const defMap = () => ({
     running: false, nextAt: 0,
@@ -266,6 +269,9 @@
     if (!c.cmd.calib) c.cmd.calib = { biasMs: 0, n: 0 };
     if (!c.cmd.mundo) c.cmd.mundo = { speed: null, unitSpeed: null, unidades: null, at: 0, confiavel: false };
     if (!c.cmd.origens) c.cmd.origens = {};
+    if (!c.cmd.fonteTropa) c.cmd.fonteTropa = 'casa';
+    if (c.cmd.fakeAlvos == null) c.cmd.fakeAlvos = '';
+    if (!c.cmd.fakeDist) c.cmd.fakeDist = 'rodizio';
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -929,11 +935,9 @@
     return ccTempoViagemMs(v.x, v.y, c.x, c.y, c.amounts);
   }
 
-  // Tropas de TODAS as aldeias numa requisição só (em vez de uma por aldeia).
-  let _tropasCache = null, _tropasCacheAt = 0;
-  async function ccTropasTodasAldeias(forcar) {
-    if (!forcar && _tropasCache && Date.now() - _tropasCacheAt < 60000) return _tropasCache;
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
+  // Lê uma aba da visão geral de tropas. type: 'own_home' (em casa) ou 'own_away' (fora).
+  async function ccLerAbaTropas(type) {
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=' + type + '&page=-1', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     // Descobre a ordem das colunas pelo cabeçalho (varia por mundo: com/sem arqueiro, paladino…)
     const ordem = [];
@@ -949,13 +953,39 @@
       const vid = q.getAttribute('data-id'); if (!vid) return;
       const lbl = tr.querySelector('.quickedit-label');
       const cm = lbl ? (lbl.textContent || '').match(/(\d{1,3})\|(\d{1,3})/) : null;
+      const nome = lbl ? (lbl.textContent || '').replace(/\s*\(\d{1,3}\|\d{1,3}\)\s*K?\d*\s*$/, '').replace(/\s+/g, ' ').trim() : '';
       const nums = Array.from(tr.querySelectorAll('td.unit-item')).map((td) => parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0);
       if (!nums.length) return;
-      const avail = {};
-      (ordem.length ? ordem : UNITS.map((u) => u[0])).forEach((u, i) => { if (nums[i] != null) avail[u] = nums[i]; });
-      out[vid] = { vid: vid, x: cm ? +cm[1] : null, y: cm ? +cm[2] : null, coord: cm ? (cm[1] + '|' + cm[2]) : null, avail: avail };
+      const t = {};
+      (ordem.length ? ordem : UNITS.map((u) => u[0])).forEach((u, i) => { if (nums[i] != null) t[u] = nums[i]; });
+      out[vid] = { vid: vid, nome: nome, x: cm ? +cm[1] : null, y: cm ? +cm[2] : null,
+                   coord: cm ? (cm[1] + '|' + cm[2]) : null, tropas: t };
     });
-    _tropasCache = out; _tropasCacheAt = Date.now();
+    return out;
+  }
+  // Tropas de TODAS as aldeias. "casa" = o que dá pra mandar agora; "total" = casa + o que
+  // está fora e volta. O total importa pra agendar um ataque full pra daqui a horas:
+  // a tropa pode estar saqueando agora e estar de volta na hora do envio.
+  let _tropasCache = null, _tropasCacheAt = 0, _tropasCacheModo = '';
+  async function ccTropasTodasAldeias(forcar) {
+    const modo = (config.cmd.fonteTropa || 'casa');
+    if (!forcar && _tropasCache && _tropasCacheModo === modo && Date.now() - _tropasCacheAt < 60000) return _tropasCache;
+    const casa = await ccLerAbaTropas('own_home');
+    const out = {};
+    Object.values(casa).forEach((v) => {
+      out[v.vid] = { vid: v.vid, nome: v.nome, x: v.x, y: v.y, coord: v.coord,
+                     casa: v.tropas, avail: Object.assign({}, v.tropas) };
+    });
+    if (modo === 'total') {
+      try {
+        const fora = await ccLerAbaTropas('own_away');
+        Object.values(fora).forEach((v) => {
+          const alvo = out[v.vid] || (out[v.vid] = { vid: v.vid, nome: v.nome, x: v.x, y: v.y, coord: v.coord, casa: {}, avail: {} });
+          Object.entries(v.tropas).forEach(([u, n]) => { alvo.avail[u] = (alvo.avail[u] || 0) + n; });
+        });
+      } catch (e) { pushLog('Não li as tropas fora de casa — usando só as de casa.', 'err', 'cmd'); }
+    }
+    _tropasCache = out; _tropasCacheAt = Date.now(); _tropasCacheModo = modo;
     return out;
   }
 
@@ -983,11 +1013,19 @@
     Object.keys(comp.max).forEach((u) => { const t = (avail && avail[u]) || 0; if (t > 0) a[u] = t; });
     return a;
   }
-  // Serve só pra estimar o tempo antes de saber o estoque: "max" conta como 1 unidade,
-  // porque o que importa pra velocidade é QUAL unidade vai, não quantas.
-  function ccCompParaVelocidade(comp) {
-    const a = Object.assign({}, comp.amounts);
-    Object.keys(comp.max).forEach((u) => { if (!a[u]) a[u] = 1; });
+  // A velocidade tem que sair do que AQUELA aldeia vai realmente mandar, não da composição
+  // global escolhida. Com "tudo" marcado em aríete, uma aldeia sem aríete manda só cavalaria
+  // e chega muito antes — usar a composição global daria 30 min/campo em vez de 10.
+  function ccCompParaVelocidade(comp, avail) {
+    const a = {};
+    Object.entries(comp.amounts).forEach(([u, n]) => {
+      if (!avail) { a[u] = n; return; }
+      if ((avail[u] || 0) >= n) a[u] = n;          // sem estoque, essa unidade não vai — não pesa
+    });
+    Object.keys(comp.max).forEach((u) => {
+      const t = avail ? (avail[u] || 0) : 1;
+      if (t > 0) a[u] = t;
+    });
     return a;
   }
   function cmdAdicionar(tipo, x, y, amounts, arriveAt, origem) {
@@ -1028,11 +1066,11 @@
   // entendeu. É o portão da Fase 3 — sem isso, apoio é suposição.
   // Autoteste do apoio. Só faz o "confirmar" — não envia tropa. É o portão do apoio/snipe:
   // sem ele passar, mandar apoio é suposição.
-  async function ccTestarApoio() {
+  async function ccTestarApoio(silencioso) {
     const out = document.getElementById('cc-teste-out');
-    const diz = (h) => { if (out) out.innerHTML = h; };
+    const diz = (h) => { if (out) out.innerHTML = silencioso ? '' : h; };
     const linhas = [];
-    diz('testando…');
+    diz('verificando apoio…');
     try {
       // 1) O que a praça REALMENTE tem no DOM. Se o nome do parâmetro for outro, corrige sozinho.
       const bA = document.querySelector('#target_attack, input[name="attack"]');
@@ -1059,11 +1097,64 @@
       } else {
         linhas.push('<span style="color:#ff7568">✖ apoio NÃO liberado — o servidor não confirmou como apoio</span>');
       }
-      pushLog('Teste de apoio: tipo "' + p.tipoDetectado + '".', ok ? 'ok' : 'err', 'cmd');
+      pushLog('Verificação de apoio: tipo "' + p.tipoDetectado + '".', ok ? 'ok' : 'err', 'cmd');
+      // Falhando, o aviso aparece mesmo no modo silencioso — senão o Apoio trava sem explicação.
+      if (!ok && out) out.innerHTML = linhas.join('<br>');
+      return ok;
     } catch (e) {
-      linhas.push('<span style="color:#ff7568">falhou: ' + esc(e.message || e) + '</span>');
+      linhas.push('<span style="color:#ff7568">verificação de apoio falhou: ' + esc(e.message || e) + '</span>');
+      if (out) out.innerHTML = linhas.join('<br>');
+      return false;
     }
     diz(linhas.join('<br>'));
+  }
+
+  // Quantos fakes cada combinação origem×alvo geraria, sem armar nada.
+  function ccParesFake() {
+    const alvos = parseCoords((document.getElementById('cc-fake-alvos') || {}).value || '');
+    const origens = CCVILAS.filter((v) => config.cmd.origens[v.vid] && v.x != null);
+    const dist = (document.querySelector('input[name="cc-fakedist"]:checked') || {}).value || 'rodizio';
+    const pares = [];
+    if (!alvos.length || !origens.length) return { pares: pares, alvos: alvos, origens: origens, dist: dist };
+    if (dist === 'todos') {
+      // Cada origem manda 1 fake pra CADA alvo.
+      origens.forEach((o) => alvos.forEach((t) => pares.push({ o: o, t: t })));
+    } else {
+      // Rodízio: 1 fake por alvo, alternando qual aldeia manda — espalha o custo.
+      alvos.forEach((t, i) => pares.push({ o: origens[i % origens.length], t: t }));
+    }
+    return { pares: pares, alvos: alvos, origens: origens, dist: dist };
+  }
+  function ccPreviaFake() {
+    const el = document.getElementById('cc-fake-previa'); if (!el) return;
+    const P = ccParesFake();
+    if (!P.alvos.length) { el.textContent = 'cole os alvos acima'; return; }
+    if (!P.origens.length) { el.textContent = 'marque as origens abaixo'; return; }
+    el.textContent = P.pares.length + ' fake(s) = ' + P.origens.length + ' origem(ns) × ' +
+      P.alvos.length + ' alvo(s) no modo ' + (P.dist === 'todos' ? 'todas × todos' : 'rodízio');
+  }
+  function ccArmarFakes(dizer, arriveAt) {
+    if (!arriveAt) return dizer('Defina o horário de chegada.');
+    if (arriveAt <= srvNowP()) return dizer('Esse horário já passou.');
+    const comp = ccComposicao();
+    if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) return dizer('Escolha as tropas do fake.');
+    const P = ccParesFake();
+    if (!P.alvos.length) return dizer('Cole ao menos um alvo na lista de fakes.');
+    if (!P.origens.length) return dizer('Marque ao menos uma origem.');
+
+    let armados = 0; const pulados = [];
+    P.pares.forEach((p) => {
+      const v = p.o, nome = (v.coord || v.vid) + '→' + p.t.x + '|' + p.t.y;
+      const amounts = ccResolverPara(comp, v.avail);
+      if (!Object.keys(amounts).length) { pulados.push(nome); return; }
+      const t = ccTempoViagemMs(v.x, v.y, p.t.x, p.t.y, amounts);
+      if (t != null && (arriveAt - t) <= srvNowP()) { pulados.push(nome + ' (longe)'); return; }
+      cmdAdicionar('fake', p.t.x, p.t.y, amounts, arriveAt, v.vid);
+      armados++;
+    });
+    if (!armados) return dizer('Nenhum fake armado.' + (pulados.length ? ' Pulados: ' + pulados.length : ''));
+    dizer(armados + ' fake(s) armado(s) em ' + P.alvos.length + ' alvo(s), chegando ' + srvClockMs(arriveAt) +
+          (pulados.length ? ' · ' + pulados.length + ' pulado(s)' : ''), '#8fe39a');
   }
 
   // Arma um comando POR ORIGEM marcada, todos com a MESMA chegada — é isso que faz
@@ -1073,9 +1164,13 @@
     const dizer = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#ff7568'; } };
     const tipo = (document.querySelector('input[name="cc-tipo"]:checked') || {}).value || 'attack';
 
+    const arriveAt0 = ccChegadaMs();
+    // Fake tem caminho próprio: vários alvos de uma vez, com distribuição escolhida.
+    if (tipo === 'fake') return ccArmarFakes(dizer, arriveAt0);
+
     const alvo = ccAlvo();
     if (!alvo) return dizer('Alvo inválido. Use 478|586.');
-    const arriveAt = ccChegadaMs();
+    const arriveAt = arriveAt0;
     if (!arriveAt) return dizer('Defina o horário de chegada.');
     if (arriveAt <= srvNowP()) return dizer('Esse horário já passou.');
     if (tipo === 'support' && !config.cmd.suporteOkAt) {
@@ -1099,18 +1194,25 @@
     }
 
     let armados = 0, pulados = [];
+    let semTropaAgora = 0;
     marcadas.forEach((v) => {
+      const nome = v.coord || v.vid;
       const amounts = ccResolverPara(comp, v.avail);
-      if (!Object.keys(amounts).length) { pulados.push(v.coord || v.vid); return; }
-      // Checa se dá tempo: se a viagem é mais longa que o tempo até a chegada, é impossível.
+      if (!Object.keys(amounts).length) { pulados.push(nome + ' (nada a enviar)'); return; }
+      // Tropa faltando NÃO impede agendar: você pode estar marcando um ataque full pra daqui
+      // a horas, com a tropa saqueando agora. O preparo (60s antes) é que confere de verdade.
+      if (!ccTemTropa(v, comp)) semTropaAgora++;
+      // Tempo pela composição REAL desta aldeia — não pela global.
       const t = (v.x != null) ? ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, amounts) : null;
-      if (t != null && (arriveAt - t) <= srvNowP()) { pulados.push((v.coord || v.vid) + ' (longe demais)'); return; }
+      if (t != null && (arriveAt - t) <= srvNowP()) { pulados.push(nome + ' (longe demais)'); return; }
       cmdAdicionar(tipo, alvo.x, alvo.y, amounts, arriveAt, v.vid);
       armados++;
     });
     if (!armados) return dizer('Nenhum comando armado. ' + (pulados.length ? 'Pulados: ' + pulados.join(', ') : ''));
     dizer(armados + ' comando(s) armado(s) chegando ' + srvClockMs(arriveAt) +
-          (pulados.length ? ' · pulados: ' + pulados.join(', ') : ''), '#8fe39a');
+          (semTropaAgora ? ' · ' + semTropaAgora + ' sem a tropa completa agora (confere no preparo)' : '') +
+          (pulados.length ? ' · pulados: ' + pulados.join(', ') : ''),
+          semTropaAgora ? '#ffd76a' : '#8fe39a');
   }
 
   // Alvo: aceita "478|586", "478 586", "478|586:1" etc.
@@ -1118,6 +1220,24 @@
     const raw = ((document.getElementById('cc-alvo') || {}).value || '').trim();
     const m = raw.match(/(\d{1,3})\s*[|\s.,;:-]\s*(\d{1,3})/);
     return m ? { x: m[1], y: m[2], coord: m[1] + '|' + m[2] } : null;
+  }
+
+  // Nome da aldeia alvo, do village.txt (que já é cacheado 6h por outro módulo).
+  // Carrega em segundo plano: se ainda não tem, mostra só a coordenada.
+  let _mapaNomes = null, _mapaNomesCarregando = false;
+  function ccNomeAlvo(coord) {
+    if (!_mapaNomes) {
+      if (!_mapaNomesCarregando) {
+        _mapaNomesCarregando = true;
+        getMapVillages(false).then((arr) => {
+          const m = {};
+          arr.forEach((v) => { m[v.x + '|' + v.y] = v.name; });
+          _mapaNomes = m; ccRender();
+        }).catch(() => { _mapaNomes = {}; });
+      }
+      return '';
+    }
+    return _mapaNomes[coord] || '';
   }
 
   // Uma origem "tem tropa" se atende TODAS as quantidades pedidas e, para as unidades
@@ -1152,23 +1272,23 @@
     const cont = document.getElementById('cc-origens'); if (!cont) return;
     const alvo = ccAlvo();
     const comp = ccComposicao();
-    const compVel = ccCompParaVelocidade(comp);
-    const temComp = Object.keys(compVel).length > 0;
-    const lenta = ccUnidadeLenta(compVel);
+    const temComp = (Object.keys(comp.amounts).length + Object.keys(comp.max).length) > 0;
     const sel = config.cmd.origens || {};
+    const ch = ccChegadaMs();
 
     const linhas = CCVILAS.map((v) => {
       const d = (alvo && v.x != null) ? fieldDist(v.x, v.y, +alvo.x, +alvo.y) : null;
-      const t = (alvo && temComp && v.x != null) ? ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, compVel) : null;
+      // Composição REAL desta aldeia — é dela que sai a unidade mais lenta e, portanto, o tempo.
+      const compV = temComp ? ccCompParaVelocidade(comp, v.avail) : {};
+      const lentaV = ccUnidadeLenta(compV);
+      const t = (alvo && lentaV && v.x != null) ? ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, compV) : null;
       const temTropa = temComp ? ccTemTropa(v, comp) : true;
-      // Dá tempo? Só dá pra saber com alvo, chegada e composição definidos.
-      const ch = ccChegadaMs();
       const daTempo = (t == null || !ch) ? null : ((ch - t) > srvNowP());
-      return { v: v, d: d, t: t, temTropa: temTropa, daTempo: daTempo };
+      return { v: v, d: d, t: t, temTropa: temTropa, daTempo: daTempo, lenta: lentaV };
     });
     linhas.sort((a, b) => (a.d == null ? 1e9 : a.d) - (b.d == null ? 1e9 : b.d));
 
-    const ch = ccChegadaMs();
+    const rotUn = {}; UNITS.forEach(([u, n]) => { rotUn[u] = n; });
     cont.innerHTML = linhas.map((L) => {
       const v = L.v, on = !!sel[v.vid];
       let sit, cor;
@@ -1176,13 +1296,25 @@
       else if (L.daTempo === false) { sit = '⚠ longe demais'; cor = '#ff7568'; }
       else if (L.t != null && ch) { sit = 'sai ' + srvClockMs(ch - L.t); cor = '#8fe39a'; }
       else { sit = ''; cor = '#8f7d57'; }
-      return '<label style="display:grid;grid-template-columns:18px 74px 52px 78px 1fr;gap:6px;align-items:center;' +
-             'padding:2px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px;cursor:pointer">' +
-        '<input type="checkbox" data-cc-org="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
-        '<span style="color:#e6cf7d">' + esc(v.coord || v.vid) + '</span>' +
-        '<span style="color:#8f7d57">' + (L.d == null ? '—' : L.d.toFixed(1) + ' c') + '</span>' +
-        '<span style="color:#cbb98f">' + (L.t == null ? '—' : fmt(L.t)) + '</span>' +
-        '<span style="color:' + cor + '">' + sit + '</span>' +
+      // Estoque de cada unidade, pra dar a visão geral sem abrir aldeia por aldeia.
+      const tropas = UNITS.map(([u, n]) => {
+        const q = (v.avail && v.avail[u]) || 0;
+        if (!q) return '';
+        const pedida = (comp.amounts[u] != null) || comp.max[u];
+        const falta = comp.amounts[u] != null && q < comp.amounts[u];
+        return '<span title="' + esc(n) + '" style="color:' + (falta ? '#ff7568' : pedida ? '#ffd76a' : '#6b5c3f') + '">' +
+               unitIcon(u, n) + fmtN(q) + '</span>';
+      }).filter(Boolean).join(' ');
+      return '<label style="display:block;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer">' +
+        '<span style="display:grid;grid-template-columns:18px 74px 52px 78px 52px 1fr;gap:6px;align-items:center;font-size:10px">' +
+          '<input type="checkbox" data-cc-org="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
+          '<span style="color:#e6cf7d" title="' + esc(v.nome || '') + '">' + esc(v.coord || v.vid) + '</span>' +
+          '<span style="color:#8f7d57">' + (L.d == null ? '—' : L.d.toFixed(1) + ' c') + '</span>' +
+          '<span style="color:#cbb98f">' + (L.t == null ? '—' : fmt(L.t)) + '</span>' +
+          '<span style="color:#8f7d57" title="unidade mais lenta que sai desta aldeia">' + (L.lenta ? esc(rotUn[L.lenta] || L.lenta) : '—') + '</span>' +
+          '<span style="color:' + cor + '">' + sit + '</span>' +
+        '</span>' +
+        (tropas ? '<span style="display:block;font-size:9px;margin:1px 0 0 24px;line-height:1.5">' + tropas + '</span>' : '') +
       '</label>';
     }).join('') || '<div style="color:#8f7d57;padding:6px;font-size:10px">— nenhuma aldeia —</div>';
 
@@ -1197,8 +1329,14 @@
     const av = document.getElementById('cc-vel-aviso');
     if (av) {
       const m = config.cmd.mundo || {};
+      // A unidade mais lenta varia por aldeia quando tem "tudo" marcado, então o cabeçalho
+      // só afirma uma quando ela é a mesma em todas.
+      const lentas = Array.from(new Set(linhas.map((L) => L.lenta).filter(Boolean)));
+      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+      const txtLenta = lentas.length === 1 ? ('<b>' + esc(rot[lentas[0]] || lentas[0]) + '</b>')
+                     : lentas.length ? '<b>varia por aldeia</b>' : '<b>—</b>';
       av.innerHTML = !temComp ? '<span style="color:#8f7d57">digite as tropas pra ver os tempos</span>'
-        : ('unidade mais lenta: <b>' + (lenta || '—') + '</b> · mundo ' + (m.speed || 1) + '×/' + (m.unitSpeed || 1) + '×' +
+        : ('unidade mais lenta: ' + txtLenta + ' · mundo ' + (m.speed || 1) + '×/' + (m.unitSpeed || 1) + '×' +
            (m.confiavel ? '' : ' · <span style="color:#ffd76a">velocidades de reserva (o servidor confirma no preparo)</span>'));
     }
     ccResumo();
@@ -1227,6 +1365,8 @@
       const dev = (c.desvioMs == null) ? '' : ((c.desvioMs >= 0 ? '+' : '') + c.desvioMs + 'ms');
       const vo = CCVILAS.find((z) => String(z.vid) === String(c.origin));
       const org = vo ? (vo.coord || vo.vid) : c.origin;
+      const orgNome = vo && vo.nome ? vo.nome : '';
+      const alvoNome = ccNomeAlvo(c.x + '|' + c.y);
       const rot = { support: 'apoio', fake: 'fake', nobre: 'nobre' }[c.tipo] || 'ataque';
       // Horário de saída: já confirmado pelo servidor (c.sendAt) ou, antes do preparo,
       // a estimativa local. A estimativa aparece com "~" pra não passar por certeza.
@@ -1236,10 +1376,12 @@
         const est = ccEstimaDeComando(c);
         if (est != null && c.arriveAt) { saiTxt = '~' + srvClockMs(c.arriveAt - est); saiCor = '#cbb98f'; }
       }
-      return '<div style="display:grid;grid-template-columns:42px 60px 60px 1fr 78px 78px 56px 18px;gap:4px;align-items:center;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px">' +
+      return '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;align-items:center;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px">' +
         '<span style="color:' + (c.tipo === 'support' ? '#7fc8ff' : '#ffb08a') + '">' + rot + (c.ondas ? ' ' + c.onda + '/' + c.ondas : '') + '</span>' +
-        '<span style="color:#8f7d57" title="origem">' + esc(String(org)) + '</span>' +
-        '<span style="color:#e6cf7d">' + esc(c.x + '|' + c.y) + '</span>' +
+        '<span style="color:#8f7d57;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(orgNome || String(org)) + '">' +
+          esc(String(org)) + (orgNome ? '<br><span style="color:#6b5c3f">' + esc(orgNome) + '</span>' : '') + '</span>' +
+        '<span style="color:#e6cf7d;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(alvoNome || (c.x + '|' + c.y)) + '">' +
+          esc(c.x + '|' + c.y) + (alvoNome ? '<br><span style="color:#8f7d57">' + esc(alvoNome) + '</span>' : '') + '</span>' +
         '<span style="color:' + (corDe[c.state] || '#cbb98f') + '">' + esc(c.state) + (c.erro ? ' · ' + esc(c.erro.slice(0, 40)) : '') + '</span>' +
         '<span style="color:' + saiCor + '" title="horário de saída">' + saiTxt + '</span>' +
         '<span style="color:#cbb98f">' + (c.arriveAt ? srvClockMs(c.arriveAt) : '—') + '</span>' +
@@ -1302,7 +1444,19 @@
       row('Tipo',
         '<label style="margin-right:10px"><input type="radio" name="cc-tipo" value="attack" checked> ⚔ Ataque</label>' +
         '<label style="margin-right:10px"><input type="radio" name="cc-tipo" value="support"> 🛡 Apoio</label>' +
-        '<label><input type="radio" name="cc-tipo" value="nobre"> 👑 Trem</label>') +
+        '<label style="margin-right:10px"><input type="radio" name="cc-tipo" value="nobre"> 👑 Trem</label>' +
+        '<label><input type="radio" name="cc-tipo" value="fake"> 🎭 Fake</label>') +
+      // Fake: dezenas de alvos de uma vez, com duas distribuições possíveis.
+      '<div id="cc-fake-cfg" style="display:none">' +
+        '<div style="font-size:10px;color:#cbb98f;margin:4px 0 2px">Alvos do fake (cole vários)</div>' +
+        '<textarea id="cc-fake-alvos" class="twmgr-inp" style="width:100%;height:54px;font-size:10px" ' +
+          'placeholder="478|586 479|587 480|588 …"></textarea>' +
+        '<div style="font-size:10px;margin:3px 0">' +
+          '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="cc-fakedist" value="rodizio"> rodízio — 1 fake por alvo, alternando as origens</label><br>' +
+          '<label style="cursor:pointer"><input type="radio" name="cc-fakedist" value="todos"> todas × todos — cada origem manda 1 fake pra cada alvo</label>' +
+        '</div>' +
+        '<div id="cc-fake-previa" style="font-size:10px;color:#ffd76a;margin-bottom:4px"></div>' +
+      '</div>' +
       '<div id="cc-trem-cfg" style="display:none">' +
         row('Ondas do trem',
           '<input id="cc-trem-n" class="twmgr-inp" type="number" min="2" max="8" value="4" style="width:56px">' +
@@ -1343,22 +1497,27 @@
             '<a id="cc-org-recarregar" style="cursor:pointer;color:#e6cf7d">↻</a>' +
           '</span>' +
         '</div>' +
+        // "total" conta a tropa que está fora e volta — necessário pra agendar um full
+        // pra daqui a horas com a tropa saqueando agora.
+        '<div style="font-size:10px;margin-bottom:3px">' +
+          '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="cc-fonte" value="casa"> só o que está em casa</label>' +
+          '<label style="cursor:pointer"><input type="radio" name="cc-fonte" value="total"> incluir tropa fora (volta a tempo)</label>' +
+        '</div>' +
         '<div id="cc-vel-aviso" style="font-size:10px;color:#8f7d57;margin-bottom:3px"></div>' +
-        '<div style="display:grid;grid-template-columns:18px 74px 52px 78px 1fr;gap:6px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
-          '<span></span><span>aldeia</span><span>dist.</span><span>viagem</span><span>saída</span></div>' +
+        '<div style="display:grid;grid-template-columns:18px 74px 52px 78px 52px 1fr;gap:6px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
+          '<span></span><span>aldeia</span><span>dist.</span><span>viagem</span><span>mais lenta</span><span>saída</span></div>' +
         '<div id="cc-origens" style="max-height:170px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
         '<div id="cc-resumo" style="font-size:10px;color:#cbb98f;margin-top:3px"></div>' +
       '</div>' +
       '<div style="display:flex;gap:6px;align-items:center">' +
         '<button id="cc-armar" class="twmgr-btn twmgr-go" style="flex:1">▶ Armar comando</button>' +
-        '<button id="cc-teste" class="twmgr-btn twmgr-ghost" title="faz só o confirmar, não envia">🔍 Testar apoio</button>' +
         '<button id="cc-limpar" class="twmgr-btn twmgr-ghost" title="remove enviados/erros da lista">🧹</button>' +
       '</div>' +
       '<div id="cc-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
       '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
       '<div style="margin-top:8px;border-top:1px solid #3a2e1b;padding-top:6px">' +
         '<div style="font-size:10px;color:#e8d29a;font-weight:600;margin-bottom:3px">Fila</div>' +
-        '<div style="display:grid;grid-template-columns:42px 60px 60px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
+        '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
           '<span>tipo</span><span>de</span><span>para</span><span>estado</span><span>sai</span><span>chegada</span><span>falta</span><span></span></div>' +
         '<div id="cc-fila" style="max-height:180px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
       '</div>';
@@ -1366,7 +1525,6 @@
     // keepAwake PRECISA ser chamado sincronamente dentro do gesto, antes de qualquer await,
     // senão o AudioContext fica 'suspended' e o antichoke não vale nada.
     document.getElementById('cc-armar').addEventListener('click', () => { keepAwake(true); ccArmar(); });
-    document.getElementById('cc-teste').addEventListener('click', ccTestarApoio);
     document.getElementById('cc-limpar').addEventListener('click', cmdLimpar);
     // Mostra os campos do trem só quando o tipo é trem, e avisa quando o intervalo pedido
     // fica abaixo do jitter medido — aí a ORDEM das ondas vira sorteio.
@@ -1374,6 +1532,12 @@
       const tipo = (document.querySelector('input[name="cc-tipo"]:checked') || {}).value;
       const cfg = document.getElementById('cc-trem-cfg');
       if (cfg) cfg.style.display = (tipo === 'nobre') ? 'block' : 'none';
+      const fk = document.getElementById('cc-fake-cfg');
+      if (fk) fk.style.display = (tipo === 'fake') ? 'block' : 'none';
+      // O campo de alvo único não serve pro fake (que usa a lista) — deixa claro.
+      const al = document.getElementById('cc-alvo');
+      if (al) { al.disabled = (tipo === 'fake'); al.style.opacity = (tipo === 'fake') ? '.4' : '1'; }
+      if (tipo === 'fake') ccPreviaFake();
       const av = document.getElementById('cc-trem-aviso');
       if (av && tipo === 'nobre') {
         const gap = parseInt((document.getElementById('cc-trem-gap') || {}).value, 10) || 150;
@@ -1434,9 +1598,26 @@
     document.getElementById('cc-tpl-fake').onclick = () => { limpar(); const r = document.getElementById('cc-u-ram'); if (r) r.value = '1'; const e = document.getElementById('cc-u-spy'); if (e) e.value = '1'; recalc(); };
 
     // Seleção de origens
+    // Fake: prévia ao vivo de quantos comandos a combinação atual geraria.
+    const fkAlvos = document.getElementById('cc-fake-alvos');
+    fkAlvos.value = config.cmd.fakeAlvos || '';
+    fkAlvos.addEventListener('input', () => { config.cmd.fakeAlvos = fkAlvos.value; save(); ccPreviaFake(); });
+    document.querySelectorAll('input[name="cc-fakedist"]').forEach((r) => {
+      r.checked = (r.value === (config.cmd.fakeDist || 'rodizio'));
+      r.addEventListener('change', () => { if (r.checked) { config.cmd.fakeDist = r.value; save(); ccPreviaFake(); } });
+    });
+
     document.getElementById('cc-org-todas').onclick = () => { CCVILAS.forEach((v) => config.cmd.origens[v.vid] = true); save(); ccRenderOrigens(); };
     document.getElementById('cc-org-nenhuma').onclick = () => { config.cmd.origens = {}; save(); ccRenderOrigens(); };
     document.getElementById('cc-org-recarregar').onclick = () => ccCarregarOrigens(true);
+    document.querySelectorAll('input[name="cc-fonte"]').forEach((r) => {
+      r.checked = (r.value === (config.cmd.fonteTropa || 'casa'));
+      r.addEventListener('change', () => {
+        if (!r.checked) return;
+        config.cmd.fonteTropa = r.value; save();
+        ccCarregarOrigens(true);   // muda a fonte -> tem que reler
+      });
+    });
     // Marca só as origens que atendem os DOIS critérios: têm a tropa pedida E ainda dá tempo.
     document.getElementById('cc-org-viaveis').onclick = () => {
       const alvo = ccAlvo(), ch = ccChegadaMs(), comp = ccComposicao();
@@ -1445,13 +1626,13 @@
         if (msg) { msg.style.color = '#ff7568'; msg.textContent = 'Preencha o alvo e a chegada primeiro.'; }
         return;
       }
-      const compVel = ccCompParaVelocidade(comp);
       let ok = 0, semTropa = 0, semTempo = 0;
       config.cmd.origens = {};
       CCVILAS.forEach((v) => {
         if (v.x == null) return;
         if (!ccTemTropa(v, comp)) { semTropa++; return; }
-        const t = ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, compVel);
+        const compV = ccCompParaVelocidade(comp, v.avail);   // por aldeia, não global
+        const t = ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, compV);
         if (t == null || (ch - t) <= srvNowP()) { semTempo++; return; }
         config.cmd.origens[v.vid] = true; ok++;
       });
@@ -1465,6 +1646,9 @@
     };
 
     ccCarregarOrigens(false);
+    // Verifica o apoio uma vez por mundo, sozinho. Só faz o "confirmar" — não envia tropa.
+    // Sem isso o tipo Apoio ficaria travado sem o usuário saber como destravar.
+    if (!config.cmd.suporteOkAt) setTimeout(() => ccTestarApoio(true), 2500);
     setInterval(ccTick, 100);        // relógio com milésimos precisa de tick rápido
     ccTick();
     netProbe(5);
@@ -1484,6 +1668,8 @@
       probe: () => netProbe(7).then((r) => (console.log('[cc] rtt min/med/jitter:', r), r)),
       relogio: () => ({ offset: wallToServerOffset(), drift: ancorar(), agora: srvClockMs() }),
       silencio: (ms) => { silenceOn('teste'); setTimeout(silenceOff, ms || 5000); },
+      testarApoio: () => ccTestarApoio(false),
+      fakes: () => ccParesFake(),
       estado: () => ({ fila: cmdFila(), calib: config.cmd.calib, lat: NETLAT, silencio: SILENCE.on }),
     };
   }

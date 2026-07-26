@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.29.1
+// @version      9.29.2
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.29.1';
+  const VERSION = '9.29.2';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1232,6 +1232,63 @@
     }
     return { pares: pares, alvos: alvos, origens: origens, dist: dist };
   }
+  // Relatório do estado interno, copiado pra área de transferência com um clique.
+  // Existe porque o console do Chrome bloqueia colar comando até o usuário digitar
+  // "allow pasting", o que trava o diagnóstico justamente quando ele é necessário.
+  async function ccDiagnostico() {
+    const msg = document.getElementById('cc-msg');
+    const L = [];
+    L.push('TW Manager v' + VERSION + ' · mundo ' + WORLD + ' · ' + new Date().toISOString());
+    L.push('fonteTropa=' + (config.cmd.fonteTropa || '?') + '  suporteOkAt=' + (config.cmd.suporteOkAt || 0));
+    L.push('mundo: speed=' + (config.cmd.mundo.speed) + ' unitSpeed=' + (config.cmd.mundo.unitSpeed) +
+           ' confiavel=' + config.cmd.mundo.confiavel + ' fatorAjuste=' + (config.cmd.mundo.fatorAjuste || 1));
+    L.push('unidades do mundo: ' + (CC_UNIDADES_MUNDO ? CC_UNIDADES_MUNDO.join(',') : '(não lido)'));
+    L.push('latencia rttMin=' + Math.round(NETLAT.rttMin) + ' jitter=' + Math.round(NETLAT.jitter) +
+           ' erroEstimado=' + erroEstimadoMs() + 'ms  drift=' + Math.round(CLK.driftMs || 0));
+    L.push('CCVILAS=' + CCVILAS.length + ' aldeias · fila=' + cmdFila().length + ' · silencio=' + SILENCE.on);
+    L.push('');
+    L.push('--- ORIGENS (avail = fonte em uso) ---');
+    CCVILAS.slice(0, 30).forEach((v) => {
+      const fmtT = (o) => Object.entries(o || {}).filter(([, n]) => n > 0).map(([u, n]) => u + '=' + n).join(' ') || '(vazio)';
+      L.push((v.coord || v.vid) + ' "' + (v.nome || '') + '"');
+      L.push('   avail   : ' + fmtT(v.avail));
+      L.push('   casa    : ' + fmtT(v.casa));
+      L.push('   minhas  : ' + fmtT(v.minhas));
+      L.push('   fora    : ' + fmtT(v.fora) + '  | transito: ' + fmtT(v.transito));
+    });
+    L.push('');
+    L.push('--- FILA ---');
+    cmdFila().slice(0, 20).forEach((c) => {
+      L.push([c.tipo, c.origin + '->' + c.x + '|' + c.y, c.state,
+              'chega=' + (c.arriveAt ? srvClockMs(c.arriveAt) : '-'),
+              'sai=' + (c.sendAt ? srvClockMs(c.sendAt) : '-'),
+              'dur=' + (c.durMs != null ? Math.round(c.durMs / 1000) + 's' : '-'),
+              'desvio=' + (c.desvioMs != null ? c.desvioMs + 'ms' : '-'),
+              c.erro ? ('ERRO: ' + c.erro) : ''].join(' | '));
+    });
+    L.push('');
+    L.push('--- LOG (cmd) ---');
+    readLogArr().filter((x) => x.mod === 'cmd').slice(0, 25).forEach((x) => L.push('[' + x.t + '] ' + x.m));
+    const txt = L.join('\n');
+    let ok = false;
+    try { await navigator.clipboard.writeText(txt); ok = true; } catch (e) {}
+    if (!ok) {   // clipboard bloqueado: cai pro textarea + execCommand, que quase sempre passa
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = txt; ta.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(ta); ta.select();
+        ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch (e) {}
+    }
+    console.log(txt);
+    if (msg) {
+      msg.style.color = ok ? '#8fe39a' : '#ffd76a';
+      msg.textContent = ok ? 'Diagnóstico copiado — é só colar aqui no chat.'
+                           : 'Não consegui copiar; o relatório saiu no console (F12).';
+    }
+  }
+
   function ccPreviaFake() {
     const el = document.getElementById('cc-fake-previa'); if (!el) return;
     const P = ccParesFake();
@@ -1626,6 +1683,7 @@
       '<div style="display:flex;gap:6px;align-items:center">' +
         '<button id="cc-armar" class="twmgr-btn twmgr-go" style="flex:1">▶ Armar comando</button>' +
         '<button id="cc-limpar" class="twmgr-btn twmgr-ghost" title="remove enviados/erros da lista">🧹</button>' +
+        '<button id="cc-diag" class="twmgr-btn twmgr-ghost" title="copia um relatório do estado interno pra área de transferência">🐛</button>' +
       '</div>' +
       '<div id="cc-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
       '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
@@ -1640,6 +1698,7 @@
     // senão o AudioContext fica 'suspended' e o antichoke não vale nada.
     document.getElementById('cc-armar').addEventListener('click', () => { keepAwake(true); ccArmar(); });
     document.getElementById('cc-limpar').addEventListener('click', cmdLimpar);
+    document.getElementById('cc-diag').addEventListener('click', ccDiagnostico);
     // Mostra os campos do trem só quando o tipo é trem, e avisa quando o intervalo pedido
     // fica abaixo do jitter medido — aí a ORDEM das ondas vira sorteio.
     const attTrem = () => {

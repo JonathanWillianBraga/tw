@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.28.0
+// @version      9.28.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.28.0';
+  const VERSION = '9.28.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -939,25 +939,57 @@
   async function ccLerAbaTropas(type) {
     const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=' + type + '&page=-1', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    // Descobre a ordem das colunas pelo cabeçalho (varia por mundo: com/sem arqueiro, paladino…)
-    const ordem = [];
-    doc.querySelectorAll('th img[src*="unit_"], th [class*="unit-item-"]').forEach((el) => {
-      const s = el.getAttribute('src') || el.className || '';
-      const mm = s.match(/unit[_-](\w+?)(?:\.png|\b)/);
-      if (mm && !ordem.includes(mm[1])) ordem.push(mm[1]);
+    // A ordem das colunas TEM que sair do cabeçalho DESTA tabela. Procurar 'th' no documento
+    // inteiro pegava imagens de unidade de outras tabelas/menus e desalinhava tudo — era isso
+    // que fazia bárbaro ler a coluna errada e cavalaria cair numa coluna vazia.
+    let tabela = null, maisCelulas = 0;
+    doc.querySelectorAll('table').forEach((tb) => {
+      const n = tb.querySelectorAll('td.unit-item').length;
+      if (n > maisCelulas) { maisCelulas = n; tabela = tb; }
     });
+    if (!tabela) throw new Error('não achei a tabela de tropas');
+
+    const ordem = [];
+    const cab = tabela.querySelector('thead tr') || tabela.querySelector('tr');
+    if (cab) {
+      cab.querySelectorAll('th').forEach((th) => {
+        const img = th.querySelector('img[src*="unit_"]');
+        const cls = th.querySelector('[class*="unit-item-"]');
+        let u = null;
+        if (img) { const m = (img.getAttribute('src') || '').match(/unit_(\w+)\./); u = m ? m[1] : null; }
+        if (!u && cls) { const m = (cls.className || '').match(/unit-item-(\w+)/); u = m ? m[1] : null; }
+        if (u) ordem.push(u);
+      });
+    }
+
     const out = {};
-    doc.querySelectorAll('tr').forEach((tr) => {
+    let avisou = false;
+    tabela.querySelectorAll('tr').forEach((tr) => {
       const q = tr.querySelector('span.quickedit-vn[data-id], .quickedit-out[data-id]');
       if (!q) return;
       const vid = q.getAttribute('data-id'); if (!vid) return;
+      if (out[vid]) return;                       // uma linha por aldeia; ignora repetição
       const lbl = tr.querySelector('.quickedit-label');
       const cm = lbl ? (lbl.textContent || '').match(/(\d{1,3})\|(\d{1,3})/) : null;
       const nome = lbl ? (lbl.textContent || '').replace(/\s*\(\d{1,3}\|\d{1,3}\)\s*K?\d*\s*$/, '').replace(/\s+/g, ' ').trim() : '';
-      const nums = Array.from(tr.querySelectorAll('td.unit-item')).map((td) => parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0);
-      if (!nums.length) return;
+      const cels = Array.from(tr.querySelectorAll('td.unit-item'));
+      if (!cels.length) return;
+      // Se cabeçalho e linha discordam no número de colunas, o mapeamento seria chute.
+      // Melhor gritar do que mostrar número errado em silêncio.
+      if (ordem.length && cels.length !== ordem.length && !avisou) {
+        avisou = true;
+        pushLog('Leitura de tropas: ' + ordem.length + ' colunas no cabeçalho mas ' + cels.length +
+                ' na linha. Números podem sair trocados — rode __cc.dumpTropas().', 'err', 'cmd');
+      }
+      const nums = cels.map((td) => {
+        // Só o texto direto da célula: tooltips/filhos escondidos colariam dígitos.
+        const txt = (td.childNodes.length ? Array.from(td.childNodes)
+          .filter((n) => n.nodeType === 3).map((n) => n.nodeValue).join('') : td.textContent) || td.textContent || '';
+        return parseInt(txt.replace(/\D/g, ''), 10) || 0;
+      });
       const t = {};
-      (ordem.length ? ordem : UNITS.map((u) => u[0])).forEach((u, i) => { if (nums[i] != null) t[u] = nums[i]; });
+      const chaves = (ordem.length === cels.length && ordem.length) ? ordem : UNITS.map((u) => u[0]);
+      chaves.forEach((u, i) => { if (nums[i] != null) t[u] = nums[i]; });
       out[vid] = { vid: vid, nome: nome, x: cm ? +cm[1] : null, y: cm ? +cm[2] : null,
                    coord: cm ? (cm[1] + '|' + cm[2]) : null, tropas: t };
     });
@@ -1670,6 +1702,38 @@
       silencio: (ms) => { silenceOn('teste'); setTimeout(silenceOff, ms || 5000); },
       testarApoio: () => ccTestarApoio(false),
       fakes: () => ccParesFake(),
+      // Diagnóstico da leitura de tropas: mostra a estrutura real da tabela do jogo
+      // pra comparar com o que o parser extraiu.
+      dumpTropas: async (type) => {
+        const t = type || 'own_home';
+        const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=' + t + '&page=-1', { credentials: 'include' });
+        const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+        const tabelas = Array.from(doc.querySelectorAll('table')).map((tb, i) => ({
+          i: i, id: tb.id || '', classe: tb.className || '',
+          linhas: tb.querySelectorAll('tr').length,
+          unitItems: tb.querySelectorAll('td.unit-item').length,
+        })).filter((x) => x.unitItems > 0);
+        const ths = Array.from(doc.querySelectorAll('th')).map((th) => {
+          const img = th.querySelector('img[src*="unit_"]');
+          return img ? (img.getAttribute('src').match(/unit_(\w+)\./) || [])[1] : (th.textContent || '').trim().slice(0, 14);
+        });
+        const linha = doc.querySelector('tr:has(span.quickedit-vn[data-id])') ||
+                      Array.from(doc.querySelectorAll('tr')).find((tr) => tr.querySelector('span.quickedit-vn[data-id], .quickedit-out[data-id]'));
+        const amostra = linha ? {
+          html: linha.outerHTML.slice(0, 1200),
+          celulas: Array.from(linha.querySelectorAll('td')).map((td) => ({
+            classe: td.className || '', txt: (td.textContent || '').trim().slice(0, 20),
+          })),
+        } : null;
+        const parsed = await ccLerAbaTropas(t);
+        const chaves = Object.keys(parsed).slice(0, 3);
+        console.log('=== ' + t + ' ===');
+        console.log('tabelas com unit-item:', tabelas);
+        console.log('cabeçalhos (th):', ths);
+        console.log('amostra de linha:', amostra);
+        console.log('parser extraiu (3 primeiras):', chaves.map((k) => parsed[k]));
+        return { tabelas, ths, amostra, exemplo: chaves.map((k) => parsed[k]) };
+      },
       estado: () => ({ fila: cmdFila(), calib: config.cmd.calib, lat: NETLAT, silencio: SILENCE.on }),
     };
   }

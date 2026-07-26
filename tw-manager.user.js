@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      9.96.0
+// @version      9.97.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '9.96.0';
+  const VERSION = '9.97.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -742,7 +742,15 @@
     const r2 = await fetch(absUrl(action), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p2.toString() });
     const t2 = await r2.text();
     // Só considera enviado se NÃO veio caixa de erro nem mensagem de recusa (senão o log logava falso "enviado").
-    try { const d2 = new DOMParser().parseFromString(t2, 'text/html'); const eb = d2.querySelector('.error_box'); if (eb && (eb.textContent || '').trim()) throw new Error('recusado: ' + eb.textContent.trim().replace(/\s+/g, ' ').slice(0, 80)); } catch (e) { if (/^recusado:/.test(e.message)) throw e; }
+    // "Selecione uma aldeia alvo" também é o texto PADRÃO da praça sem alvo escolhido — que é o estado
+    // da tela logo após um envio dar certo. Então essa mensagem é AMBÍGUA: pode ser recusa ou sucesso.
+    // Marcada à parte pra quem chama não reenviar por outra origem e acabar mandando ataque dobrado.
+    try {
+      const d2 = new DOMParser().parseFromString(t2, 'text/html');
+      const eb = d2.querySelector('.error_box');
+      const et = eb ? (eb.textContent || '').trim().replace(/\s+/g, ' ') : '';
+      if (et) throw new Error((/selecione uma aldeia alvo/i.test(et) ? 'ambiguo: ' : 'recusado: ') + et.slice(0, 80));
+    } catch (e) { if (/^(recusado|ambiguo):/.test(e.message)) throw e; }
     if (/n[aã]o (tem|h[aá]) (tropas|unidades)|insuficient|not enough/i.test(t2)) throw new Error('Servidor recusou: tropas insuficientes.');
     return dur && dur > 0 ? dur : null;
   }
@@ -1116,6 +1124,7 @@
     else eligible.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
     let count = 0, errs = 0;   // errs = envios recusados APÓS a origem passar na pré-checagem de tropa
     let _farmSaveAt = 0;       // throttle da gravação imediata do carimbo de envio
+    let incertos = 0, calcCount = 0;   // envios de resultado ambíguo · envios por quantidade calculada
     // Limite de fake do mundo: o ataque precisa ter no mínimo (pontos da ORIGEM × pct)% de população.
     // Quem estoura isso é a origem grande, não o alvo — então o bloqueio é por origem+modo e vale pro
     // ciclo todo. Assim uma aldeia grande demais pro template B é descartada após UM erro, não a cada alvo.
@@ -1164,13 +1173,16 @@
       const cands = myV.map((s) => ({ s: s, d: fieldDist(s.x, s.y, tx, ty) })).filter((o) => o.d <= maxDist).sort((a, b) => a.d - b.d);
       if (!cands.length) { skip.dist++; continue; }
       const estCL = Math.max(1, Math.ceil((mode === 'b' ? sum * 1.2 : sum) / 80));   // CL estimada do envio (p/ descontar da origem)
-      let did = false, usedName = '', usedDist = 0;
+      let did = false, usedName = '', usedDist = 0, incerto = false, usedCalc = false;
       for (const c of cands) {
-        if (fakeBlock[c.s.vid + '|' + mode]) continue;   // origem já reprovada no limite de fake neste ciclo
-        // Proativo: origem grande demais pro template nem é tentada (economiza a requisição do erro).
-        if (!dyn && mode !== 'c' && vPoints && tplPop[mode] > 0) {
-          const pts = parseInt(vPoints[String(c.s.vid)], 10) || 0;
-          if (pts > 0 && tplPop[mode] < Math.ceil((fakePct / 100) * pts)) { fakeBlock[c.s.vid + '|' + mode] = true; continue; }
+        // Origem reprovada no limite de fake: em vez de pular, manda quantidade CALCULADA que cumpre
+        // o mínimo do mundo (fallback). Só pula de vez se não der pra calcular (sem pontos da aldeia).
+        let useCalc = false;
+        const ptsC = vPoints ? (parseInt(vPoints[String(c.s.vid)], 10) || 0) : 0;
+        const minPopC = ptsC > 0 ? Math.ceil((fakePct / 100) * ptsC) : 0;
+        if (mode !== 'c' && (fakeBlock[c.s.vid + '|' + mode] || (!dyn && tplPop[mode] > 0 && minPopC > 0 && tplPop[mode] < minPopC))) {
+          if (!minPopC) continue;   // sem os pontos da origem não dá pra calcular o piso -> pula
+          useCalc = true;
         }
         const avail = await getAvail(c.s.vid);
         if (minCL > 0 && (avail.light || 0) < minCL) continue;   // origem drenada -> tenta a próxima mais próxima
@@ -1181,19 +1193,27 @@
         // e deixava o servidor recusar — 1 requisição jogada fora por origem sem tropa. Agora confere
         // antes, usando as unidades lidas do próprio template. Se não deu pra ler (mapa vazio), passa
         // direto e o comportamento fica igual ao de antes.
-        if (!dyn && mode !== 'c') {
+        if (!dyn && !useCalc && mode !== 'c') {
           const need = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {};
           let falta = false;
           for (const u in need) { if ((avail[u] || 0) < need[u]) { falta = true; break; } }
           if (falta) continue;
         }
+        // Cavalaria do envio calculado: o maior entre carregar o saque e cumprir o piso de fake.
+        const calcCL = Math.max(1, Math.ceil((mode === 'b' ? sum * 1.2 : sum) / 80), Math.ceil(minPopC / (FAKE_POP.light || 4)));
+        if (useCalc) { if ((avail.light || 0) < calcCL) continue; if ((avail.spy || 0) < 1) continue; }
         try {
           if (mode === 'c') { await sendFarmC(c.s.vid, t.reportId); did = true; }
+          else if (useCalc) { await sendAttack(c.s.vid, tx, ty, { light: calcCL, spy: 1 }); did = true; }
           else if (mode === 'a') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum / 80)), spy: 1 }); } else { if (!tpl || !tpl.a) break; await sendFarmB(c.s.vid, t.targetId, tpl.a); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
           else if (mode === 'b') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum * 1.2 / 80)), spy: 1 }); } else { if (!tpl || !tpl.b) break; await sendFarmB(c.s.vid, t.targetId, tpl.b); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
         } catch (e) {   // envio recusado -> guarda o MOTIVO (antes era engolido e a gente ficava no escuro)
-          did = false; errs++;
+          did = false;
           const em = String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 90);
+          // Resposta ambígua: pode ter enviado. Assume que SIM e para de tentar este alvo — errar pra
+          // menos (deixar de mandar) é muito mais barato que errar pra mais (ataque dobrado).
+          if (/^ambiguo:/.test(em)) { incerto = true; break; }
+          errs++;
           errReasons[em] = (errReasons[em] || 0) + 1;
           // Limite de fake: o template é pequeno demais PRA ESSA ORIGEM (vale pra qualquer alvo).
           // Marca e não tenta de novo no ciclo — antes gastava uma requisição por alvo.
@@ -1210,10 +1230,12 @@
           // Dinâmico manda {light: estCL, spy: 1} — o explorador TAMBÉM tem que ser abatido, senão a
           // origem parece ter spy pra sempre, passa na pré-checagem e o servidor recusa. Era a causa
           // das recusas que sobravam: aldeia reusada 3x no ciclo com 2 exploradores.
-          if (dyn && mode !== 'c') { avail.light = Math.max(0, (avail.light || 0) - estCL); avail.spy = Math.max(0, (avail.spy || 0) - 1); }
+          if (useCalc) { avail.light = Math.max(0, (avail.light || 0) - calcCL); avail.spy = Math.max(0, (avail.spy || 0) - 1); }
+          else if (dyn && mode !== 'c') { avail.light = Math.max(0, (avail.light || 0) - estCL); avail.spy = Math.max(0, (avail.spy || 0) - 1); }
           else if (mode === 'c') { avail.light = Math.max(0, (avail.light || 0) - estCL); }
           else { const used = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {}; for (const u in used) avail[u] = Math.max(0, (avail[u] || 0) - used[u]); }
-          usedName = c.s.name; usedDist = c.d; count++; cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break;
+          usedName = c.s.name; usedDist = c.d; usedCalc = useCalc; count++; if (useCalc) calcCount++;
+          cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break;
         }
       }
       if (did) {
@@ -1223,15 +1245,21 @@
         // "Repetir a cada". Throttle de 2s pra não escrever no disco a cada envio.
         const _ts = Date.now();
         if (_ts - _farmSaveAt > 2000) { _farmSaveAt = _ts; save(); }
-        pushLog('Saque: ' + usedName + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (mode !== 'c' ? ' ×' + qty : '') + ' · ' + (Math.round(usedDist * 10) / 10) + ' campos', 'ok', 'farm');
+        pushLog('Saque: ' + usedName + ' → ' + t.coord + ' (' + colorTxt(t) + ') pelo ' + mode.toUpperCase() + (usedCalc ? ' calculado' : (mode !== 'c' ? ' ×' + qty : '')) + ' · ' + (Math.round(usedDist * 10) / 10) + ' campos', 'ok', 'farm');
+      }
+      else if (incerto) {
+        // Não sabemos se saiu. Carimba como enviado pra NÃO reenviar; o próximo ciclo lê a lista de
+        // comandos do jogo e corrige sozinho se não tiver saído.
+        sent[t.coord] = Date.now(); cfg.sentReports = sent; pendingCoords.add(t.coord); incertos++;
+        pushLog('Saque: ' + t.coord + ' — resposta ambígua do servidor, pode ter enviado. Não vou repetir por outra origem.', '', 'farm');
       }
       else skip.semorig++;
     }
     // Fecha a barra: a MESMA linha vira o extrato (não empilha outra). Falha = alvo elegível que não
     // conseguiu envio; pulado = descartado no meio do caminho (defesa, muralha, alcance, já em rota…).
     if (barId) {
-      const falhas = skip.semorig, pulados = Math.max(0, eligible.length - count - falhas);
-      updateLogLive(barId, 'Saque: extrato do ciclo — ✔ ' + count + ' enviado(s) · ✖ ' + falhas + ' falha(s) · ⏭ ' + pulados + ' pulado(s) · ' + eligible.length + ' alvo(s) mapeados' + (errs ? (' · ' + errs + ' tentativa(s) recusada(s)') : ''), count ? 'ok' : 'err', true);
+      const falhas = skip.semorig, pulados = Math.max(0, eligible.length - count - falhas - incertos);
+      updateLogLive(barId, 'Saque: extrato do ciclo — ✔ ' + count + ' enviado(s)' + (calcCount ? (' (' + calcCount + ' calculado)') : '') + ' · ✖ ' + falhas + ' falha(s) · ⏭ ' + pulados + ' pulado(s)' + (incertos ? (' · ? ' + incertos + ' incerto(s)') : '') + ' · ' + eligible.length + ' alvo(s) mapeados' + (errs ? (' · ' + errs + ' tentativa(s) recusada(s)') : ''), count ? 'ok' : 'err', true);
     }
     // Quais foram os motivos das recusas (top 3). Sem isso só dava pra saber QUANTAS, não POR QUÊ.
     const topErr = Object.keys(errReasons).map((m) => [m, errReasons[m]]).sort((a, b) => b[1] - a[1]).slice(0, 3);

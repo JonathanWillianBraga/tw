@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.34.0
+// @version      9.35.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.34.0';
+  const VERSION = '9.35.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1308,6 +1308,129 @@
     }
   }
 
+  // ---- Comandos do jogo (chegando / saindo) ----
+  // Estrutura conferida no jogo real:
+  //   #incomings_table: tipo | destino | origem | jogador | dist | "hoje às HH:MM:SS:mmm" | chega em
+  //   #commands_table : "Ataque a X (coord)" | "Origem (coord)" | "hoje às HH:MM:SS:mmm" | tropas…
+  // Neste mundo os milésimos vêm no texto, o que é o que torna snipe e calibração viáveis.
+  function ccAgoraParede() { return new Date(serverNow() - wallToServerOffset()); }
+  function ccParseChegada(txt) {
+    const t = (txt || '').replace(/\s+/g, ' ').trim();
+    const hm = t.match(/(\d{1,2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/);
+    if (!hm) return 0;
+    const base = ccAgoraParede();
+    let ano = base.getFullYear(), mes = base.getMonth(), dia = base.getDate();
+    if (/amanh/i.test(t)) dia += 1;
+    else {
+      // "em 28.07. às ..." — exige o "às" logo depois pra não casar com a própria hora.
+      const dm = t.match(/(\d{1,2})[.\/](\d{1,2})\.?\s*(?:às|as)\s/i);
+      if (dm) { dia = +dm[1]; mes = +dm[2] - 1; }
+    }
+    const local = new Date(ano, mes, dia, +hm[1], +hm[2], +hm[3], +(hm[4] || 0)).getTime();
+    if (isNaN(local)) return 0;
+    return local + wallToServerOffset();
+  }
+  const CMDS = { incoming: { at: 0, lista: [] }, outgoing: { at: 0, lista: [] } };
+  async function ccLerComandos(qual, forcar) {
+    const c = CMDS[qual];
+    if (!forcar && c.at && Date.now() - c.at < 30000) return c.lista;
+    const url = (qual === 'incoming')
+      ? '/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=incomings&subtype=attacks&page=-1'
+      : '/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=attack&page=-1';
+    const doc = new DOMParser().parseFromString(await (await fetch(url, { credentials: 'include' })).text(), 'text/html');
+    const tb = doc.querySelector(qual === 'incoming' ? '#incomings_table' : '#commands_table');
+    if (!tb) throw new Error('não achei a tabela de comandos');
+    const co = (s) => { const m = (s || '').match(/(\d{1,3})\|(\d{1,3})/); return m ? (m[1] + '|' + m[2]) : null; };
+    const out = [];
+    tb.querySelectorAll('tr').forEach((tr) => {
+      if (!tr.querySelector('a[href*="screen=info_command"]')) return;
+      const td = [...tr.querySelectorAll('td')].map((x) => (x.textContent || '').replace(/\s+/g, ' ').trim());
+      if (td.length < 3) return;
+      const chega = ccParseChegada(qual === 'incoming' ? td[5] : td[2]);
+      if (!chega) return;
+      out.push(qual === 'incoming'
+        ? { tipo: td[0], destino: co(td[1]), origem: co(td[2]), jogador: td[3], dist: td[4], chega: chega, temMs: /:\d{3}\s*$/.test(td[5]) }
+        : { tipo: td[0], destino: co(td[0]), origem: co(td[1]), jogador: '', dist: '', chega: chega, temMs: /:\d{3}\s*$/.test(td[2]) });
+    });
+    out.sort((a, b) => a.chega - b.chega);
+    c.at = Date.now(); c.lista = out;
+    return out;
+  }
+  // Janela de snipe: entre a chegada escolhida e a PRÓXIMA no MESMO destino.
+  function ccJanelaSnipe(lista, i, folgaMs) {
+    const alvo = lista[i], folga = folgaMs == null ? 50 : folgaMs;
+    const prox = lista.slice(i + 1).find((k) => k.destino === alvo.destino);
+    const de = alvo.chega + (alvo.temMs ? 0 : 1000) + folga;   // sem milésimos, assume o pior caso
+    const ate = prox ? (prox.chega - folga) : null;
+    return { de: de, ate: ate, largura: ate == null ? null : (ate - de), prox: prox, exato: !!alvo.temMs };
+  }
+
+  // Escreve um instante do servidor no campo de chegada (datetime-local, com milésimos).
+  function ccSetChegada(srvMs) {
+    const el = document.getElementById('cc-chegada'); if (!el) return;
+    const d = new Date(srvMs - wallToServerOffset()), p = (n, w) => String(n).padStart(w || 2, '0');
+    el.value = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' +
+               p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + '.' + p(d.getMilliseconds(), 3);
+    ccRenderOrigens();
+  }
+  let _ccCmdsQual = 'incoming', _ccAttTipo = null;
+  async function ccCmdsRender(qual, forcar) {
+    _ccCmdsQual = qual || _ccCmdsQual;
+    const box = document.getElementById('cc-cmds-lista'); if (!box) return;
+    box.innerHTML = '<div style="color:#8f7d57;padding:6px;font-size:10px">lendo…</div>';
+    let L = [];
+    try { L = await ccLerComandos(_ccCmdsQual, !!forcar); }
+    catch (e) { box.innerHTML = '<div style="color:#ff7568;padding:6px;font-size:10px">' + esc(e.message || e) + '</div>'; return; }
+    if (!L.length) { box.innerHTML = '<div style="color:#8f7d57;padding:6px;font-size:10px">— nenhum —</div>'; return; }
+    const agora = srvNowP(), ehIn = (_ccCmdsQual === 'incoming');
+    box.innerHTML = L.slice(0, 60).map((c, i) => {
+      const jan = ehIn ? ccJanelaSnipe(L, i, 50) : null;
+      return '<div style="display:grid;grid-template-columns:1fr 78px 62px 96px;gap:4px;align-items:center;' +
+             'padding:2px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px">' +
+        '<span style="color:#cbb98f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.tipo) + '">' +
+          esc((c.origem || '?') + ' → ' + (c.destino || '?')) + (c.jogador ? ' <span style="color:#8f7d57">' + esc(c.jogador) + '</span>' : '') + '</span>' +
+        '<span style="color:' + (c.temMs ? '#e6cf7d' : '#ffd76a') + '" title="' + (c.temMs ? 'com milésimos' : 'sem milésimos — margem de 1s') + '">' +
+          srvClockMs(c.chega) + '</span>' +
+        '<span style="color:#8f7d57">' + (c.chega > agora ? fmt(c.chega - agora) : '—') + '</span>' +
+        '<span style="text-align:right;white-space:nowrap">' +
+          '<a data-usar="' + i + '" style="cursor:pointer;color:#8fe39a" title="usar este horário">📋 usar</a>' +
+          (ehIn ? ' <a data-snipe="' + i + '" style="cursor:pointer;color:' +
+                  ((jan.largura == null || jan.largura > 0) ? '#7fc8ff' : '#ff7568') + '" title="' +
+                  (jan.largura == null ? 'sem próximo ataque neste alvo — janela aberta'
+                   : (jan.largura > 0 ? 'janela de ' + jan.largura + 'ms' : 'ondas coladas demais pra snipar')) +
+                  '">🎯 snipe</a>' : '') +
+        '</span>' +
+      '</div>';
+    }).join('');
+    const off = () => parseInt((document.getElementById('cc-cmds-off') || {}).value, 10) || 0;
+    box.querySelectorAll('[data-usar]').forEach((el) => el.onclick = () => {
+      const c = L[+el.getAttribute('data-usar')];
+      ccSetChegada(c.chega + off());
+      const m = document.getElementById('cc-msg');
+      if (m) { m.style.color = '#8fe39a'; m.textContent = 'Chegada copiada: ' + srvClockMs(c.chega + off()) + (off() ? ' (com ' + off() + 'ms de deslocamento)' : ''); }
+    });
+    box.querySelectorAll('[data-snipe]').forEach((el) => el.onclick = () => {
+      const i = +el.getAttribute('data-snipe'), c = L[i], jan = ccJanelaSnipe(L, i, 50);
+      const m = document.getElementById('cc-msg');
+      if (jan.largura != null && jan.largura <= 0) {
+        if (m) { m.style.color = '#ff7568'; m.textContent = 'Não dá pra snipar: a próxima onda chega antes da janela abrir.'; }
+        return;
+      }
+      // Snipe é apoio no MEU alvo, pousando logo depois do ataque escolhido.
+      config.cmd.tipo = 'support'; save();
+      const al = document.getElementById('cc-alvo');
+      if (al && c.destino) al.value = c.destino;
+      ccSetChegada(jan.de + off());
+      if (typeof _ccAttTipo === 'function') _ccAttTipo();
+      if (m) {
+        m.style.color = jan.exato ? '#8fe39a' : '#ffd76a';
+        m.textContent = 'Snipe armado em ' + (c.destino || '?') + ' para ' + srvClockMs(jan.de + off()) +
+          (jan.largura != null ? ' · janela de ' + jan.largura + 'ms até a próxima onda' : ' · sem próxima onda conhecida') +
+          (jan.exato ? '' : ' · ATENÇÃO: essa chegada veio sem milésimos, considerei 1s de margem');
+      }
+    });
+  }
+
   // ---- Grade de tropas ----
   // Uma "carta" por unidade: ícone em cima (clicar = mandar tudo), número embaixo.
   // O checkbox separado dobrava a altura da grade e poluía a leitura.
@@ -1963,7 +2086,21 @@
         '<span id="cc-alvo-ok" style="font-size:10px;color:#8f7d57"></span>') +
       row('Chegada (servidor)',
         '<input id="cc-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:230px">' +
-        '<button id="cc-ch-agora" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="preenche com a hora do servidor + 10 min">+10min</button>') +
+        '<button id="cc-ch-agora" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="preenche com a hora do servidor + 10 min">+10min</button>' +
+        '<button id="cc-ch-cmd" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="copiar o horário de um comando do jogo">📋 de um comando</button>') +
+      // Comandos do jogo: copiar horário pra coordenar em cima, ou escolher um pra snipar.
+      '<div id="cc-cmds-box" style="display:none;border:1px solid #4a3b28;border-radius:6px;padding:6px;margin:4px 0">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
+          '<span style="font-size:10px">' +
+            '<a id="cc-cmds-in" style="cursor:pointer;color:#e6cf7d">🛡 chegando em mim</a> · ' +
+            '<a id="cc-cmds-out" style="cursor:pointer;color:#e6cf7d">⚔ meus em rota</a>' +
+          '</span>' +
+          '<span style="font-size:10px;color:#8f7d57">deslocar ' +
+            '<input id="cc-cmds-off" class="twmgr-inp" type="number" step="10" value="0" style="width:60px;font-size:10px;padding:1px">ms' +
+            ' <a id="cc-cmds-fechar" style="cursor:pointer;color:#ff7568;margin-left:6px">✕</a></span>' +
+        '</div>' +
+        '<div id="cc-cmds-lista" style="max-height:200px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
+      '</div>' +
       // Abas em vez de rádios: cada tipo tem configuração própria, e a aba deixa claro
       // qual conjunto de campos está valendo.
       '<div id="cc-abas" style="display:flex;gap:2px;margin:8px 0 0">' +
@@ -2117,6 +2254,7 @@
       if (tipo === 'nobre') ccOndasRender();   // ele já cuida do aviso de intervalo/origens
       ccRenderOrigens();
     };
+    _ccAttTipo = attTrem;   // o snipe troca a aba pra Apoio e precisa redesenhar
     document.querySelectorAll('.cc-aba').forEach((el) => {
       el.addEventListener('click', () => { config.cmd.tipo = el.getAttribute('data-tipo'); save(); attTrem(); });
       el.addEventListener('mouseenter', () => { if (el.getAttribute('data-tipo') !== ccTipo()) el.style.color = '#cbb98f'; });
@@ -2146,6 +2284,16 @@
         p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + '.' + p(d.getMilliseconds(), 3);
       recalc();
     });
+    // Comandos do jogo: abrir/fechar, trocar entre chegando e saindo.
+    const cmdsBox = document.getElementById('cc-cmds-box');
+    document.getElementById('cc-ch-cmd').addEventListener('click', () => {
+      const abrir = (cmdsBox.style.display === 'none');
+      cmdsBox.style.display = abrir ? 'block' : 'none';
+      if (abrir) ccCmdsRender(_ccCmdsQual, true);
+    });
+    document.getElementById('cc-cmds-fechar').onclick = () => { cmdsBox.style.display = 'none'; };
+    document.getElementById('cc-cmds-in').onclick = () => ccCmdsRender('incoming', true);
+    document.getElementById('cc-cmds-out').onclick = () => ccCmdsRender('outgoing', true);
 
     // Modelos de tropa
     const limpar = () => {

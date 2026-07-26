@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.7.0
+// @version      10.7.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.7.0';
+  const VERSION = '10.7.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1302,7 +1302,9 @@
       }
       else skip.semorig++;
     }
-    const falhas = skip.semorig, pulados = Math.max(0, eligible.length - count - falhas - incertos);
+    // "Sem origem c/ tropa" NÃO é falha: é teto de tropa, situação normal quando há mais alvo do que
+    // cavalaria. Falha de verdade é envio recusado pelo servidor (errs) ou de resultado incerto.
+    const naoEnviados = Math.max(0, eligible.length - count - incertos);
     const topErr = Object.keys(errReasons).map((m) => [m, errReasons[m]]).sort((a, b) => b[1] - a[1]).slice(0, 3);
     // PAINEL fica com o detalhe (tem espaço e é status, não histórico).
     const parts = [];
@@ -1317,16 +1319,19 @@
     if (eligible.length) {
       setFarmProg(farmProgHTML(eligible.length, eligible.length,
         '✔ <b>' + count + '</b> enviado(s)' + (calcCount ? (' · ' + calcCount + ' completado(s) ao mínimo') : '') +
-        (falhas ? (' · ✖ ' + falhas + ' falha(s)') : '') + (incertos ? (' · ? ' + incertos + ' incerto(s)') : '') +
-        (pulados ? (' · ⏭ ' + pulados + ' pulado(s)') : '') +
+        (incertos ? (' · ? ' + incertos + ' incerto(s)') : '') +
+        (naoEnviados ? (' · ⏭ ' + naoEnviados + ' não enviado(s)') : '') +
         (parts.length ? ('<br><span style="opacity:.7">' + parts.join(' · ') + '</span>') : '') +
         (lastCalcTxt ? ('<br><span style="opacity:.7">completado: ' + lastCalcTxt + '</span>') : '')));
     } else setFarmProg('Nenhum alvo elegível neste ciclo.');
-    // LOG fica enxuto: só o resumo (mais abaixo, "ciclo concluído") e, se falhou, o motivo.
-    if (falhas || incertos || topErr.length) {
-      pushLog('Saque: ' + (falhas ? falhas + ' falha(s)' : '') + (incertos ? ((falhas ? ' · ' : '') + incertos + ' incerto(s)') : '') +
+    // LOG enxuto: o resumo sai mais abaixo ("ciclo concluído"). Aqui, só problema DE VERDADE —
+    // recusa do servidor ou envio incerto. Falta de tropa não entra: é teto, não defeito.
+    if (errs || incertos || topErr.length) {
+      pushLog('Saque: ' + (errs ? errs + ' recusa(s)' : '') + (incertos ? ((errs ? ' · ' : '') + incertos + ' incerto(s)') : '') +
         (topErr.length ? (' — ' + topErr.map((p) => p[1] + '× "' + p[0] + '"').join(' · ')) : ''), 'err', 'farm');
     }
+    // Tropa esgotada é informação útil (dá pra decidir intervalo/ordem), mas em tom neutro.
+    if (skip.semorig) pushLog('Saque: ' + skip.semorig + ' alvo(s) sem origem com tropa — acabou a cavalaria antes dos alvos.', '', 'farm');
     // Detecção de BLOQUEIO por efeito (pega bot-check enquanto você está AFK). Só conta como suspeito o
     // que é sintoma REAL de bloqueio: servidor RECUSOU envios (errs) OU o assistente voltou VAZIO
     // (0 alvos, degradado). "0 enviados por falta de CL / fora de alcance / cooldown" é NORMAL e ZERA o

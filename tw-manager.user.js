@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.6.0
+// @version      10.7.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.6.0';
+  const VERSION = '10.7.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -887,12 +887,17 @@
   }
   function scheduleScav() { clearTimeout(scavTimer); if (!config.scav.running) return; scavTimer = setTimeout(scavTick, Math.min(Math.max((config.scav.nextAt || 0) - Date.now(), 1000), 60000)); }
 
+  let _farmPagesInfo = null;   // diagnóstico: quantas páginas do assistente foram lidas no último ciclo
   async function getFarmTargets(vid) {
-    const res = await fetch('/game.php?village=' + vid + '&screen=am_farm', { credentials: 'include' });
-    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    const rows = [];
+    const rows = [], seen = {};
+    const fetchPage = async (n) => {
+      const res = await fetch('/game.php?village=' + vid + '&screen=am_farm' + (n > 0 ? ('&Farm_page=' + n) : ''), { credentials: 'include' });
+      return new DOMParser().parseFromString(await res.text(), 'text/html');
+    };
+    const parseDoc = (doc) => {
     doc.querySelectorAll('#plunder_list tr[id^="village_"]').forEach((tr) => {
       const targetId = tr.id.replace('village_', '');
+      if (seen[targetId]) return;   // mesma aldeia repetida entre páginas
       const rl = tr.querySelector('a[href*="view="]');
       let reportId = null, coord = '';
       if (rl) { const m = rl.getAttribute('href').match(/view=(\d+)/); if (m) reportId = m[1]; const cmm = (rl.textContent || '').match(/(\d+)\|(\d+)/); if (cmm) coord = cmm[1] + '|' + cmm[2]; }   // normaliza p/ "x|y" (o texto vem "(x|y) Kxx")
@@ -917,8 +922,25 @@
       const mlImg = tr.querySelector('img[src*="/max_loot/"]');
       const mm = mlImg ? (mlImg.getAttribute('src') || '').match(/max_loot\/(\d)/) : null;
       const full = mm ? (mm[1] === '1') : false;                        // true = cheio, false = vazio
+      seen[targetId] = 1;
       rows.push({ targetId: targetId, reportId: reportId, reportAt: reportAt, wood: nums[0] || 0, stone: nums[1] || 0, iron: nums[2] || 0, wall: wall, dist: dist, cEnabled: cEnabled, aEnabled: aEnabled, bEnabled: bEnabled, color: color, full: full, coord: coord });
     });
+    };
+    // O assistente PAGINA (teto de 100 linhas por página). Lendo só a primeira, os alvos das páginas
+    // seguintes ficavam invisíveis e a tropa sobrava parada. Segue a paginação até o fim.
+    const doc0 = await fetchPage(0);
+    parseDoc(doc0);
+    const pages = new Set();
+    doc0.querySelectorAll('a[href*="Farm_page="]').forEach((a) => {
+      const m = (a.getAttribute('href') || '').match(/Farm_page=(\d+)/);
+      if (m) { const p = parseInt(m[1], 10); if (p > 0) pages.add(p); }
+    });
+    const extras = Array.from(pages).sort((a, b) => a - b).slice(0, 14);   // teto de segurança
+    let lidas = 1;
+    for (const p of extras) {
+      try { parseDoc(await fetchPage(p)); lidas++; await sleep(200); } catch (e) { break; }
+    }
+    _farmPagesInfo = { pages: lidas, achadas: extras.length + 1, alvos: rows.length };
     return rows;
   }
 
@@ -1079,6 +1101,7 @@
     let targets;
     try { targets = await getFarmTargets(CUR_VID); }
     catch (e) { pushLog('Saque: erro ao ler os alvos do assistente (' + (e.message || e) + ').', 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
+    if (_farmPagesInfo && _farmPagesInfo.pages > 1) pushLog('Saque: assistente tem ' + _farmPagesInfo.pages + ' página(s) — ' + _farmPagesInfo.alvos + ' alvo(s) no total.', '', 'farm');
     let tpl = null;
     if (!dyn) { try { tpl = await getFarmTemplates(CUR_VID); } catch (e) { tpl = null; } }
     // Sem as unidades dos templates não dá pra saber se a origem tem tropa, e o ciclo cai no

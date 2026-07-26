@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.5.0
+// @version      10.5.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -44,7 +44,7 @@
   };
 
   const SCAV_UNITS = [['spear', 'Lanc.'], ['sword', 'Espad.'], ['axe', 'Bárb.'], ['light', 'C.leve'], ['heavy', 'C.pes.'], ['knight', 'Palad.']];
-  const CARRY = { spear: 25, sword: 15, axe: 10, light: 80, heavy: 50, knight: 100 };
+  const CARRY = { spear: 25, sword: 15, axe: 10, archer: 10, spy: 0, light: 80, marcher: 50, heavy: 50, ram: 0, catapult: 0, knight: 100, snob: 0 };
   const POP = { spear: 1, sword: 1, axe: 1, light: 4, heavy: 6, knight: 10 };
   const LOOT_FACTOR = { 1: 0.1, 2: 0.25, 3: 0.5, 4: 0.75 };
   const MIN_POP = 10;
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.5.0';
+  const VERSION = '10.5.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1950,8 +1950,7 @@
   }
   const attackPrepare = fakePrepare, attackFire = fakeFire;
   const FAKE_POP = { spear: 1, sword: 1, axe: 1, archer: 1, spy: 2, light: 4, marcher: 5, heavy: 6, ram: 5, catapult: 8, knight: 10, snob: 100 };
-  // Quanto cada unidade CARREGA de recurso (base do cálculo de eficiência do Saque).
-  const CARRY = { spear: 25, sword: 15, axe: 10, archer: 10, spy: 0, light: 80, marcher: 50, heavy: 50, ram: 0, catapult: 0, knight: 100, snob: 0 };
+  // Capacidade de carga de um conjunto de unidades (usa o CARRY declarado lá no topo).
   const carryOf = (units) => Object.keys(units || {}).reduce((s, u) => s + (parseInt(units[u], 10) || 0) * (CARRY[u] || 0), 0);
   function parseCoords(raw) {
     const out = [], seen = {};

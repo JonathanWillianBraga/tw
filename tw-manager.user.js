@@ -2742,7 +2742,15 @@
   }
   async function renderPaladinVillages() {
     const cont = document.getElementById('twmgr-pd-villages'); if (!cont) return;
+    cont.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">carregando…</div>';
     let vils = []; try { vils = await getAllVillages(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
+    let knights = {};
+    try { knights = await getKnightsData(CUR_VID); }
+    catch (e) { cont.innerHTML = '<div style="font-size:10px;color:#ff7568;padding:6px;text-align:center">Erro ao ler paladinos (' + esc(e.message || String(e)) + ')</div>'; return; }
+    const withKnight = {};
+    Object.values(knights).forEach((k) => { if (k && k.home_village) withKnight[String(k.home_village.id)] = true; });
+    vils = vils.filter((v) => withKnight[v.vid]);   // só aldeias com paladino entram na lista de seleção
+    if (!vils.length) { cont.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— nenhuma aldeia com paladino —</div>'; return; }
     const sel = config.paladin.villages || {};
     cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-pd-vil" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
     cont.querySelectorAll('.twmgr-pd-vil').forEach((cb) => cb.addEventListener('change', readPaladinCfg));

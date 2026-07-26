@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.3.0
+// @version      10.4.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.3.0';
+  const VERSION = '10.4.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1063,14 +1063,20 @@
     // demais pro template (limite de fake do mundo). 0 = desconhecido -> checagem proativa desligada,
     // e sobra só o freio reativo (que aprende com o primeiro erro).
     const tplPop = { a: 0, b: 0 };
+    // Ataque SÓ de explorador é isento do limite de fake (regra do jogo: olheiro sozinho sempre pode
+    // sair, não importa o tamanho da origem). Sem isso o script "consertava" um template de
+    // reconhecimento somando cavalaria que o jogo nem exigia.
+    const tplOnlySpy = { a: false, b: false };
     let vPoints = null;
     const fakePct = (config.fakes && config.fakes.pct) || 1;
     if (!dyn && tpl) {
       const popOf = (u) => Object.keys(u || {}).reduce((s, k) => s + (parseInt(u[k], 10) || 0) * (FAKE_POP[k] || 1), 0);
+      const soSpy = (u) => { const ks = Object.keys(u || {}).filter((k) => (parseInt(u[k], 10) || 0) > 0); return ks.length > 0 && ks.every((k) => k === 'spy'); };
       tplPop.a = popOf(tpl.unitsA); tplPop.b = popOf(tpl.unitsB);
+      tplOnlySpy.a = soSpy(tpl.unitsA); tplOnlySpy.b = soSpy(tpl.unitsB);
       if (tplPop.a || tplPop.b) {
         try { vPoints = await getVillagePoints(); } catch (e) { vPoints = null; }
-        pushLog('Saque: limite de fake ativo — template A=' + tplPop.a + ' pop, B=' + tplPop.b + ' pop; origem precisa de ' + fakePct + '% dos pontos dela.', '', 'farm');
+        pushLog('Saque: limite de fake ativo — template A=' + tplPop.a + ' pop' + (tplOnlySpy.a ? ' (só explorador: isento)' : '') + ', B=' + tplPop.b + ' pop' + (tplOnlySpy.b ? ' (só explorador: isento)' : '') + '; origem precisa de ' + fakePct + '% dos pontos dela.', '', 'farm');
       }
     }
     const availCache = {};
@@ -1143,7 +1149,7 @@
         let useCalc = false;
         const ptsC = vPoints ? (parseInt(vPoints[String(c.s.vid)], 10) || 0) : 0;
         const minPopC = ptsC > 0 ? Math.ceil((fakePct / 100) * ptsC) : 0;
-        if (mode !== 'c' && (fakeBlock[c.s.vid + '|' + mode] || (!dyn && tplPop[mode] > 0 && minPopC > 0 && tplPop[mode] < minPopC))) {
+        if (mode !== 'c' && !tplOnlySpy[mode] && (fakeBlock[c.s.vid + '|' + mode] || (!dyn && tplPop[mode] > 0 && minPopC > 0 && tplPop[mode] < minPopC))) {
           if (!minPopC) continue;   // sem os pontos da origem não dá pra calcular o piso -> pula
           useCalc = true;
         }

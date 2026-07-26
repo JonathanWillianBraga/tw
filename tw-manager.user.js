@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.28.1
+// @version      9.29.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.28.1';
+  const VERSION = '9.29.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -935,7 +935,85 @@
     return ccTempoViagemMs(v.x, v.y, c.x, c.y, c.amounts);
   }
 
-  // Lê uma aba da visão geral de tropas. type: 'own_home' (em casa) ou 'own_away' (fora).
+  // A visão geral de tropas traz, POR ALDEIA, 5 linhas rotuladas — e todas de uma vez, numa
+  // requisição só. Buscar duas abas e somar (como eu fazia) contava a mesma tropa duas vezes.
+  //   "suas próprias" = tudo que é seu, esteja onde estiver
+  //   "Na Aldeia"     = o que dá pra mandar agora
+  //   "fora"          = seu, apoiando outra aldeia
+  //   "em trânsito"   = seu, voltando/indo
+  //   "total"         = inclui apoio de terceiros (que você NÃO pode reenviar)
+  // Conferido contra a página real: "total" = próprias + fora + trânsito em 20 de 21 aldeias.
+  // A exceção tinha apoio de OUTRO jogador — que aparece em "Na Aldeia" e em "total", mas não
+  // em "suas próprias". Por isso as duas nunca servem: tropa de terceiro não é sua pra reenviar.
+  const CC_LINHAS = [
+    { chave: 'proprias', re: /suas\s*pr[óo]prias|own\s*troops/i },   // suas, aqui  -> mandar agora
+    { chave: 'naAldeia', re: /^na\s*aldeia|in\s*village/i },         // inclui apoio de terceiros
+    { chave: 'fora',     re: /^fora$|^away$/i },                     // suas, apoiando fora
+    { chave: 'transito', re: /tr[âa]nsito|moving/i },                // suas, voltando
+    { chave: 'total',    re: /^total$/i },                           // inclui apoio de terceiros
+  ];
+  async function ccLerTropas() {
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const tabela = doc.querySelector('#units_table') || doc.querySelector('table.overview_table');
+    if (!tabela) throw new Error('não achei #units_table');
+
+    // Ordem das colunas: só os <th> com ícone de unidade, DESTA tabela. Varia por mundo —
+    // aqui, por exemplo, não há arqueiro nem arqueiro a cavalo, mas há milícia.
+    const ordem = [];
+    (tabela.querySelector('thead tr') || tabela.querySelector('tr')).querySelectorAll('th').forEach((th) => {
+      const img = th.querySelector('img[src*="unit_"]');
+      if (!img) return;
+      const m = (img.getAttribute('src') || '').match(/unit_(\w+)\./);
+      if (m) ordem.push(m[1]);
+    });
+    if (!ordem.length) throw new Error('não li as colunas de unidade');
+
+    const out = {};
+    tabela.querySelectorAll('tbody').forEach((tb) => {
+      const q = tb.querySelector('.quickedit-vn[data-id]');
+      if (!q) return;
+      const vid = q.getAttribute('data-id'); if (!vid) return;
+      // A coordenada está no TEXTO ("Draco (445|592) K54"); o data-text tem só o nome.
+      const lbl = tb.querySelector('.quickedit-label');
+      const txt = lbl ? (lbl.textContent || '') : '';
+      const cm = txt.match(/(\d{1,3})\|(\d{1,3})/);
+      const nome = (lbl && lbl.getAttribute('data-text')) || txt.replace(/\s*\(\d{1,3}\|\d{1,3}\).*$/, '').trim();
+
+      const linhas = {};
+      tb.querySelectorAll('tr').forEach((tr) => {
+        const cels = Array.from(tr.querySelectorAll('td.unit-item'));
+        if (cels.length !== ordem.length) return;      // linha que não é de tropa
+        // O rótulo é o <td> imediatamente antes da primeira célula de unidade.
+        let rot = '';
+        const primeira = cels[0];
+        for (let p = primeira.previousElementSibling; p; p = p.previousElementSibling) {
+          const t = (p.textContent || '').trim();
+          if (t) { rot = t; break; }
+        }
+        const achou = CC_LINHAS.find((L) => L.re.test(rot));
+        if (!achou) return;
+        const nums = {};
+        cels.forEach((td, i) => { nums[ordem[i]] = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0; });
+        linhas[achou.chave] = nums;
+      });
+      if (!Object.keys(linhas).length) return;
+      const pr = linhas.proprias || {}, fo = linhas.fora || {}, tr = linhas.transito || {};
+      // "minhas em qualquer lugar" é somado à mão, e não lido da linha "total", justamente
+      // porque a linha "total" carrega apoio de terceiros junto.
+      const minhas = {};
+      ordem.forEach((u) => { minhas[u] = (pr[u] || 0) + (fo[u] || 0) + (tr[u] || 0); });
+      out[vid] = {
+        vid: vid, nome: nome,
+        x: cm ? +cm[1] : null, y: cm ? +cm[2] : null, coord: cm ? (cm[1] + '|' + cm[2]) : null,
+        casa: pr, minhas: minhas, fora: fo, transito: tr,
+      };
+    });
+    if (!Object.keys(out).length) throw new Error('nenhuma aldeia lida da tabela');
+    return { aldeias: out, unidades: ordem };
+  }
+
+  // (legado — mantido só pro diagnóstico __cc.dumpTropas)
   async function ccLerAbaTropas(type) {
     const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=' + type + '&page=-1', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
@@ -995,29 +1073,26 @@
     });
     return out;
   }
-  // Tropas de TODAS as aldeias. "casa" = o que dá pra mandar agora; "total" = casa + o que
-  // está fora e volta. O total importa pra agendar um ataque full pra daqui a horas:
-  // a tropa pode estar saqueando agora e estar de volta na hora do envio.
-  let _tropasCache = null, _tropasCacheAt = 0, _tropasCacheModo = '';
+  // Uma requisição só traz tudo. "avail" aponta pra linha escolhida:
+  //   casa   = suas tropas nesta aldeia -> dá pra mandar AGORA
+  //   minhas = suas em qualquer lugar (aqui + fora + voltando) -> pra agendar pra daqui a horas
+  let _tropasCache = null, _tropasCacheAt = 0;
+  let CC_UNIDADES_MUNDO = null;   // unidades que este mundo realmente tem
   async function ccTropasTodasAldeias(forcar) {
-    const modo = (config.cmd.fonteTropa || 'casa');
-    if (!forcar && _tropasCache && _tropasCacheModo === modo && Date.now() - _tropasCacheAt < 60000) return _tropasCache;
-    const casa = await ccLerAbaTropas('own_home');
-    const out = {};
-    Object.values(casa).forEach((v) => {
-      out[v.vid] = { vid: v.vid, nome: v.nome, x: v.x, y: v.y, coord: v.coord,
-                     casa: v.tropas, avail: Object.assign({}, v.tropas) };
-    });
-    if (modo === 'total') {
-      try {
-        const fora = await ccLerAbaTropas('own_away');
-        Object.values(fora).forEach((v) => {
-          const alvo = out[v.vid] || (out[v.vid] = { vid: v.vid, nome: v.nome, x: v.x, y: v.y, coord: v.coord, casa: {}, avail: {} });
-          Object.entries(v.tropas).forEach(([u, n]) => { alvo.avail[u] = (alvo.avail[u] || 0) + n; });
-        });
-      } catch (e) { pushLog('Não li as tropas fora de casa — usando só as de casa.', 'err', 'cmd'); }
+    if (!forcar && _tropasCache && Date.now() - _tropasCacheAt < 60000) {
+      return ccAplicarFonte(_tropasCache);
     }
-    _tropasCache = out; _tropasCacheAt = Date.now(); _tropasCacheModo = modo;
+    const r = await ccLerTropas();
+    CC_UNIDADES_MUNDO = r.unidades;
+    _tropasCache = r.aldeias; _tropasCacheAt = Date.now();
+    return ccAplicarFonte(_tropasCache);
+  }
+  function ccAplicarFonte(mapa) {
+    const modo = (config.cmd.fonteTropa || 'casa');
+    const out = {};
+    Object.values(mapa).forEach((v) => {
+      out[v.vid] = Object.assign({}, v, { avail: (modo === 'total' ? v.minhas : v.casa) || {} });
+    });
     return out;
   }
 
@@ -1532,8 +1607,8 @@
         // "total" conta a tropa que está fora e volta — necessário pra agendar um full
         // pra daqui a horas com a tropa saqueando agora.
         '<div style="font-size:10px;margin-bottom:3px">' +
-          '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="cc-fonte" value="casa"> só o que está em casa</label>' +
-          '<label style="cursor:pointer"><input type="radio" name="cc-fonte" value="total"> incluir tropa fora (volta a tempo)</label>' +
+          '<label style="margin-right:10px;cursor:pointer" title="linha &quot;Na Aldeia&quot; do jogo"><input type="radio" name="cc-fonte" value="casa"> na aldeia agora</label>' +
+          '<label style="cursor:pointer" title="linha &quot;suas próprias&quot; do jogo: inclui o que está fora e em trânsito"><input type="radio" name="cc-fonte" value="total"> suas próprias (inclui fora/trânsito)</label>' +
         '</div>' +
         '<div id="cc-vel-aviso" style="font-size:10px;color:#8f7d57;margin-bottom:3px"></div>' +
         '<div style="display:grid;grid-template-columns:18px 74px 52px 78px 52px 1fr;gap:6px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
@@ -1647,7 +1722,8 @@
       r.addEventListener('change', () => {
         if (!r.checked) return;
         config.cmd.fonteTropa = r.value; save();
-        ccCarregarOrigens(true);   // muda a fonte -> tem que reler
+        // Não precisa rebuscar: a leitura já traz as duas linhas, só troca qual delas usar.
+        ccCarregarOrigens(false);
       });
     });
     // Marca só as origens que atendem os DOIS critérios: têm a tropa pedida E ainda dá tempo.

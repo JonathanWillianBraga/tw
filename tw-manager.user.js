@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.9.0
+// @version      10.10.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -83,11 +83,14 @@
   // Fast Nobre é exceção — quebra essa regra e sobe Armazém de forma proativa, por isso tem
   // "storage" embutido no template mesmo. Níveis finais e prioridades vieram direto da dicção do
   // usuário, guardada em memória (tw_village_building_plans.md). ====================
-  const OBRA_TPL_FULL_ATK = 'main 3\nbarracks 1\nstatue 1\nwood 5\nstone 5\niron 5\nsmith 5\nwood 10\nstone 10\niron 10\nbarracks 5\nmain 6\nwood 15\nstone 15\niron 15\nbarracks 10\nstable 1\ngarage 1\nmarket 5\nwood 20\nstone 20\niron 20\nmain 10\nbarracks 15\nstable 5\nmarket 10\nwood 25\nstone 25\niron 25\nmain 15\nbarracks 20\nstable 10\ngarage 2\nmarket 15\nwood 30\nstone 30\niron 30\nmain 20\nbarracks 25\nstable 15\nmarket 20\nstable 20';
-  const OBRA_TPL_FULL_DEF = 'main 3\nbarracks 1\nstatue 1\nwood 5\nstone 5\niron 5\nsmith 5\nwood 10\nstone 10\niron 10\nbarracks 5\nstable 1\nmain 6\nwood 15\nstone 15\niron 15\nbarracks 10\nstable 5\nmarket 5\nwood 20\nstone 20\niron 20\nmain 10\nbarracks 15\nstable 10\nmarket 10\nwall 10\nwood 25\nstone 25\niron 25\nmain 15\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nmain 20\nbarracks 25\nmarket 20\nwall 15\nwall 20';
-  const OBRA_TPL_FARM_ATK = 'main 3\nstable 1\nstatue 1\nwood 5\nstone 5\niron 5\nsmith 5\nwood 10\nstone 10\niron 10\nstable 5\nbarracks 1\nmain 6\nwood 15\nstone 15\niron 15\nstable 10\nbarracks 5\nmarket 5\ngarage 1\nwood 20\nstone 20\niron 20\nmain 10\nstable 15\nbarracks 10\nmarket 10\nwood 25\nstone 25\niron 25\nmain 15\nstable 20\nbarracks 15\ngarage 2\nmarket 15\nwood 30\nstone 30\niron 30\nmain 20\nbarracks 20\nmarket 20\nbarracks 25';
-  const OBRA_TPL_FAST_DEF = 'main 3\nbarracks 1\nstatue 1\nwood 5\nstone 5\niron 5\nsmith 5\nwood 10\nstone 10\niron 10\nbarracks 5\nstable 1\nmain 6\nsmith 10\nwood 15\nstone 15\niron 15\nbarracks 10\nstable 5\nmarket 5\nwood 20\nstone 20\niron 20\nmain 10\nbarracks 15\nstable 10\nsmith 15\nmarket 10\nwall 10\nwood 25\nstone 25\niron 25\nmain 15\nbarracks 20\nstable 15\nmarket 15\nwood 30\nstone 30\niron 30\nmain 20\nbarracks 25\nmarket 20\nwall 15\nwall 20';
-  const OBRA_TPL_FAST_NOBRE = 'main 3\nstable 1\nstatue 1\nwood 5\nstone 5\niron 5\nsmith 5\nstorage 5\nwood 10\nstone 10\niron 10\nstable 5\nbarracks 1\nsmith 10\nmain 6\nstorage 10\nwood 15\nstone 15\niron 15\nstable 10\nbarracks 5\nmarket 5\nstorage 15\ngarage 1\nwood 20\nstone 20\niron 20\nmain 10\nsmith 15\nstable 15\nbarracks 10\nstorage 20\nmarket 10\nwood 25\nstone 25\niron 25\nmain 15\nsmith 20\nstable 20\nbarracks 15\nstorage 24\ngarage 2\nwood 30\nstone 30\niron 30\nmain 20\nsnob 1\nbarracks 20\nstorage 27\nbarracks 25\nstorage 30';
+  // Regra do usuário: prédio prioritário SEMPRE bem à frente das minas (ex.: quando minas batem 15, o
+  // prioritário já está em ~23) — por isso os saltos de mina (sempre em trio sincronizado wood/stone/
+  // iron) ficam logo APÓS o prioritário ter avançado bastante na lista, nunca antes.
+  const OBRA_TPL_FULL_ATK = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nmain 6\nbarracks 15\nstable 1\nwood 8\nstone 8\niron 8\nbarracks 20\ngarage 1\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nbarracks 23\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 25\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\ngarage 2\nmarket 15\nwood 25\nstone 25\niron 25\nmain 20\nstable 15\nmarket 20\nwood 30\nstone 30\niron 30\nstable 20';
+  const OBRA_TPL_FULL_DEF = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nstable 1\nmain 6\nbarracks 15\nwood 8\nstone 8\niron 8\nbarracks 20\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nbarracks 23\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 25\nwall 10\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\nmarket 15\nwood 25\nstone 25\niron 25\nmain 20\nmarket 20\nwood 30\nstone 30\niron 30\nwall 15\nwall 20';
+  const OBRA_TPL_FARM_ATK = 'main 3\nstable 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nstable 5\nwood 5\nstone 5\niron 5\nstable 10\nbarracks 1\nmain 6\nstable 15\nwood 8\nstone 8\niron 8\nstable 18\ngarage 1\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nstable 20\nwood 15\nstone 15\niron 15\nbarracks 5\nmarket 10\nbarracks 10\nwood 20\nstone 20\niron 20\nmain 15\nbarracks 15\ngarage 2\nmarket 15\nwood 25\nstone 25\niron 25\nmain 20\nbarracks 20\nmarket 20\nwood 30\nstone 30\niron 30\nbarracks 25';
+  const OBRA_TPL_FAST_DEF = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nstable 1\nsmith 10\nmain 6\nbarracks 15\nwood 8\nstone 8\niron 8\nbarracks 20\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nsmith 15\nbarracks 23\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 25\nwall 10\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\nmarket 15\nwood 25\nstone 25\niron 25\nmain 20\nstable 15\nmarket 20\nwood 30\nstone 30\niron 30\nwall 15\nwall 20';
+  const OBRA_TPL_FAST_NOBRE = 'main 3\nstable 1\nstatue 1\nsmith 5\nstorage 5\nwood 3\nstone 3\niron 3\nstable 5\nsmith 10\nwood 5\nstone 5\niron 5\nstable 10\nbarracks 1\nmain 6\nstorage 10\nsmith 15\nwood 8\nstone 8\niron 8\nstable 15\nmarket 5\nstorage 15\ngarage 1\nwood 12\nstone 12\niron 12\nstable 18\nsmith 20\nmain 10\nstorage 20\nwood 15\nstone 15\niron 15\nmarket 10\nbarracks 5\nwood 20\nstone 20\niron 20\nmain 15\nstable 20\nbarracks 10\nstorage 24\ngarage 2\nwood 25\nstone 25\niron 25\nmain 20\nsnob 1\nbarracks 15\nstorage 27\nwood 30\nstone 30\niron 30\nbarracks 20\nbarracks 25\nstorage 30';
   const OBRA_PROFILES = ['fullAtk', 'fullDef', 'farmAtk', 'fastDef', 'fastNobre'];
   const OBRA_PROFILE_META = {
     fullAtk:   { name: 'Full ATK',   tpl: OBRA_TPL_FULL_ATK,   storageProativo: false },
@@ -98,7 +101,7 @@
   };
 
 
-  const VERSION = '10.9.0';
+  const VERSION = '10.10.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -227,6 +230,7 @@
     reserveMin: 0,          // reserva mín. de cada recurso antes de construir — 0 = desliga; usar pra sobrar recurso pro Recrutar
     farmFreePopMin: 800,    // gatilho Fazenda: só upa quando população livre (max-atual) cai abaixo disso
     storageFillPct: 60,     // gatilho Armazém: só upa quando algum recurso atinge X% da capacidade (Fast Nobre ignora, é proativo)
+    autoResearch: true,     // pesquisa automática no Ferreiro, seguindo a ordem de OBRA_RESEARCH_ORDER por perfil
     plans: {
       fullAtk: tplToPlan(OBRA_TPL_FULL_ATK), fullDef: tplToPlan(OBRA_TPL_FULL_DEF), farmAtk: tplToPlan(OBRA_TPL_FARM_ATK),
       fastDef: tplToPlan(OBRA_TPL_FAST_DEF), fastNobre: tplToPlan(OBRA_TPL_FAST_NOBRE),
@@ -442,6 +446,7 @@
     if (c.obra.reserveMin == null) c.obra.reserveMin = 0;
     if (c.obra.farmFreePopMin == null) c.obra.farmFreePopMin = 800;
     if (c.obra.storageFillPct == null) c.obra.storageFillPct = 60;
+    if (c.obra.autoResearch == null) c.obra.autoResearch = true;
     if (!c.obra.plans) c.obra.plans = {};
     OBRA_PROFILES.forEach((p) => { if (!Array.isArray(c.obra.plans[p]) || !c.obra.plans[p].length) c.obra.plans[p] = tplToPlan(OBRA_PROFILE_META[p].tpl); });
     if (!c.obra.demand || typeof c.obra.demand !== 'object') c.obra.demand = {};
@@ -623,6 +628,7 @@
       arr = [
         { v: fmtN(s.villages), l: 'aldeias mapeadas', hl: true },
         { v: fmtN(s.built), l: 'obras na fila (últ. ciclo)' },
+        { v: fmtN(s.researched), l: 'pesquisas (últ. ciclo)' },
         { v: fmtN(Object.keys(config.obra.demand || {}).length), l: 'aguard. recurso' },
       ];
     }
@@ -3611,6 +3617,60 @@
     }
     return { build: null, demand: null };
   }
+  // ==================== OBRA — pesquisa automática do Ferreiro ====================
+  // Confirmado via DevTools (capturado ao vivo, não chutado): POST /game.php?village=X&screen=smith
+  // &ajaxaction=research, body "tech_id=<unit>&source=<vid>&h=<csrf>". A tela GET screen=smith embute
+  // BuildingSmith.techs = {...} com o estado de cada tropa pesquisável — mesmo truque de parse
+  // (extractBalancedJSON) usado no módulo Paladino pro receiveKnightsData.
+  const OBRA_RESEARCH_ORDER = {
+    fullAtk:   ['axe', 'spy', 'light', 'ram'],
+    fullDef:   ['spear', 'sword', 'spy'],
+    farmAtk:   ['axe', 'spy', 'light', 'ram'],
+    fastDef:   ['spear', 'sword', 'spy', 'light', 'heavy'],
+    fastNobre: ['axe', 'spy', 'light', 'ram'],
+  };
+  async function getSmithTechs(vid) {
+    const res = await fetch('/game.php?village=' + vid + '&screen=smith', { credentials: 'include' });
+    const html = await res.text();
+    const marker = 'BuildingSmith.techs = ';
+    const idx = html.indexOf(marker);
+    if (idx < 0) throw new Error('BuildingSmith.techs não encontrado (Ferreiro nv.0?)');
+    const json = extractBalancedJSON(html, idx + marker.length);
+    if (!json) throw new Error('parse de BuildingSmith.techs falhou');
+    const data = JSON.parse(json);
+    return (data && data.available) || {};
+  }
+  async function smithResearch(vid, techId) {
+    const b = new URLSearchParams();
+    b.set('tech_id', techId);
+    b.set('source', String(vid));
+    b.set('h', CSRF);
+    const res = await fetch('/game.php?village=' + vid + '&screen=smith&ajaxaction=research', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+      body: b.toString(),
+    });
+    const txt = await res.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (!j || !j.response) throw new Error('resposta inesperada (' + (txt || '').slice(0, 100).replace(/\s+/g, ' ') + ')');
+    return j.response;
+  }
+  // Anda pela ordem de pesquisa do perfil; devolve o techId pesquisado agora, ou null se não fez nada
+  // (já tudo pesquisado / falta prédio / já tem pesquisa em andamento nessa aldeia).
+  async function obraResearchStep(vid, profile) {
+    const order = OBRA_RESEARCH_ORDER[profile] || [];
+    if (!order.length) return null;
+    const techs = await getSmithTechs(vid);
+    for (const techId of order) {
+      const t = techs[techId];
+      if (!t) continue;
+      if ((+t.level || 0) >= 1) continue;        // já pesquisado -> próximo da ordem
+      if (t.error_buildings) return null;        // falta prédio (Estábulo/Oficina/Ferreiro) -> Obra resolve subindo o prédio, espera
+      if (t.can_research) { await smithResearch(vid, techId); return techId; }
+      return null;                                // nem pronto nem livre -> já em andamento, espera
+    }
+    return null;
+  }
   async function obraTick() {
     clearTimeout(obraTimer);
     if (!config.obra.running) return;
@@ -3625,7 +3685,7 @@
     const vids = Object.keys(pmap);
     if (!vids.length) { pushLog('Obra: mapeie ao menos 1 grupo de perfil na aba Obra.', '', 'obra'); config.obra.nextAt = now + 300000; save(); scheduleObra(); return; }
     config.obra.demand = {};
-    let built = 0;
+    let built = 0, researched = 0;
     for (const vid of vids) {
       const profile = pmap[vid].profile;
       const plan = (config.obra.plans && config.obra.plans[profile]) || [];
@@ -3645,11 +3705,18 @@
         const bn = (BUILD_META[r.demand.b] && BUILD_META[r.demand.b].name) || r.demand.b;
         pushLog((pmap[vid].coord || vid) + ' [' + OBRA_PROFILE_META[profile].name + ']: aguardando recurso p/ ' + bn + ' (' + r.demand.cost.wood + '/' + r.demand.cost.stone + '/' + r.demand.cost.iron + ')', '', 'obra');
       }
+      if (config.obra.autoResearch) {
+        try {
+          const techId = await obraResearchStep(vid, profile);
+          if (techId) { researched++; pushLog('Obra: ' + (pmap[vid].coord || vid) + ' [' + OBRA_PROFILE_META[profile].name + '] → pesquisando ' + techId, 'ok', 'obra'); }
+        } catch (e) { pushLog('Obra (pesquisa) em ' + (pmap[vid].coord || vid) + ': ' + (e.message || e), 'err', 'obra'); }
+      }
       await sleep(300);
     }
     config.obra.stats = config.obra.stats || {};
     config.obra.stats.villages = vids.length;
     config.obra.stats.built = built;
+    config.obra.stats.researched = researched;
     config.obra.nextAt = now + Math.max(60, config.obra.interval || 600) * 1000;
     save();
     refreshCards('obra'); renderObraDemand();
@@ -3664,6 +3731,7 @@
     if (g('twmgr-ob-reserve')) c.reserveMin = Math.max(0, parseInt(g('twmgr-ob-reserve').value, 10) || 0);
     if (g('twmgr-ob-farmpop')) c.farmFreePopMin = Math.max(0, parseInt(g('twmgr-ob-farmpop').value, 10) || 800);
     if (g('twmgr-ob-storagepct')) c.storageFillPct = Math.max(1, Math.min(100, parseInt(g('twmgr-ob-storagepct').value, 10) || 60));
+    if (g('twmgr-ob-research')) c.autoResearch = !!g('twmgr-ob-research').checked;
     OBRA_PROFILES.forEach((p) => { const el = g('twmgr-ob-g-' + p); if (el) c.groups[p] = el.value || null; });
     save();
   }
@@ -4982,6 +5050,8 @@
         sec('3. Gatilhos (Fazenda/Armazém condicionais)',
           '<div class="twmgr-row"><span class="twmgr-lbl" title="Upa Fazenda quando a população livre (máx-atual) cair abaixo disso.">Fazenda: pop. livre mín.</span><input id="twmgr-ob-farmpop" class="twmgr-inp" type="number" min="0" step="50" value="800" style="width:80px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl" title="Upa Armazém quando algum recurso atingir esse % da capacidade. Fast Nobre ignora (sobe proativo).">Armazém: % cheio p/ upar</span><input id="twmgr-ob-storagepct" class="twmgr-inp" type="number" min="1" max="100" value="60" style="width:66px"></div>') +
+        sec('4. Pesquisa do Ferreiro',
+          '<label class="twmgr-check"><input id="twmgr-ob-research" type="checkbox" checked> Pesquisar automaticamente (segue a ordem de cada perfil, pula se faltar prédio ou já tiver pesquisa em andamento)</label>') +
         '<div class="twmgr-actions"><button id="twmgr-ob-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-ob-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         sec('Aguardando recurso', '<div id="twmgr-ob-demand"></div>') +
         modLog('obra') +
@@ -5183,9 +5253,10 @@
     document.getElementById('twmgr-ob-reserve').value = config.obra.reserveMin != null ? config.obra.reserveMin : 0;
     document.getElementById('twmgr-ob-farmpop').value = config.obra.farmFreePopMin != null ? config.obra.farmFreePopMin : 800;
     document.getElementById('twmgr-ob-storagepct').value = config.obra.storageFillPct != null ? config.obra.storageFillPct : 60;
+    document.getElementById('twmgr-ob-research').checked = config.obra.autoResearch !== false;
     fillObraGroupSelects();
     renderObraDemand();
-    ['twmgr-ob-int', 'twmgr-ob-max', 'twmgr-ob-reserve', 'twmgr-ob-farmpop', 'twmgr-ob-storagepct'].concat(OBRA_PROFILES.map((p) => 'twmgr-ob-g-' + p))
+    ['twmgr-ob-int', 'twmgr-ob-max', 'twmgr-ob-reserve', 'twmgr-ob-farmpop', 'twmgr-ob-storagepct', 'twmgr-ob-research'].concat(OBRA_PROFILES.map((p) => 'twmgr-ob-g-' + p))
       .forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readObraCfg); });
     document.getElementById('twmgr-ob-start').addEventListener('click', obraStart);
     document.getElementById('twmgr-ob-stop').addEventListener('click', obraStop);

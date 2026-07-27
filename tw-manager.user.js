@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.10.1
+// @version      10.11.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.10.1';
+  const VERSION = '10.11.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -170,8 +170,12 @@
   const defDesviar = () => ({
     keepSpy: true,        // deixar exploradores em casa (pra farmar/monitorar)
     keepKnight: false,    // deixar paladino
-    cancelOffsetMs: 5000, // cancelar N ms APÓS o ataque bater (buffer de segurança)
-    pending: [],          // [{ id, vid, supportVid, supportCoord, cmdId, cancelAt, incomingArriveAt, state, err }]
+    sendBeforeMs: 30000,  // sair de casa N ms ANTES do primeiro ataque marcado
+    cancelOffsetMs: 5000, // cancelar N ms APÓS o ÚLTIMO ataque marcado
+    // Ataques marcados pra desviar. Marcar NÃO envia: o envio é agendado.
+    // [{ id, coord, vid, arriveAt }]
+    marks: [],
+    pending: [],          // [{ id, vid, coordOrigem, supportVid, supportCoord, cmdId, sendAt, cancelAt, ultimoAtaque, state, err }]
   });
   const defMapUi = () => ({
     // Filtros visuais persistidos entre visitas ao screen=map
@@ -4326,6 +4330,10 @@
       if (!min || min < 1 || lockOther()) return;
       if (isCaptchaVisible() || scanForBotCheck((document.body && document.body.innerText) || '')) { checkCaptchaOnce(); return; }   // já tem bot-check: não recarrega
       if (Date.now() - _lastActivity < min * 60000) return;   // você está ativo -> não atrapalha
+      // Não recarrega em cima de um desvio prestes a sair: o reload mata o timer e a retomada
+      // levaria segundos que a tropa não tem. Adia pro próximo ciclo. (Ideia do Nexus, que usa uma
+      // janela de segurança de 60s antes de qualquer auto-reload.)
+      if (desviarSaidaProxima(60000)) { pushLog('Auto-F5 adiado: tem desvio saindo em menos de 1 min.', '', 'desv'); return; }
       location.reload();
     } catch (e) {}
   }
@@ -5247,19 +5255,23 @@
   // Helpers -----------------------------------------------------------------
   const desviarCoordDist = (a, b) => { const [ax, ay] = a.split('|').map(Number); const [bx, by] = b.split('|').map(Number); return Math.hypot(ax - bx, ay - by); };
 
-  async function pickNearestOwnVillage(originVid) {
+  // Candidatas a destino do apoio, da mais PERTO pra mais longe.
+  // A escolha final depende da janela de tempo: o apoio não pode POUSAR antes da hora de voltar,
+  // senão não há o que cancelar. Quem chama testa a duração real que o jogo devolve na confirmação.
+  async function desviarCandidatos(originVid) {
     const vils = await getAllVillages();
     const origin = vils.find((v) => String(v.vid) === String(originVid));
     if (!origin || !origin.coord) throw new Error('aldeia origem sem coord (' + originVid + ')');
-    let best = null, bestD = Infinity;
-    vils.forEach((v) => {
-      if (String(v.vid) === String(originVid)) return;
-      if (!v.coord) return;
-      const d = desviarCoordDist(origin.coord, v.coord);
-      if (d < bestD) { bestD = d; best = v; }
-    });
-    if (!best) throw new Error('nenhuma outra aldeia sua encontrada');
-    return best;   // { vid, name, coord }
+    return vils
+      .filter((v) => String(v.vid) !== String(originVid) && v.coord)
+      .map((v) => ({ v: v, d: desviarCoordDist(origin.coord, v.coord) }))
+      .sort((a, b) => a.d - b.d)
+      .map((o) => o.v);
+  }
+  async function pickNearestOwnVillage(originVid) {
+    const cands = await desviarCandidatos(originVid);
+    if (!cands.length) throw new Error('nenhuma outra aldeia sua encontrada');
+    return cands[0];   // { vid, name, coord }
   }
 
   // Depois de enviar o apoio, procura o cmd_id do apoio recém-saído da aldeia originVid.
@@ -5324,9 +5336,31 @@
     throw new Error('não consegui confirmar o cancelamento (' + (ultimoErro || 'motivo desconhecido') + ')');
   }
 
+  // ---- Agendamento robusto (padrão observado no Nexus) --------------------------------------
+  // setTimeout longo não é confiável: o navegador estrangula o timer quando a aba vai pro fundo e
+  // o disparo escorrega — pode ser em minutos. Corta em blocos de 30s e reagenda; o último bloco é
+  // sempre curto, então o erro fica limitado ao último trecho.
+  const _desvTimers = {};
+  function desvAgendar(id, ms, fn) {
+    clearTimeout(_desvTimers[id]);
+    const BLOCO = 30000;
+    if (ms <= BLOCO) { _desvTimers[id] = setTimeout(fn, Math.max(0, ms)); return; }
+    _desvTimers[id] = setTimeout(() => desvAgendar(id, ms - BLOCO, fn), BLOCO);
+  }
+  function desvCancelarAgendamento(id) { clearTimeout(_desvTimers[id]); delete _desvTimers[id]; }
+  // Aba oculta tem timer estrangulado: acorda mais cedo pra ter folga. Mesma ideia do
+  // FINAL_COUNTDOWN_BUFFER (5s) x BACKGROUND (30s) do Nexus.
+  function desvFolga() { return (typeof document !== 'undefined' && document.hidden) ? 30000 : 5000; }
+  // Há algum desvio pra sair nos próximos N ms? O Auto-F5 consulta isto pra não recarregar a
+  // página em cima de um envio agendado.
+  function desviarSaidaProxima(janelaMs) {
+    const lim = serverNow() + (janelaMs || 60000);
+    return (config.desviar.pending || []).some((p) => p.state === 'waiting' && p.sendAt && p.sendAt <= lim);
+  }
+
   function scheduleDesviarCancel(item) {
     const delay = Math.max(0, item.cancelAt - serverNow());
-    setTimeout(async () => {
+    desvAgendar(item.id + ':cancel', delay, async () => {
       const cur = (config.desviar.pending || []).find((x) => x.id === item.id);
       if (!cur || cur.state !== 'scheduled') return;
       try {
@@ -5343,28 +5377,84 @@
         if (config.captcha && config.captcha.enabled) { try { fireCaptchaNotification('desvio-falhou/' + cur.vid, true); } catch (e2) {} }
       }
       desviarRefreshRowStates();
-    }, delay);
+    });
   }
 
   // Motor principal
-  async function desviarAldeia(originVid, incomingArriveMs, destinoVid, coordOrigem) {
-    return ocupado(() => _desviarAldeia(originVid, incomingArriveMs, destinoVid, coordOrigem));
+  // ---- Marcação e plano por aldeia -----------------------------------------------------------
+  // Marcar NÃO envia. O envio é agendado pra sair `sendBeforeMs` antes do PRIMEIRO ataque marcado
+  // daquela aldeia, e o retorno pra depois do ÚLTIMO. Assim a tropa fica fora o mínimo necessário
+  // — antes o clique enviava na hora e ela passava horas fora, com o apoio pousando no vizinho.
+  function desviarMarcas(coord) {
+    return (config.desviar.marks || []).filter((m) => m.coord === coord).sort((a, b) => a.arriveAt - b.arriveAt);
   }
-  async function _desviarAldeia(originVid, incomingArriveMs, destinoVid, coordOrigem) {
-    try {
-      let destino;
-      if (destinoVid) {
-        const vils = await getAllVillages();
-        destino = vils.find((v) => String(v.vid) === String(destinoVid));
-      } else {
-        destino = await pickNearestOwnVillage(originVid);
+  function desviarPlanoDe(coord) {
+    const ms = desviarMarcas(coord);
+    if (!ms.length) return null;
+    return {
+      coord: coord,
+      vid: ms[0].vid,
+      primeiro: ms[0].arriveAt,
+      ultimo: ms[ms.length - 1].arriveAt,
+      qtd: ms.length,
+      sendAt: ms[0].arriveAt - (config.desviar.sendBeforeMs || 30000),
+      cancelAt: ms[ms.length - 1].arriveAt + (config.desviar.cancelOffsetMs || 5000),
+    };
+  }
+  function desviarPendenteDe(coord) {
+    return (config.desviar.pending || []).find((p) => p.coordOrigem === coord && (p.state === 'waiting' || p.state === 'scheduled'));
+  }
+  // (Re)agenda a saída da aldeia conforme as marcas atuais. Chamado ao marcar, ao desmarcar e no boot.
+  function desviarReplanejar(coord) {
+    const plano = desviarPlanoDe(coord);
+    let pend = desviarPendenteDe(coord);
+    if (!plano) {
+      if (pend && pend.state === 'waiting') {
+        desvCancelarAgendamento(pend.id);
+        config.desviar.pending = config.desviar.pending.filter((p) => p.id !== pend.id);
+        save();
       }
+      return;
+    }
+    if (pend && pend.state === 'scheduled') return;   // já saiu de casa; o retorno manda agora
+    if (!pend) {
+      pend = { id: 'd' + Date.now() + Math.random().toString(36).slice(2, 6),
+               vid: String(plano.vid), coordOrigem: coord, supportVid: '', supportCoord: '',
+               cmdId: '', sendAt: plano.sendAt, cancelAt: plano.cancelAt,
+               ultimoAtaque: plano.ultimo, state: 'waiting', err: '' };
+      config.desviar.pending.push(pend);
+    } else {
+      pend.sendAt = plano.sendAt; pend.cancelAt = plano.cancelAt; pend.ultimoAtaque = plano.ultimo;
+    }
+    save();
+    const falta = pend.sendAt - serverNow();
+    if (falta < -60000) {
+      pend.state = 'failed'; pend.err = 'a hora de sair já passou (aba fechada?)';
+      save();
+      pushLog('🚨 Desvio ' + coord + ': a hora de sair (' + new Date(pend.sendAt).toLocaleTimeString() + ') já passou — NÃO enviei. Desvie na mão se ainda der.', 'err', 'desv');
+      return;
+    }
+    desvAgendar(pend.id, Math.max(0, falta), () => { desviarExecutarSaida(pend.id); });
+    pushLog('🚨 Desvio ' + coord + ' armado: ' + plano.qtd + ' ataque(s) marcado(s) · sai às '
+      + new Date(pend.sendAt).toLocaleTimeString() + ' · volta às ' + new Date(pend.cancelAt).toLocaleTimeString(), 'ok', 'desv');
+    desviarRefreshRowStates();
+  }
+  async function desviarExecutarSaida(pendId) {
+    const pend = (config.desviar.pending || []).find((p) => p.id === pendId);
+    if (!pend || pend.state !== 'waiting') return;
+    return ocupado(() => _desviarSair(pend));
+  }
+
+  // A saída de casa, na hora agendada.
+  async function _desviarSair(pend) {
+    try {
+      const destino = await pickNearestOwnVillage(pend.vid);
       if (!destino || !destino.coord) throw new Error('destino sem coord');
       const [dx, dy] = destino.coord.split('|');
 
       // getVillageStateReserved, não getVillageState: era o único módulo que lia a tropa CRUA e
       // levava junto o que o Coordenado tinha reservado pra um ataque armado.
-      const state = await getVillageStateReserved(originVid);
+      const state = await getVillageStateReserved(pend.vid);
       const amounts = {};
       UNITS.forEach(([u]) => {
         if (u === 'spy' && config.desviar.keepSpy) return;
@@ -5375,86 +5465,75 @@
       });
       if (!Object.keys(amounts).length) throw new Error('sem tropas em casa pra desviar');
 
-      pushLog('🚨 Desviando aldeia ' + originVid + ' → apoio ' + destino.coord + ' · ' + Object.entries(amounts).map(([u, n]) => n + ' ' + u).join(', '), '', 'desv');
-
-      const durSeg = await sendAttack(originVid, dx, dy, amounts, 'support');
+      const durSeg = await sendAttack(pend.vid, dx, dy, amounts, 'support');
       await sleep(700);   // dá tempo do server registrar o cmd
-      const cmdId = await findLatestSupportCommand(originVid, destino.coord);
-      if (!cmdId) throw new Error('apoio saiu mas cmd_id não encontrado — cancele manualmente se precisar');
+      const cmdId = await findLatestSupportCommand(pend.vid, destino.coord);
+      if (!cmdId) throw new Error('o apoio saiu mas não achei o comando — cancele na mão');
 
-      // QUANDO cancelar. O erro antigo era usar só a chegada do incoming: o apoio vai pra aldeia
-      // MAIS PRÓXIMA (minutos de viagem) enquanto o incoming pode estar a horas. O apoio pousava
-      // muito antes e o cancelamento falhava — no TW não se cancela comando que já chegou.
-      const agora = serverNow();
-      const pousoEm = durSeg ? (agora + durSeg * 1000) : null;       // quando o apoio chega no vizinho
-      const MARGEM = 20000;                                          // não cancelar em cima do pouso
-      let cancelAt = incomingArriveMs + (config.desviar.cancelOffsetMs || 5000);
-      let aviso = '';
-      if (pousoEm && cancelAt > pousoEm - MARGEM) {
-        // Não dá pra esperar o incoming: o apoio pousa antes. Cancela o mais tarde possível.
-        cancelAt = pousoEm - MARGEM;
-        // Comando cancelado volta gastando o mesmo tempo já voado: sai em t0, cancela em c,
-        // chega em casa em c + (c - t0). Se isso for antes do incoming, a tropa está em casa na hora errada.
-        const voltaEm = cancelAt + (cancelAt - agora);
-        aviso = voltaEm < incomingArriveMs
-          ? ('a tropa voltaria às ' + new Date(voltaEm).toLocaleTimeString() + ', ANTES do ataque — vai ficar parada em ' + destino.coord + '; traga na mão depois')
-          : ('apoio pousa antes do ataque; cancelo às ' + new Date(cancelAt).toLocaleTimeString());
+      pend.supportVid = String(destino.vid); pend.supportCoord = destino.coord;
+      pend.cmdId = cmdId; pend.state = 'scheduled';
+
+      // O apoio não pode POUSAR antes da hora de voltar — comando que chegou não se cancela.
+      // Com a saída 30s antes do ataque, a janela é de segundos e qualquer vizinha está a minutos,
+      // então isto praticamente nunca dispara. Fica como rede.
+      const pousoEm = durSeg ? (serverNow() + durSeg * 1000) : null;
+      if (pousoEm && pend.cancelAt > pousoEm - 20000) {
+        pend.cancelAt = pousoEm - 20000;
+        pushLog('🚨 Desvio ' + pend.coordOrigem + ': o apoio pousaria antes da volta; antecipei o cancelamento pra '
+          + new Date(pend.cancelAt).toLocaleTimeString() + '.', '', 'desv');
       }
-      if (cancelAt <= agora) {
-        // Viagem curta demais pra qualquer cancelamento automático. A tropa está segura fora de
-        // casa, mas quem traz de volta é você — e isso precisa ficar explícito, não implícito.
-        pushLog('🚨 Desvio: tropa da aldeia ' + originVid + ' saiu pra ' + destino.coord
-          + ', mas a viagem é curta demais pra cancelar automaticamente. Ela fica parada lá — traga de volta na mão.', 'err', 'desv');
-        cancelAt = 0;
-      } else if (aviso) {
-        pushLog('🚨 Desvio: ' + aviso + '.', '', 'desv');
-      }
-      const item = { id: 'd' + Date.now() + Math.random().toString(36).slice(2, 6),
-                     vid: String(originVid), coordOrigem: coordOrigem || '',
-                     supportVid: String(destino.vid), supportCoord: destino.coord,
-                     cmdId: cmdId, cancelAt: cancelAt, incomingArriveAt: incomingArriveMs,
-                     state: cancelAt ? 'scheduled' : 'parked', err: '' };
-      config.desviar.pending.push(item);
       save();
-      if (cancelAt) {
-        scheduleDesviarCancel(item);
-        pushLog('🚨 Desvio armado ✓ comando ' + cmdId + ' · cancelo às ' + new Date(cancelAt).toLocaleTimeString(), 'ok', 'desv');
-      } else {
-        pushLog('🚨 Desvio armado, SEM cancelamento automático — comando ' + cmdId + '. A tropa está em ' + destino.coord + '.', '', 'desv');
-      }
+      pushLog('🚨 Desvio ' + pend.coordOrigem + ': tropa FORA (' + Object.entries(amounts).map(([u, n]) => n + ' ' + u).join(', ')
+        + ' → ' + destino.coord + ') · volta às ' + new Date(pend.cancelAt).toLocaleTimeString(), 'ok', 'desv');
+      scheduleDesviarCancel(pend);
       desviarRefreshRowStates();
-      return item;
+      return pend;
     } catch (e) {
-      pushLog('🚨 Desvio FALHOU: ' + (e.message || e), 'err', 'desv');
+      pend.state = 'failed'; pend.err = e.message || String(e); save();
+      // Falhar AQUI significa que a tropa continua em casa e o ataque vai bater nela.
+      pushLog('🚨 DESVIO NÃO SAIU — ' + pend.coordOrigem + ': ' + pend.err + '. A tropa está em casa e o ataque vem aí.', 'err', 'desv');
+      if (config.captcha && config.captcha.enabled) { try { fireCaptchaNotification('desvio-nao-saiu/' + pend.coordOrigem, true); } catch (e2) {} }
+      desviarRefreshRowStates();
       throw e;
     }
   }
 
   // UI ---- injeção na tela de incomings ----
   const DESV_ROW_COLORS = {
-    scheduled: 'rgba(140,220,140,.35)',   // verde claro
+    marked:    'rgba(120,180,255,.28)',   // azul: marcado, ainda não saiu
+    waiting:   'rgba(120,180,255,.28)',   // azul: saída agendada
+    scheduled: 'rgba(140,220,140,.35)',   // verde: tropa fora de casa
     canceling: 'rgba(255,225,120,.35)',   // amarelo
-    canceled:  'rgba(180,180,180,.25)',   // cinza
+    canceled:  'rgba(180,180,180,.25)',   // cinza: voltou
     failed:    'rgba(255,120,120,.30)',   // vermelho suave
   };
 
-  function desviarFindPending(originVid, arriveMs) {
-    // Casa por COORDENADA: a linha da tabela só tem a coord da aldeia atacada; o vid é resolvido
-    // no clique. Casar por coord faz o estado ("armado", "falhou") reaparecer depois de um F5.
-    return (config.desviar.pending || []).find((p) => p.coordOrigem === originVid && Math.abs((p.incomingArriveAt || 0) - (arriveMs || 0)) < 2000);
+  function desviarMarcado(coord, arriveMs) {
+    return (config.desviar.marks || []).some((m) => m.coord === coord && Math.abs(m.arriveAt - arriveMs) < 2000);
   }
 
   function desviarRefreshRowStates() {
+    const hm = (t) => new Date(t).toLocaleTimeString();
     document.querySelectorAll('tr[data-twmgr-desv-coord]').forEach((tr) => {
-      const vid = tr.getAttribute('data-twmgr-desv-coord');
+      const coord = tr.getAttribute('data-twmgr-desv-coord');
       const arriveMs = parseInt(tr.getAttribute('data-twmgr-desv-arr'), 10);
-      const pend = desviarFindPending(vid, arriveMs);
       const btn = tr.querySelector('.twmgr-desviar-btn'); if (!btn) return;
-      if (!pend) { tr.style.background = ''; btn.textContent = '🔄 Desviar'; btn.disabled = false; return; }
-      tr.style.background = DESV_ROW_COLORS[pend.state] || '';
-      const label = { scheduled: '✓ armado', canceling: '⏳ cancelando', canceled: '✓ cancelado', failed: '✗ falhou' }[pend.state] || pend.state;
-      btn.textContent = label;
-      btn.disabled = pend.state !== 'failed';   // permite re-tentar se falhou
+      const marcado = desviarMarcado(coord, arriveMs);
+      const pend = desviarPendenteDe(coord)
+        || (config.desviar.pending || []).find((p) => p.coordOrigem === coord && (p.state === 'canceled' || p.state === 'failed'));
+      if (!marcado && !pend) { tr.style.background = ''; btn.textContent = '🔄 Desviar'; btn.disabled = false; return; }
+      const st = pend ? pend.state : 'marked';
+      tr.style.background = DESV_ROW_COLORS[st] || '';
+      // O rótulo mostra o PLANO da aldeia inteira: várias linhas marcadas compartilham uma só saída.
+      btn.textContent = {
+        marked:    '✓ marcado',
+        waiting:   pend ? ('⏱ sai ' + hm(pend.sendAt)) : '⏱ agendado',
+        scheduled: pend ? ('🚀 fora · volta ' + hm(pend.cancelAt)) : '🚀 fora',
+        canceled:  '✓ voltou',
+        failed:    '✗ falhou',
+      }[st] || st;
+      // Marcado ou esperando ainda dá pra desmarcar; depois que a tropa saiu, não.
+      btn.disabled = (st === 'scheduled' || st === 'canceled');
     });
   }
 
@@ -5536,16 +5615,35 @@
       btn.className = 'btn twmgr-desviar-btn';
       btn.textContent = '🔄 Desviar';
       btn.style.whiteSpace = 'nowrap';
+      // Clicar MARCA (ou desmarca). O envio é agendado pra sair pouco antes do primeiro ataque
+      // marcado da aldeia — clicar não tira tropa de casa na hora.
       btn.addEventListener('click', async () => {
         if (btn.disabled) return;
-        btn.disabled = true; btn.textContent = '⏳ enviando…';
         try {
+          if (desviarMarcado(coordDestino, arriveMs)) {
+            config.desviar.marks = (config.desviar.marks || [])
+              .filter((m) => !(m.coord === coordDestino && Math.abs(m.arriveAt - arriveMs) < 2000));
+            save();
+            desviarReplanejar(coordDestino);
+            if (!desviarMarcas(coordDestino).length) pushLog('🚨 Desvio ' + coordDestino + ': desmarcado.', '', 'desv');
+            desviarRefreshRowStates();
+            return;
+          }
+          if (!arriveMs) throw new Error('não consegui ler o horário de chegada desta linha');
+          btn.textContent = '⏳…';
           const vils = await getAllVillages();
           const minha = vils.find((v) => v.coord === coordDestino);
           if (!minha) throw new Error('a aldeia ' + coordDestino + ' não está na sua lista de aldeias');
-          await desviarAldeia(minha.vid, arriveMs, null, coordDestino);
+          config.desviar.marks = config.desviar.marks || [];
+          config.desviar.marks.push({ id: 'm' + Date.now() + Math.random().toString(36).slice(2, 5),
+                                      coord: coordDestino, vid: String(minha.vid), arriveAt: arriveMs });
+          save();
+          desviarReplanejar(coordDestino);
+          desviarRefreshRowStates();
+        } catch (e) {
+          btn.textContent = '🔄 Desviar';
+          alert('Desvio falhou: ' + (e.message || e));
         }
-        catch (e) { btn.disabled = false; btn.textContent = '🔄 Desviar'; alert('Desvio falhou: ' + (e.message || e)); }
       });
       td.appendChild(btn);
       tr.appendChild(td);
@@ -5557,11 +5655,27 @@
     setInterval(desviarRefreshRowStates, 2000);
   }
 
-  // Retomada pós reload: pra cada pending com state='scheduled', reagenda o cancel
+  // Retomada pós reload. É a parte que sustenta o modelo: como o envio agora é AGENDADO (e não
+  // imediato), a página recarregar entre a marcação e a saída não pode perder o compromisso.
   function desviarResumeAll() {
+    const agora = serverNow();
+    // 1) tropa já fora: só reagenda a volta
     (config.desviar.pending || []).forEach((item) => {
       if (item.state === 'scheduled') scheduleDesviarCancel(item);
     });
+    // 2) saída ainda por vir: reagenda a partir das marcas (que sobrevivem no localStorage)
+    const coords = {};
+    (config.desviar.marks || []).forEach((m) => { coords[m.coord] = 1; });
+    Object.keys(coords).forEach((coord) => {
+      const pend = desviarPendenteDe(coord);
+      if (pend && pend.state === 'scheduled') return;
+      desviarReplanejar(coord);
+    });
+    // 3) faxina: marcas de ataques que já bateram há mais de 1h não servem mais pra nada
+    const antes = (config.desviar.marks || []).length;
+    config.desviar.marks = (config.desviar.marks || []).filter((m) => m.arriveAt > agora - 3600000);
+    config.desviar.pending = (config.desviar.pending || []).filter((p) => (p.cancelAt || p.sendAt || 0) > agora - 6 * 3600000);
+    if (antes !== config.desviar.marks.length) save();
   }
 
   // ==================== MAPA — filtros e badges na tela do jogo ====================

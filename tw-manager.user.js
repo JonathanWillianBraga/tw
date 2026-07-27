@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.37.0
+// @version      9.38.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.37.0';
+  const VERSION = '9.38.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -127,6 +127,7 @@
     passoMs: 50,            // passo dos botões de ajuste fino na fila
     modelos: null,          // modelos de tropa do usuário (null = ainda não semeado)
     fechados: {},           // seções recolhidas do painel (ele fica alto demais com tudo aberto)
+    snipeFolgaMs: 150,      // quanto DEPOIS do ataque o apoio pousa (margem de segurança)
   });
   // Semente: os antigos atalhos fixos viram modelos editáveis, pra ninguém perder o atalho.
   const MODELOS_PADRAO = () => ([
@@ -292,6 +293,7 @@
     if (c.cmd.passoMs == null) c.cmd.passoMs = 50;
     if (!Array.isArray(c.cmd.modelos)) c.cmd.modelos = MODELOS_PADRAO();
     if (!c.cmd.fechados) c.cmd.fechados = {};
+    if (c.cmd.snipeFolgaMs == null) c.cmd.snipeFolgaMs = 150;
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -1359,12 +1361,16 @@
     return out;
   }
   // Janela de snipe: entre a chegada escolhida e a PRÓXIMA no MESMO destino.
+  // Margem entre a chegada do ataque e a do apoio. Fixá-la em 50ms era perigoso: se o erro
+  // de disparo for maior que a margem, o apoio pousa ANTES do ataque e morre nele.
+  function ccFolgaSnipe() { return Math.max(0, (config.cmd && config.cmd.snipeFolgaMs != null) ? config.cmd.snipeFolgaMs : 150); }
   function ccJanelaSnipe(lista, i, folgaMs) {
-    const alvo = lista[i], folga = folgaMs == null ? 50 : folgaMs;
+    const alvo = lista[i], folga = folgaMs == null ? ccFolgaSnipe() : folgaMs;
     const prox = lista.slice(i + 1).find((k) => k.destino === alvo.destino);
-    const de = alvo.chega + (alvo.temMs ? 0 : 1000) + folga;   // sem milésimos, assume o pior caso
+    const base = alvo.chega + (alvo.temMs ? 0 : 1000);   // sem milésimos, assume o pior caso
+    const de = base + folga;
     const ate = prox ? (prox.chega - folga) : null;
-    return { de: de, ate: ate, largura: ate == null ? null : (ate - de), prox: prox, exato: !!alvo.temMs };
+    return { base: base, de: de, ate: ate, largura: ate == null ? null : (ate - de), prox: prox, exato: !!alvo.temMs };
   }
 
   // Seções recolhíveis: com tudo aberto o painel empurrava a praça de reunião pra fora da
@@ -1403,7 +1409,7 @@
     if (!L.length) { box.innerHTML = '<div style="color:#8f7d57;padding:6px;font-size:10px">— nenhum —</div>'; return; }
     const agora = srvNowP(), ehIn = (_ccCmdsQual === 'incoming');
     box.innerHTML = L.slice(0, 60).map((c, i) => {
-      const jan = ehIn ? ccJanelaSnipe(L, i, 50) : null;
+      const jan = ehIn ? ccJanelaSnipe(L, i) : null;
       return '<div style="display:grid;grid-template-columns:1fr 78px 62px 96px;gap:4px;align-items:center;' +
              'padding:2px 5px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px">' +
         '<span style="color:#cbb98f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.tipo) + '">' +
@@ -1429,15 +1435,15 @@
       if (m) { m.style.color = '#8fe39a'; m.textContent = 'Chegada copiada: ' + srvClockMs(c.chega + off()) + (off() ? ' (com ' + off() + 'ms de deslocamento)' : ''); }
     });
     box.querySelectorAll('[data-snipe]').forEach((el) => el.onclick = () => {
-      const i = +el.getAttribute('data-snipe'), c = L[i], jan = ccJanelaSnipe(L, i, 50);
+      const i = +el.getAttribute('data-snipe'), c = L[i], jan = ccJanelaSnipe(L, i);
       const m = document.getElementById('cc-msg');
       if (jan.largura != null && jan.largura <= 0) {
         if (m) { m.style.color = '#ff7568'; m.textContent = 'Não dá pra snipar: a próxima onda chega antes da janela abrir.'; }
         return;
       }
       // Abre o mesmo popup de sugestão usado pela tela de ataques.
-      ccSnipeModal({ destino: c.destino, chegaEm: jan.de + off(), ate: jan.ate,
-                     largura: jan.largura, exato: jan.exato });
+      ccSnipeModal({ destino: c.destino, chegaEm: jan.de + off(), base: jan.base + off(),
+                     ate: jan.ate, largura: jan.largura, exato: jan.exato });
     });
   }
 
@@ -2109,7 +2115,7 @@
       thRow.appendChild(th);
     }
     dados.forEach((d, i) => {
-      const jan = ccJanelaSnipe(dados, i, 50);
+      const jan = ccJanelaSnipe(dados, i);
       const td = document.createElement('td');
       td.style.cssText = 'text-align:center;white-space:nowrap';
       const viavel = (jan.largura == null || jan.largura > 0);
@@ -2121,7 +2127,8 @@
         if (!viavel) { alert('Não dá pra snipar: a próxima onda chega antes da janela abrir.'); return; }
         // Guarda o pedido e manda pra praça, onde o Centro de Comando o consome.
         localStorage.setItem(KEY + '_snipe', JSON.stringify({
-          destino: d.destino, chegaEm: jan.de, ate: jan.ate, largura: jan.largura, exato: jan.exato, at: Date.now(),
+          destino: d.destino, chegaEm: jan.de, base: jan.base, ate: jan.ate,
+          largura: jan.largura, exato: jan.exato, at: Date.now(),
         }));
         location.href = '/game.php?screen=place&cc_snipe=1';
       });
@@ -2172,10 +2179,18 @@
           '<b style="color:#d4af37;font-size:13px">🎯 Snipe em ' + esc(p.destino || '?') + '</b>' +
           '<a id="cc-sn-x" style="cursor:pointer;color:#ff7568;font-size:14px">✕</a>' +
         '</div>' +
-        '<div style="font-size:10px;color:#cbb98f;margin-bottom:8px">' +
+        '<div style="font-size:10px;color:#cbb98f;margin-bottom:4px">' +
           'Pousar às <b style="color:#ffd76a">' + srvClockMs(p.chegaEm) + '</b>' +
+          ' — <b>' + ccFolgaSnipe() + 'ms</b> depois do ataque' +
           (p.largura != null ? ' · janela de <b>' + p.largura + 'ms</b>' : ' · sem próxima onda conhecida') +
           (p.exato ? '' : ' · <b style="color:#ffd76a">chegada sem milésimos: 1s de margem</b>') +
+        '</div>' +
+        // A margem precisa ser maior que o erro de disparo, senão o apoio pousa ANTES do
+        // ataque e morre nele em vez de defender da onda seguinte.
+        '<div style="font-size:10px;margin-bottom:8px">' +
+          'margem depois do ataque <input id="cc-sn-folga" class="twmgr-inp" type="number" min="0" step="50" ' +
+            'value="' + ccFolgaSnipe() + '" style="width:66px;font-size:10px;padding:1px">ms ' +
+          '<span id="cc-sn-folga-av"></span>' +
         '</div>' +
         (viaveis.length
           ? '<div style="display:grid;grid-template-columns:20px 96px 1fr 74px 70px;gap:6px;font-size:9px;color:#8f7d57;padding:0 4px 3px">' +
@@ -2208,6 +2223,26 @@
       msg.style.color = '#ff7568';
       msg.textContent = 'Nenhuma aldeia chega a tempo: a mais rápida sairia ' + fmt(Math.abs(cands[0].folga)) + ' atrás.';
     }
+    // Aviso vivo: margem menor que o erro de disparo é o cenário em que o snipe morre no ataque.
+    const folgaEl = ov.querySelector('#cc-sn-folga'), folgaAv = ov.querySelector('#cc-sn-folga-av');
+    const attFolga = () => {
+      const e = erroEstimadoMs(), f = parseInt(folgaEl.value, 10) || 0;
+      if (f < e) {
+        folgaAv.innerHTML = '<b style="color:#ff7568">⚠ menor que o erro medido (±' + e + 'ms) — o apoio pode pousar ANTES do ataque e morrer nele</b>';
+      } else if (p.largura != null && f > p.largura) {
+        folgaAv.innerHTML = '<b style="color:#ff7568">⚠ maior que a janela (' + p.largura + 'ms) — pousaria depois da próxima onda</b>';
+      } else {
+        folgaAv.innerHTML = '<span style="color:#8fe39a">✓ acima do erro medido (±' + e + 'ms)</span>';
+      }
+    };
+    folgaEl.addEventListener('change', () => {
+      config.cmd.snipeFolgaMs = Math.max(0, parseInt(folgaEl.value, 10) || 0); save();
+      // A margem desloca a chegada — redesenha o popup inteiro pra os candidatos e os
+      // horários refletirem o novo valor, em vez de mostrar número desatualizado.
+      if (p.base != null) { ov.remove(); ccSnipeModal(Object.assign({}, p, { chegaEm: p.base + ccFolgaSnipe() })); }
+    });
+    folgaEl.addEventListener('input', attFolga);
+    attFolga();
     ov.querySelector('#cc-sn-x').onclick = () => ov.remove();
     ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
     ov.querySelector('#cc-sn-praca').onclick = () => { ccPreencherSnipe(p); ov.remove(); };

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.36.0
+// @version      9.37.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.36.0';
+  const VERSION = '9.37.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1435,18 +1435,9 @@
         if (m) { m.style.color = '#ff7568'; m.textContent = 'Não dá pra snipar: a próxima onda chega antes da janela abrir.'; }
         return;
       }
-      // Snipe é apoio no MEU alvo, pousando logo depois do ataque escolhido.
-      config.cmd.tipo = 'support'; save();
-      const al = document.getElementById('cc-alvo');
-      if (al && c.destino) al.value = c.destino;
-      ccSetChegada(jan.de + off());
-      if (typeof _ccAttTipo === 'function') _ccAttTipo();
-      if (m) {
-        m.style.color = jan.exato ? '#8fe39a' : '#ffd76a';
-        m.textContent = 'Snipe armado em ' + (c.destino || '?') + ' para ' + srvClockMs(jan.de + off()) +
-          (jan.largura != null ? ' · janela de ' + jan.largura + 'ms até a próxima onda' : ' · sem próxima onda conhecida') +
-          (jan.exato ? '' : ' · ATENÇÃO: essa chegada veio sem milésimos, considerei 1s de margem');
-      }
+      // Abre o mesmo popup de sugestão usado pela tela de ataques.
+      ccSnipeModal({ destino: c.destino, chegaEm: jan.de + off(), ate: jan.ate,
+                     largura: jan.largura, exato: jan.exato });
     });
   }
 
@@ -2130,7 +2121,7 @@
         if (!viavel) { alert('Não dá pra snipar: a próxima onda chega antes da janela abrir.'); return; }
         // Guarda o pedido e manda pra praça, onde o Centro de Comando o consome.
         localStorage.setItem(KEY + '_snipe', JSON.stringify({
-          destino: d.destino, chegaEm: jan.de, largura: jan.largura, exato: jan.exato, at: Date.now(),
+          destino: d.destino, chegaEm: jan.de, ate: jan.ate, largura: jan.largura, exato: jan.exato, at: Date.now(),
         }));
         location.href = '/game.php?screen=place&cc_snipe=1';
       });
@@ -2138,25 +2129,119 @@
     });
     pushLog('Snipe disponível em ' + dados.length + ' ataque(s) a caminho.', '', 'cmd');
   }
+  // Unidades que defendem. Usadas pra sugerir de onde mandar o snipe.
+  const CC_DEF = ['spear', 'sword', 'heavy', 'archer'];
+  // Valores de defesa do TW por unidade (geral/cavalaria/arqueiro). Serve pra ordenar os
+  // candidatos por quanto realmente seguram, e não por número bruto de tropa.
+  const CC_DEF_VAL = { spear: 15, sword: 25, heavy: 200, archer: 50 };
+  function ccPoderDef(avail) {
+    let p = 0;
+    CC_DEF.forEach((u) => { p += (avail[u] || 0) * (CC_DEF_VAL[u] || 0); });
+    return p;
+  }
+  // Quem consegue pousar DENTRO da janela, com a tropa que tem.
+  function ccSnipeCandidatos(destino, chegaEm, ate) {
+    const m = destino.match(/(\d+)\|(\d+)/); if (!m) return [];
+    const tx = +m[1], ty = +m[2], agora = srvNowP();
+    return CCVILAS.map((v) => {
+      const comp = {};
+      CC_DEF.forEach((u) => { if ((v.avail[u] || 0) > 0) comp[u] = v.avail[u]; });
+      if (!Object.keys(comp).length) return null;
+      const t = (v.x != null) ? ccTempoViagemMs(v.x, v.y, tx, ty, comp) : null;
+      if (t == null) return null;
+      const sai = chegaEm - t;
+      // Precisa dar tempo de sair E a chegada tem que caber na janela.
+      const viavel = (sai > agora + 5000) && (ate == null || chegaEm <= ate);
+      return { v: v, comp: comp, t: t, sai: sai, viavel: viavel, poder: ccPoderDef(v.avail), folga: sai - agora };
+    }).filter(Boolean).sort((a, b) => (b.viavel - a.viavel) || (b.poder - a.poder));
+  }
+  function ccSnipeModal(p) {
+    const velho = document.getElementById('cc-snipe-modal'); if (velho) velho.remove();
+    const cands = ccSnipeCandidatos(p.destino, p.chegaEm, p.ate);
+    const viaveis = cands.filter((c) => c.viavel);
+    const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+
+    const ov = document.createElement('div');
+    ov.id = 'cc-snipe-modal';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:99999;display:flex;' +
+                       'align-items:center;justify-content:center';
+    ov.innerHTML =
+      '<div style="background:linear-gradient(180deg,#2a2016,#201810);border:1px solid #4a3b28;border-radius:10px;' +
+           'padding:12px;width:min(680px,94vw);max-height:86vh;overflow:auto;color:#e8d29a;font-size:11px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+          '<b style="color:#d4af37;font-size:13px">🎯 Snipe em ' + esc(p.destino || '?') + '</b>' +
+          '<a id="cc-sn-x" style="cursor:pointer;color:#ff7568;font-size:14px">✕</a>' +
+        '</div>' +
+        '<div style="font-size:10px;color:#cbb98f;margin-bottom:8px">' +
+          'Pousar às <b style="color:#ffd76a">' + srvClockMs(p.chegaEm) + '</b>' +
+          (p.largura != null ? ' · janela de <b>' + p.largura + 'ms</b>' : ' · sem próxima onda conhecida') +
+          (p.exato ? '' : ' · <b style="color:#ffd76a">chegada sem milésimos: 1s de margem</b>') +
+        '</div>' +
+        (viaveis.length
+          ? '<div style="display:grid;grid-template-columns:20px 96px 1fr 74px 70px;gap:6px;font-size:9px;color:#8f7d57;padding:0 4px 3px">' +
+              '<span></span><span>aldeia</span><span>tropas de defesa</span><span>sai às</span><span>folga</span></div>'
+          : '') +
+        '<div id="cc-sn-lista"></div>' +
+        '<div id="cc-sn-msg" style="font-size:10px;margin:6px 0;min-height:12px"></div>' +
+        '<div style="display:flex;gap:6px">' +
+          '<button id="cc-sn-armar" class="twmgr-btn twmgr-go" style="flex:1">▶ Armar apoio das marcadas</button>' +
+          '<button id="cc-sn-praca" class="twmgr-btn twmgr-ghost">só preencher no painel</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(ov);
+
+    const lista = ov.querySelector('#cc-sn-lista');
+    lista.innerHTML = cands.length ? cands.slice(0, 25).map((c, i) =>
+      '<label style="display:grid;grid-template-columns:20px 96px 1fr 74px 70px;gap:6px;align-items:center;' +
+      'padding:3px 4px;border-bottom:1px solid rgba(255,255,255,.05);' + (c.viavel ? '' : 'opacity:.45;') + '">' +
+        '<input type="checkbox" data-sn="' + i + '"' + (c.viavel && i === 0 ? ' checked' : '') + (c.viavel ? '' : ' disabled') + '>' +
+        '<span style="color:#e6cf7d">' + esc(c.v.coord) + '</span>' +
+        '<span style="color:#cbb98f;font-size:10px">' +
+          CC_DEF.filter((u) => c.comp[u]).map((u) => esc(rot[u] || u) + ' ' + fmtN(c.comp[u])).join(' · ') + '</span>' +
+        '<span style="color:' + (c.viavel ? '#8fe39a' : '#ff7568') + '">' + srvClockMs(c.sai) + '</span>' +
+        '<span style="color:#8f7d57">' + (c.folga > 0 ? fmt(c.folga) : 'tarde') + '</span>' +
+      '</label>').join('')
+      : '<div style="color:#ff7568;padding:8px;font-size:10px">Nenhuma aldeia sua tem tropa de defesa para este alvo.</div>';
+
+    const msg = ov.querySelector('#cc-sn-msg');
+    if (!viaveis.length && cands.length) {
+      msg.style.color = '#ff7568';
+      msg.textContent = 'Nenhuma aldeia chega a tempo: a mais rápida sairia ' + fmt(Math.abs(cands[0].folga)) + ' atrás.';
+    }
+    ov.querySelector('#cc-sn-x').onclick = () => ov.remove();
+    ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
+    ov.querySelector('#cc-sn-praca').onclick = () => { ccPreencherSnipe(p); ov.remove(); };
+    ov.querySelector('#cc-sn-armar').onclick = () => {
+      const marcadas = [...lista.querySelectorAll('[data-sn]')].filter((e) => e.checked).map((e) => cands[+e.getAttribute('data-sn')]);
+      if (!marcadas.length) { msg.style.color = '#ff7568'; msg.textContent = 'Marque ao menos uma aldeia.'; return; }
+      if (!config.cmd.suporteOkAt) { msg.style.color = '#ff7568'; msg.textContent = 'O apoio ainda não foi verificado neste mundo — abra a praça de reunião uma vez.'; return; }
+      const al = p.destino.split('|');
+      let n = 0;
+      marcadas.forEach((c) => { cmdAdicionar('support', al[0], al[1], c.comp, p.chegaEm, c.v.vid); n++; });
+      save(); ccRender();
+      msg.style.color = '#8fe39a';
+      msg.textContent = n + ' apoio(s) armado(s) chegando ' + srvClockMs(p.chegaEm) + '.';
+      setTimeout(() => ov.remove(), 1800);
+    };
+  }
+  function ccPreencherSnipe(p) {
+    config.cmd.tipo = 'support'; save();
+    const al = document.getElementById('cc-alvo');
+    if (al && p.destino) al.value = p.destino;
+    ccSetChegada(p.chegaEm);
+    if (typeof _ccAttTipo === 'function') _ccAttTipo();
+  }
+
   // Consome o pedido deixado pela tela de ataques.
   function ccConsumirSnipe() {
     let p = null;
     try { p = JSON.parse(localStorage.getItem(KEY + '_snipe') || 'null'); } catch (e) {}
     if (!p || (Date.now() - (p.at || 0)) > 120000) return;   // pedido velho: ignora
     localStorage.removeItem(KEY + '_snipe');
-    config.cmd.tipo = 'support'; save();
-    const al = document.getElementById('cc-alvo');
-    if (al && p.destino) al.value = p.destino;
-    ccSetChegada(p.chegaEm);
-    if (typeof _ccAttTipo === 'function') _ccAttTipo();
-    const m = document.getElementById('cc-msg');
-    if (m) {
-      m.style.color = p.exato ? '#8fe39a' : '#ffd76a';
-      m.textContent = 'Snipe em ' + (p.destino || '?') + ' para ' + srvClockMs(p.chegaEm) +
-        (p.largura != null ? ' · janela de ' + p.largura + 'ms' : ' · sem próxima onda conhecida') +
-        (p.exato ? '' : ' · chegada sem milésimos, considerei 1s de margem') +
-        ' — escolha as tropas e a origem, depois Armar.';
-    }
+    ccPreencherSnipe(p);
+    // O modal precisa das aldeias carregadas pra sugerir de onde mandar.
+    const abrir = () => { if (CCVILAS.length) ccSnipeModal(p); else setTimeout(abrir, 500); };
+    setTimeout(abrir, 300);
   }
 
   function mountCmdCenter() {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.35.0
+// @version      9.35.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.35.0';
+  const VERSION = '9.35.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -126,6 +126,7 @@
     filaOrdem: 'chegada',   // como listar a fila: 'chegada' | 'saida'
     passoMs: 50,            // passo dos botões de ajuste fino na fila
     modelos: null,          // modelos de tropa do usuário (null = ainda não semeado)
+    fechados: {},           // seções recolhidas do painel (ele fica alto demais com tudo aberto)
   });
   // Semente: os antigos atalhos fixos viram modelos editáveis, pra ninguém perder o atalho.
   const MODELOS_PADRAO = () => ([
@@ -290,6 +291,7 @@
     if (!c.cmd.filaOrdem) c.cmd.filaOrdem = 'chegada';
     if (c.cmd.passoMs == null) c.cmd.passoMs = 50;
     if (!Array.isArray(c.cmd.modelos)) c.cmd.modelos = MODELOS_PADRAO();
+    if (!c.cmd.fechados) c.cmd.fechados = {};
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
@@ -1365,6 +1367,23 @@
     return { de: de, ate: ate, largura: ate == null ? null : (ate - de), prox: prox, exato: !!alvo.temMs };
   }
 
+  // Seções recolhíveis: com tudo aberto o painel empurrava a praça de reunião pra fora da
+  // tela e deixava controles (como o snipe) longe demais.
+  function ccAplicarFechados() {
+    const F = config.cmd.fechados || {};
+    document.querySelectorAll('[data-secbody]').forEach((b) => {
+      b.style.display = F[b.getAttribute('data-secbody')] ? 'none' : '';
+    });
+    document.querySelectorAll('[data-sec]').forEach((h) => {
+      const k = h.getAttribute('data-sec');
+      h.innerHTML = (F[k] ? '▸' : '▾') + h.innerHTML.replace(/^[▾▸]\s*/, ' ');
+    });
+  }
+  function ccToggleSecao(k) {
+    const F = (config.cmd.fechados = config.cmd.fechados || {});
+    F[k] = !F[k]; save(); ccAplicarFechados();
+  }
+
   // Escreve um instante do servidor no campo de chegada (datetime-local, com milésimos).
   function ccSetChegada(srvMs) {
     const el = document.getElementById('cc-chegada'); if (!el) return;
@@ -1985,6 +2004,12 @@
     const f = cmdFila();
     const ord = document.getElementById('cc-fila-ordem');
     if (ord && ord.value !== config.cmd.filaOrdem) ord.value = config.cmd.filaOrdem;
+    // Contador no cabeçalho, pra saber que há comandos mesmo com a seção recolhida.
+    const cn = document.getElementById('cc-fila-n');
+    if (cn) {
+      const pend = f.filter((c) => c.state === 'novo' || c.state === 'preparado' || c.state === 'armado').length;
+      cn.textContent = f.length ? ('(' + pend + ' pendente(s) de ' + f.length + ')') : '';
+    }
     if (!f.length) { box.innerHTML = '<div style="color:#8f7d57;padding:6px;font-size:10px">— nenhum comando armado —</div>'; return; }
     const agora = serverNow();
     const passo = Math.max(1, config.cmd.passoMs || 50);
@@ -2144,22 +2169,24 @@
       // Tropas digitadas AQUI, não nas caixas do jogo. "tudo" = manda o estoque inteiro daquela origem.
       '<div style="margin:8px 0 4px;border-top:1px solid #3a2e1b;padding-top:6px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
-          '<span style="font-size:10px;color:#e8d29a;font-weight:600">Tropas por origem</span>' +
+          '<span data-sec="tropas" style="font-size:10px;color:#e8d29a;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Tropas por origem</span>' +
           '<span style="font-size:10px">' +
             '<a id="cc-tpl-salvar" style="cursor:pointer;color:#8fe39a">+ salvar como modelo</a> · ' +
             '<a id="cc-tpl-limpar" style="cursor:pointer;color:#e6cf7d">limpar</a> · ' +
             '<a id="cc-tpl-restaurar" style="cursor:pointer;color:#8f7d57" title="repõe Tudo/Nobre/Fake">padrão</a>' +
           '</span>' +
         '</div>' +
+        '<div data-secbody="tropas">' +
         '<div id="cc-modelos" style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:5px"></div>' +
         // Montada em ccRenderTropas() a partir das unidades que ESTE mundo tem — a lista fixa
         // de 12 mostrava arqueiro e arqueiro a cavalo em mundos que não os têm.
         '<div id="cc-tropas-grade" style="display:flex;flex-wrap:wrap;gap:4px"></div>' +
+        '</div>' +
       '</div>' +
       // Origens: cada aldeia com distância e tempo já calculados pela unidade mais lenta.
       '<div style="margin:8px 0 4px;border-top:1px solid #3a2e1b;padding-top:6px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
-          '<span style="font-size:10px;color:#e8d29a;font-weight:600">Origens</span>' +
+          '<span data-sec="origens" style="font-size:10px;color:#e8d29a;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Origens</span>' +
           '<span style="font-size:10px">' +
             '<a id="cc-org-todas" style="cursor:pointer;color:#e6cf7d">todas</a> · ' +
             '<a id="cc-org-nenhuma" style="cursor:pointer;color:#e6cf7d">nenhuma</a> · ' +
@@ -2169,6 +2196,7 @@
         '</div>' +
         // "total" conta a tropa que está fora e volta — necessário pra agendar um full
         // pra daqui a horas com a tropa saqueando agora.
+        '<div data-secbody="origens">' +
         '<div style="font-size:10px;margin-bottom:3px">' +
           '<label style="margin-right:10px;cursor:pointer" title="linha &quot;Na Aldeia&quot; do jogo"><input type="radio" name="cc-fonte" value="casa"> na aldeia agora</label>' +
           '<label style="cursor:pointer" title="linha &quot;suas próprias&quot; do jogo: inclui o que está fora e em trânsito"><input type="radio" name="cc-fonte" value="total"> suas próprias (inclui fora/trânsito)</label>' +
@@ -2178,6 +2206,7 @@
           '<span></span><span>aldeia</span><span>dist.</span><span>viagem</span><span>mais lenta</span><span>saída</span></div>' +
         '<div id="cc-origens" style="max-height:170px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
         '<div id="cc-resumo" style="font-size:10px;color:#cbb98f;margin-top:3px"></div>' +
+        '</div>' +
       '</div>' +
       '<div style="display:flex;gap:6px;align-items:center">' +
         '<button id="cc-armar" class="twmgr-btn twmgr-go" style="flex:1">▶ Armar comando</button>' +
@@ -2188,7 +2217,7 @@
       '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
       '<div style="margin-top:8px;border-top:1px solid #3a2e1b;padding-top:6px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
-          '<span style="font-size:10px;color:#e8d29a;font-weight:600">Fila</span>' +
+          '<span data-sec="fila" style="font-size:10px;color:#e8d29a;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Fila <span id="cc-fila-n" style="color:#8f7d57;font-weight:400"></span></span>' +
           '<span style="font-size:10px;color:#8f7d57">ordenar por ' +
             '<select id="cc-fila-ordem" class="twmgr-inp" style="width:auto;font-size:10px;padding:1px">' +
               '<option value="chegada">chegada</option><option value="saida">saída</option></select>' +
@@ -2197,7 +2226,7 @@
         '</div>' +
         '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
           '<span>tipo</span><span>de</span><span>para</span><span>estado</span><span>sai</span><span>chegada</span><span>falta</span><span></span></div>' +
-        '<div id="cc-fila" style="max-height:180px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
+        '<div data-secbody="fila"><div id="cc-fila" style="max-height:180px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div></div>' +
       '</div>';
     host.insertBefore(d, host.firstChild);
     // keepAwake PRECISA ser chamado sincronamente dentro do gesto, antes de qualquer await,
@@ -2311,6 +2340,9 @@
     };
     ccRenderTropas();
     ccModelosRender();
+    document.querySelectorAll('[data-sec]').forEach((h) =>
+      h.addEventListener('click', () => ccToggleSecao(h.getAttribute('data-sec'))));
+    ccAplicarFechados();
 
     // Seleção de origens
     // Fake: prévia ao vivo de quantos comandos a combinação atual geraria.

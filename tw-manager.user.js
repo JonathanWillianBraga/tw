@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.10.0
+// @version      10.10.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.10.0';
+  const VERSION = '10.10.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -5347,10 +5347,10 @@
   }
 
   // Motor principal
-  async function desviarAldeia(originVid, incomingArriveMs, destinoVid) {
-    return ocupado(() => _desviarAldeia(originVid, incomingArriveMs, destinoVid));
+  async function desviarAldeia(originVid, incomingArriveMs, destinoVid, coordOrigem) {
+    return ocupado(() => _desviarAldeia(originVid, incomingArriveMs, destinoVid, coordOrigem));
   }
-  async function _desviarAldeia(originVid, incomingArriveMs, destinoVid) {
+  async function _desviarAldeia(originVid, incomingArriveMs, destinoVid, coordOrigem) {
     try {
       let destino;
       if (destinoVid) {
@@ -5410,7 +5410,8 @@
         pushLog('🚨 Desvio: ' + aviso + '.', '', 'desv');
       }
       const item = { id: 'd' + Date.now() + Math.random().toString(36).slice(2, 6),
-                     vid: String(originVid), supportVid: String(destino.vid), supportCoord: destino.coord,
+                     vid: String(originVid), coordOrigem: coordOrigem || '',
+                     supportVid: String(destino.vid), supportCoord: destino.coord,
                      cmdId: cmdId, cancelAt: cancelAt, incomingArriveAt: incomingArriveMs,
                      state: cancelAt ? 'scheduled' : 'parked', err: '' };
       config.desviar.pending.push(item);
@@ -5438,12 +5439,14 @@
   };
 
   function desviarFindPending(originVid, arriveMs) {
-    return (config.desviar.pending || []).find((p) => String(p.vid) === String(originVid) && Math.abs((p.incomingArriveAt || 0) - (arriveMs || 0)) < 2000);
+    // Casa por COORDENADA: a linha da tabela só tem a coord da aldeia atacada; o vid é resolvido
+    // no clique. Casar por coord faz o estado ("armado", "falhou") reaparecer depois de um F5.
+    return (config.desviar.pending || []).find((p) => p.coordOrigem === originVid && Math.abs((p.incomingArriveAt || 0) - (arriveMs || 0)) < 2000);
   }
 
   function desviarRefreshRowStates() {
-    document.querySelectorAll('tr[data-twmgr-desv-vid]').forEach((tr) => {
-      const vid = tr.getAttribute('data-twmgr-desv-vid');
+    document.querySelectorAll('tr[data-twmgr-desv-coord]').forEach((tr) => {
+      const vid = tr.getAttribute('data-twmgr-desv-coord');
       const arriveMs = parseInt(tr.getAttribute('data-twmgr-desv-arr'), 10);
       const pend = desviarFindPending(vid, arriveMs);
       const btn = tr.querySelector('.twmgr-desviar-btn'); if (!btn) return;
@@ -5464,18 +5467,24 @@
     const m = clean.match(/(\d{1,2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/);
     if (!m) return 0;
     const [_, hh, mm, ss, ms] = m;
-    const now = new Date();
-    const d = new Date(now);
-    d.setHours(+hh, +mm, +ss, ms ? +ms : 0);
-    if (/amanh[aã]/i.test(clean)) d.setDate(d.getDate() + 1);
-    else if (/hoje/i.test(clean)) {
-      if (d.getTime() < now.getTime() - 60 * 60 * 1000) d.setDate(d.getDate() + 1);   // rollover meia-noite
-    } else {
-      // data explícita DD/MM/YYYY
-      const dm = clean.match(/(\d{1,2})[/](\d{1,2})[/](\d{4})/);
-      if (dm) { d.setFullYear(+dm[3], +dm[2] - 1, +dm[1]); }
-    }
-    return d.getTime();
+    // A tabela mostra o relógio DO SERVIDOR. Antes isto montava um Date local e o resultado era
+    // comparado com serverNow() — erro do tamanho do fuso do navegador, ou seja, horas.
+    // Agora usa a data do servidor (#serverDate) como base e converte com arrivalToServerMs(),
+    // o mesmo caminho que o resto do script já usa pra horário de chegada.
+    const ed = document.querySelector('#serverDate');
+    const base = ed ? (ed.textContent || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/) : null;
+    const hoje = new Date();
+    let Y = base ? +base[3] : hoje.getFullYear();
+    let M = base ? +base[2] - 1 : hoje.getMonth();
+    let D = base ? +base[1] : hoje.getDate();
+    const dExp = clean.match(/(\d{1,2})[/](\d{1,2})[/](\d{4})/);
+    if (dExp) { D = +dExp[1]; M = +dExp[2] - 1; Y = +dExp[3]; }
+    else if (/amanh[aã]/i.test(clean)) D += 1;
+    const montar = (dia) => arrivalToServerMs(new Date(Y, M, dia, +hh, +mm, +ss, ms ? +ms : 0));
+    let alvo = montar(D);
+    // "hoje" com horário que já passou = a lista virou a meia-noite entre a leitura e agora
+    if (!dExp && /hoje/i.test(clean) && alvo < serverNow() - 3600000) alvo = montar(D + 1);
+    return alvo;   // na escala de serverNow(), que é a usada em cancelAt
   }
 
   function enhanceIncomingsPage() {
@@ -5487,17 +5496,31 @@
 
     // Adiciona header
     const thead = table.querySelector('tr:first-child'); if (!thead) return;
+    // Índice da coluna DESTINO pelo texto do cabeçalho. Antes a aldeia atacada era pega com
+    // `tr.querySelector('.quickedit[data-id]')` — mas neste mundo o único quickedit da linha está
+    // na célula "Ataque" e o data-id dela é o ID DO COMANDO (ex.: 547545962), não da aldeia.
+    // O botão sempre falhava com "aldeia origem sem coord". Ancorar no cabeçalho também sobrevive
+    // a reordenação de coluna, que a leitura por posição fixa não sobreviveria.
+    let colDestino = -1;
+    Array.from(thead.querySelectorAll('th, td')).forEach((c, i) => {
+      if (colDestino < 0 && /destino/i.test((c.textContent || ''))) colDestino = i;
+    });
     const th = document.createElement('th'); th.textContent = 'Desviar'; th.style.whiteSpace = 'nowrap';
     thead.appendChild(th);
+    if (colDestino < 0) { pushLog('Desviar: não achei a coluna "Destino" no cabeçalho — botões desativados.', 'err', 'desv'); return; }
 
     // Adiciona célula em cada linha de incoming
     table.querySelectorAll('tr').forEach((tr) => {
       if (tr === thead) return;
       // Ignora linhas de rodapé (têm colspan)
       if (tr.querySelector('th[colspan], td[colspan]')) { const td = document.createElement('td'); tr.appendChild(td); return; }
-      // Destino: primeira quickedit com data-id na coluna Destino
-      const destSpan = tr.querySelector('.quickedit[data-id]'); if (!destSpan) { const td = document.createElement('td'); tr.appendChild(td); return; }
-      const vid = destSpan.getAttribute('data-id');
+      // Destino = a MINHA aldeia que está sendo atacada. Vem da coluna Destino, pela coordenada
+      // (o vid é resolvido depois, na hora do clique, contra a lista de aldeias).
+      const tdsAll = tr.querySelectorAll('td');
+      const cel = tdsAll[colDestino];
+      const cm = cel ? (cel.textContent || '').match(/(\d{1,3})\|(\d{1,3})/) : null;
+      if (!cm) { const td = document.createElement('td'); tr.appendChild(td); return; }
+      const coordDestino = cm[1] + '|' + cm[2];
       // Chegada: procurar a última td com texto tipo "hoje às HH:MM:SS"
       let arriveMs = 0;
       const tds = tr.querySelectorAll('td');
@@ -5505,7 +5528,7 @@
         const t = td.textContent || '';
         if (/(hoje|amanh[aã]|\d{1,2}[/]\d{1,2}[/]\d{4}) [aàáç]s /i.test(t) && /:\d{2}/.test(t)) { arriveMs = desviarParseArriveAt(t); break; }
       }
-      tr.setAttribute('data-twmgr-desv-vid', vid);
+      tr.setAttribute('data-twmgr-desv-coord', coordDestino);
       tr.setAttribute('data-twmgr-desv-arr', String(arriveMs));
 
       const td = document.createElement('td');
@@ -5516,7 +5539,12 @@
       btn.addEventListener('click', async () => {
         if (btn.disabled) return;
         btn.disabled = true; btn.textContent = '⏳ enviando…';
-        try { await desviarAldeia(vid, arriveMs); }
+        try {
+          const vils = await getAllVillages();
+          const minha = vils.find((v) => v.coord === coordDestino);
+          if (!minha) throw new Error('a aldeia ' + coordDestino + ' não está na sua lista de aldeias');
+          await desviarAldeia(minha.vid, arriveMs, null, coordDestino);
+        }
         catch (e) { btn.disabled = false; btn.textContent = '🔄 Desviar'; alert('Desvio falhou: ' + (e.message || e)); }
       });
       td.appendChild(btn);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.38.0
+// @version      9.39.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.38.0';
+  const VERSION = '9.39.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1364,13 +1364,35 @@
   // Margem entre a chegada do ataque e a do apoio. Fixá-la em 50ms era perigoso: se o erro
   // de disparo for maior que a margem, o apoio pousa ANTES do ataque e morre nele.
   function ccFolgaSnipe() { return Math.max(0, (config.cmd && config.cmd.snipeFolgaMs != null) ? config.cmd.snipeFolgaMs : 150); }
+  // O apoio tem que estar NA ALDEIA quando o ataque escolhido pousa — ou seja, chegar ANTES
+  // dele. E depois do ataque anterior no mesmo alvo, senão morre naquele.
+  // Janela útil: (chegada do anterior, chegada do escolhido). Miramos no fim dela, o mais
+  // colado possível ao ataque, pra reduzir a exposição a ondas que não estamos vendo.
   function ccJanelaSnipe(lista, i, folgaMs) {
     const alvo = lista[i], folga = folgaMs == null ? ccFolgaSnipe() : folgaMs;
-    const prox = lista.slice(i + 1).find((k) => k.destino === alvo.destino);
-    const base = alvo.chega + (alvo.temMs ? 0 : 1000);   // sem milésimos, assume o pior caso
-    const de = base + folga;
-    const ate = prox ? (prox.chega - folga) : null;
-    return { base: base, de: de, ate: ate, largura: ate == null ? null : (ate - de), prox: prox, exato: !!alvo.temMs };
+    // Anterior no MESMO destino (o nuke que limpa, tipicamente).
+    let ant = null;
+    for (let k = i - 1; k >= 0; k--) { if (lista[k].destino === alvo.destino) { ant = lista[k]; break; } }
+    // Sem milésimos a chegada pode ser até 1s depois do que o texto diz; ao mirar ANTES dela,
+    // o seguro é assumir o instante mais cedo possível.
+    const base = alvo.chega;
+    const de = ant ? (ant.chega + (ant.temMs ? 0 : 1000) + folga) : null;   // depois do anterior
+    const ate = base - folga;                                              // antes do escolhido
+    return { base: base, de: de, ate: ate, alvoChega: base,
+             largura: de == null ? null : (ate - de), ant: ant, exato: !!alvo.temMs };
+  }
+
+  // Viável se ainda dá pra pousar antes do ataque E depois do anterior no mesmo alvo.
+  function ccSnipeViavel(jan) {
+    if (jan.ate <= srvNowP()) return false;                 // o ataque já passou (ou passa agora)
+    if (jan.de != null && jan.ate <= jan.de) return false;   // nuke e nobre colados demais
+    return true;
+  }
+  function ccSnipeTitulo(jan) {
+    if (jan.ate <= srvNowP()) return 'tarde demais — esse ataque pousa antes de qualquer apoio chegar';
+    if (jan.de == null) return 'sem ataque anterior neste alvo — janela aberta até a chegada';
+    if (jan.ate <= jan.de) return 'ondas coladas demais: não cabe apoio entre elas';
+    return 'janela de ' + jan.largura + 'ms entre o ataque anterior e este';
   }
 
   // Seções recolhíveis: com tudo aberto o painel empurrava a praça de reunião pra fora da
@@ -1420,9 +1442,8 @@
         '<span style="text-align:right;white-space:nowrap">' +
           '<a data-usar="' + i + '" style="cursor:pointer;color:#8fe39a" title="usar este horário">📋 usar</a>' +
           (ehIn ? ' <a data-snipe="' + i + '" style="cursor:pointer;color:' +
-                  ((jan.largura == null || jan.largura > 0) ? '#7fc8ff' : '#ff7568') + '" title="' +
-                  (jan.largura == null ? 'sem próximo ataque neste alvo — janela aberta'
-                   : (jan.largura > 0 ? 'janela de ' + jan.largura + 'ms' : 'ondas coladas demais pra snipar')) +
+                  (ccSnipeViavel(jan) ? '#7fc8ff' : '#ff7568') + '" title="' +
+                  ccSnipeTitulo(jan) +
                   '">🎯 snipe</a>' : '') +
         '</span>' +
       '</div>';
@@ -1437,13 +1458,13 @@
     box.querySelectorAll('[data-snipe]').forEach((el) => el.onclick = () => {
       const i = +el.getAttribute('data-snipe'), c = L[i], jan = ccJanelaSnipe(L, i);
       const m = document.getElementById('cc-msg');
-      if (jan.largura != null && jan.largura <= 0) {
-        if (m) { m.style.color = '#ff7568'; m.textContent = 'Não dá pra snipar: a próxima onda chega antes da janela abrir.'; }
+      if (!ccSnipeViavel(jan)) {
+        if (m) { m.style.color = '#ff7568'; m.textContent = ccSnipeTitulo(jan); }
         return;
       }
-      // Abre o mesmo popup de sugestão usado pela tela de ataques.
-      ccSnipeModal({ destino: c.destino, chegaEm: jan.de + off(), base: jan.base + off(),
-                     ate: jan.ate, largura: jan.largura, exato: jan.exato });
+      // Mira no FIM da janela: colado ao ataque, mas antes dele.
+      ccSnipeModal({ destino: c.destino, chegaEm: jan.ate + off(), base: jan.base + off(),
+                     de: jan.de, largura: jan.largura, exato: jan.exato });
     });
   }
 
@@ -2118,16 +2139,15 @@
       const jan = ccJanelaSnipe(dados, i);
       const td = document.createElement('td');
       td.style.cssText = 'text-align:center;white-space:nowrap';
-      const viavel = (jan.largura == null || jan.largura > 0);
-      const titulo = jan.largura == null ? 'sem próxima onda neste alvo — janela aberta'
-        : (viavel ? 'janela de ' + jan.largura + 'ms até a próxima onda' : 'ondas coladas demais pra snipar');
+      const viavel = ccSnipeViavel(jan);
+      const titulo = ccSnipeTitulo(jan);
       td.innerHTML = '<a href="#" style="font-weight:bold;color:' + (viavel ? '#2e6b2e' : '#a11') + '" title="' + esc(titulo) + '">🎯 snipe</a>';
       td.querySelector('a').addEventListener('click', (ev) => {
         ev.preventDefault();
-        if (!viavel) { alert('Não dá pra snipar: a próxima onda chega antes da janela abrir.'); return; }
+        if (!viavel) { alert(ccSnipeTitulo(jan)); return; }
         // Guarda o pedido e manda pra praça, onde o Centro de Comando o consome.
         localStorage.setItem(KEY + '_snipe', JSON.stringify({
-          destino: d.destino, chegaEm: jan.de, base: jan.base, ate: jan.ate,
+          destino: d.destino, chegaEm: jan.ate, base: jan.base, de: jan.de,
           largura: jan.largura, exato: jan.exato, at: Date.now(),
         }));
         location.href = '/game.php?screen=place&cc_snipe=1';
@@ -2180,16 +2200,17 @@
           '<a id="cc-sn-x" style="cursor:pointer;color:#ff7568;font-size:14px">✕</a>' +
         '</div>' +
         '<div style="font-size:10px;color:#cbb98f;margin-bottom:4px">' +
-          'Pousar às <b style="color:#ffd76a">' + srvClockMs(p.chegaEm) + '</b>' +
-          ' — <b>' + ccFolgaSnipe() + 'ms</b> depois do ataque' +
-          (p.largura != null ? ' · janela de <b>' + p.largura + 'ms</b>' : ' · sem próxima onda conhecida') +
-          (p.exato ? '' : ' · <b style="color:#ffd76a">chegada sem milésimos: 1s de margem</b>') +
+          'O ataque pousa às <b style="color:#ff9a7a">' + srvClockMs(p.base) + '</b> · ' +
+          'o apoio chega às <b style="color:#8fe39a">' + srvClockMs(p.chegaEm) + '</b>' +
+          ' (<b>' + ccFolgaSnipe() + 'ms antes</b>)' +
+          (p.largura != null ? ' · janela de <b>' + p.largura + 'ms</b> desde a onda anterior' : ' · sem onda anterior conhecida') +
+          (p.exato ? '' : ' · <b style="color:#ffd76a">chegada sem milésimos: 1s de incerteza</b>') +
         '</div>' +
-        // A margem precisa ser maior que o erro de disparo, senão o apoio pousa ANTES do
-        // ataque e morre nele em vez de defender da onda seguinte.
+        // A margem precisa ser maior que o erro de disparo: se o apoio atrasar mais que ela,
+        // pousa DEPOIS do ataque e não serve pra nada.
         '<div style="font-size:10px;margin-bottom:8px">' +
-          'margem depois do ataque <input id="cc-sn-folga" class="twmgr-inp" type="number" min="0" step="50" ' +
-            'value="' + ccFolgaSnipe() + '" style="width:66px;font-size:10px;padding:1px">ms ' +
+          'chegar <input id="cc-sn-folga" class="twmgr-inp" type="number" min="0" step="50" ' +
+            'value="' + ccFolgaSnipe() + '" style="width:66px;font-size:10px;padding:1px">ms antes do ataque ' +
           '<span id="cc-sn-folga-av"></span>' +
         '</div>' +
         (viaveis.length
@@ -2228,9 +2249,9 @@
     const attFolga = () => {
       const e = erroEstimadoMs(), f = parseInt(folgaEl.value, 10) || 0;
       if (f < e) {
-        folgaAv.innerHTML = '<b style="color:#ff7568">⚠ menor que o erro medido (±' + e + 'ms) — o apoio pode pousar ANTES do ataque e morrer nele</b>';
+        folgaAv.innerHTML = '<b style="color:#ff7568">⚠ menor que o erro medido (±' + e + 'ms) — o apoio pode chegar DEPOIS do ataque e não segurar nada</b>';
       } else if (p.largura != null && f > p.largura) {
-        folgaAv.innerHTML = '<b style="color:#ff7568">⚠ maior que a janela (' + p.largura + 'ms) — pousaria depois da próxima onda</b>';
+        folgaAv.innerHTML = '<b style="color:#ff7568">⚠ maior que a janela (' + p.largura + 'ms) — cairia antes da onda anterior e morreria nela</b>';
       } else {
         folgaAv.innerHTML = '<span style="color:#8fe39a">✓ acima do erro medido (±' + e + 'ms)</span>';
       }
@@ -2239,7 +2260,7 @@
       config.cmd.snipeFolgaMs = Math.max(0, parseInt(folgaEl.value, 10) || 0); save();
       // A margem desloca a chegada — redesenha o popup inteiro pra os candidatos e os
       // horários refletirem o novo valor, em vez de mostrar número desatualizado.
-      if (p.base != null) { ov.remove(); ccSnipeModal(Object.assign({}, p, { chegaEm: p.base + ccFolgaSnipe() })); }
+      if (p.base != null) { ov.remove(); ccSnipeModal(Object.assign({}, p, { chegaEm: p.base - ccFolgaSnipe() })); }
     });
     folgaEl.addEventListener('input', attFolga);
     attFolga();

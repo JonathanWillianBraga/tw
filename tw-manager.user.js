@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.9.0
+// @version      10.10.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.9.0';
+  const VERSION = '10.10.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -409,12 +409,37 @@
   let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, uiTimer = null;
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running); }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || _ocupadoAvulso > 0; }
+  // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
+  // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
+  // sendo montado. Quem faz trabalho avulso marca aqui.
+  let _ocupadoAvulso = 0;
+  async function ocupado(fn) { _ocupadoAvulso++; try { return await fn(); } finally { _ocupadoAvulso--; } }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
   function lockOther() { const l = readLock(); return !!(l && l.id !== TAB_ID && (Date.now() - l.ts) < 12000); }
   function claimLock() { localStorage.setItem(LOCKKEY, JSON.stringify({ id: TAB_ID, ts: Date.now() })); }
+  // Guarda para DENTRO dos laços longos. Os ciclos duram de 1 a 10 minutos e até aqui nada era
+  // reconferido depois da entrada do tick — com três consequências:
+  //   1. o botão Parar não parava: apagava a flag, mas o laço não a lia e seguia enviando;
+  //   2. a trava de aba (12s) expirava no meio e a outra aba passava a enviar junto, porque a
+  //      renovação depende do tickUI de 1s, que o Chrome estrangula em aba de fundo;
+  //   3. o bot-check só era visto na entrada; aparecendo no minuto 2 de um ciclo de 8, o laço
+  //      continuava martelando o servidor.
+  // Chamar no topo de cada iteração: `if (devoParar('farm')) break;`
+  // Renova a trava de brinde — quem está trabalhando é quem deve segurá-la.
+  function devoParar(mod) {
+    if (mod) {
+      const c = config[mod];
+      if (mod === 'planner') { if (!(config.planner.attacks || []).some((a) => a.running)) return 'parado pelo usuário'; }
+      else if (c && c.running === false) return 'parado pelo usuário';
+    }
+    if (lockOther()) return 'outra aba assumiu';
+    if (captchaBlocked()) return 'bot-check na tela';
+    claimLock();
+    return null;
+  }
 
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
   function pushLog(msg, kind, mod) {
@@ -928,8 +953,17 @@
   let _farmPagesInfo = null;   // diagnóstico: quantas páginas do assistente foram lidas no último ciclo
   async function getFarmTargets(vid) {
     const rows = [], seen = {};
+    // Ordenação fixa por distância em todas as páginas — é o que os próprios links de paginação
+    // do jogo usam. Não corrige um bug medido: testado ao vivo, ler página 0 e 1 com 600ms de
+    // intervalo dá zero sobreposição com ou sem o parâmetro. É garantia de que a lista não
+    // reordene entre as requisições se uma delas demorar (relatório chegando, ataque pousando),
+    // caso em que um alvo escorregaria pra página já lida e sumiria em silêncio.
+    // Efeito colateral bem-vindo: os alvos vêm do mais perto pro mais longe.
     const fetchPage = async (n) => {
-      const res = await fetch('/game.php?village=' + vid + '&screen=am_farm' + (n > 0 ? ('&Farm_page=' + n) : ''), { credentials: 'include' });
+      const url = '/game.php?village=' + vid + '&screen=am_farm&order=distance&dir=asc'
+        + (n > 0 ? ('&Farm_page=' + n) : '');
+      const res = await fetch(url, { credentials: 'include' });
+      if (!res.ok) throw new Error('assistente página ' + n + ': HTTP ' + res.status);
       return new DOMParser().parseFromString(await res.text(), 'text/html');
     };
     const parseDoc = (doc) => {
@@ -1213,6 +1247,8 @@
       setFarmProg(farmProgHTML(done, eligible.length, '✔ ' + count + ' enviado(s)' + (errs ? (' · ✖ ' + errs + ' recusa(s)') : '')));
     };
     for (const [idx, t] of eligible.entries()) {
+      const pare = devoParar('farm');
+      if (pare) { pushLog('Saque: ciclo interrompido — ' + pare + ' (' + idx + '/' + eligible.length + ' alvos percorridos).', '', 'farm'); break; }
       tickBar(idx);   // idx = quantos JÁ terminaram
       const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
       const tx = +cm[1], ty = +cm[2];
@@ -1464,6 +1500,8 @@
     const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
     let count = 0, semTropa = 0, foraAlcance = 0, incertos = 0;
     for (const t of eligible) {
+      const pare = devoParar('wall');
+      if (pare) { pushLog('Muralha: ciclo interrompido — ' + pare + '.', '', 'wall'); break; }
       const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
       const tx = +cm[1], ty = +cm[2];
       const rams = config.wall.ramMode === 'fixo' ? Math.max(1, config.wall.ramFixed || 20) : ramsForWall(t.wall, config.wall.ramWall6 || 24);
@@ -1934,6 +1972,7 @@
     if (!vids.length) { pushLog('Recrutar: nenhum grupo mapeado com aldeias.', '', 'recruit'); config.recruit.nextAt = now + 300000; save(); scheduleRecruit(); return; }
     let totalSent = 0;
     for (const vid of vids) {
+      { const pare = devoParar('recruit'); if (pare) { pushLog('Recrutar: ciclo interrompido — ' + pare + '.', '', 'recruit'); break; } }
       const targets = map[vid].targets || {};
       if (!Object.keys(targets).length) continue;
       let state;
@@ -2821,7 +2860,8 @@
     return rows;
   }
 
-  async function blindagemSend() {
+  async function blindagemSend() { return ocupado(_blindagemSend); }
+  async function _blindagemSend() {
     const list = (config.planner.blindagem.rows || []).filter((r) => r.checked && r.originVid);
     if (!list.length) { pushLog('Blindagem: nenhuma linha marcada com origem definida.', 'err'); return; }
     const results = [];
@@ -3218,6 +3258,7 @@
     const sel = config.market.sources || {};
     let count = 0; const tot = { wood: 0, stone: 0, iron: 0 };
     for (const v of vils) {
+      { const pare = devoParar('market'); if (pare) { pushLog('Cunhagem: interrompida — ' + pare + '.', '', 'market'); break; } }
       if (!sel[v.vid]) continue;
       if (v.coord && v.coord === coord) continue;   // pula destino pela coordenada
       let state;
@@ -3279,6 +3320,7 @@
     const sel = config.market.mintSources || {};
     let count = 0, coins = 0;
     for (const v of vils) {
+      { const pare = devoParar('market'); if (pare) { pushLog('Cunhar: interrompido — ' + pare + '.', '', 'market'); break; } }
       if (!sel[v.vid]) continue;
       try {
         const r = await mintCoins(v.vid);
@@ -3320,6 +3362,7 @@
       const receivers = st.map((s) => ({ s: s, eff: s.cur[r] + inSum(s.vid, r) }))
         .filter((x) => x.eff < x.s.thr).map((x) => ({ s: x.s, def: x.s.thr - x.eff })).sort((a, b) => b.def - a.def);
       for (const rec of receivers) {
+        { const pare = devoParar('market'); if (pare) { pushLog('Equilíbrio: interrompido — ' + pare + '.', '', 'market'); return; } }
         if (rec.def <= 0) continue;
         const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] > s.thr)
           .map((s) => ({ s: s, exc: s.cur[r] - s.thr, d: coordDist(s.coord, rec.s.coord) }))
@@ -3460,6 +3503,7 @@
     config.build.demand = {};
     let built = 0;
     for (const vid of vids) {
+      { const pare = devoParar('build'); if (pare) { pushLog('Edifícios: ciclo interrompido — ' + pare + '.', '', 'build'); break; } }
       const prof = pmap[vid].profile;
       const plan = prof === 'atk' ? atkPlan : defPlan;
       let st;
@@ -3674,6 +3718,7 @@
     let built = 0, recruited = 0, fed = 0, f1 = 0, f2 = 0, f3 = 0;
     const gMain = config.bb.gradMain || 20, gStable = config.bb.gradStable || 15;
     for (const v of vils) {
+      { const pare = devoParar('bb'); if (pare) { pushLog('Cultivo: ciclo interrompido — ' + pare + '.', '', 'bb'); break; } }
       if (!v.coord && coordByVid[v.vid]) v.coord = coordByVid[v.vid];
       let st;
       try { st = await getBuildState(v.vid); }
@@ -4000,6 +4045,18 @@
       (state.commands || []).forEach((c) => { if (c.coord && (c.kind === 'attack' || c.kind === 'return')) busy[c.coord] = 1; });
       let vSent = 0, semSpy = 0, ocup = 0;
       for (const t of p.targets) {
+        // O Mapa põe running=false só no fim; aqui a guarda usa lock e bot-check, que é o que
+        // importa num laço de aldeias × até 20 alvos cada (chega a 7 minutos).
+        {
+          const pare = devoParar(null);
+          if (pare) {
+            // One-shot: interrompido é interrompido. Sem apagar a flag, o módulo ficaria eternamente
+            // "rodando" — segurando a trava e bloqueando as outras abas sem estar fazendo nada.
+            cfg.running = false; save(); setMapStatus(false); refreshCards('map');
+            pushLog('Mapa: interrompido — ' + pare + '. ' + sentTotal + ' explorador(es) já enviado(s); clique Iniciar pra continuar de onde parou.', 'err', 'map');
+            return;
+          }
+        }
         if (busy[t.coord]) { ocup++; continue; }
         if ((avail.spy || 0) - reserve < spyCount) { semSpy++; continue; }
         try {
@@ -5291,6 +5348,9 @@
 
   // Motor principal
   async function desviarAldeia(originVid, incomingArriveMs, destinoVid) {
+    return ocupado(() => _desviarAldeia(originVid, incomingArriveMs, destinoVid));
+  }
+  async function _desviarAldeia(originVid, incomingArriveMs, destinoVid) {
     try {
       let destino;
       if (destinoVid) {

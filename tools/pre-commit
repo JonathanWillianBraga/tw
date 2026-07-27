@@ -1,0 +1,4 @@
+#!/bin/sh
+# Barra o commit se o check.py achar erro. Instale nos colaboradores com:
+#   cp tools/pre-commit .git/hooks/pre-commit
+exec python "$(git rev-parse --show-toplevel)/tools/check.py"

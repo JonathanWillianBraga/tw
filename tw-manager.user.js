@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.12.0
+// @version      10.13.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -94,15 +94,15 @@
   const OBRA_TPL_FAST_NOBRE = 'main 3\nstable 1\nstatue 1\nsmith 5\nstorage 5\nwood 3\nstone 3\niron 3\nstable 5\nsmith 10\nwood 5\nstone 5\niron 5\nbarracks 1\nmain 6\nstorage 10\nsmith 15\nwood 8\nstone 8\niron 8\nmarket 5\nstorage 15\ngarage 1\nwood 12\nstone 12\niron 12\nstable 12\nbarracks 10\nsmith 20\nmain 10\nstorage 20\nwood 15\nstone 15\niron 15\nmarket 10\nstable 15\nbarracks 15\nwood 20\nstone 20\niron 20\nmain 15\nstorage 24\ngarage 2\nstable 18\nwood 25\nstone 25\niron 25\nmain 20\nsnob 1\nbarracks 20\nstorage 27\nstable 20\nwood 30\nstone 30\niron 30\nbarracks 25\nstorage 30';
   const OBRA_PROFILES = ['fullAtk', 'fullDef', 'farmAtk', 'fastDef', 'fastNobre'];
   const OBRA_PROFILE_META = {
-    fullAtk:   { name: 'Full ATK',   tpl: OBRA_TPL_FULL_ATK,   storageProativo: false },
-    fullDef:   { name: 'Full DEF',   tpl: OBRA_TPL_FULL_DEF,   storageProativo: false },
-    farmAtk:   { name: 'Farm ATK',   tpl: OBRA_TPL_FARM_ATK,   storageProativo: false },
-    fastDef:   { name: 'Fast DEF',   tpl: OBRA_TPL_FAST_DEF,   storageProativo: false },
-    fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true },
+    fullAtk:   { name: 'Full ATK',   tpl: OBRA_TPL_FULL_ATK,   storageProativo: false, priorityBuilding: 'barracks' },
+    fullDef:   { name: 'Full DEF',   tpl: OBRA_TPL_FULL_DEF,   storageProativo: false, priorityBuilding: 'barracks' },
+    farmAtk:   { name: 'Farm ATK',   tpl: OBRA_TPL_FARM_ATK,   storageProativo: false, priorityBuilding: 'stable' },
+    fastDef:   { name: 'Fast DEF',   tpl: OBRA_TPL_FAST_DEF,   storageProativo: false, priorityBuilding: 'barracks' },
+    fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
 
-  const VERSION = '10.12.0';
+  const VERSION = '10.13.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -3596,8 +3596,11 @@
     }
     return null;
   }
+  const OBRA_MINE_GATE_LEVEL = 10;   // uma mina só é upada além disso se o prédio prioritário também já estiver aqui
   function computeObra(state, plan, profile) {
     const cfg = config.obra, reserve = cfg.reserveMin || 0, res = state.res || {};
+    const meta = OBRA_PROFILE_META[profile] || {};
+    const prioLevel = meta.priorityBuilding ? (state.level[meta.priorityBuilding] || 0) : Infinity;
     const canAfford = (b) => {
       if (!state.buildable[b]) return false;
       if (!reserve) return true;
@@ -3613,6 +3616,12 @@
       if (it.en === false) continue;
       if ((state.level[it.b] || 0) >= it.lvl) continue;
       if (!state.hasBtn[it.b]) continue;
+      // Aldeias "de segunda mão" (conquistadas/compradas) podem já ter mina bem upada com o prédio
+      // prioritário travado (falta Ed.Principal p/ liberar Quartel/Estábulo) — sem isso, o motor cai
+      // pra mina por eliminação. Regra: uma mina que JÁ está em nível 10+ só continua subindo se o
+      // prédio prioritário também já estiver em 10+; minas ainda baixas (bootstrap de aldeia nova)
+      // seguem normal, pois a economia inicial ainda depende delas.
+      if ((it.b === 'wood' || it.b === 'stone' || it.b === 'iron') && (state.level[it.b] || 0) >= OBRA_MINE_GATE_LEVEL && prioLevel < OBRA_MINE_GATE_LEVEL) continue;
       if (canAfford(it.b)) return { build: { b: it.b, cost: state.cost[it.b] }, demand: null };
       return { build: null, demand: { b: it.b, cost: state.cost[it.b] } };
     }

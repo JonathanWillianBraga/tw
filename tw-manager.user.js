@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.10.0
+// @version      10.11.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -83,14 +83,15 @@
   // Fast Nobre é exceção — quebra essa regra e sobe Armazém de forma proativa, por isso tem
   // "storage" embutido no template mesmo. Níveis finais e prioridades vieram direto da dicção do
   // usuário, guardada em memória (tw_village_building_plans.md). ====================
-  // Regra do usuário: prédio prioritário SEMPRE bem à frente das minas (ex.: quando minas batem 15, o
-  // prioritário já está em ~23) — por isso os saltos de mina (sempre em trio sincronizado wood/stone/
-  // iron) ficam logo APÓS o prioritário ter avançado bastante na lista, nunca antes.
-  const OBRA_TPL_FULL_ATK = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nmain 6\nbarracks 15\nstable 1\nwood 8\nstone 8\niron 8\nbarracks 20\ngarage 1\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nbarracks 23\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 25\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\ngarage 2\nmarket 15\nwood 25\nstone 25\niron 25\nmain 20\nstable 15\nmarket 20\nwood 30\nstone 30\niron 30\nstable 20';
-  const OBRA_TPL_FULL_DEF = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nstable 1\nmain 6\nbarracks 15\nwood 8\nstone 8\niron 8\nbarracks 20\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nbarracks 23\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 25\nwall 10\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\nmarket 15\nwood 25\nstone 25\niron 25\nmain 20\nmarket 20\nwood 30\nstone 30\niron 30\nwall 15\nwall 20';
-  const OBRA_TPL_FARM_ATK = 'main 3\nstable 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nstable 5\nwood 5\nstone 5\niron 5\nstable 10\nbarracks 1\nmain 6\nstable 15\nwood 8\nstone 8\niron 8\nstable 18\ngarage 1\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nstable 20\nwood 15\nstone 15\niron 15\nbarracks 5\nmarket 10\nbarracks 10\nwood 20\nstone 20\niron 20\nmain 15\nbarracks 15\ngarage 2\nmarket 15\nwood 25\nstone 25\niron 25\nmain 20\nbarracks 20\nmarket 20\nwood 30\nstone 30\niron 30\nbarracks 25';
-  const OBRA_TPL_FAST_DEF = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nstable 1\nsmith 10\nmain 6\nbarracks 15\nwood 8\nstone 8\niron 8\nbarracks 20\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nsmith 15\nbarracks 23\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 25\nwall 10\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\nmarket 15\nwood 25\nstone 25\niron 25\nmain 20\nstable 15\nmarket 20\nwood 30\nstone 30\niron 30\nwall 15\nwall 20';
-  const OBRA_TPL_FAST_NOBRE = 'main 3\nstable 1\nstatue 1\nsmith 5\nstorage 5\nwood 3\nstone 3\niron 3\nstable 5\nsmith 10\nwood 5\nstone 5\niron 5\nstable 10\nbarracks 1\nmain 6\nstorage 10\nsmith 15\nwood 8\nstone 8\niron 8\nstable 15\nmarket 5\nstorage 15\ngarage 1\nwood 12\nstone 12\niron 12\nstable 18\nsmith 20\nmain 10\nstorage 20\nwood 15\nstone 15\niron 15\nmarket 10\nbarracks 5\nwood 20\nstone 20\niron 20\nmain 15\nstable 20\nbarracks 10\nstorage 24\ngarage 2\nwood 25\nstone 25\niron 25\nmain 20\nsnob 1\nbarracks 15\nstorage 27\nwood 30\nstone 30\niron 30\nbarracks 20\nbarracks 25\nstorage 30';
+  // Regra do usuário (calibrada 2x): gap mais suave que a versão anterior. Perfis com Quartel como
+  // prioridade: quando minas batem 15, Quartel já está em 18. Perfis com Estábulo como prioridade
+  // (Farm ATK, Fast Nobre): quando minas batem 15, Estábulo está em 12 (bem mais discreto). Minas
+  // sempre em trio sincronizado wood/stone/iron.
+  const OBRA_TPL_FULL_ATK = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nmain 6\nwood 8\nstone 8\niron 8\nstable 1\ngarage 1\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nbarracks 18\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 20\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\ngarage 2\nmarket 15\nbarracks 23\nwood 25\nstone 25\niron 25\nmain 20\nstable 15\nbarracks 25\nmarket 20\nwood 30\nstone 30\niron 30\nstable 20';
+  const OBRA_TPL_FULL_DEF = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nstable 1\nmain 6\nwood 8\nstone 8\niron 8\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nbarracks 18\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 20\nwall 10\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\nmarket 15\nbarracks 23\nwood 25\nstone 25\niron 25\nmain 20\nbarracks 25\nmarket 20\nwood 30\nstone 30\niron 30\nwall 15\nwall 20';
+  const OBRA_TPL_FARM_ATK = 'main 3\nstable 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nstable 5\nwood 5\nstone 5\niron 5\nbarracks 1\nmain 6\nwood 8\nstone 8\niron 8\ngarage 1\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nstable 12\nwood 15\nstone 15\niron 15\nbarracks 5\nmarket 10\nstable 15\nwood 20\nstone 20\niron 20\nmain 15\nbarracks 10\ngarage 2\nmarket 15\nstable 18\nwood 25\nstone 25\niron 25\nmain 20\nbarracks 15\nstable 20\nmarket 20\nwood 30\nstone 30\niron 30\nbarracks 20\nbarracks 25';
+  const OBRA_TPL_FAST_DEF = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nstable 1\nsmith 10\nmain 6\nwood 8\nstone 8\niron 8\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nsmith 15\nbarracks 18\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 20\nwall 10\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\nmarket 15\nbarracks 23\nwood 25\nstone 25\niron 25\nmain 20\nstable 15\nbarracks 25\nmarket 20\nwood 30\nstone 30\niron 30\nwall 15\nwall 20';
+  const OBRA_TPL_FAST_NOBRE = 'main 3\nstable 1\nstatue 1\nsmith 5\nstorage 5\nwood 3\nstone 3\niron 3\nstable 5\nsmith 10\nwood 5\nstone 5\niron 5\nbarracks 1\nmain 6\nstorage 10\nsmith 15\nwood 8\nstone 8\niron 8\nmarket 5\nstorage 15\ngarage 1\nwood 12\nstone 12\niron 12\nstable 12\nsmith 20\nmain 10\nstorage 20\nwood 15\nstone 15\niron 15\nmarket 10\nbarracks 5\nstable 15\nwood 20\nstone 20\niron 20\nmain 15\nbarracks 10\nstorage 24\ngarage 2\nstable 18\nwood 25\nstone 25\niron 25\nmain 20\nsnob 1\nbarracks 15\nstorage 27\nstable 20\nwood 30\nstone 30\niron 30\nbarracks 20\nbarracks 25\nstorage 30';
   const OBRA_PROFILES = ['fullAtk', 'fullDef', 'farmAtk', 'fastDef', 'fastNobre'];
   const OBRA_PROFILE_META = {
     fullAtk:   { name: 'Full ATK',   tpl: OBRA_TPL_FULL_ATK,   storageProativo: false },
@@ -101,7 +102,7 @@
   };
 
 
-  const VERSION = '10.10.0';
+  const VERSION = '10.11.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';

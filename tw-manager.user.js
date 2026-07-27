@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      9.35.1
+// @version      9.36.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -61,7 +61,7 @@
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
-  const VERSION = '9.35.1';
+  const VERSION = '9.36.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -2091,6 +2091,74 @@
     if (agora - _ccLastRender >= 1000) { _ccLastRender = agora; ccRender(); }
   }
 
+  // Botão de snipe direto na tela de ataques a caminho. O Centro de Comando só monta na praça,
+  // mas é AQUI que se vê o ataque e se decide snipar — obrigar a trocar de tela e reencontrar
+  // a linha era pedir demais.
+  function mountSnipeIncomings() {
+    if (!config.cmd || !config.cmd.enabled) return;
+    const tb = document.querySelector('#incomings_table');
+    if (!tb || tb.getAttribute('data-cc-snipe')) return;
+    tb.setAttribute('data-cc-snipe', '1');
+
+    const linhas = [...tb.querySelectorAll('tr')].filter((t) => t.querySelector('a[href*="screen=info_command"]'));
+    if (!linhas.length) return;
+    const co = (s) => { const m = (s || '').match(/(\d{1,3})\|(\d{1,3})/); return m ? (m[1] + '|' + m[2]) : null; };
+    const dados = linhas.map((tr) => {
+      const td = [...tr.querySelectorAll('td')].map((x) => (x.textContent || '').replace(/\s+/g, ' ').trim());
+      return { tr: tr, destino: co(td[1]), origem: co(td[2]), chega: ccParseChegada(td[5]), temMs: /:\d{3}\s*$/.test(td[5] || '') };
+    }).filter((d) => d.chega);
+    dados.sort((a, b) => a.chega - b.chega);
+
+    // Cabeçalho da coluna nova
+    const thRow = tb.querySelector('tr');
+    if (thRow && thRow.querySelector('th')) {
+      const th = document.createElement('th');
+      th.textContent = 'Snipe';
+      th.style.cssText = 'text-align:center';
+      thRow.appendChild(th);
+    }
+    dados.forEach((d, i) => {
+      const jan = ccJanelaSnipe(dados, i, 50);
+      const td = document.createElement('td');
+      td.style.cssText = 'text-align:center;white-space:nowrap';
+      const viavel = (jan.largura == null || jan.largura > 0);
+      const titulo = jan.largura == null ? 'sem próxima onda neste alvo — janela aberta'
+        : (viavel ? 'janela de ' + jan.largura + 'ms até a próxima onda' : 'ondas coladas demais pra snipar');
+      td.innerHTML = '<a href="#" style="font-weight:bold;color:' + (viavel ? '#2e6b2e' : '#a11') + '" title="' + esc(titulo) + '">🎯 snipe</a>';
+      td.querySelector('a').addEventListener('click', (ev) => {
+        ev.preventDefault();
+        if (!viavel) { alert('Não dá pra snipar: a próxima onda chega antes da janela abrir.'); return; }
+        // Guarda o pedido e manda pra praça, onde o Centro de Comando o consome.
+        localStorage.setItem(KEY + '_snipe', JSON.stringify({
+          destino: d.destino, chegaEm: jan.de, largura: jan.largura, exato: jan.exato, at: Date.now(),
+        }));
+        location.href = '/game.php?screen=place&cc_snipe=1';
+      });
+      d.tr.appendChild(td);
+    });
+    pushLog('Snipe disponível em ' + dados.length + ' ataque(s) a caminho.', '', 'cmd');
+  }
+  // Consome o pedido deixado pela tela de ataques.
+  function ccConsumirSnipe() {
+    let p = null;
+    try { p = JSON.parse(localStorage.getItem(KEY + '_snipe') || 'null'); } catch (e) {}
+    if (!p || (Date.now() - (p.at || 0)) > 120000) return;   // pedido velho: ignora
+    localStorage.removeItem(KEY + '_snipe');
+    config.cmd.tipo = 'support'; save();
+    const al = document.getElementById('cc-alvo');
+    if (al && p.destino) al.value = p.destino;
+    ccSetChegada(p.chegaEm);
+    if (typeof _ccAttTipo === 'function') _ccAttTipo();
+    const m = document.getElementById('cc-msg');
+    if (m) {
+      m.style.color = p.exato ? '#8fe39a' : '#ffd76a';
+      m.textContent = 'Snipe em ' + (p.destino || '?') + ' para ' + srvClockMs(p.chegaEm) +
+        (p.largura != null ? ' · janela de ' + p.largura + 'ms' : ' · sem próxima onda conhecida') +
+        (p.exato ? '' : ' · chegada sem milésimos, considerei 1s de margem') +
+        ' — escolha as tropas e a origem, depois Armar.';
+    }
+  }
+
   function mountCmdCenter() {
     if (!config.cmd || !config.cmd.enabled) return;
     if (document.getElementById('cc-painel')) return;
@@ -2395,6 +2463,7 @@
     };
 
     ccCarregarOrigens(false);
+    ccConsumirSnipe();   // veio da tela de ataques com um snipe escolhido?
     // Verifica o apoio uma vez por mundo, sozinho. Só faz o "confirmar" — não envia tropa.
     // Sem isso o tipo Apoio ficaria travado sem o usuário saber como destravar.
     if (!config.cmd.suporteOkAt) setTimeout(() => ccTestarApoio(true), 2500);
@@ -4908,6 +4977,8 @@
     startCaptchaWatcher();
     // Centro de Comando: só monta na praça de reunião, dentro do conteúdo do jogo.
     if (telaAtual() === 'place') { try { mountCmdCenter(); } catch (e) { pushLog('Centro de Comando não montou: ' + (e.message || e), 'err', 'cmd'); } }
+    // Botão de snipe na tela de ataques a caminho, que é onde a decisão é tomada.
+    try { mountSnipeIncomings(); } catch (e) { pushLog('Snipe na lista de ataques falhou: ' + (e.message || e), 'err', 'cmd'); }
     cmdBoot();   // comandos armados sobrevivem ao F5 e são re-armados aqui
   }
 

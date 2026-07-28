@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.15.0
+// @version      10.16.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -74,6 +74,14 @@
     wall:       { name: 'Muralha',       ico: '🧱', max: 20 },
   };
   const tplToPlan = (text) => (text || '').split('\n').map((l) => l.trim().match(/^([a-z_]+)\s+(\d+)$/i)).filter(Boolean).filter((m) => BUILD_META[m[1].toLowerCase()]).map((m) => ({ b: m[1].toLowerCase(), lvl: Math.max(1, Math.min(BUILD_META[m[1].toLowerCase()].max, +m[2])), en: true }));
+  // Nomes completos (não abreviados) como aparecem na tabela "Ainda não disponível" de screen=main —
+  // diferente de BUILD_META.name, que é abreviado pra UI (ex.: "Ed. principal" vs "Edifício principal").
+  const LOCKED_REQ_NAME_TO_KEY = {
+    'Edifício principal': 'main', 'Quartel': 'barracks', 'Estábulo': 'stable', 'Oficina': 'garage',
+    'Torre de vigia': 'watchtower', 'Academia': 'snob', 'Ferreiro': 'smith', 'Praça de reunião': 'place',
+    'Estátua': 'statue', 'Mercado': 'market', 'Bosque': 'wood', 'Poço de argila': 'stone', 'Mina de ferro': 'iron',
+    'Fazenda': 'farm', 'Armazém': 'storage', 'Esconderijo': 'hide', 'Muralha': 'wall',
+  };
   const planToTpl = (plan) => (plan || []).map((it) => it.b + ' ' + it.lvl).join('\n');
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
@@ -102,7 +110,7 @@
   };
 
 
-  const VERSION = '10.15.0';
+  const VERSION = '10.16.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -3530,7 +3538,31 @@
     // pros gatilhos condicionais de Fazenda (pop livre) e Armazém (% de recurso cheio).
     const num = (id) => { const el = doc.getElementById(id); return el ? (parseInt((el.textContent || '').replace(/\D/g, ''), 10) || 0) : 0; };
     const resInfo = { wood: num('wood'), stone: num('stone'), iron: num('iron'), storageMax: num('storage'), pop: num('pop_current_label'), popMax: num('pop_max_label') };
-    return { level: level, cost: cost, buildable: buildable, hasBtn: hasBtn, queueLen: queueLen, res: resInfo };
+    // Tabela "Ainda não disponível" (mesma página): pra cada prédio travado, lista os pré-requisitos AINDA
+    // não cumpridos (span.inactive). Usado pelo Obra pra priorizar o requisito que falta (ex.: Ed.Principal
+    // pra liberar Ferreiro) em vez de cair no próximo item do template por eliminação.
+    const locked = {};
+    doc.querySelectorAll('tr').forEach((tr) => {
+      const reqDiv = tr.querySelector('td div.unmet_req'); if (!reqDiv) return;
+      const link = tr.querySelector('td a[href*="screen="]'); if (!link) return;
+      const sm = (link.getAttribute('href') || '').match(/screen=([a-z_]+)/i);
+      let key = sm ? sm[1].toLowerCase() : null;
+      if (!key || !BUILD_META[key]) {
+        const nmEl = tr.querySelector('img[data-title]');
+        const nm = (link.textContent || (nmEl && nmEl.getAttribute('data-title')) || '').trim();
+        key = LOCKED_REQ_NAME_TO_KEY[nm] || null;
+      }
+      if (!key) return;
+      const reqs = [];
+      reqDiv.querySelectorAll('span.inactive').forEach((sp) => {
+        const m = (sp.textContent || '').trim().match(/^(.+?)\s*\((\d+)\)$/);
+        if (!m) return;
+        const reqKey = LOCKED_REQ_NAME_TO_KEY[m[1].trim()];
+        if (reqKey) reqs.push({ b: reqKey, lvl: +m[2] });
+      });
+      if (reqs.length) locked[key] = reqs;
+    });
+    return { level: level, cost: cost, buildable: buildable, hasBtn: hasBtn, queueLen: queueLen, res: resInfo, locked: locked };
   }
   function computeBuild(state, plan) {
     // ordem estrita: para no 1º item ativo/não atingido que dá pra upar; se não tem recurso, ESPERA (vira demanda)
@@ -3730,7 +3762,18 @@
     for (const it of plan) {
       if (it.en === false) continue;
       if ((state.level[it.b] || 0) >= it.lvl) continue;
-      if (!state.hasBtn[it.b]) continue;
+      if (!state.hasBtn[it.b]) {
+        // travado por pré-requisito (ex.: Ferreiro exige Ed.Principal 5) -> prioriza o requisito que falta
+        // em vez de cair no próximo item do template por eliminação (senão o motor nunca "volta" pro travado)
+        const reqs = (state.locked && state.locked[it.b]) || [];
+        for (const req of reqs) {
+          if ((state.level[req.b] || 0) >= req.lvl) continue;
+          if (!state.hasBtn[req.b]) continue;   // o próprio requisito também travado -> não dá pra resolver agora
+          if (canAfford(req.b)) return { build: { b: req.b, cost: state.cost[req.b] }, demand: null };
+          return { build: null, demand: { b: req.b, cost: state.cost[req.b] } };
+        }
+        continue;
+      }
       // Aldeias "de segunda mão" (conquistadas/compradas) podem já ter mina bem upada com o prédio
       // prioritário travado (falta Ed.Principal p/ liberar Quartel/Estábulo) — sem isso, o motor cai
       // pra mina por eliminação. Regra: uma mina que JÁ está em nível 10+ só continua subindo se o

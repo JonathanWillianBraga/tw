@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.17.0
+// @version      10.18.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -110,7 +110,7 @@
   };
 
 
-  const VERSION = '10.17.0';
+  const VERSION = '10.18.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -3469,8 +3469,11 @@
       for (const rec of receivers) {
         if (rec.def <= 0) continue;
         let covered = false;
-        // passo normal: só doa quem tem excedente acima do próprio piso (recurso mais baixo × %), mais perto primeiro
-        const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] > donorFloor(s, r))
+        // passo normal: só doa quem tem excedente acima do próprio piso (recurso mais baixo × %), mais perto primeiro.
+        // "s.cur[r] >= s.thr" é essencial: sem isso, uma aldeia carente NESSE MESMO recurso (abaixo do limiar de
+        // armazém) podia ainda passar no piso do doador (que usa o recurso mais baixo dela como base, uma conta
+        // separada) e acabar doando o próprio recurso que está faltando nela.
+        const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] >= s.thr && s.cur[r] > donorFloor(s, r))
           .map((s) => ({ s: s, exc: s.cur[r] - donorFloor(s, r), d: coordDist(s.coord, rec.s.coord) }))
           .filter((x) => x.d <= maxDist)
           .sort((a, b) => a.d - b.d);
@@ -3492,7 +3495,8 @@
         // gargalo geral: ninguém passou no piso normal desse recurso -> a mais próxima cede só a fatia
         // acima de keepPct (padrão 90%) do que ela TEM agora, ficando sempre com pelo menos keepPct do que possui.
         if (!covered && rec.def > 0) {
-          const fallback = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] > 0)
+          // mesma proteção do passo normal: mesmo no gargalo, nunca puxa de quem já está carente NESSE recurso
+          const fallback = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] >= s.thr && s.cur[r] > 0)
             .map((s) => ({ s: s, d: coordDist(s.coord, rec.s.coord) }))
             .filter((x) => x.d <= maxDist)
             .sort((a, b) => a.d - b.d);

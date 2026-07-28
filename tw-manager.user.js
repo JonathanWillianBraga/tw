@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.18.0
+// @version      10.19.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -110,7 +110,7 @@
   };
 
 
-  const VERSION = '10.18.0';
+  const VERSION = '10.19.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -144,7 +144,7 @@
     groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo (mantido p/ Edifícios/Cultivo)
   });
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
-  const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, mintSources: {}, thresholdPct: 50, maxDist: 15, groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioGargaloKeepPct: 90, inflight: {} });
+  const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, mintSources: {}, thresholdPct: 50, maxDist: 15, groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {} });
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
   // Cultivo — 3 fases (batem com os cards: f1 = main<20 · f2 = main 20 e stable<15 · f3 = graduada/recrutando).
   // FASE 1: leva o Ed. principal até 20 + o que ele depende (armazém "lidera" p/ bancar os níveis; fazenda leve p/ pop). Sem estábulo.
@@ -340,6 +340,7 @@
     if (c.market.solidarioThresholdPct == null) c.market.solidarioThresholdPct = 50;
     if (c.market.solidarioMaxDist == null) c.market.solidarioMaxDist = 20;
     if (c.market.solidarioDonorPct == null) c.market.solidarioDonorPct = 50;
+    if (c.market.solidarioDonorMinPct == null) c.market.solidarioDonorMinPct = 50;
     if (c.market.solidarioGargaloKeepPct == null) c.market.solidarioGargaloKeepPct = 90;
     if (!c.market.inflight) c.market.inflight = {};
     if (!c.recruit.demand) c.recruit.demand = {};
@@ -3443,6 +3444,7 @@
     const donorSet = {}, recvSet = {}, totRes = { wood: 0, stone: 0, iron: 0 };
     const pct = (config.market.solidarioThresholdPct != null ? config.market.solidarioThresholdPct : 50) / 100;
     const donorPct = (config.market.solidarioDonorPct != null ? config.market.solidarioDonorPct : 50) / 100;
+    const donorMinPct = (config.market.solidarioDonorMinPct != null ? config.market.solidarioDonorMinPct : 50) / 100;
     const keepPct = (config.market.solidarioGargaloKeepPct != null ? config.market.solidarioGargaloKeepPct : 90) / 100;
     const maxDist = config.market.solidarioMaxDist != null ? config.market.solidarioMaxDist : 20;
     const now = Date.now();
@@ -3455,11 +3457,16 @@
     // piso normal do doador pro recurso r: % do recurso mais baixo que ELE tem agora (protege mais quem já tá capenga
     // em algum recurso, mesmo doando um recurso abundante), com piso mínimo absoluto por baixo.
     const donorFloor = (s, r) => Math.max((Math.min(s.cur.wood, s.cur.stone, s.cur.iron)) * donorPct, SOLID_ABS_MIN[r] || 0);
+    // piso INDEPENDENTE do limiar de carência (thr): "quão cheia preciso estar desse recurso pra não ser
+    // considerada carente demais pra doar ele". Separado de thr de propósito — se o limiar de carência for
+    // configurado agressivo (ex.: 85%, "deixa todo mundo quase cheio"), isso NÃO pode travar todo mundo de
+    // doar, senão nenhuma aldeia nunca fica "cheia o bastante" e o Solidário para de mandar qualquer coisa.
+    const donorMinFor = (s) => s.storage * donorMinPct;
     const st = [];
     for (const v of members) {
       let m; try { m = await getMarketState(v.vid); } catch (e) { continue; }
       if (!m.storage) continue;
-      st.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, thr: m.storage * pct });
+      st.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, storage: m.storage, thr: m.storage * pct });
       await sleep(120);
     }
     let sent = 0;
@@ -3470,10 +3477,10 @@
         if (rec.def <= 0) continue;
         let covered = false;
         // passo normal: só doa quem tem excedente acima do próprio piso (recurso mais baixo × %), mais perto primeiro.
-        // "s.cur[r] >= s.thr" é essencial: sem isso, uma aldeia carente NESSE MESMO recurso (abaixo do limiar de
-        // armazém) podia ainda passar no piso do doador (que usa o recurso mais baixo dela como base, uma conta
-        // separada) e acabar doando o próprio recurso que está faltando nela.
-        const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] >= s.thr && s.cur[r] > donorFloor(s, r))
+        // "s.cur[r] >= donorMinFor(s)" é essencial: sem isso, uma aldeia carente NESSE MESMO recurso podia ainda
+        // passar no piso do doador (que usa o recurso mais baixo dela como base, uma conta separada) e acabar
+        // doando o próprio recurso que está faltando nela. Usa donorMinPct (independente do limiar de carência).
+        const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] >= donorMinFor(s) && s.cur[r] > donorFloor(s, r))
           .map((s) => ({ s: s, exc: s.cur[r] - donorFloor(s, r), d: coordDist(s.coord, rec.s.coord) }))
           .filter((x) => x.d <= maxDist)
           .sort((a, b) => a.d - b.d);
@@ -3496,7 +3503,7 @@
         // acima de keepPct (padrão 90%) do que ela TEM agora, ficando sempre com pelo menos keepPct do que possui.
         if (!covered && rec.def > 0) {
           // mesma proteção do passo normal: mesmo no gargalo, nunca puxa de quem já está carente NESSE recurso
-          const fallback = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] >= s.thr && s.cur[r] > 0)
+          const fallback = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] >= donorMinFor(s) && s.cur[r] > 0)
             .map((s) => ({ s: s, d: coordDist(s.coord, rec.s.coord) }))
             .filter((x) => x.d <= maxDist)
             .sort((a, b) => a.d - b.d);
@@ -3553,6 +3560,7 @@
     if (g('twmgr-mk-thr')) c.thresholdPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-thr').value, 10) || 50));
     if (g('twmgr-mk-dist')) c.maxDist = Math.max(1, parseFloat((g('twmgr-mk-dist').value || '').replace(',', '.')) || 15);
     if (g('twmgr-mk-sthr')) c.solidarioThresholdPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-sthr').value, 10) || 50));
+    if (g('twmgr-mk-sdonormin')) c.solidarioDonorMinPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-sdonormin').value, 10) || 50));
     if (g('twmgr-mk-sdonor')) c.solidarioDonorPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-sdonor').value, 10) || 50));
     if (g('twmgr-mk-sgargalo')) c.solidarioGargaloKeepPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-sgargalo').value, 10) || 90));
     if (g('twmgr-mk-sdist')) c.solidarioMaxDist = Math.max(1, parseFloat((g('twmgr-mk-sdist').value || '').replace(',', '.')) || 20);
@@ -5169,6 +5177,7 @@
             '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Só as aldeias do grupo escolhido se ajudam. Doadora só cede acima de "% do recurso mais baixo dela" — se a mais perto também estiver apertada nesse recurso, tenta a próxima. Se o grupo inteiro estiver apertado no mesmo recurso, a mais próxima cede só a fatia acima de "% que fica na doadora" mesmo assim (nunca esvazia), pra nunca travar construção/pesquisa numa aldeia nova ou bárbara conquistada.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Grupo Solidário</span><select id="twmgr-mk-g-solid" class="twmgr-inp" style="width:140px"></select></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Carente: encher armazém até (%)</span><input id="twmgr-mk-sthr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl" title="Independente do limiar acima — se o limiar de carente for alto (ex.: 85%), esse aqui evita que ninguém nunca qualifique como doador.">Doadora: mín. % de armazém p/ poder doar</span><input id="twmgr-mk-sdonormin" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Doadora: piso = % do recurso mais baixo dela</span><input id="twmgr-mk-sdonor" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Gargalo: % que fica na doadora</span><input id="twmgr-mk-sgargalo" class="twmgr-inp" type="number" min="1" max="99" value="90" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-sdist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:56px"></div>') +
@@ -5534,6 +5543,7 @@
     document.getElementById('twmgr-mk-thr').value = config.market.thresholdPct != null ? config.market.thresholdPct : 50;
     document.getElementById('twmgr-mk-dist').value = config.market.maxDist != null ? config.market.maxDist : 15;
     document.getElementById('twmgr-mk-sthr').value = config.market.solidarioThresholdPct != null ? config.market.solidarioThresholdPct : 50;
+    document.getElementById('twmgr-mk-sdonormin').value = config.market.solidarioDonorMinPct != null ? config.market.solidarioDonorMinPct : 50;
     document.getElementById('twmgr-mk-sdonor').value = config.market.solidarioDonorPct != null ? config.market.solidarioDonorPct : 50;
     document.getElementById('twmgr-mk-sgargalo').value = config.market.solidarioGargaloKeepPct != null ? config.market.solidarioGargaloKeepPct : 90;
     document.getElementById('twmgr-mk-sdist').value = config.market.solidarioMaxDist != null ? config.market.solidarioMaxDist : 20;
@@ -5552,7 +5562,7 @@
     document.getElementById('twmgr-mk-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.checked = false); readMarketCfg(); });
     document.getElementById('twmgr-mk-mint-all').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.checked = true); readMarketCfg(); });
     document.getElementById('twmgr-mk-mint-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.checked = false); readMarketCfg(); });
-    ['twmgr-mk-coord', 'twmgr-mk-reserve', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
+    ['twmgr-mk-coord', 'twmgr-mk-reserve', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
     document.querySelectorAll('input[name="twmgr-mk-mode"]').forEach((r) => r.addEventListener('change', () => { readMarketCfg(); applyMkMode(); }));
     applyMkMode();
     document.getElementById('twmgr-mk-start').addEventListener('click', marketStart);

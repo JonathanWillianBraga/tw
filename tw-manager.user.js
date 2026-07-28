@@ -202,8 +202,12 @@
   const defDesviar = () => ({
     keepSpy: true,        // deixar exploradores em casa (pra farmar/monitorar)
     keepKnight: false,    // deixar paladino
-    cancelOffsetMs: 5000, // cancelar N ms APÓS o ataque bater (buffer de segurança)
-    pending: [],          // [{ id, vid, supportVid, supportCoord, cmdId, cancelAt, incomingArriveAt, state, err }]
+    sendBeforeMs: 30000,  // sair de casa N ms ANTES do primeiro ataque marcado
+    cancelOffsetMs: 5000, // cancelar N ms APÓS o ÚLTIMO ataque marcado
+    // Ataques marcados pra desviar. Marcar NÃO envia: o envio é agendado.
+    // [{ id, coord, vid, arriveAt }]
+    marks: [],
+    pending: [],          // [{ id, vid, coordOrigem, supportVid, supportCoord, cmdId, sendAt, cancelAt, ultimoAtaque, state, err }]
   });
   const defMapUi = () => ({
     // Filtros visuais persistidos entre visitas ao screen=map
@@ -476,12 +480,37 @@
   let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null;
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || (config.obra && config.obra.running); }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || (config.obra && config.obra.running) || _ocupadoAvulso > 0; }
+  // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
+  // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
+  // sendo montado. Quem faz trabalho avulso marca aqui.
+  let _ocupadoAvulso = 0;
+  async function ocupado(fn) { _ocupadoAvulso++; try { return await fn(); } finally { _ocupadoAvulso--; } }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
   function lockOther() { const l = readLock(); return !!(l && l.id !== TAB_ID && (Date.now() - l.ts) < 12000); }
   function claimLock() { localStorage.setItem(LOCKKEY, JSON.stringify({ id: TAB_ID, ts: Date.now() })); }
+  // Guarda para DENTRO dos laços longos. Os ciclos duram de 1 a 10 minutos e até aqui nada era
+  // reconferido depois da entrada do tick — com três consequências:
+  //   1. o botão Parar não parava: apagava a flag, mas o laço não a lia e seguia enviando;
+  //   2. a trava de aba (12s) expirava no meio e a outra aba passava a enviar junto, porque a
+  //      renovação depende do tickUI de 1s, que o Chrome estrangula em aba de fundo;
+  //   3. o bot-check só era visto na entrada; aparecendo no minuto 2 de um ciclo de 8, o laço
+  //      continuava martelando o servidor.
+  // Chamar no topo de cada iteração: `if (devoParar('farm')) break;`
+  // Renova a trava de brinde — quem está trabalhando é quem deve segurá-la.
+  function devoParar(mod) {
+    if (mod) {
+      const c = config[mod];
+      if (mod === 'planner') { if (!(config.planner.attacks || []).some((a) => a.running)) return 'parado pelo usuário'; }
+      else if (c && c.running === false) return 'parado pelo usuário';
+    }
+    if (lockOther()) return 'outra aba assumiu';
+    if (captchaBlocked()) return 'bot-check na tela';
+    claimLock();
+    return null;
+  }
 
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
   function pushLog(msg, kind, mod) {
@@ -848,6 +877,7 @@
     clearTimeout(sendTimer);
     if (!config.running) return;
     if (lockOther()) { sendTimer = setTimeout(processDue, 5000); return; }
+    if (captchaBlocked()) { sendTimer = setTimeout(processDue, 30000); return; }   // era o único tick sem esta guarda
     claimLock();
     const now = Date.now();
     const due = config.targets.filter((t) => t.enabled && hasUnits(t) && (t.nextSendAt || 0) <= now && t.x && t.y);
@@ -872,7 +902,18 @@
           Object.entries(amounts).forEach(([u, a]) => { avail[u] = Math.max(0, (avail[u] || 0) - a); });
           t.lastSentAt = now; t.phase = 'sent'; t.nextSendAt = now + 12000; sentAny = true;
           pushLog('Enviado → ' + coord + ' [' + desc + '] · de ' + (t.originName || origin), 'ok');
-        } catch (e) { t.nextSendAt = now + 30000; pushLog('Falha em ' + coord + ' (de ' + (t.originName || origin) + '): ' + (e.message || e), 'err'); }
+        } catch (e) {
+          const em = String(e.message || e);
+          // Ambíguo = pode ter enviado. Reagendar em 30s manda de novo no mesmo alvo. Trata como
+          // enviado e deixa o intervalo normal correr; se não saiu, o próximo ciclo cobre.
+          if (/^ambiguo:/.test(em)) {
+            t.lastSentAt = now; t.phase = 'sent'; t.nextSendAt = now + 12000; sentAny = true;
+            pushLog('Resposta ambígua em ' + coord + ' — pode ter enviado, não vou repetir agora.', '');
+          } else {
+            t.nextSendAt = now + 30000;
+            pushLog('Falha em ' + coord + ' (de ' + (t.originName || origin) + '): ' + em, 'err');
+          }
+        }
       }
     }
     save();
@@ -991,8 +1032,17 @@
   let _farmPagesInfo = null;   // diagnóstico: quantas páginas do assistente foram lidas no último ciclo
   async function getFarmTargets(vid) {
     const rows = [], seen = {};
+    // Ordenação fixa por distância em todas as páginas — é o que os próprios links de paginação
+    // do jogo usam. Não corrige um bug medido: testado ao vivo, ler página 0 e 1 com 600ms de
+    // intervalo dá zero sobreposição com ou sem o parâmetro. É garantia de que a lista não
+    // reordene entre as requisições se uma delas demorar (relatório chegando, ataque pousando),
+    // caso em que um alvo escorregaria pra página já lida e sumiria em silêncio.
+    // Efeito colateral bem-vindo: os alvos vêm do mais perto pro mais longe.
     const fetchPage = async (n) => {
-      const res = await fetch('/game.php?village=' + vid + '&screen=am_farm' + (n > 0 ? ('&Farm_page=' + n) : ''), { credentials: 'include' });
+      const url = '/game.php?village=' + vid + '&screen=am_farm&order=distance&dir=asc'
+        + (n > 0 ? ('&Farm_page=' + n) : '');
+      const res = await fetch(url, { credentials: 'include' });
+      if (!res.ok) throw new Error('assistente página ' + n + ': HTTP ' + res.status);
       return new DOMParser().parseFromString(await res.text(), 'text/html');
     };
     const parseDoc = (doc) => {
@@ -1130,19 +1180,25 @@
     const base = (x) => Math.pow(1.09, x) * (4 * x - 2) + 0.5;   // fórmula oficial (nº de níveis)
     return Math.ceil(base(w) * ((ramWall6 || 24) / base(6)));    // calibrado no dado do usuário (muro 6)
   }
-  // Relatório: soma o total de tropas do defensor (0 se não achar nada / aldeia vazia).
+  // Relatório: soma o total de tropas do defensor. 0 = aldeia comprovadamente vazia.
+  // LANÇA se não conseguir ler — antes devolvia 0 em QUALQUER exceção (rede oscilando, seletor
+  // mudado, sessão caída), e "não consegui ler" virava "aldeia vazia": o saque ia contra um azul
+  // defendido e perdia tropa. Quem chama tem que pular o alvo quando não dá pra saber.
   async function getReportDefenseTotal(reportId) {
-    try {
-      const res = await fetch('/game.php?village=' + CUR_VID + '&screen=report&view=' + reportId, { credentials: 'include' });
-      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-      const tbl = doc.querySelector('#attack_info_def_units') || doc.querySelector('#attack_spy_away') || doc.querySelector('#attack_info_def');
-      if (tbl) {
-        const cells = tbl.querySelectorAll('td.unit-item, .unit-item');
-        let total = 0; cells.forEach((c) => { total += parseInt((c.textContent || '').replace(/\D/g, ''), 10) || 0; });
-        return total;
-      }
-    } catch (e) {}
-    return 0;
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=report&view=' + reportId, { credentials: 'include' });
+    if (!res.ok) throw new Error('relatório ' + reportId + ': HTTP ' + res.status);
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const tbl = doc.querySelector('#attack_info_def_units') || doc.querySelector('#attack_spy_away') || doc.querySelector('#attack_info_def');
+    if (!tbl) {
+      // Sem NENHUMA das três tabelas: ou a página não é um relatório (sessão/bloqueio), ou o
+      // formato mudou. Nos dois casos, não dá pra afirmar que a aldeia está vazia.
+      if (!/id="attack_info|class="report/.test(html)) throw new Error('relatório ' + reportId + ': resposta não parece um relatório');
+      throw new Error('relatório ' + reportId + ': não achei a tabela de defesa');
+    }
+    const cells = tbl.querySelectorAll('td.unit-item, .unit-item');
+    let total = 0; cells.forEach((c) => { total += parseInt((c.textContent || '').replace(/\D/g, ''), 10) || 0; });
+    return total;
   }
   async function farmTick() {
     clearTimeout(farmTimer);
@@ -1270,12 +1326,22 @@
       setFarmProg(farmProgHTML(done, eligible.length, '✔ ' + count + ' enviado(s)' + (errs ? (' · ✖ ' + errs + ' recusa(s)') : '')));
     };
     for (const [idx, t] of eligible.entries()) {
+      const pare = devoParar('farm');
+      if (pare) { pushLog('Saque: ciclo interrompido — ' + pare + ' (' + idx + '/' + eligible.length + ' alvos percorridos).', '', 'farm'); break; }
       tickBar(idx);   // idx = quantos JÁ terminaram
       const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
       const tx = +cm[1], ty = +cm[2];
       if (t.color === 'blue') {
         if (defended[t.reportId]) { skip.def++; continue; }
-        let defTotal = 0; try { defTotal = await getReportDefenseTotal(t.reportId); } catch (e) {}
+        // Não deu pra ler o relatório? PULA. Azul é o único que pode ter defesa; mandar sem saber
+        // é o erro mais caro do módulo. Errar pra menos custa um saque; errar pra mais custa tropa.
+        let defTotal = 0;
+        try { defTotal = await getReportDefenseTotal(t.reportId); }
+        catch (e) {
+          skip.def++;
+          errReasons['azul sem leitura de defesa: ' + String(e.message || e).slice(0, 60)] = (errReasons['azul sem leitura de defesa: ' + String(e.message || e).slice(0, 60)] || 0) + 1;
+          continue;
+        }
         if (defTotal > 0) {
           // Registra intel rico (usado depois no mapa) e ALERTA no log.
           defended[t.reportId] = { at: now, coord: t.coord, x: tx, y: ty, defTotal: defTotal, wall: t.wall };
@@ -1511,13 +1577,20 @@
     // Tropa por aldeia (sob demanda, com cache) — descontada conforme vai assinando alvos.
     const availCache = {};
     const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
-    let count = 0, semTropa = 0;
+    let count = 0, semTropa = 0, foraAlcance = 0, incertos = 0;
     for (const t of eligible) {
+      const pare = devoParar('wall');
+      if (pare) { pushLog('Muralha: ciclo interrompido — ' + pare + '.', '', 'wall'); break; }
       const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
       const tx = +cm[1], ty = +cm[2];
       const rams = config.wall.ramMode === 'fixo' ? Math.max(1, config.wall.ramFixed || 20) : ramsForWall(t.wall, config.wall.ramWall6 || 24);
       // aldeias candidatas, da MAIS PRÓXIMA pra mais longe; usa a 1ª que tiver bárbaro + aríete.
-      const cands = myV.map((s) => ({ s: s, d: fieldDist(s.x, s.y, tx, ty) })).sort((a, b) => a.d - b.d);
+      // FILTRO DE DISTÂNCIA: sem ele, quando nenhuma aldeia perto tinha tropa, saíam 80 bárbaros +
+      // ~24 aríetes de dezenas de campos de distância — dias de viagem e tropa fácil de interceptar.
+      // Usa o alcance do Saque como padrão (mesma frota, mesma lógica de vizinhança).
+      const wallMaxDist = config.wall.maxDist != null ? config.wall.maxDist : (config.farm.maxDist != null ? config.farm.maxDist : 13);
+      const cands = myV.map((s) => ({ s: s, d: fieldDist(s.x, s.y, tx, ty) })).filter((o) => o.d <= wallMaxDist).sort((a, b) => a.d - b.d);
+      if (!cands.length) { foraAlcance++; continue; }
       let done = false;
       for (const c of cands) {
         const avail = await getAvail(c.s.vid);
@@ -1531,11 +1604,22 @@
           pushLog('Muralha: ' + c.s.name + ' → ' + t.coord + ' (muro ' + t.wall + ', ' + (Math.round(c.d * 10) / 10) + ' campos) com ' + axeN + ' bárbaro + ' + rams + ' aríete' + (spies ? ' + ' + spies + ' explorador' : ''), 'ok', 'wall');
           await sleep(delay + Math.floor(Math.random() * 250));
           break;
-        } catch (e) { pushLog('Muralha em ' + c.s.name + ' → ' + t.coord + ': ' + (e.message || e), 'err', 'wall'); }   // falhou nessa origem -> tenta a próxima
+        } catch (e) {
+          const em = String(e.message || e);
+          // Resposta ambígua = PODE ter saído. Tentar outra origem aqui manda 160 bárbaros e 48
+          // aríetes num muro que precisava de metade. Assume enviado e para neste alvo.
+          if (/^ambiguo:/.test(em)) {
+            demo[t.reportId] = now; incertos++; done = true;
+            pushLog('Muralha: ' + t.coord + ' — resposta ambígua, pode ter saído. Não repito por outra origem.', '', 'wall');
+            break;
+          }
+          pushLog('Muralha em ' + c.s.name + ' → ' + t.coord + ': ' + em, 'err', 'wall');
+        }   // falhou nessa origem -> tenta a próxima
       }
       if (!done) semTropa++;
     }
-    if (semTropa) pushLog('Muralha: ' + semTropa + ' alvo(s) sem nenhuma aldeia próxima com bárbaro+aríete.', '', 'wall');
+    if (semTropa) pushLog('Muralha: ' + semTropa + ' alvo(s) sem nenhuma aldeia no alcance com bárbaro+aríete.', '', 'wall');
+    if (foraAlcance) pushLog('Muralha: ' + foraAlcance + ' alvo(s) fora do alcance de ' + (config.wall.maxDist != null ? config.wall.maxDist : (config.farm.maxDist != null ? config.farm.maxDist : 13)) + ' campos.', '', 'wall');
     Object.keys(demo).forEach((r) => { if (now - demo[r] > 12 * 3600 * 1000) delete demo[r]; });
     config.wall.sentDemo = demo;
     config.wall.stats = config.wall.stats || {};
@@ -1545,7 +1629,7 @@
     config.wall.nextAt = now + Math.max(60, config.wall.interval || 600) * 1000;
     save();
     refreshCards('wall');
-    pushLog('Muralha: ciclo concluído — ' + count + ' ataque(s) de quebra. Próximo em ' + Math.round((config.wall.interval || 600) / 60) + ' min.', 'ok', 'wall');
+    pushLog('Muralha: ciclo concluído — ' + count + ' ataque(s) de quebra' + (incertos ? (' · ' + incertos + ' incerto(s)') : '') + '. Próximo em ' + Math.round((config.wall.interval || 600) / 60) + ' min.', 'ok', 'wall');
     scheduleWall();
   }
   function scheduleWall() { clearTimeout(wallTimer); if (!config.wall.running) return; wallTimer = setTimeout(wallTick, Math.min(Math.max((config.wall.nextAt || 0) - Date.now(), 1000), 60000)); }
@@ -1976,6 +2060,7 @@
     if (!vids.length) { pushLog('Recrutar: nenhum grupo mapeado com aldeias.', '', 'recruit'); config.recruit.nextAt = now + 300000; save(); scheduleRecruit(); return; }
     let totalSent = 0;
     for (const vid of vids) {
+      { const pare = devoParar('recruit'); if (pare) { pushLog('Recrutar: ciclo interrompido — ' + pare + '.', '', 'recruit'); break; } }
       const targets = map[vid].targets || {};
       if (!Object.keys(targets).length) continue;
       let state;
@@ -2881,21 +2966,24 @@
       if (!/^\d+$/.test(numText)) return;
       const num = parseInt(numText, 10);
       // Aldeia + coord: procura em qualquer td, tipicamente o 2º
-      let name = '', coord = null, x = 0, y = 0;
+      let name = '', coord = null, x = 0, y = 0, ci = -1;
       for (let i = 1; i < tds.length; i++) {
         const t = (tds[i].textContent || '').replace(/\s+/g, ' ').trim();
         const m = t.match(/^(.*?)\((\d{1,3})\|(\d{1,3})\)/);
-        if (m) { name = m[1].trim(); coord = m[2] + '|' + m[3]; x = +m[2]; y = +m[3]; break; }
+        if (m) { name = m[1].trim(); coord = m[2] + '|' + m[3]; x = +m[2]; y = +m[3]; ci = i; break; }
       }
       if (!coord) return;
-      // Quantidades: pega TODOS os tds numéricos seguintes (LANC, ESP, [SPY, CP])
-      const nums = tds.map((td) => {
+      // Quantidades: as colunas LOGO DEPOIS da aldeia, na ordem LANC/ESP/SPY/CP.
+      // Antes varria todos os tds, removia os zeros e destruturava por posição — dois defeitos
+      // somados: (a) o zero sumia, então "250/0/0/100" virava LANC=250 e ESP=100; (b) a célula
+      // da aldeia "Nome (500|600)" virava o número 500600 e entrava na lista, deslocando tudo.
+      // Resultado: o painel mostrava um pedido que a tribo não fez, e era ele que ia pro envio.
+      const val = (i) => {
+        const td = tds[i]; if (!td) return 0;
         const t = (td.textContent || '').replace(/\D/g, '');
-        return t ? parseInt(t, 10) : null;
-      }).filter((n) => n !== null && n > 0);
-      // O primeiro num é o N do pedido, já usado. Os próximos são LANC/ESP/SPY/CP na ordem.
-      const [_n, LANC, ESP, SPY, CP] = nums;
-      const ped = { LANC: LANC || 0, ESP: ESP || 0, SPY: SPY || 0, CP: CP || 0 };
+        return t ? parseInt(t, 10) : 0;
+      };
+      const ped = { LANC: val(ci + 1), ESP: val(ci + 2), SPY: val(ci + 3), CP: val(ci + 4) };
       rows.push({
         id: 'blz' + num + '-' + coord,
         num: num, name: name, coord: coord, x: x, y: y,
@@ -2905,13 +2993,30 @@
         checked: false,
       });
     });
+    // PRESERVA o que era seu. Antes isto sobrescrevia tudo, apagando sem aviso a origem escolhida,
+    // as quantidades ajustadas à mão e a marca de já-enviado — e o que já tinha saído voltava a
+    // aparecer como pendente. Agora o fórum manda no pedido; o resto é seu e sobrevive.
+    const antigas = {};
+    (config.planner.blindagem.rows || []).forEach((r) => { antigas[r.id] = r; });
+    rows.forEach((r) => {
+      const a = antigas[r.id];
+      if (!a) return;
+      r.originVid = a.originVid || '';
+      r.enviadoEm = a.enviadoEm || 0;
+      r.checked = r.enviadoEm ? false : !!a.checked;
+      // só reaproveita o envio ajustado se o pedido do fórum não mudou
+      const mesmoPedido = a.ped && a.ped.LANC === r.ped.LANC && a.ped.ESP === r.ped.ESP
+        && a.ped.SPY === r.ped.SPY && a.ped.CP === r.ped.CP;
+      if (mesmoPedido && a.send) r.send = a.send;
+    });
     config.planner.blindagem.rows = rows;
     config.planner.blindagem.lastFetch = Date.now();
     save();
     return rows;
   }
 
-  async function blindagemSend() {
+  async function blindagemSend() { return ocupado(_blindagemSend); }
+  async function _blindagemSend() {
     const list = (config.planner.blindagem.rows || []).filter((r) => r.checked && r.originVid);
     if (!list.length) { pushLog('Blindagem: nenhuma linha marcada com origem definida.', 'err'); return; }
     const results = [];
@@ -2930,11 +3035,22 @@
       }
       try {
         await sendAttack(r.originVid, r.x, r.y, amounts, 'support');
+        // DESMARCA E GRAVA JÁ. Sem isto, um segundo clique em "Enviar" reenviava tudo que já
+        // tinha saído — as aldeias de defesa esvaziavam duas vezes. Grava a cada linha porque
+        // a página recarrega, e o que já saiu não pode voltar a aparecer como pendente.
+        r.checked = false; r.enviadoEm = Date.now(); save();
         results.push(r);
         pushLog('🛡️ Blindagem #' + r.num + ' → ' + r.coord + ' enviada (' + (s.LANC || 0) + '/' + (s.ESP || 0) + '/' + (s.SPY || 0) + '/' + (s.CP || 0) + ')', 'ok', 'planner');
         await sleep(400);
       } catch (e) {
-        pushLog('🛡️ Blindagem #' + r.num + ' FALHOU: ' + (e.message || e), 'err', 'planner');
+        const em = String(e.message || e);
+        // Ambíguo = pode ter saído. Desmarca também: reenviar apoio dobra a defesa fora de casa.
+        if (/^ambiguo:/.test(em)) {
+          r.checked = false; r.enviadoEm = Date.now(); save();
+          pushLog('🛡️ Blindagem #' + r.num + ' (' + r.coord + '): resposta ambígua, pode ter saído. Desmarquei — confira na tela de comandos antes de reenviar.', '', 'planner');
+        } else {
+          pushLog('🛡️ Blindagem #' + r.num + ' FALHOU: ' + em, 'err', 'planner');
+        }
       }
     }
     // Gera texto do fórum a partir das enviadas
@@ -3298,6 +3414,7 @@
     const sel = config.market.sources || {};
     let count = 0; const tot = { wood: 0, stone: 0, iron: 0 };
     for (const v of vils) {
+      { const pare = devoParar('market'); if (pare) { pushLog('Cunhagem: interrompida — ' + pare + '.', '', 'market'); break; } }
       if (!sel[v.vid]) continue;
       if (v.coord && v.coord === coord) continue;   // pula destino pela coordenada
       let state;
@@ -3359,6 +3476,7 @@
     const sel = config.market.mintSources || {};
     let count = 0, coins = 0;
     for (const v of vils) {
+      { const pare = devoParar('market'); if (pare) { pushLog('Cunhar: interrompido — ' + pare + '.', '', 'market'); break; } }
       if (!sel[v.vid]) continue;
       try {
         const r = await mintCoins(v.vid);
@@ -3400,6 +3518,7 @@
       const receivers = st.map((s) => ({ s: s, eff: s.cur[r] + inSum(s.vid, r) }))
         .filter((x) => x.eff < x.s.thr).map((x) => ({ s: x.s, def: x.s.thr - x.eff })).sort((a, b) => b.def - a.def);
       for (const rec of receivers) {
+        { const pare = devoParar('market'); if (pare) { pushLog('Equilíbrio: interrompido — ' + pare + '.', '', 'market'); return; } }
         if (rec.def <= 0) continue;
         const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] > s.thr)
           .map((s) => ({ s: s, exc: s.cur[r] - s.thr, d: coordDist(s.coord, rec.s.coord) }))
@@ -3697,6 +3816,7 @@
     config.build.demand = {};
     let built = 0;
     for (const vid of vids) {
+      { const pare = devoParar('build'); if (pare) { pushLog('Edifícios: ciclo interrompido — ' + pare + '.', '', 'build'); break; } }
       const prof = pmap[vid].profile;
       const plan = prof === 'atk' ? atkPlan : defPlan;
       let st;
@@ -4136,6 +4256,7 @@
     let built = 0, recruited = 0, fed = 0, f1 = 0, f2 = 0, f3 = 0;
     const gMain = config.bb.gradMain || 20, gStable = config.bb.gradStable || 15;
     for (const v of vils) {
+      { const pare = devoParar('bb'); if (pare) { pushLog('Cultivo: ciclo interrompido — ' + pare + '.', '', 'bb'); break; } }
       if (!v.coord && coordByVid[v.vid]) v.coord = coordByVid[v.vid];
       let st;
       try { st = await getBuildState(v.vid); }
@@ -4462,6 +4583,18 @@
       (state.commands || []).forEach((c) => { if (c.coord && (c.kind === 'attack' || c.kind === 'return')) busy[c.coord] = 1; });
       let vSent = 0, semSpy = 0, ocup = 0;
       for (const t of p.targets) {
+        // O Mapa põe running=false só no fim; aqui a guarda usa lock e bot-check, que é o que
+        // importa num laço de aldeias × até 20 alvos cada (chega a 7 minutos).
+        {
+          const pare = devoParar(null);
+          if (pare) {
+            // One-shot: interrompido é interrompido. Sem apagar a flag, o módulo ficaria eternamente
+            // "rodando" — segurando a trava e bloqueando as outras abas sem estar fazendo nada.
+            cfg.running = false; save(); setMapStatus(false); refreshCards('map');
+            pushLog('Mapa: interrompido — ' + pare + '. ' + sentTotal + ' explorador(es) já enviado(s); clique Iniciar pra continuar de onde parou.', 'err', 'map');
+            return;
+          }
+        }
         if (busy[t.coord]) { ocup++; continue; }
         if ((avail.spy || 0) - reserve < spyCount) { semSpy++; continue; }
         try {
@@ -4471,7 +4604,18 @@
           vSent++; sentTotal++;
           pushLog('Mapa: ' + p.src.name + ' → ' + t.coord + ' (' + spyCount + ' explorador, ' + (Math.round(t.dist * 10) / 10) + ' campos' + (t.points ? ', ' + t.points + ' pts' : '') + ')', 'ok', 'map');
           if (delay) await sleep(delay + Math.floor(Math.random() * 200));
-        } catch (e) { pushLog('Mapa: ' + p.src.name + ' → ' + t.coord + ': ' + (e.message || e), 'err', 'map'); }
+        } catch (e) {
+          const em = String(e.message || e);
+          // Ambíguo = o explorador pode ter saído. Carimba mesmo assim: sem isso o próximo run
+          // re-explora o alvo e queima explorador de novo.
+          if (/^ambiguo:/.test(em)) {
+            avail.spy = (avail.spy || 0) - spyCount;
+            cfg.sentAt[t.vid] = Date.now(); vSent++; sentTotal++;
+            pushLog('Mapa: ' + t.coord + ' — resposta ambígua, pode ter saído. Marquei como explorado.', '', 'map');
+          } else {
+            pushLog('Mapa: ' + p.src.name + ' → ' + t.coord + ': ' + em, 'err', 'map');
+          }
+        }
       }
       leftTotal += semSpy + ocup;
       const parts = ['enviou ' + vSent];
@@ -4720,6 +4864,10 @@
       if (!min || min < 1 || lockOther()) return;
       if (isCaptchaVisible() || scanForBotCheck((document.body && document.body.innerText) || '')) { checkCaptchaOnce(); return; }   // já tem bot-check: não recarrega
       if (Date.now() - _lastActivity < min * 60000) return;   // você está ativo -> não atrapalha
+      // Não recarrega em cima de um desvio prestes a sair: o reload mata o timer e a retomada
+      // levaria segundos que a tropa não tem. Adia pro próximo ciclo. (Ideia do Nexus, que usa uma
+      // janela de segurança de 60s antes de qualquer auto-reload.)
+      if (desviarSaidaProxima(60000)) { pushLog('Auto-F5 adiado: tem desvio saindo em menos de 1 min.', '', 'desv'); return; }
       location.reload();
     } catch (e) {}
   }
@@ -5701,19 +5849,23 @@
   // Helpers -----------------------------------------------------------------
   const desviarCoordDist = (a, b) => { const [ax, ay] = a.split('|').map(Number); const [bx, by] = b.split('|').map(Number); return Math.hypot(ax - bx, ay - by); };
 
-  async function pickNearestOwnVillage(originVid) {
+  // Candidatas a destino do apoio, da mais PERTO pra mais longe.
+  // A escolha final depende da janela de tempo: o apoio não pode POUSAR antes da hora de voltar,
+  // senão não há o que cancelar. Quem chama testa a duração real que o jogo devolve na confirmação.
+  async function desviarCandidatos(originVid) {
     const vils = await getAllVillages();
     const origin = vils.find((v) => String(v.vid) === String(originVid));
     if (!origin || !origin.coord) throw new Error('aldeia origem sem coord (' + originVid + ')');
-    let best = null, bestD = Infinity;
-    vils.forEach((v) => {
-      if (String(v.vid) === String(originVid)) return;
-      if (!v.coord) return;
-      const d = desviarCoordDist(origin.coord, v.coord);
-      if (d < bestD) { bestD = d; best = v; }
-    });
-    if (!best) throw new Error('nenhuma outra aldeia sua encontrada');
-    return best;   // { vid, name, coord }
+    return vils
+      .filter((v) => String(v.vid) !== String(originVid) && v.coord)
+      .map((v) => ({ v: v, d: desviarCoordDist(origin.coord, v.coord) }))
+      .sort((a, b) => a.d - b.d)
+      .map((o) => o.v);
+  }
+  async function pickNearestOwnVillage(originVid) {
+    const cands = await desviarCandidatos(originVid);
+    if (!cands.length) throw new Error('nenhuma outra aldeia sua encontrada');
+    return cands[0];   // { vid, name, coord }
   }
 
   // Depois de enviar o apoio, procura o cmd_id do apoio recém-saído da aldeia originVid.
@@ -5745,52 +5897,158 @@
     } catch (e) { return null; }
   }
 
+  // O comando ainda existe na lista de saídas da aldeia? É a ÚNICA prova de cancelamento que vale.
+  async function comandoAindaExiste(vid, cmdId) {
+    const r = await fetch('/game.php?village=' + vid + '&screen=overview_villages&mode=commands&page=-1&_=' + Date.now(),
+      { credentials: 'include', cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao reler os comandos');
+    const html = await r.text();
+    if (!/screen=info_command|commands_table/.test(html)) throw new Error('resposta não parece a tela de comandos');
+    return new RegExp('[?&]id=' + cmdId + '\\b').test(html);
+  }
+
+  // Cancela e CONFIRMA. Antes isto era `if (r.ok) return true` — mas o TW responde HTTP 200 com
+  // página de erro quando o id/token não serve ou o comando já pousou. O log dizia "Desvio OK" e
+  // o exército continuava fora de casa. Agora só devolve sucesso se o comando sumiu da lista.
   async function cancelCommand(vid, cmdId) {
-    // Tentativa 1: GET com action=cancel (formato mais comum no TW)
-    try {
-      const url = '/game.php?village=' + vid + '&screen=info_command&id=' + cmdId + '&action=cancel&h=' + window.game_data.csrf;
-      const r = await fetch(url, { credentials: 'include', cache: 'no-store', redirect: 'follow' });
-      if (r.ok) return true;
-    } catch (e) {}
-    // Fallback: POST simples
-    try {
-      const p = new URLSearchParams(); p.set('h', window.game_data.csrf);
-      const r = await fetch('/game.php?village=' + vid + '&screen=info_command&id=' + cmdId + '&action=cancel',
-        { method: 'POST', credentials: 'include', body: p.toString() });
-      return r.ok;
-    } catch (e) { return false; }
+    const tentativas = [
+      () => fetch('/game.php?village=' + vid + '&screen=info_command&id=' + cmdId + '&action=cancel&h=' + window.game_data.csrf,
+        { credentials: 'include', cache: 'no-store', redirect: 'follow' }),
+      () => { const p = new URLSearchParams(); p.set('h', window.game_data.csrf);
+        return fetch('/game.php?village=' + vid + '&screen=info_command&id=' + cmdId + '&action=cancel',
+          { method: 'POST', credentials: 'include', body: p.toString() }); },
+    ];
+    let ultimoErro = '';
+    for (const tentar of tentativas) {
+      try { await tentar(); } catch (e) { ultimoErro = String(e.message || e); continue; }
+      await sleep(700);   // o servidor precisa registrar antes da releitura
+      try {
+        if (!(await comandoAindaExiste(vid, cmdId))) return true;   // sumiu = cancelado de verdade
+        ultimoErro = 'o comando continua na lista';
+      } catch (e) { ultimoErro = String(e.message || e); }
+    }
+    throw new Error('não consegui confirmar o cancelamento (' + (ultimoErro || 'motivo desconhecido') + ')');
+  }
+
+  // ---- Agendamento robusto (padrão observado no Nexus) --------------------------------------
+  // setTimeout longo não é confiável: o navegador estrangula o timer quando a aba vai pro fundo e
+  // o disparo escorrega — pode ser em minutos. Corta em blocos de 30s e reagenda; o último bloco é
+  // sempre curto, então o erro fica limitado ao último trecho.
+  const _desvTimers = {};
+  function desvAgendar(id, ms, fn) {
+    clearTimeout(_desvTimers[id]);
+    const BLOCO = 30000;
+    if (ms <= BLOCO) { _desvTimers[id] = setTimeout(fn, Math.max(0, ms)); return; }
+    _desvTimers[id] = setTimeout(() => desvAgendar(id, ms - BLOCO, fn), BLOCO);
+  }
+  function desvCancelarAgendamento(id) { clearTimeout(_desvTimers[id]); delete _desvTimers[id]; }
+  // Aba oculta tem timer estrangulado: acorda mais cedo pra ter folga. Mesma ideia do
+  // FINAL_COUNTDOWN_BUFFER (5s) x BACKGROUND (30s) do Nexus.
+  function desvFolga() { return (typeof document !== 'undefined' && document.hidden) ? 30000 : 5000; }
+  // Há algum desvio pra sair nos próximos N ms? O Auto-F5 consulta isto pra não recarregar a
+  // página em cima de um envio agendado.
+  function desviarSaidaProxima(janelaMs) {
+    const lim = serverNow() + (janelaMs || 60000);
+    return (config.desviar.pending || []).some((p) => p.state === 'waiting' && p.sendAt && p.sendAt <= lim);
   }
 
   function scheduleDesviarCancel(item) {
     const delay = Math.max(0, item.cancelAt - serverNow());
-    setTimeout(async () => {
+    desvAgendar(item.id + ':cancel', delay, async () => {
       const cur = (config.desviar.pending || []).find((x) => x.id === item.id);
       if (!cur || cur.state !== 'scheduled') return;
       try {
-        const ok = await cancelCommand(cur.vid, cur.cmdId);
-        cur.state = ok ? 'canceled' : 'failed';
-        cur.err = ok ? '' : 'cancel HTTP falhou';
+        await cancelCommand(cur.vid, cur.cmdId);   // lança se não conseguir CONFIRMAR
+        cur.state = 'canceled'; cur.err = '';
       } catch (e) { cur.state = 'failed'; cur.err = e.message || String(e); }
       save();
-      pushLog('🚨 Desvio ' + (cur.state === 'canceled' ? 'OK' : 'FALHOU') + ' — vid ' + cur.vid + ' cmd ' + cur.cmdId + (cur.err ? ' (' + cur.err + ')' : ''), cur.state === 'canceled' ? 'ok' : 'err', 'desv');
+      if (cur.state === 'canceled') {
+        pushLog('🚨 Desvio OK — tropa voltando (aldeia ' + cur.vid + ', comando ' + cur.cmdId + ').', 'ok', 'desv');
+      } else {
+        // Falha aqui = tropa FORA DE CASA. Tem que gritar, não virar uma linha discreta.
+        pushLog('🚨 DESVIO FALHOU — a tropa da aldeia ' + cur.vid + ' NÃO voltou: ' + cur.err
+          + '. Cancele o comando ' + cur.cmdId + ' na mão, agora.', 'err', 'desv');
+        if (config.captcha && config.captcha.enabled) { try { fireCaptchaNotification('desvio-falhou/' + cur.vid, true); } catch (e2) {} }
+      }
       desviarRefreshRowStates();
-    }, delay);
+    });
   }
 
   // Motor principal
-  async function desviarAldeia(originVid, incomingArriveMs, destinoVid) {
-    try {
-      let destino;
-      if (destinoVid) {
-        const vils = await getAllVillages();
-        destino = vils.find((v) => String(v.vid) === String(destinoVid));
-      } else {
-        destino = await pickNearestOwnVillage(originVid);
+  // ---- Marcação e plano por aldeia -----------------------------------------------------------
+  // Marcar NÃO envia. O envio é agendado pra sair `sendBeforeMs` antes do PRIMEIRO ataque marcado
+  // daquela aldeia, e o retorno pra depois do ÚLTIMO. Assim a tropa fica fora o mínimo necessário
+  // — antes o clique enviava na hora e ela passava horas fora, com o apoio pousando no vizinho.
+  function desviarMarcas(coord) {
+    return (config.desviar.marks || []).filter((m) => m.coord === coord).sort((a, b) => a.arriveAt - b.arriveAt);
+  }
+  function desviarPlanoDe(coord) {
+    const ms = desviarMarcas(coord);
+    if (!ms.length) return null;
+    return {
+      coord: coord,
+      vid: ms[0].vid,
+      primeiro: ms[0].arriveAt,
+      ultimo: ms[ms.length - 1].arriveAt,
+      qtd: ms.length,
+      sendAt: ms[0].arriveAt - (config.desviar.sendBeforeMs || 30000),
+      cancelAt: ms[ms.length - 1].arriveAt + (config.desviar.cancelOffsetMs || 5000),
+    };
+  }
+  function desviarPendenteDe(coord) {
+    return (config.desviar.pending || []).find((p) => p.coordOrigem === coord && (p.state === 'waiting' || p.state === 'scheduled'));
+  }
+  // (Re)agenda a saída da aldeia conforme as marcas atuais. Chamado ao marcar, ao desmarcar e no boot.
+  function desviarReplanejar(coord) {
+    const plano = desviarPlanoDe(coord);
+    let pend = desviarPendenteDe(coord);
+    if (!plano) {
+      if (pend && pend.state === 'waiting') {
+        desvCancelarAgendamento(pend.id);
+        config.desviar.pending = config.desviar.pending.filter((p) => p.id !== pend.id);
+        save();
       }
+      return;
+    }
+    if (pend && pend.state === 'scheduled') return;   // já saiu de casa; o retorno manda agora
+    if (!pend) {
+      pend = { id: 'd' + Date.now() + Math.random().toString(36).slice(2, 6),
+               vid: String(plano.vid), coordOrigem: coord, supportVid: '', supportCoord: '',
+               cmdId: '', sendAt: plano.sendAt, cancelAt: plano.cancelAt,
+               ultimoAtaque: plano.ultimo, state: 'waiting', err: '' };
+      config.desviar.pending.push(pend);
+    } else {
+      pend.sendAt = plano.sendAt; pend.cancelAt = plano.cancelAt; pend.ultimoAtaque = plano.ultimo;
+    }
+    save();
+    const falta = pend.sendAt - serverNow();
+    if (falta < -60000) {
+      pend.state = 'failed'; pend.err = 'a hora de sair já passou (aba fechada?)';
+      save();
+      pushLog('🚨 Desvio ' + coord + ': a hora de sair (' + new Date(pend.sendAt).toLocaleTimeString() + ') já passou — NÃO enviei. Desvie na mão se ainda der.', 'err', 'desv');
+      return;
+    }
+    desvAgendar(pend.id, Math.max(0, falta), () => { desviarExecutarSaida(pend.id); });
+    pushLog('🚨 Desvio ' + coord + ' armado: ' + plano.qtd + ' ataque(s) marcado(s) · sai às '
+      + new Date(pend.sendAt).toLocaleTimeString() + ' · volta às ' + new Date(pend.cancelAt).toLocaleTimeString(), 'ok', 'desv');
+    desviarRefreshRowStates();
+  }
+  async function desviarExecutarSaida(pendId) {
+    const pend = (config.desviar.pending || []).find((p) => p.id === pendId);
+    if (!pend || pend.state !== 'waiting') return;
+    return ocupado(() => _desviarSair(pend));
+  }
+
+  // A saída de casa, na hora agendada.
+  async function _desviarSair(pend) {
+    try {
+      const destino = await pickNearestOwnVillage(pend.vid);
       if (!destino || !destino.coord) throw new Error('destino sem coord');
       const [dx, dy] = destino.coord.split('|');
 
-      const state = await getVillageState(originVid);
+      // getVillageStateReserved, não getVillageState: era o único módulo que lia a tropa CRUA e
+      // levava junto o que o Coordenado tinha reservado pra um ataque armado.
+      const state = await getVillageStateReserved(pend.vid);
       const amounts = {};
       UNITS.forEach(([u]) => {
         if (u === 'spy' && config.desviar.keepSpy) return;
@@ -5801,53 +6059,75 @@
       });
       if (!Object.keys(amounts).length) throw new Error('sem tropas em casa pra desviar');
 
-      pushLog('🚨 Desviando aldeia ' + originVid + ' → apoio ' + destino.coord + ' · ' + Object.entries(amounts).map(([u, n]) => n + ' ' + u).join(', '), '', 'desv');
-
-      await sendAttack(originVid, dx, dy, amounts, 'support');
+      const durSeg = await sendAttack(pend.vid, dx, dy, amounts, 'support');
       await sleep(700);   // dá tempo do server registrar o cmd
-      const cmdId = await findLatestSupportCommand(originVid, destino.coord);
-      if (!cmdId) throw new Error('apoio saiu mas cmd_id não encontrado — cancele manualmente se precisar');
+      const cmdId = await findLatestSupportCommand(pend.vid, destino.coord);
+      if (!cmdId) throw new Error('o apoio saiu mas não achei o comando — cancele na mão');
 
-      const cancelAt = incomingArriveMs + (config.desviar.cancelOffsetMs || 5000);
-      const item = { id: 'd' + Date.now() + Math.random().toString(36).slice(2, 6),
-                     vid: String(originVid), supportVid: String(destino.vid), supportCoord: destino.coord,
-                     cmdId: cmdId, cancelAt: cancelAt, incomingArriveAt: incomingArriveMs,
-                     state: 'scheduled', err: '' };
-      config.desviar.pending.push(item);
+      pend.supportVid = String(destino.vid); pend.supportCoord = destino.coord;
+      pend.cmdId = cmdId; pend.state = 'scheduled';
+
+      // O apoio não pode POUSAR antes da hora de voltar — comando que chegou não se cancela.
+      // Com a saída 30s antes do ataque, a janela é de segundos e qualquer vizinha está a minutos,
+      // então isto praticamente nunca dispara. Fica como rede.
+      const pousoEm = durSeg ? (serverNow() + durSeg * 1000) : null;
+      if (pousoEm && pend.cancelAt > pousoEm - 20000) {
+        pend.cancelAt = pousoEm - 20000;
+        pushLog('🚨 Desvio ' + pend.coordOrigem + ': o apoio pousaria antes da volta; antecipei o cancelamento pra '
+          + new Date(pend.cancelAt).toLocaleTimeString() + '.', '', 'desv');
+      }
       save();
-      scheduleDesviarCancel(item);
-      pushLog('🚨 Desvio armado ✓ cmd ' + cmdId + ' · cancel em ' + new Date(cancelAt).toLocaleTimeString(), 'ok', 'desv');
+      pushLog('🚨 Desvio ' + pend.coordOrigem + ': tropa FORA (' + Object.entries(amounts).map(([u, n]) => n + ' ' + u).join(', ')
+        + ' → ' + destino.coord + ') · volta às ' + new Date(pend.cancelAt).toLocaleTimeString(), 'ok', 'desv');
+      scheduleDesviarCancel(pend);
       desviarRefreshRowStates();
-      return item;
+      return pend;
     } catch (e) {
-      pushLog('🚨 Desvio FALHOU: ' + (e.message || e), 'err', 'desv');
+      pend.state = 'failed'; pend.err = e.message || String(e); save();
+      // Falhar AQUI significa que a tropa continua em casa e o ataque vai bater nela.
+      pushLog('🚨 DESVIO NÃO SAIU — ' + pend.coordOrigem + ': ' + pend.err + '. A tropa está em casa e o ataque vem aí.', 'err', 'desv');
+      if (config.captcha && config.captcha.enabled) { try { fireCaptchaNotification('desvio-nao-saiu/' + pend.coordOrigem, true); } catch (e2) {} }
+      desviarRefreshRowStates();
       throw e;
     }
   }
 
   // UI ---- injeção na tela de incomings ----
   const DESV_ROW_COLORS = {
-    scheduled: 'rgba(140,220,140,.35)',   // verde claro
+    marked:    'rgba(120,180,255,.28)',   // azul: marcado, ainda não saiu
+    waiting:   'rgba(120,180,255,.28)',   // azul: saída agendada
+    scheduled: 'rgba(140,220,140,.35)',   // verde: tropa fora de casa
     canceling: 'rgba(255,225,120,.35)',   // amarelo
-    canceled:  'rgba(180,180,180,.25)',   // cinza
+    canceled:  'rgba(180,180,180,.25)',   // cinza: voltou
     failed:    'rgba(255,120,120,.30)',   // vermelho suave
   };
 
-  function desviarFindPending(originVid, arriveMs) {
-    return (config.desviar.pending || []).find((p) => String(p.vid) === String(originVid) && Math.abs((p.incomingArriveAt || 0) - (arriveMs || 0)) < 2000);
+  function desviarMarcado(coord, arriveMs) {
+    return (config.desviar.marks || []).some((m) => m.coord === coord && Math.abs(m.arriveAt - arriveMs) < 2000);
   }
 
   function desviarRefreshRowStates() {
-    document.querySelectorAll('tr[data-twmgr-desv-vid]').forEach((tr) => {
-      const vid = tr.getAttribute('data-twmgr-desv-vid');
+    const hm = (t) => new Date(t).toLocaleTimeString();
+    document.querySelectorAll('tr[data-twmgr-desv-coord]').forEach((tr) => {
+      const coord = tr.getAttribute('data-twmgr-desv-coord');
       const arriveMs = parseInt(tr.getAttribute('data-twmgr-desv-arr'), 10);
-      const pend = desviarFindPending(vid, arriveMs);
       const btn = tr.querySelector('.twmgr-desviar-btn'); if (!btn) return;
-      if (!pend) { tr.style.background = ''; btn.textContent = '🔄 Desviar'; btn.disabled = false; return; }
-      tr.style.background = DESV_ROW_COLORS[pend.state] || '';
-      const label = { scheduled: '✓ armado', canceling: '⏳ cancelando', canceled: '✓ cancelado', failed: '✗ falhou' }[pend.state] || pend.state;
-      btn.textContent = label;
-      btn.disabled = pend.state !== 'failed';   // permite re-tentar se falhou
+      const marcado = desviarMarcado(coord, arriveMs);
+      const pend = desviarPendenteDe(coord)
+        || (config.desviar.pending || []).find((p) => p.coordOrigem === coord && (p.state === 'canceled' || p.state === 'failed'));
+      if (!marcado && !pend) { tr.style.background = ''; btn.textContent = '🔄 Desviar'; btn.disabled = false; return; }
+      const st = pend ? pend.state : 'marked';
+      tr.style.background = DESV_ROW_COLORS[st] || '';
+      // O rótulo mostra o PLANO da aldeia inteira: várias linhas marcadas compartilham uma só saída.
+      btn.textContent = {
+        marked:    '✓ marcado',
+        waiting:   pend ? ('⏱ sai ' + hm(pend.sendAt)) : '⏱ agendado',
+        scheduled: pend ? ('🚀 fora · volta ' + hm(pend.cancelAt)) : '🚀 fora',
+        canceled:  '✓ voltou',
+        failed:    '✗ falhou',
+      }[st] || st;
+      // Marcado ou esperando ainda dá pra desmarcar; depois que a tropa saiu, não.
+      btn.disabled = (st === 'scheduled' || st === 'canceled');
     });
   }
 
@@ -5860,18 +6140,24 @@
     const m = clean.match(/(\d{1,2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/);
     if (!m) return 0;
     const [_, hh, mm, ss, ms] = m;
-    const now = new Date();
-    const d = new Date(now);
-    d.setHours(+hh, +mm, +ss, ms ? +ms : 0);
-    if (/amanh[aã]/i.test(clean)) d.setDate(d.getDate() + 1);
-    else if (/hoje/i.test(clean)) {
-      if (d.getTime() < now.getTime() - 60 * 60 * 1000) d.setDate(d.getDate() + 1);   // rollover meia-noite
-    } else {
-      // data explícita DD/MM/YYYY
-      const dm = clean.match(/(\d{1,2})[/](\d{1,2})[/](\d{4})/);
-      if (dm) { d.setFullYear(+dm[3], +dm[2] - 1, +dm[1]); }
-    }
-    return d.getTime();
+    // A tabela mostra o relógio DO SERVIDOR. Antes isto montava um Date local e o resultado era
+    // comparado com serverNow() — erro do tamanho do fuso do navegador, ou seja, horas.
+    // Agora usa a data do servidor (#serverDate) como base e converte com arrivalToServerMs(),
+    // o mesmo caminho que o resto do script já usa pra horário de chegada.
+    const ed = document.querySelector('#serverDate');
+    const base = ed ? (ed.textContent || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/) : null;
+    const hoje = new Date();
+    let Y = base ? +base[3] : hoje.getFullYear();
+    let M = base ? +base[2] - 1 : hoje.getMonth();
+    let D = base ? +base[1] : hoje.getDate();
+    const dExp = clean.match(/(\d{1,2})[/](\d{1,2})[/](\d{4})/);
+    if (dExp) { D = +dExp[1]; M = +dExp[2] - 1; Y = +dExp[3]; }
+    else if (/amanh[aã]/i.test(clean)) D += 1;
+    const montar = (dia) => arrivalToServerMs(new Date(Y, M, dia, +hh, +mm, +ss, ms ? +ms : 0));
+    let alvo = montar(D);
+    // "hoje" com horário que já passou = a lista virou a meia-noite entre a leitura e agora
+    if (!dExp && /hoje/i.test(clean) && alvo < serverNow() - 3600000) alvo = montar(D + 1);
+    return alvo;   // na escala de serverNow(), que é a usada em cancelAt
   }
 
   function enhanceIncomingsPage() {
@@ -5883,17 +6169,31 @@
 
     // Adiciona header
     const thead = table.querySelector('tr:first-child'); if (!thead) return;
+    // Índice da coluna DESTINO pelo texto do cabeçalho. Antes a aldeia atacada era pega com
+    // `tr.querySelector('.quickedit[data-id]')` — mas neste mundo o único quickedit da linha está
+    // na célula "Ataque" e o data-id dela é o ID DO COMANDO (ex.: 547545962), não da aldeia.
+    // O botão sempre falhava com "aldeia origem sem coord". Ancorar no cabeçalho também sobrevive
+    // a reordenação de coluna, que a leitura por posição fixa não sobreviveria.
+    let colDestino = -1;
+    Array.from(thead.querySelectorAll('th, td')).forEach((c, i) => {
+      if (colDestino < 0 && /destino/i.test((c.textContent || ''))) colDestino = i;
+    });
     const th = document.createElement('th'); th.textContent = 'Desviar'; th.style.whiteSpace = 'nowrap';
     thead.appendChild(th);
+    if (colDestino < 0) { pushLog('Desviar: não achei a coluna "Destino" no cabeçalho — botões desativados.', 'err', 'desv'); return; }
 
     // Adiciona célula em cada linha de incoming
     table.querySelectorAll('tr').forEach((tr) => {
       if (tr === thead) return;
       // Ignora linhas de rodapé (têm colspan)
       if (tr.querySelector('th[colspan], td[colspan]')) { const td = document.createElement('td'); tr.appendChild(td); return; }
-      // Destino: primeira quickedit com data-id na coluna Destino
-      const destSpan = tr.querySelector('.quickedit[data-id]'); if (!destSpan) { const td = document.createElement('td'); tr.appendChild(td); return; }
-      const vid = destSpan.getAttribute('data-id');
+      // Destino = a MINHA aldeia que está sendo atacada. Vem da coluna Destino, pela coordenada
+      // (o vid é resolvido depois, na hora do clique, contra a lista de aldeias).
+      const tdsAll = tr.querySelectorAll('td');
+      const cel = tdsAll[colDestino];
+      const cm = cel ? (cel.textContent || '').match(/(\d{1,3})\|(\d{1,3})/) : null;
+      if (!cm) { const td = document.createElement('td'); tr.appendChild(td); return; }
+      const coordDestino = cm[1] + '|' + cm[2];
       // Chegada: procurar a última td com texto tipo "hoje às HH:MM:SS"
       let arriveMs = 0;
       const tds = tr.querySelectorAll('td');
@@ -5901,7 +6201,7 @@
         const t = td.textContent || '';
         if (/(hoje|amanh[aã]|\d{1,2}[/]\d{1,2}[/]\d{4}) [aàáç]s /i.test(t) && /:\d{2}/.test(t)) { arriveMs = desviarParseArriveAt(t); break; }
       }
-      tr.setAttribute('data-twmgr-desv-vid', vid);
+      tr.setAttribute('data-twmgr-desv-coord', coordDestino);
       tr.setAttribute('data-twmgr-desv-arr', String(arriveMs));
 
       const td = document.createElement('td');
@@ -5909,11 +6209,35 @@
       btn.className = 'btn twmgr-desviar-btn';
       btn.textContent = '🔄 Desviar';
       btn.style.whiteSpace = 'nowrap';
+      // Clicar MARCA (ou desmarca). O envio é agendado pra sair pouco antes do primeiro ataque
+      // marcado da aldeia — clicar não tira tropa de casa na hora.
       btn.addEventListener('click', async () => {
         if (btn.disabled) return;
-        btn.disabled = true; btn.textContent = '⏳ enviando…';
-        try { await desviarAldeia(vid, arriveMs); }
-        catch (e) { btn.disabled = false; btn.textContent = '🔄 Desviar'; alert('Desvio falhou: ' + (e.message || e)); }
+        try {
+          if (desviarMarcado(coordDestino, arriveMs)) {
+            config.desviar.marks = (config.desviar.marks || [])
+              .filter((m) => !(m.coord === coordDestino && Math.abs(m.arriveAt - arriveMs) < 2000));
+            save();
+            desviarReplanejar(coordDestino);
+            if (!desviarMarcas(coordDestino).length) pushLog('🚨 Desvio ' + coordDestino + ': desmarcado.', '', 'desv');
+            desviarRefreshRowStates();
+            return;
+          }
+          if (!arriveMs) throw new Error('não consegui ler o horário de chegada desta linha');
+          btn.textContent = '⏳…';
+          const vils = await getAllVillages();
+          const minha = vils.find((v) => v.coord === coordDestino);
+          if (!minha) throw new Error('a aldeia ' + coordDestino + ' não está na sua lista de aldeias');
+          config.desviar.marks = config.desviar.marks || [];
+          config.desviar.marks.push({ id: 'm' + Date.now() + Math.random().toString(36).slice(2, 5),
+                                      coord: coordDestino, vid: String(minha.vid), arriveAt: arriveMs });
+          save();
+          desviarReplanejar(coordDestino);
+          desviarRefreshRowStates();
+        } catch (e) {
+          btn.textContent = '🔄 Desviar';
+          alert('Desvio falhou: ' + (e.message || e));
+        }
       });
       td.appendChild(btn);
       tr.appendChild(td);
@@ -5925,11 +6249,27 @@
     setInterval(desviarRefreshRowStates, 2000);
   }
 
-  // Retomada pós reload: pra cada pending com state='scheduled', reagenda o cancel
+  // Retomada pós reload. É a parte que sustenta o modelo: como o envio agora é AGENDADO (e não
+  // imediato), a página recarregar entre a marcação e a saída não pode perder o compromisso.
   function desviarResumeAll() {
+    const agora = serverNow();
+    // 1) tropa já fora: só reagenda a volta
     (config.desviar.pending || []).forEach((item) => {
       if (item.state === 'scheduled') scheduleDesviarCancel(item);
     });
+    // 2) saída ainda por vir: reagenda a partir das marcas (que sobrevivem no localStorage)
+    const coords = {};
+    (config.desviar.marks || []).forEach((m) => { coords[m.coord] = 1; });
+    Object.keys(coords).forEach((coord) => {
+      const pend = desviarPendenteDe(coord);
+      if (pend && pend.state === 'scheduled') return;
+      desviarReplanejar(coord);
+    });
+    // 3) faxina: marcas de ataques que já bateram há mais de 1h não servem mais pra nada
+    const antes = (config.desviar.marks || []).length;
+    config.desviar.marks = (config.desviar.marks || []).filter((m) => m.arriveAt > agora - 3600000);
+    config.desviar.pending = (config.desviar.pending || []).filter((p) => (p.cancelAt || p.sendAt || 0) > agora - 6 * 3600000);
+    if (antes !== config.desviar.marks.length) save();
   }
 
   // ==================== MAPA — filtros e badges na tela do jogo ====================

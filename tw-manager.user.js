@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.19.0
+// @version      10.20.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -110,7 +110,7 @@
   };
 
 
-  const VERSION = '10.19.0';
+  const VERSION = '10.20.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -3427,7 +3427,9 @@
     pushLog('Equilíbrio: ciclo concluído — ' + sent + ' transferência(s), limiar ' + Math.round(pct * 100) + '%.', 'ok', 'market');
   }
 
-  // ---- Solidário: mesma ideia do Equilíbrio, mas restrito a 1 grupo do TW, com 2 níveis de proteção pro doador:
+  // ---- Solidário: as aldeias do grupo escolhido SÓ RECEBEM (nunca doam). Doadoras são TODAS as outras
+  // aldeias (qualquer uma fora do grupo), testadas da mais próxima pra mais longe — se a mais próxima não
+  // tiver mercador livre/recurso suficiente, tenta a próxima mais próxima, e assim por diante. Proteções:
   // 1) piso normal = % (editável) do recurso mais baixo que a doadora TEM agora, com piso mínimo absoluto de segurança.
   // 2) gargalo (ninguém passa no piso normal): a mais próxima cede só a fatia acima de X% (editável, padrão 90%)
   //    do que ela já tem — ou seja, fica sempre com pelo menos X% do que possui, nunca esvazia.
@@ -3436,11 +3438,16 @@
   async function solidarioPass() {
     const gid = config.market.groupSolidario;
     if (!gid) { pushLog('Solidário: nenhum grupo selecionado.', 'err', 'market'); return; }
-    let members = [];
-    try { members = (await getVillagesInGroup(gid)).map((x) => ({ vid: x.vid, coord: x.coord, name: x.coord })); }
+    let recvMembers = [];
+    try { recvMembers = (await getVillagesInGroup(gid)).map((x) => ({ vid: x.vid, coord: x.coord, name: x.coord })); }
     catch (e) { pushLog('Solidário: erro ao listar grupo (' + (e.message || e) + ').', 'err', 'market'); return; }
-    members = members.filter((v) => v.coord);
-    if (members.length < 2) { pushLog('Solidário: grupo com menos de 2 aldeias, nada a fazer.', '', 'market'); return; }
+    recvMembers = recvMembers.filter((v) => v.coord);
+    if (!recvMembers.length) { pushLog('Solidário: grupo sem aldeias, nada a fazer.', '', 'market'); return; }
+    const recvSetIds = {}; recvMembers.forEach((v) => { recvSetIds[v.vid] = true; });
+    let allV = [];
+    try { allV = await getAllVillages(); } catch (e) { pushLog('Solidário: erro ao listar todas as aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
+    const donorPool = allV.filter((v) => v.coord && !recvSetIds[v.vid]);
+    if (!donorPool.length) { pushLog('Solidário: nenhuma aldeia fora do grupo pra doar.', 'err', 'market'); return; }
     const donorSet = {}, recvSet = {}, totRes = { wood: 0, stone: 0, iron: 0 };
     const pct = (config.market.solidarioThresholdPct != null ? config.market.solidarioThresholdPct : 50) / 100;
     const donorPct = (config.market.solidarioDonorPct != null ? config.market.solidarioDonorPct : 50) / 100;
@@ -3463,15 +3470,15 @@
     // doar, senão nenhuma aldeia nunca fica "cheia o bastante" e o Solidário para de mandar qualquer coisa.
     const donorMinFor = (s) => s.storage * donorMinPct;
     const st = [];
-    for (const v of members) {
+    for (const v of recvMembers.concat(donorPool)) {
       let m; try { m = await getMarketState(v.vid); } catch (e) { continue; }
       if (!m.storage) continue;
-      st.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, storage: m.storage, thr: m.storage * pct });
+      st.push({ vid: v.vid, coord: v.coord, name: v.name, isRecv: !!recvSetIds[v.vid], cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, storage: m.storage, thr: m.storage * pct });
       await sleep(120);
     }
     let sent = 0;
     for (const r of ['wood', 'stone', 'iron']) {
-      const receivers = st.map((s) => ({ s: s, eff: s.cur[r] + inSum(s.vid, r) }))
+      const receivers = st.filter((s) => s.isRecv).map((s) => ({ s: s, eff: s.cur[r] + inSum(s.vid, r) }))
         .filter((x) => x.eff < x.s.thr).map((x) => ({ s: x.s, def: x.s.thr - x.eff })).sort((a, b) => b.def - a.def);
       for (const rec of receivers) {
         if (rec.def <= 0) continue;
@@ -3480,7 +3487,8 @@
         // "s.cur[r] >= donorMinFor(s)" é essencial: sem isso, uma aldeia carente NESSE MESMO recurso podia ainda
         // passar no piso do doador (que usa o recurso mais baixo dela como base, uma conta separada) e acabar
         // doando o próprio recurso que está faltando nela. Usa donorMinPct (independente do limiar de carência).
-        const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] >= donorMinFor(s) && s.cur[r] > donorFloor(s, r))
+        // "!s.isRecv" garante que só aldeias FORA do grupo Solidário entram como doadoras.
+        const donors = st.filter((s) => !s.isRecv && s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] >= donorMinFor(s) && s.cur[r] > donorFloor(s, r))
           .map((s) => ({ s: s, exc: s.cur[r] - donorFloor(s, r), d: coordDist(s.coord, rec.s.coord) }))
           .filter((x) => x.d <= maxDist)
           .sort((a, b) => a.d - b.d);
@@ -3502,8 +3510,9 @@
         // gargalo geral: ninguém passou no piso normal desse recurso -> a mais próxima cede só a fatia
         // acima de keepPct (padrão 90%) do que ela TEM agora, ficando sempre com pelo menos keepPct do que possui.
         if (!covered && rec.def > 0) {
-          // mesma proteção do passo normal: mesmo no gargalo, nunca puxa de quem já está carente NESSE recurso
-          const fallback = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] >= donorMinFor(s) && s.cur[r] > 0)
+          // mesma proteção do passo normal: mesmo no gargalo, nunca puxa de quem já está carente NESSE recurso,
+          // e nunca de quem é do próprio grupo Solidário (só recebe, nunca doa).
+          const fallback = st.filter((s) => !s.isRecv && s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] >= donorMinFor(s) && s.cur[r] > 0)
             .map((s) => ({ s: s, d: coordDist(s.coord, rec.s.coord) }))
             .filter((x) => x.d <= maxDist)
             .sort((a, b) => a.d - b.d);
@@ -5156,7 +5165,7 @@
         modLog('fakes') +
       '</div>' +
       '<div id="twmgr-tab-market" style="display:none">' +
-        hint('Mercado: <b>Cunhagem</b> junta recurso num destino; <b>Equilíbrio</b> nivela as aldeias por %; <b>Solidário</b> ajuda só o grupo escolhido (com gargalo); <b>Cunhar</b> cunha moedas de ouro nas aldeias marcadas.') +
+        hint('Mercado: <b>Cunhagem</b> junta recurso num destino; <b>Equilíbrio</b> nivela as aldeias por %; <b>Solidário</b> abastece só o grupo escolhido (que só recebe) com qualquer outra aldeia sua doando; <b>Cunhar</b> cunha moedas de ouro nas aldeias marcadas.') +
         cardsDiv('market') +
         sec('Modo', '<div class="twmgr-row"><span class="twmgr-lbl">Modo</span><span style="font-size:11px"><label><input type="radio" name="twmgr-mk-mode" value="cunhagem"> 💰 Cunhagem</label> <label><input type="radio" name="twmgr-mk-mode" value="equilibrio"> ⚖️ Equilíbrio</label> <label><input type="radio" name="twmgr-mk-mode" value="solidario"> 🤝 Solidário</label> <label><input type="radio" name="twmgr-mk-mode" value="cunhar"> 🪙 Cunhar</label></span></div>') +
         '<div id="twmgr-mk-cunhagem">' +
@@ -5174,7 +5183,7 @@
         '</div>' +
         '<div id="twmgr-mk-solidario" style="display:none">' +
           sec('Solidário',
-            '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Só as aldeias do grupo escolhido se ajudam. Doadora só cede acima de "% do recurso mais baixo dela" — se a mais perto também estiver apertada nesse recurso, tenta a próxima. Se o grupo inteiro estiver apertado no mesmo recurso, a mais próxima cede só a fatia acima de "% que fica na doadora" mesmo assim (nunca esvazia), pra nunca travar construção/pesquisa numa aldeia nova ou bárbara conquistada.</div>' +
+            '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Aldeias do grupo escolhido SÓ RECEBEM (nunca doam). Doadora é qualquer OUTRA aldeia sua — testa da mais perto pra mais longe, e pula pra próxima se a mais perto não tiver mercador/recurso suficiente. Doadora só cede acima de "% do recurso mais baixo dela" (protege quem já tá capenga). Se ninguém qualificar, a mais próxima cede só a fatia acima de "% que fica na doadora" mesmo assim (nunca esvazia), pra nunca travar construção/pesquisa numa aldeia nova ou bárbara conquistada.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Grupo Solidário</span><select id="twmgr-mk-g-solid" class="twmgr-inp" style="width:140px"></select></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Carente: encher armazém até (%)</span><input id="twmgr-mk-sthr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl" title="Independente do limiar acima — se o limiar de carente for alto (ex.: 85%), esse aqui evita que ninguém nunca qualifique como doador.">Doadora: mín. % de armazém p/ poder doar</span><input id="twmgr-mk-sdonormin" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +

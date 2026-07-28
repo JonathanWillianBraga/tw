@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.16.0
+// @version      10.17.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -110,7 +110,7 @@
   };
 
 
-  const VERSION = '10.16.0';
+  const VERSION = '10.17.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -141,6 +141,7 @@
   const defRecruit = () => ({
     running: false, nextAt: 0, interval: 600, targetHours: 2, refillBelowMin: 30,
     groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
+    groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo (mantido p/ Edifícios/Cultivo)
   });
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
   const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, mintSources: {}, thresholdPct: 50, maxDist: 15, groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioGargaloKeepPct: 90, inflight: {} });
@@ -311,6 +312,7 @@
     if (!c.recruit.profiles.def) c.recruit.profiles.def = { targets: {} };
     if (!c.recruit.overrides) c.recruit.overrides = {};
     if (!c.recruit.queueEst) c.recruit.queueEst = {};
+    if (!Array.isArray(c.recruit.groups)) c.recruit.groups = [];
     if (c.recruit.targetHours == null) c.recruit.targetHours = 2;
     if (c.recruit.refillBelowMin == null) c.recruit.refillBelowMin = 30;
     if (c.recruit.interval == null) c.recruit.interval = 600;
@@ -1849,12 +1851,21 @@
 
   async function resolveTargets() {
     const r = config.recruit, map = {};
-    const add = (list, prof) => (list || []).forEach((v) => { if (map[v.vid]) return; map[v.vid] = { name: v.coord || v.vid, targets: r.profiles[prof].targets }; });
+    const add = (list, targets) => (list || []).forEach((v) => { if (map[v.vid]) return; map[v.vid] = { name: v.coord || v.vid, targets: targets }; });
     let atkV = [], defV = [];
     if (r.groupAtk) { try { atkV = await getVillagesInGroup(r.groupAtk); } catch (e) { pushLog('Recrutar: erro grupo ATK: ' + (e.message || e), 'err'); } }
     if (r.groupDef) { try { defV = await getVillagesInGroup(r.groupDef); } catch (e) { pushLog('Recrutar: erro grupo DEF: ' + (e.message || e), 'err'); } }
-    add(atkV, 'atk'); add(defV, 'def');
-    if (r.groupAtk || r.groupDef) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} } // reseta grupo p/ "todos"
+    add(atkV, r.profiles.atk.targets); add(defV, r.profiles.def.targets);
+    // Grupos adicionais livres (quantos o usuário quiser, cada um ligado a 1 grupo do TW) — resolvidos DEPOIS
+    // do ATK/DEF fixo, então uma aldeia que já está no ATK/DEF antigo mantém o comportamento de sempre.
+    for (const g of (r.groups || [])) {
+      if (!g.groupId) continue;
+      let vs = [];
+      try { vs = await getVillagesInGroup(g.groupId); } catch (e) { pushLog('Recrutar: erro no grupo "' + (g.name || g.id) + '": ' + (e.message || e), 'err'); continue; }
+      add(vs, g.targets || {});
+    }
+    const anyGroup = r.groupAtk || r.groupDef || (r.groups || []).some((g) => g.groupId);
+    if (anyGroup) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} } // reseta grupo p/ "todos"
     Object.entries(r.overrides || {}).forEach(([vid, o]) => { map[vid] = { name: o.name || vid, targets: o.targets }; });
     return map;
   }
@@ -2006,13 +2017,75 @@
       '</div>').join('');
     return '<div style="font-size:11px;color:#e8d29a;margin:6px 0 2px">' + label + '</div>' + rows;
   }
+  let _twGroupsCache = [];
   async function fillGroupSelects() {
     let groups = [];
     try { groups = await getGroups(); } catch (e) { pushLog('Recrutar: erro ao listar grupos: ' + (e.message || e), 'err'); return; }
+    _twGroupsCache = groups;
     [['twmgr-r-gatk', config.recruit.groupAtk], ['twmgr-r-gdef', config.recruit.groupDef], ['twmgr-bb-group', config.bb.group], ['twmgr-bm-group', config.map && config.map.group], ['twmgr-farm-group', config.farm && config.farm.group]].forEach(([id, cur]) => {
       const sel = document.getElementById(id); if (!sel) return;
       sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((g) => '<option value="' + g.id + '"' + (String(cur) === String(g.id) ? ' selected' : '') + '>' + esc(g.name) + '</option>').join('');
     });
+    renderRecruitGroups();
+  }
+  // ---- Grupos adicionais livres do Recrutar (quantos o usuário quiser, cada um ligado a 1 grupo do TW) ----
+  function recruitGroupCardHTML(g) {
+    const opts = '<option value="">— nenhum —</option>' + _twGroupsCache.map((gr) => '<option value="' + gr.id + '"' + (String(g.groupId || '') === String(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
+    const t = g.targets || {};
+    const rows = RUNITS.map(([u, n]) =>
+      '<div style="display:flex;align-items:center;gap:5px;margin:1px 0">' +
+      '<input type="checkbox" class="twmgr-rg-on" data-gid="' + g.id + '" data-unit="' + u + '"' + (t[u] !== undefined ? ' checked' : '') + '>' +
+      unitIcon(u, n) + '<span style="flex:1;font-size:10px">' + n + '</span>' +
+      '<input class="twmgr-rg-t twmgr-inp" data-gid="' + g.id + '" data-unit="' + u + '" type="number" min="0" placeholder="∞" value="' + (t[u] != null ? t[u] : '') + '" style="width:60px" title="alvo (vazio = contínuo)">' +
+      '</div>').join('');
+    return '<div class="twmgr-rg-card" data-gid="' + g.id + '" style="border:1px solid #3a2c1a;border-radius:6px;padding:6px;margin-bottom:6px">' +
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">' +
+      '<input class="twmgr-rg-name twmgr-inp" data-gid="' + g.id + '" type="text" placeholder="nome do perfil" value="' + esc(g.name || '') + '" style="flex:1;font-size:11px">' +
+      '<select class="twmgr-rg-grp twmgr-inp" data-gid="' + g.id + '" style="width:130px">' + opts + '</select>' +
+      '<span class="twmgr-rg-rm" data-gid="' + g.id + '" title="remover grupo" style="cursor:pointer;color:#ff7568;padding:0 4px;font-weight:bold">✕</span>' +
+      '</div>' + rows + '</div>';
+  }
+  function renderRecruitGroups() {
+    const box = document.getElementById('twmgr-rg-list'); if (!box) return;
+    const groups = config.recruit.groups || [];
+    box.innerHTML = groups.length ? groups.map(recruitGroupCardHTML).join('') : '<div style="color:#8f7d57;text-align:center;padding:8px;font-size:10px">— nenhum grupo adicional (use o botão abaixo) —</div>';
+  }
+  function bindRecruitGroupsHandlers() {
+    const box = document.getElementById('twmgr-rg-list'); if (!box) return;
+    box.addEventListener('change', (e) => {
+      const el = e.target, gid = el.getAttribute('data-gid'); if (!gid) return;
+      const g = (config.recruit.groups || []).find((x) => x.id === gid); if (!g) return;
+      if (el.classList.contains('twmgr-rg-name')) g.name = el.value;
+      else if (el.classList.contains('twmgr-rg-grp')) g.groupId = el.value || null;
+      else if (el.classList.contains('twmgr-rg-on') || el.classList.contains('twmgr-rg-t')) {
+        const u = el.getAttribute('data-unit');
+        const cb = box.querySelector('.twmgr-rg-on[data-gid="' + gid + '"][data-unit="' + u + '"]');
+        const inp = box.querySelector('.twmgr-rg-t[data-gid="' + gid + '"][data-unit="' + u + '"]');
+        const hasNum = inp && inp.value.trim() !== '';
+        g.targets = g.targets || {};
+        if (!cb.checked && !hasNum) { delete g.targets[u]; }
+        else {
+          const v = hasNum ? parseInt(inp.value, 10) : null;
+          g.targets[u] = (v != null && !Number.isNaN(v)) ? v : null;
+          if (hasNum) cb.checked = true;
+        }
+      }
+      save();
+    });
+    box.addEventListener('click', (e) => {
+      const el = e.target, gid = el.getAttribute('data-gid'); if (!gid) return;
+      if (el.classList.contains('twmgr-rg-rm')) {
+        if (!confirm('Remover este grupo?')) return;
+        config.recruit.groups = (config.recruit.groups || []).filter((x) => x.id !== gid);
+        save(); renderRecruitGroups();
+      }
+    });
+  }
+  function recruitAddGroup() {
+    config.recruit.groups = config.recruit.groups || [];
+    const id = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    config.recruit.groups.push({ id: id, name: 'Grupo ' + (config.recruit.groups.length + 1), groupId: null, targets: {} });
+    save(); renderRecruitGroups();
   }
   function readRecruitCfg() {
     const r = config.recruit;
@@ -2036,7 +2109,12 @@
     save();
   }
   function setRecruitStatus(on) { setBtnState('twmgr-r-start', 'twmgr-r-stop', on, '● Recrutando', '▶ Recrutar'); }
-  function recruitStart() { readRecruitCfg(); if (!config.recruit.groupAtk && !config.recruit.groupDef) { pushLog('Recrutar: mapeie ao menos 1 grupo (ATK ou DEF).', 'err', 'recruit'); return; } config.recruit.running = true; config.recruit.nextAt = 0; save(); setRecruitStatus(true); pushLog('Recrutar iniciado.', 'ok', 'recruit'); recruitTick(); }
+  function recruitStart() {
+    readRecruitCfg();
+    const hasCustom = (config.recruit.groups || []).some((g) => g.groupId);
+    if (!config.recruit.groupAtk && !config.recruit.groupDef && !hasCustom) { pushLog('Recrutar: mapeie ao menos 1 grupo (ATK, DEF ou um grupo adicional).', 'err', 'recruit'); return; }
+    config.recruit.running = true; config.recruit.nextAt = 0; save(); setRecruitStatus(true); pushLog('Recrutar iniciado.', 'ok', 'recruit'); recruitTick();
+  }
   function recruitStop() { readRecruitCfg(); config.recruit.running = false; save(); clearTimeout(recruitTimer); setRecruitStatus(false); pushLog('Recrutar parado.', '', 'recruit'); }
   async function runRecruitDiag() {
     pushLog('Diag Recrutar: lendo grupos e tela train…');
@@ -5024,13 +5102,17 @@
         modLog('wall') +
       '</div>' +
       '<div id="twmgr-tab-recruit" style="display:none">' +
-        hint('Recruta por <b>grupo</b> (ATK/DEF): mantém a fila alvo por edifício e para no alvo de tropas. Vazio = contínuo.') +
+        hint('Recruta por <b>grupo</b> do TW: mantém a fila alvo por edifício e para no alvo de tropas. Vazio = contínuo.') +
         cardsDiv('recruit') +
-        sec('Grupos',
+        sec('Grupos (fixo ATK/DEF)',
           '<div class="twmgr-row"><span class="twmgr-lbl">Grupo ATK</span><select id="twmgr-r-gatk" class="twmgr-inp" style="width:170px"></select></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Grupo DEF</span><select id="twmgr-r-gdef" class="twmgr-inp" style="width:170px"></select></div>' +
           '<div style="text-align:right;margin-top:2px"><button id="twmgr-r-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button></div>') +
         sec('Tropas por perfil', recruitProfileHTML('atk', '⚔️ Perfil ATK') + recruitProfileHTML('def', '🛡️ Perfil DEF')) +
+        sec('Grupos adicionais',
+          '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Crie quantos perfis quiser, cada um ligado a um grupo do TW — igual o ATK/DEF acima, mas sem limite de quantidade.</div>' +
+          '<div id="twmgr-rg-list"></div>' +
+          '<button id="twmgr-rg-add" class="twmgr-btn twmgr-ghost" style="width:100%;margin-top:2px">+ Adicionar grupo</button>') +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Fila alvo (h)</span><input id="twmgr-r-hours" class="twmgr-inp" type="number" min="0.5" step="0.5" value="2" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Repor quando faltar (min)</span><input id="twmgr-r-refill" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>') +
@@ -5319,6 +5401,9 @@
 
     document.getElementById('twmgr-r-hours').value = config.recruit.targetHours != null ? config.recruit.targetHours : 2;
     document.getElementById('twmgr-r-refill').value = config.recruit.refillBelowMin != null ? config.recruit.refillBelowMin : 30;
+    renderRecruitGroups();
+    bindRecruitGroupsHandlers();
+    document.getElementById('twmgr-rg-add').addEventListener('click', recruitAddGroup);
     fillGroupSelects();
     document.getElementById('twmgr-r-reload').addEventListener('click', fillGroupSelects);
     document.getElementById('twmgr-r-start').addEventListener('click', recruitStart);

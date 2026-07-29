@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.14.0
+// @version      10.15.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.14.0';
+  const VERSION = '10.15.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -591,8 +591,15 @@
       ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});
+      // O card "no alcance" mostrava s.mapped, que é barbCount: os bárbaros do MUNDO INTEIRO que
+      // passam no filtro de PONTOS, sem filtro de distância nenhum. Dava 118.254 num print — e um
+      // círculo de 20 campos tem ~1.257 posições, então nem 43 aldeias sem sobreposição chegariam
+      // a 54 mil. O número estava certo, o rótulo é que mentia. Agora "no alcance" é o que sobra
+      // depois de distância + já explorado + já com ataque a caminho, e o total do mundo aparece
+      // separado, que é uma informação diferente e também útil.
       arr = [
-        { v: fmtN(s.mapped), l: 'no alcance', hl: true },
+        { v: fmtN(s.reach), l: 'no alcance', hl: true },
+        { v: fmtN(s.mapped), l: 'no mundo' },
         { v: fmtN(s.sent), l: 'explorados' },
         { v: fmtN(s.left), l: 'de fora' },
       ];
@@ -1621,7 +1628,15 @@
       const cm2 = name.match(/(\d{1,3})\|(\d{1,3})/);
       seen[vid] = 1; vils.push({ vid: String(vid), name: name, coord: cm2 ? (cm2[1] + '|' + cm2[2]) : null });
     });
-    if (!vils.length) vils.push({ vid: CUR_VID, name: CUR_NAME });
+    if (!vils.length) {
+      // Rede de segurança pra não quebrar quem chama — mas SILENCIOSA ela é pior que o erro.
+      // getAllVillages alimenta quase todo módulo; se o parse do overview falhar, todos passam a
+      // operar numa aldeia só e o painel segue mostrando números plausíveis. Ninguém desconfia:
+      // parece que o módulo "achou pouca coisa", não que ele ficou cego pras outras 42 aldeias.
+      vils.push({ vid: CUR_VID, name: CUR_NAME });
+      vils.incompleto = true;
+      pushLog('⚠️ Não consegui ler a lista de aldeias (overview_villages) — vou trabalhar SÓ com a aldeia atual. Se algum módulo parecer que ignorou suas outras aldeias, é isto. Recarregue a página.', 'err');
+    }
     return vils;
   }
   // ==================== TROPAS (helpers de força/pop) ====================
@@ -4125,7 +4140,7 @@
       pushLog(p.src.name + ' (' + p.src.coord + '): ' + parts.join(' · '), '', 'map');
     }
     Object.keys(cfg.sentAt).forEach((k) => { if (now - cfg.sentAt[k] > 30 * 86400000) delete cfg.sentAt[k]; });
-    cfg.stats = { mapped: plan.barbCount, sent: sentTotal, left: leftTotal };
+    cfg.stats = { mapped: plan.barbCount, reach: plan.totalCandidates, sent: sentTotal, left: leftTotal };
     cfg.running = false;   // ONE-SHOT: termina e PARA (rodar de novo = clicar Iniciar)
     save();
     setMapStatus(false);
@@ -4149,12 +4164,21 @@
     config.map.lastPreview = plan.plan.flatMap((p) => p.targets.map((t) => ({ src: p.src.coord, srcName: p.src.name, coord: t.coord, dist: Math.round(t.dist * 10) / 10, pts: t.points, name: t.name, lastAt: t.lastAt }))).slice(0, 500);
     save(); renderMapPreview();
     const tot = plan.plan.reduce((a, p) => a + p.targets.length, 0);
-    config.map.stats = { mapped: plan.barbCount, sent: (config.map.stats && config.map.stats.sent) || 0, left: 0 };
+    config.map.stats = { mapped: plan.barbCount, reach: plan.totalCandidates, sent: (config.map.stats && config.map.stats.sent) || 0, left: 0 };
     refreshCards('map');
     pushLog('Filtro de pontos (' + config.map.minPoints + '–' + config.map.maxPoints + '): ' + plan.barbCount + ' bárbaros.', '', 'map');
     pushLog('Minhas aldeias: ' + plan.myV.length + (config.map.group ? ' (grupo ' + config.map.group + ')' : ' (todas)') + '.', '', 'map');
     pushLog('Candidatos a ≤ ' + config.map.maxDist + ' campos e ≥ ' + config.map.minDaysSinceScout + 'd sem scout: ' + plan.totalCandidates + '.', '', 'map');
     pushLog('Planejados neste ciclo (cota ' + config.map.maxPerVillage + '/aldeia): ' + tot + '.', tot > 0 ? 'ok' : 'err', 'map');
+    // Quantas origens receberam alvo, e quais bateram no teto. Sem isto, "todos os alvos vêm da
+    // mesma aldeia" fica sem explicação: pode ser geografia (só ela tem bárbaro virgem por perto)
+    // ou pode ser a cota cortando. A linha abaixo separa os dois casos na hora.
+    const comAlvo = plan.plan.filter((p) => p.targets.length);
+    const noTeto = comAlvo.filter((p) => p.targets.length >= (config.map.maxPerVillage || 20));
+    pushLog('Origens com alvo: ' + comAlvo.length + '/' + plan.myV.length +
+      (noTeto.length ? ' · ' + noTeto.length + ' bateu(ram) o teto de ' + config.map.maxPerVillage + ' (havia mais alvo por perto — aumente "Máx alvos por aldeia")' : '') +
+      (comAlvo.length === 1 && plan.myV.length > 1 ? ' · só uma origem: as outras não têm bárbaro dentro de ' + config.map.maxDist + ' campos que ainda não tenha sido escaneado ou já esteja com ataque a caminho' : ''),
+      '', 'map');
     if (tot === 0 && plan.myV.length > 0 && all) {
       const barbs = all.filter((b) => b.player === '0');
       let minD = Infinity;

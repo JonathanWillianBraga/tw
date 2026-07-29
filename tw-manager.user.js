@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.15.0
+// @version      10.16.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.15.0';
+  const VERSION = '10.16.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -696,14 +696,36 @@
   }
 
   function serverNow() { try { return window.Timing.getCurrentServerTime(); } catch (e) { return Date.now(); } }
+  // Diferença entre o relógio de parede do NAVEGADOR e o do MUNDO (fuso), em ms.
+  //
+  // A versão anterior calculava isto a cada chamada, e o resultado era uma dente-de-serra
+  // de 1000ms: serverNow() corre em milissegundo, enquanto o wallLocal vem do TEXTO de
+  // #serverTime, que só muda uma vez por segundo. Cada chamada pegava um ponto diferente
+  // da serra.
+  //
+  // Isso destruía qualquer agendamento em ms. Medido num teste real de 8 comandos: o
+  // usuário pediu espaçamentos de 0/100/200/300/350/400/425ms e o plano guardou
+  // 0/318/333/382/604/677/700/727 — cada comando pegou um deslocamento aleatório, e três
+  // deles caíram do outro lado da virada de segundo, indo parar 1s adiante. A precisão
+  // morria no AGENDAMENTO, antes de qualquer questão de disparo.
+  //
+  // Correção: fuso é sempre um número inteiro de MINUTOS, e o ruído da medição é de no
+  // máximo 1s. Arredondar pro minuto mais próximo elimina a serra inteira e devolve o
+  // valor exato — funcione ele zero, meia hora ou três horas. Calculado uma vez só.
+  let _fusoMs = null;
   function wallToServerOffset() {
+    if (_fusoMs != null) return _fusoMs;
     const ed = document.querySelector('#serverDate'), et = document.querySelector('#serverTime');
-    if (!ed || !et) return serverNow() - Date.now();
-    const dm = (ed.textContent || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
-    const tm = (et.textContent || '').match(/(\d{2}):(\d{2}):(\d{2})/);
-    if (!dm || !tm) return serverNow() - Date.now();
-    const wallLocal = new Date(+dm[3], +dm[2] - 1, +dm[1], +tm[1], +tm[2], +tm[3]).getTime();
-    return serverNow() - wallLocal;
+    let bruto;
+    if (!ed || !et) bruto = serverNow() - Date.now();
+    else {
+      const dm = (ed.textContent || '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+      const tm = (et.textContent || '').match(/(\d{2}):(\d{2}):(\d{2})/);
+      if (!dm || !tm) bruto = serverNow() - Date.now();
+      else bruto = serverNow() - new Date(+dm[3], +dm[2] - 1, +dm[1], +tm[1], +tm[2], +tm[3]).getTime();
+    }
+    _fusoMs = Math.round(bruto / 60000) * 60000;
+    return _fusoMs;
   }
   function arrivalToServerMs(dtLocal) {
     if (!dtLocal) return 0;
@@ -6262,8 +6284,14 @@
     ACORDAR_ANTES: 300000,  // liga o keep-awake 5 min antes do disparo
     JANELA_CRITICA: 60000,  // nesta janela os outros módulos e o Auto-F5 recuam
     SONDAS: 5,              // requisições HEAD por medição de rede
-    BIAS_TETO: 400,         // limite do viés aprendido, pra um outlier não desregular tudo
-    BIAS_GANHO: 0.4,        // correção parcial: converge sem oscilar
+    // O viés corrige atraso SISTEMÁTICO, da ordem de dezenas de ms. Os primeiros valores
+    // que escolhi — teto 400ms, ganho 0,4 — não vieram de lugar nenhum, e no primeiro
+    // teste real o viés saturou em exatamente +400ms. Teto largo demais deixou uma
+    // excursão de ruído virar correção permanente, e o ganho alto levava um erro de
+    // 600ms a virar +240 de viés num passo só. Ver a nota em ccRealimentar: a causa raiz
+    // era a realimentação estar no sinal errado, mas estes números pioraram o estrago.
+    BIAS_TETO: 150,
+    BIAS_GANHO: 0.25,
     ATRASO_TOLERADO: 1500,  // passou disso do horário, não dispara — marca como perdido
   };
 
@@ -6372,17 +6400,10 @@
   }
 
   // ── Escada de espera ────────────────────────────────────────────────────────────
-  const _ccTimers = {};
-  // Fase grossa: fatia a espera em blocos e reagenda. Um setTimeout de 4h escorrega
-  // (e morre se a aba suspender); em blocos de 30s o erro fica preso ao último trecho.
-  function ccEsperarGrosso(id, alvoMs, fn) {
-    clearTimeout(_ccTimers[id]);
-    const falta = alvoMs - ccNow();
-    if (falta <= CC.BLOCO_MS) { _ccTimers[id] = setTimeout(fn, Math.max(0, falta)); return; }
-    _ccTimers[id] = setTimeout(() => ccEsperarGrosso(id, alvoMs, fn), CC.BLOCO_MS);
-  }
-  function ccCancelarEspera(id) { clearTimeout(_ccTimers[id]); delete _ccTimers[id]; }
-
+  // A espera longa em blocos de 30s vive agora dentro do ccMotor, que é quem decide
+  // qual comando é o próximo — não existe mais timer por comando. Era justamente esse
+  // timer por comando que o ccTick re-agendava, criando o disparo duplicado.
+  //
   // Fases fina, cedendo e ocupada. Devolve o instante real em que soltou.
   async function ccEsperarPreciso(alvoMs) {
     for (;;) {
@@ -6425,44 +6446,63 @@
   // Escrita adiantada: grava a INTENÇÃO antes de agir. Se a aba morrer entre o POST e a
   // resposta, a retomada encontra 'disparando' e trata como INCERTO — nunca reenvia.
   // Mandar um nobre duas vezes é pior do que não mandar.
-  async function ccDisparar(cmd) {
+  // DISPARA E SEGUE. Não espera a resposta — e isso é requisito, não otimização.
+  //
+  // A versão anterior fazia `await fetch(...); await r.text()` antes de devolver, e o
+  // round-trip real de um POST na praça foi medido entre 183 e 787ms. Numa onda de 8
+  // comandos espaçados de 100ms, esperar a resposta do primeiro já atropela os cinco
+  // seguintes. Agora emite o POST, carimba o instante e volta em ~1ms; a resposta é
+  // tratada quando chegar.
+  //
+  // A escrita adiantada continua valendo: 'disparando' vai pro disco ANTES do fetch, e
+  // uma aba que morra no meio deixa o comando INCERTO, nunca reenviado.
+  function ccDispararAgora(cmd) {
     cmd.state = 'disparando';
     cmd.fireAt = ccNow();
+    const meio = ccMeioRtt();
     save();
-    const corpo = new URLSearchParams(cmd.payload.params).toString();
     const t0 = performance.now();
-    let t2 = '';
-    try {
-      const r = await fetch(cmd.payload.action, {
-        method: 'POST', credentials: 'include', cache: 'no-store',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: corpo,
-      });
-      t2 = await r.text();
-    } catch (e) {
-      // Rede caiu no meio: NÃO dá pra saber se o servidor recebeu. Incerto, não falha.
-      cmd.state = 'incerto'; cmd.erro = 'rede caiu durante o envio (' + (e.message || e) + ')'; save();
-      throw new Error('incerto: ' + cmd.erro);
-    }
-    cmd.rttEnvioMs = Math.round(performance.now() - t0);
-    if (/n[aã]o tem tropas suficientes|not enough|insuficient/i.test(t2)) {
-      cmd.state = 'falhou'; cmd.erro = 'tropas insuficientes'; save();
-      throw new Error('recusado: tropas insuficientes');
-    }
-    // "Selecione uma aldeia alvo" é ambíguo: é também o estado normal da praça DEPOIS
-    // de um envio dar certo. Tratado como incerto em todo o script; aqui idem.
-    if (/selecione uma aldeia alvo/i.test(t2)) {
-      cmd.state = 'incerto'; cmd.erro = 'resposta ambígua — confira na tela de comandos'; save();
-      throw new Error('incerto: ' + cmd.erro);
-    }
-    cmd.state = 'enviado'; cmd.sentAt = ccNow(); cmd.erro = null; save();
-    return true;
+    fetch(cmd.payload.action, {
+      method: 'POST', credentials: 'include', cache: 'no-store',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(cmd.payload.params).toString(),
+    }).then((r) => r.text()).then((t2) => {
+      cmd.rttEnvioMs = Math.round(performance.now() - t0);
+      if (/n[aã]o tem tropas suficientes|not enough|insuficient/i.test(t2)) {
+        cmd.state = 'falhou'; cmd.erro = 'tropas insuficientes';
+      } else if (/selecione uma aldeia alvo/i.test(t2)) {
+        // Ambíguo: é também o estado normal da praça DEPOIS de um envio que deu certo.
+        cmd.state = 'incerto'; cmd.erro = 'resposta ambígua — confira na tela de comandos';
+      } else {
+        cmd.state = 'enviado'; cmd.sentAt = ccNow(); cmd.erro = null;
+      }
+      // ERRO LÍQUIDO: quando estimamos que o servidor RECEBEU, contra a hora pedida.
+      ccRealimentar(cmd, (cmd.fireAt + meio) - cmd.sendAt);
+      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.state + ', erro ' + cmd.erroMs + 'ms (ida-e-volta ' + cmd.rttEnvioMs + 'ms).', cmd.state === 'enviado' ? 'ok' : 'err', 'planner');
+      save(); ccRenderPagina();
+    }).catch((e) => {
+      // Rede caiu: NÃO dá pra saber se o servidor recebeu. Incerto, nunca falha.
+      cmd.state = 'incerto'; cmd.erro = 'rede caiu durante o envio (' + (e.message || e) + ')';
+      save(); ccRenderPagina();
+      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — INCERTO (' + cmd.erro + ')', 'err', 'planner');
+    });
   }
 
   // ── Laço fechado ────────────────────────────────────────────────────────────────
-  // Mede o atraso do PRÓPRIO agendador (instante real em que a chamada saiu, menos o
-  // instante pretendido) e corrige parcialmente. Ganho < 1 pra convergir sem oscilar.
-  // Note o que isto NÃO mede: o relógio do servidor. Ver o cabeçalho do bloco.
+  // Recebe o ERRO LÍQUIDO: quando estimamos que o servidor recebeu, contra a hora pedida.
+  //
+  // A primeira versão realimentava outra coisa — o atraso da escada, `real - alvoChamada`.
+  // Parece razoável e é um erro de controle: como `alvoChamada = sendAt - meioRtt - viés`,
+  // esse valor é o atraso da escada PURO, que não diminui quando o viés cresce. Ou seja,
+  // um integrador sobre uma entrada que ele não afeta: sem ponto de equilíbrio, cresce até
+  // bater na trava. No primeiro teste real o viés saturou em exatamente +400ms, o teto que
+  // eu tinha posto — e aí os comandos passaram a sair 485ms ADIANTADOS enquanto o painel
+  // exibia "0ms de erro", porque o erro exibido também era o da escada.
+  //
+  // Com o líquido: liquido = atrasoDaEscada - viés, então `viés += g*liquido` converge pra
+  // viés = atrasoDaEscada, que é exatamente a correção desejada. Ganho < 1 pra não oscilar.
+  //
+  // O que isto continua NÃO medindo: o relógio do servidor. Ver o cabeçalho do bloco.
   function ccRealimentar(cmd, erroMs) {
     cmd.erroMs = Math.round(erroMs);
     const cc = config.cc;
@@ -6481,47 +6521,91 @@
     return true;
   }
 
-  function ccAgendar(cmd) {
-    ccCancelarEspera(cmd.id);
-    const prepAt = cmd.sendAt - CC.PREPARAR_ANTES;
-    ccEsperarGrosso(cmd.id, Math.min(prepAt, cmd.sendAt - CC.AQUECER_ANTES), () => ccExecutar(cmd));
+  // ── MOTOR: um disparo de cada vez ───────────────────────────────────────────────
+  //
+  // A versão anterior dava a cada comando o seu próprio timer e a sua própria escada de
+  // espera, todas correndo juntas. Não funciona, e o teste real mostrou por quê: oito
+  // comandos planejados até 604ms separados dispararam dentro de 38ms uns dos outros —
+  // colapso total do espaçamento. Duas razões:
+  //   - cada escada termina numa espera OCUPADA, e espera ocupada não divide thread:
+  //     enquanto uma gira, as outras não conseguem nem checar o próprio relógio;
+  //   - o disparo aguardava a resposta do POST (183 a 787ms medidos), segurando tudo.
+  //
+  // Agora existe UM motor. Ele pega sempre o comando de menor sendAt, espera a hora
+  // dele, emite o POST sem aguardar resposta, e vai pro próximo. Uma onda sai em
+  // sequência, na ordem, com o espaçamento que foi pedido.
+  //
+  // Consequência que o usuário precisa saber: dois comandos no MESMO milissegundo são
+  // fisicamente impossíveis — o segundo sai alguns ms depois. ccEspacamentoMinimoMs()
+  // é o piso medido.
+  let _ccMotorAtivo = false;
+
+  function ccProximo() {
+    const fila = (config.cc && config.cc.fila) || [];
+    let melhor = null;
+    fila.forEach((c) => {
+      if (c.state !== 'armado' && c.state !== 'preparado') return;
+      if (!c.sendAt) return;
+      if (!melhor || c.sendAt < melhor.sendAt) melhor = c;
+    });
+    return melhor;
   }
 
-  async function ccExecutar(cmd) {
-    if (cmd.state !== 'armado' && cmd.state !== 'preparado') return;
-    return ocupado(async () => {
-      try {
-        // Payload fresco: tropa pode ter mudado e o token pode ter virado desde o armar.
-        if (cmd.sendAt - ccNow() > CC.AQUECER_ANTES || !ccPayloadValido(cmd)) {
-          await ccPreparar(cmd);
-          // Em modo chegada a duração pode ter mudado (composição/nobre a mais):
-          // recalcula a saída com a duração que o servidor acabou de devolver.
-          if (cmd.modo === 'chegada') ccCalcularSaida(cmd);
-          cmd.state = 'preparado'; save();
-        }
+  async function ccMotor() {
+    if (_ccMotorAtivo) return;
+    _ccMotorAtivo = true;
+    try {
+      for (;;) {
+        const cmd = ccProximo();
+        if (!cmd) break;
+        if (captchaBlocked()) { await ccDormir(30000); continue; }
+        const falta = cmd.sendAt - ccNow();
+
+        // Longe: dorme em bloco e reavalia. Reavaliar importa — um comando novo pode ter
+        // entrado na frente enquanto este dormia.
+        if (falta > CC.PREPARAR_ANTES) { await ccDormir(Math.min(falta - CC.PREPARAR_ANTES, CC.BLOCO_MS)); continue; }
+
+        // Passou da hora: não dispara atrasado. Explorador atrasado é tropa fora de casa
+        // sem motivo; nobre atrasado é pior.
         if (ccNow() > cmd.sendAt + CC.ATRASO_TOLERADO) {
-          cmd.state = 'perdido'; cmd.erro = 'a hora passou antes do preparo terminar'; save();
+          cmd.state = 'perdido';
+          cmd.erro = 'a hora de sair passou (aba fechada, ou a fila estava ocupada com outro comando)';
+          save(); ccRenderPagina();
           pushLog('⏱️ Central: ' + ccRotulo(cmd) + ' PERDIDO — ' + cmd.erro, 'err', 'planner');
-          return;
+          continue;
         }
-        await ccAquecer();
-        // Dispara meio RTT antes, pra o POST CHEGAR na hora, menos o atraso que o
-        // agendador vem mostrando nos disparos anteriores.
+
+        // Payload pronto ANTES da janela de disparo. Preparar custa um round-trip e não
+        // pode acontecer entre dois disparos de uma onda.
+        if (!ccPayloadValido(cmd)) {
+          try {
+            await ocupado(() => ccPreparar(cmd));
+            if (cmd.modo === 'chegada') ccCalcularSaida(cmd);
+            cmd.state = 'preparado'; save(); ccRenderPagina();
+          } catch (e) {
+            cmd.state = 'falhou'; cmd.erro = 'preparo falhou: ' + (e.message || e);
+            save(); ccRenderPagina();
+            pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.erro, 'err', 'planner');
+            continue;
+          }
+          continue;   // reavalia: o preparo pode ter mudado sendAt (duração exata do servidor)
+        }
+
+        if (config.cc.manterAcordado) ccManterAcordado(true);
+        if (cmd.sendAt - ccNow() > CC.AQUECER_ANTES) await ccAquecer();
+
+        // Dispara meio ida-e-volta antes, pra o POST CHEGAR na hora, menos o atraso fixo
+        // que os disparos anteriores mostraram.
         const alvoChamada = cmd.sendAt - ccMeioRtt() - config.cc.biasMs;
         const real = await ccEsperarPreciso(alvoChamada);
-        await ccDisparar(cmd);
-        ccRealimentar(cmd, real - alvoChamada);
-        pushLog('🎯 Central: ' + ccRotulo(cmd) + ' enviado — erro do agendador ' + cmd.erroMs + 'ms, ida-e-volta ' + cmd.rttEnvioMs + 'ms.', 'ok', 'planner');
-      } catch (e) {
-        const em = String(e.message || e);
-        if (!/^incerto:/.test(em) && cmd.state === 'disparando') { cmd.state = 'incerto'; cmd.erro = em; }
-        else if (cmd.state !== 'incerto' && cmd.state !== 'enviado') { cmd.state = 'falhou'; cmd.erro = em; }
-        save();
-        pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + em, /^incerto:/.test(em) ? '' : 'err', 'planner');
-      } finally {
-        if (!ccJanelaCritica(CC.ACORDAR_ANTES)) ccManterAcordado(false);
+        cmd.atrasoEscadaMs = Math.round(real - alvoChamada);
+        ccDispararAgora(cmd);       // sem await: o próximo da onda não pode esperar a resposta
+        ccRenderPagina();
       }
-    });
+    } finally {
+      _ccMotorAtivo = false;
+      if (!ccJanelaCritica(CC.ACORDAR_ANTES)) ccManterAcordado(false);
+    }
   }
 
   function ccRotulo(cmd) { return (cmd.kind || 'attack') + ' ' + cmd.origin + ' → ' + cmd.x + '|' + cmd.y; }
@@ -6541,18 +6625,13 @@
         try { await ccPreparar(cmd); ccCalcularSaida(cmd); }
         catch (e) { cmd.state = 'falhou'; cmd.erro = 'não consegui a duração: ' + (e.message || e); save(); continue; }
       }
-      if (!cmd.sendAt) continue;
-      if (ccNow() > cmd.sendAt + CC.ATRASO_TOLERADO) {
-        cmd.state = 'perdido';
-        cmd.erro = 'a hora de sair passou com a aba fechada';
-        pushLog('⏱️ Central: ' + ccRotulo(cmd) + ' PERDIDO — ' + cmd.erro, 'err', 'planner');
-        continue;
-      }
-      ccAgendar(cmd);
     }
     if (config.cc.manterAcordado && ccJanelaCritica(CC.ACORDAR_ANTES)) ccManterAcordado(true);
     if (!ccJanelaCritica(CC.ACORDAR_ANTES)) ccReancorarSeSeguro();
     save();
+    // O tick só faz manutenção. Quem espera e dispara é o motor, e ele é um só —
+    // chamá-lo de novo enquanto roda é no-op, por isso não há mais corrida de re-agendar.
+    ccMotor();
     ccTimer = setTimeout(ccTick, 30000);
   }
 
@@ -6598,7 +6677,6 @@
     if (!config.cc) return false;
     const c = config.cc.fila.find((x) => x.id === id);
     if (!c) return false;
-    ccCancelarEspera(id);
     config.cc.fila = config.cc.fila.filter((x) => x.id !== id);
     save();
     return true;
@@ -6731,10 +6809,16 @@
     document.head.appendChild(s);
   }
 
+  // COM os milissegundos. A tabela mostrava só até o segundo, e numa ferramenta que existe
+  // pra acertar milissegundo isso é cegueira: num teste de 8 comandos espaçados de 100ms,
+  // as oito linhas apareciam idênticas e não dava pra ver que o espaçamento tinha colapsado.
   function ccFmtHora(ms) {
     if (!ms) return '—';
     const d = new Date(ms - wallToServerOffset());
-    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2);
+    // Texto puro de propósito: esta função também vai pro log e pra mensagens do agendador
+    // da praça, que são inseridos como TEXTO — devolver HTML aqui apareceria como tag crua.
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2) +
+      '.' + ('00' + d.getMilliseconds()).slice(-3);
   }
   function ccFmtFalta(ms) {
     if (ms == null) return '—';
@@ -6813,8 +6897,8 @@
     const agora = ccNow();
     alvo.innerHTML =
       '<table class="twmgr-cct"><thead><tr>' +
-        '<th style="width:88px">Estado</th><th style="width:78px">Sai em</th><th>Comando</th>' +
-        '<th style="width:70px">Sai</th><th style="width:70px">Chega</th><th style="width:64px">Erro</th><th style="width:26px"></th>' +
+        '<th style="width:88px">Estado</th><th style="width:74px">Sai em</th><th>Comando</th>' +
+        '<th style="width:96px">Sai</th><th style="width:96px">Chega</th><th style="width:64px">Erro</th><th style="width:26px"></th>' +
       '</tr></thead><tbody>' +
       ordem.map((c) => {
         const falta = c.sendAt ? c.sendAt - agora : null;

@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.16.0
+// @version      10.17.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.16.0';
+  const VERSION = '10.17.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -6476,9 +6476,15 @@
       } else {
         cmd.state = 'enviado'; cmd.sentAt = ccNow(); cmd.erro = null;
       }
-      // ERRO LÍQUIDO: quando estimamos que o servidor RECEBEU, contra a hora pedida.
-      ccRealimentar(cmd, (cmd.fireAt + meio) - cmd.sendAt);
-      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.state + ', erro ' + cmd.erroMs + 'ms (ida-e-volta ' + cmd.rttEnvioMs + 'ms).', cmd.state === 'enviado' ? 'ok' : 'err', 'planner');
+      // Estimativa própria — só diagnóstico. Quem move o viés é a chegada que o jogo
+      // publica, conferida alguns segundos depois (o comando precisa aparecer na lista).
+      ccRealimentar(cmd, (cmd.fireAt + meio) - cmd.sendAt, false);
+      if (cmd.state === 'enviado') {
+        _ccPorConferir.push(cmd);
+        clearTimeout(_ccConferirTimer);
+        _ccConferirTimer = setTimeout(() => { ccConferirPendentes().catch(() => {}); }, 8000);
+      }
+      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.state + ', estimei ' + cmd.erroMs + 'ms (ida-e-volta ' + cmd.rttEnvioMs + 'ms). Conferindo com o jogo…', cmd.state === 'enviado' ? 'ok' : 'err', 'planner');
       save(); ccRenderPagina();
     }).catch((e) => {
       // Rede caiu: NÃO dá pra saber se o servidor recebeu. Incerto, nunca falha.
@@ -6486,6 +6492,82 @@
       save(); ccRenderPagina();
       pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — INCERTO (' + cmd.erro + ')', 'err', 'planner');
     });
+  }
+
+  // ── Verdade de campo: a chegada que o JOGO publica ──────────────────────────────
+  //
+  // Eu tinha dito que o jogo só mostrava segundos e que por isso não dava pra verificar
+  // precisão de ms. Errado: a lista "Próprios comandos" da praça mostra
+  // `hoje às 18:49:00:300` — o `:300` num elemento separado e menor, mas textContent
+  // concatena os filhos, então uma regex na célula inteira pega tudo.
+  //
+  // Isso muda o laço fechado de lugar. No primeiro teste real de um comando só:
+  //     pedido ............ 18:40:00.200
+  //     jogo registrou .... 18:40:00.300   (chegada 18:49:00:300 menos 9min de viagem)
+  //     erro verdadeiro ... +100ms
+  //     meu painel disse .. +1ms
+  // A escada acertou o alvo (+1ms). O buraco inteiro estava na estimativa de rede: eu
+  // estimava meia-viagem com um HEAD num arquivo estático (~85ms), e a ida real de um
+  // POST na praça é ~184ms. Realimentar a minha própria estimativa nunca acharia isso —
+  // ela concorda consigo mesma. Contra a chegada publicada pelo jogo, acha.
+  const _ccPorConferir = [];
+  let _ccConferirTimer = null;
+
+  function ccParseChegadaMs(txt) {
+    // "hoje às 18:49:00:300" — o quarto grupo é opcional porque nem toda linha traz ms.
+    const m = (txt || '').match(/(\d{1,2}):(\d{2}):(\d{2})(?:[:.](\d{1,3}))?/);
+    if (!m) return null;
+    const base = new Date(Date.now() + wallToServerOffset());
+    const d = new Date(base.getFullYear(), base.getMonth(), base.getDate(),
+      +m[1], +m[2], +m[3], m[4] ? +(m[4] + '00').slice(0, 3) : 0);
+    let ms = d.getTime() + wallToServerOffset();
+    // Passou da meia-noite entre a saída e a chegada: a linha diz "amanhã".
+    if (/amanh/i.test(txt)) ms += 86400000;
+    return ms;
+  }
+
+  // Uma requisição para a onda inteira, não uma por comando.
+  async function ccConferirPendentes() {
+    if (!_ccPorConferir.length) return;
+    const lote = _ccPorConferir.splice(0, _ccPorConferir.length);
+    const origens = Array.from(new Set(lote.map((c) => c.origin)));
+    for (const vid of origens) {
+      let doc;
+      try {
+        const r = await fetch('/game.php?village=' + vid + '&screen=place', { credentials: 'include', cache: 'no-store' });
+        doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+      } catch (e) { continue; }
+      // Toda linha da tabela de comandos que tenha coordenada e horário.
+      const linhas = [];
+      doc.querySelectorAll('tr').forEach((tr) => {
+        const t = (tr.textContent || '').replace(/\s+/g, ' ');
+        const mc = t.match(/\((\d{1,3})\|(\d{1,3})\)/);
+        if (!mc) return;
+        const chegada = ccParseChegadaMs(t);
+        if (chegada) linhas.push({ coord: mc[1] + '|' + mc[2], chegada: chegada });
+      });
+      lote.filter((c) => c.origin === vid).forEach((cmd) => {
+        const esperada = cmd.modo === 'chegada' ? cmd.alvoMs : (cmd.durSec ? cmd.sendAt + cmd.durSec * 1000 : null);
+        if (!esperada) return;
+        const coord = cmd.x + '|' + cmd.y;
+        // A mais próxima da esperada, dentro de 10s. Sem essa janela, uma onda de vários
+        // comandos pro mesmo alvo casaria todos com a mesma linha.
+        let melhor = null;
+        linhas.forEach((l) => {
+          if (l.coord !== coord) return;
+          const d = Math.abs(l.chegada - esperada);
+          if (d <= 10000 && (!melhor || d < melhor.d)) melhor = { d: d, l: l };
+        });
+        if (!melhor) return;
+        cmd.chegadaReal = melhor.l.chegada;
+        cmd.erroRealMs = Math.round(melhor.l.chegada - esperada);
+        // ESTE é o sinal que alimenta o viés. O erro estimado vira só diagnóstico.
+        ccRealimentar(cmd, cmd.erroRealMs, true);
+        pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — o jogo registrou chegada ' + ccFmtHora(melhor.l.chegada) +
+          ', erro REAL ' + (cmd.erroRealMs > 0 ? '+' : '') + cmd.erroRealMs + 'ms (eu estimei ' + cmd.erroMs + 'ms).', 'ok', 'planner');
+      });
+    }
+    save(); ccRenderPagina();
   }
 
   // ── Laço fechado ────────────────────────────────────────────────────────────────
@@ -6503,11 +6585,15 @@
   // viés = atrasoDaEscada, que é exatamente a correção desejada. Ganho < 1 pra não oscilar.
   //
   // O que isto continua NÃO medindo: o relógio do servidor. Ver o cabeçalho do bloco.
-  function ccRealimentar(cmd, erroMs) {
-    cmd.erroMs = Math.round(erroMs);
+  // `verdadeiro` = veio da chegada publicada pelo jogo. Só esse move o viés.
+  // A estimativa própria fica registrada pra comparação, mas não realimenta: ela concorda
+  // consigo mesma por construção, e foi assim que o viés ficou 100ms fora sem perceber.
+  function ccRealimentar(cmd, erroMs, verdadeiro) {
+    if (verdadeiro) cmd.erroRealMs = Math.round(erroMs); else cmd.erroMs = Math.round(erroMs);
+    if (!verdadeiro) { save(); return; }
     const cc = config.cc;
     cc.biasMs = Math.max(-CC.BIAS_TETO, Math.min(CC.BIAS_TETO, Math.round(cc.biasMs + erroMs * CC.BIAS_GANHO)));
-    cc.afericoes = (cc.afericoes || []).concat([{ t: cmd.sentAt || ccNow(), erro: cmd.erroMs, bias: cc.biasMs, oculta: document.hidden, acordado: ccAcordadoOk() }]).slice(-50);
+    cc.afericoes = (cc.afericoes || []).concat([{ t: cmd.sentAt || ccNow(), erro: cmd.erroRealMs, estimado: cmd.erroMs, bias: cc.biasMs, oculta: document.hidden, acordado: ccAcordadoOk() }]).slice(-50);
     save();
   }
 
@@ -6911,7 +6997,11 @@
             '<div style="font-size:9px;color:#8f7d57">' + ccResumoTropa(c.amounts) + (c.erro ? ' · <span style="color:#e6a89d">' + c.erro + '</span>' : '') + '</div></td>' +
           '<td>' + ccFmtHora(c.sendAt) + '</td>' +
           '<td>' + ccFmtHora(chega) + '</td>' +
-          '<td class="twmgr-cccd">' + (c.erroMs == null ? '—' : (c.erroMs > 0 ? '+' : '') + c.erroMs + 'ms') + '</td>' +
+          // Mostra o erro REAL (chegada publicada pelo jogo) quando já conferido; enquanto
+          // não conferiu, a estimativa entre parênteses, pra ficar claro que é provisória.
+          '<td class="twmgr-cccd">' + (c.erroRealMs != null
+            ? (c.erroRealMs > 0 ? '+' : '') + c.erroRealMs + 'ms'
+            : (c.erroMs == null ? '—' : '<span style="opacity:.55">(' + (c.erroMs > 0 ? '+' : '') + c.erroMs + ')</span>')) + '</td>' +
           '<td>' + (vivo ? '<span class="twmgr-del twmgr-cc-rm" data-id="' + c.id + '" title="cancelar">✕</span>' : '') + '</td>' +
         '</tr>';
       }).join('') + '</tbody></table>';
@@ -6930,6 +7020,20 @@
   //
   // Diferença: o Nexus tem um botão "buscar tropas". Aqui não precisa — na tela da
   // praça os disponíveis já estão no DOM. Zero requisição pra montar a tela.
+  // As unidades QUE ESTE MUNDO TEM, não a lista fixa de 12. O br143 roda com 10 — sem
+  // arqueiro nem arqueiro a cavalo — e a matriz desenhava duas colunas sempre zeradas,
+  // que eram justamente as que empurravam a tabela pros 978px que precisaram rolar.
+  function ccUnidades() {
+    try {
+      const w = window.game_data && window.game_data.units;
+      if (Array.isArray(w) && w.length) {
+        const tem = UNITS.filter(([u]) => w.indexOf(u) >= 0);
+        if (tem.length) return tem;
+      }
+    } catch (e) {}
+    return UNITS;
+  }
+
   function ccLerDisponivelDaTela() {
     const av = {};
     UNITS.forEach(([u]) => {
@@ -6962,15 +7066,15 @@
         // Rola dentro do proprio contentor em vez de arrebentar o layout do jogo.
         '<div style="overflow-x:auto;margin-bottom:8px">' +
         '<table style="border-collapse:collapse;min-width:900px;width:100%"><tbody>' +
-          '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px"></td>' + UNITS.map(([u, n]) => '<td style="text-align:center;padding:2px 3px">' + unitIcon(u, n) + '</td>').join('') + '</tr>' +
+          '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px"></td>' + ccUnidades().map(([u, n]) => '<td style="text-align:center;padding:2px 3px">' + unitIcon(u, n) + '</td>').join('') + '</tr>' +
           '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px" title="quantas ficam em casa">Mínimo</td>' +
-            UNITS.map(([u]) => cel(u) + '<input class="twmgr-ccq-min" data-u="' + u + '" type="number" min="0" value="0" style="width:42px;text-align:center;font-size:11px"></td>').join('') + '</tr>' +
+            ccUnidades().map(([u]) => cel(u) + '<input class="twmgr-ccq-min" data-u="' + u + '" type="number" min="0" value="0" style="width:42px;text-align:center;font-size:11px"></td>').join('') + '</tr>' +
           '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px">Enviar</td>' +
-            UNITS.map(([u]) => cel(u) + '<input class="twmgr-ccq-qtd" data-u="' + u + '" type="number" min="0" value="0" style="width:42px;text-align:center;font-size:11px"></td>').join('') + '</tr>' +
+            ccUnidades().map(([u]) => cel(u) + '<input class="twmgr-ccq-qtd" data-u="' + u + '" type="number" min="0" value="0" style="width:42px;text-align:center;font-size:11px"></td>').join('') + '</tr>' +
           '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px" title="manda tudo que houver, menos o mínimo">Tudo</td>' +
-            UNITS.map(([u]) => cel(u) + '<input class="twmgr-ccq-all" data-u="' + u + '" type="checkbox"></td>').join('') + '</tr>' +
+            ccUnidades().map(([u]) => cel(u) + '<input class="twmgr-ccq-all" data-u="' + u + '" type="checkbox"></td>').join('') + '</tr>' +
           '<tr style="border-top:1px solid #c8ab74"><td style="font-size:10px;color:#5c4321;padding:2px 4px">Disponível</td>' +
-            UNITS.map(([u]) => cel(u) + '<span class="twmgr-ccq-av" data-u="' + u + '" style="font-size:10px;color:#6b5330">' + (disp[u] || 0) + '</span></td>').join('') + '</tr>' +
+            ccUnidades().map(([u]) => cel(u) + '<span class="twmgr-ccq-av" data-u="' + u + '" style="font-size:10px;color:#6b5330">' + (disp[u] || 0) + '</span></td>').join('') + '</tr>' +
         '</tbody></table></div>' +
         '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">' +
           '<label>Alvo<br><input id="twmgr-ccq-alvo" type="text" placeholder="500|600" style="width:88px"></label>' +
@@ -7028,7 +7132,9 @@
         if (!hora) return dizer('Informe o horário.', true);
         const amounts = {};
         let total = 0, estouro = [];
-        UNITS.forEach(([u, nome]) => {
+        // ccUnidades(), não UNITS: com 10 colunas desenhadas, procurar o campo do arqueiro
+        // devolveria null e o clique em Agendar estouraria.
+        ccUnidades().forEach(([u, nome]) => {
           const min = parseInt(box.querySelector('.twmgr-ccq-min[data-u="' + u + '"]').value, 10) || 0;
           const ck = box.querySelector('.twmgr-ccq-all[data-u="' + u + '"]').checked;
           const teto = Math.max(0, (disp[u] || 0) - min);

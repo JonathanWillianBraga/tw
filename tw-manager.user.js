@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.12.0
+// @version      10.13.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.12.0';
+  const VERSION = '10.13.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -6609,6 +6609,318 @@
     return { ok: false, motivo: 'não peguei a virada de segundo em ' + N + ' sondas' };
   }
 
+  // ════════════════════════════════════════════════════════════════════════════════
+  // CENTRAL — INTERFACE
+  //
+  // Dividida como o Nexus divide, que é como o usuário descreveu antes de ver a tela
+  // deles: o AGENDADOR RÁPIDO mora na tela da aldeia (screen=place), na linguagem
+  // visual do próprio TW; a PÁGINA PRÓPRIA é a fila com contagem regressiva e a
+  // aferição de precisão.
+  //
+  // A tela do Nexus só CRIA comando — não mostra a fila. Aqui é o contrário do que
+  // importa: a fila com contagem regressiva é onde se percebe que algo está errado
+  // ANTES de custar exército. E depois de medir 20ms de dispersão só de thread
+  // ocupada, mostrar o erro real não é vaidade: é como saber se dá pra confiar um
+  // trem de nobres à central.
+  // ════════════════════════════════════════════════════════════════════════════════
+
+  let _ccEstiloOk = false;
+  function ccInjetarEstilo() {
+    if (_ccEstiloOk) return; _ccEstiloOk = true;
+    const s = document.createElement('style');
+    s.textContent = [
+      "#twmgr-ccpg{position:fixed;inset:0;z-index:100001;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.62)}",
+      "#twmgr-ccpg.on{display:flex}",
+      "#twmgr-ccbox{width:min(1080px,94vw);max-height:88vh;display:flex;flex-direction:column;font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#e9dcc2;background:linear-gradient(160deg,#2a2016,#201810);border:1px solid #b8912e;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.7);overflow:hidden}",
+      "#twmgr-ccbox *{box-sizing:border-box}",
+      "#twmgr-cchead{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:linear-gradient(90deg,#6e5015,#9a721c 55%,#caa031);color:#fff;border-bottom:1px solid #8a6a20}",
+      "#twmgr-cchead .t{font-weight:700;font-size:13px;letter-spacing:.3px}",
+      "#twmgr-ccx{cursor:pointer;font-size:19px;line-height:1;padding:0 4px;opacity:.85}#twmgr-ccx:hover{opacity:1}",
+      "#twmgr-ccbody{flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px 14px 14px}",
+      "#twmgr-ccbody::-webkit-scrollbar{width:9px}#twmgr-ccbody::-webkit-scrollbar-thumb{background:#4a3a22;border-radius:4px}",
+      ".twmgr-cct{width:100%;border-collapse:collapse;font-size:11px}",
+      ".twmgr-cct th{font-size:9px;color:#ffd76a;font-weight:700;padding:5px 6px;border-bottom:1px solid #6a5320;text-transform:uppercase;text-align:left;letter-spacing:.4px}",
+      ".twmgr-cct td{padding:5px 6px;border-bottom:1px solid rgba(255,255,255,.05);vertical-align:middle}",
+      ".twmgr-cct tr:hover td{background:rgba(212,175,55,.05)}",
+      ".twmgr-ccst{font-size:9px;font-weight:700;padding:2px 7px;border-radius:99px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}",
+      ".twmgr-ccst.armado{background:rgba(90,140,220,.18);color:#8fb7f0;border:1px solid #3f6091}",
+      // As cores seguem duas familias, e isso nao e enfeite: azul/verde = no rumo,
+      // ambar/vermelho = precisa de voce. 'preparado' e 'incerto' sairam quase iguais
+      // na primeira versao (mesma borda, texto a 23 pontos de distancia) e significam
+      // coisas opostas — um esta saudavel, o outro quer dizer "pode ter enviado, va
+      // conferir". Confundir os dois custa exercito. 'incerto' tambem e tracejado.
+      ".twmgr-ccst.preparado{background:rgba(70,190,190,.15);color:#6fd8d8;border:1px solid #2f7d7d}",
+      // Bem mais claro que 'incerto', que e ambar: 'disparando' e o instante em que o
+      // POST esta no ar, e brilho maior le como "acontecendo agora".
+      ".twmgr-ccst.disparando{background:rgba(255,170,70,.26);color:#fff0d8;border:1px solid #d68a2a}",
+      ".twmgr-ccst.enviado{background:rgba(63,206,84,.15);color:#7ee38c;border:1px solid #2f7d3a}",
+      ".twmgr-ccst.incerto{background:rgba(230,150,40,.16);color:#ffc266;border:1px dashed #c98a22}",
+      ".twmgr-ccst.falhou,.twmgr-ccst.perdido{background:rgba(231,76,60,.16);color:#ff8b7c;border:1px solid #9c3a2c}",
+      ".twmgr-cccd{font-variant-numeric:tabular-nums;font-weight:700;color:#ffd76a;font-family:Consolas,'Courier New',monospace}",
+      ".twmgr-cccd.perto{color:#ff9a5a}",
+      ".twmgr-ccmet{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:11px}",
+      ".twmgr-ccm{flex:1 1 0;min-width:96px;background:linear-gradient(165deg,#241a0e,#181008);border:1px solid #45351d;border-radius:9px;padding:8px 7px;text-align:center}",
+      ".twmgr-ccm .v{font-size:18px;font-weight:800;color:#ffd76a;line-height:1;font-variant-numeric:tabular-nums}",
+      ".twmgr-ccm .l{font-size:8px;color:#9a8a63;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}",
+      ".twmgr-ccm.ruim .v{color:#ff8b7c}", ".twmgr-ccm.bom .v{color:#7ee38c}",
+      ".twmgr-ccvazio{text-align:center;color:#8f7d57;font-size:11px;padding:22px 0}",
+      "#twmgr-ccpg-btn{cursor:pointer;font-size:13px;line-height:1;padding:2px 3px;border-radius:5px;opacity:.85;transition:.15s}",
+      "#twmgr-ccpg-btn:hover{opacity:1;background:rgba(255,255,255,.14)}",
+    ].join('');
+    document.head.appendChild(s);
+  }
+
+  function ccFmtHora(ms) {
+    if (!ms) return '—';
+    const d = new Date(ms - wallToServerOffset());
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2);
+  }
+  function ccFmtFalta(ms) {
+    if (ms == null) return '—';
+    const neg = ms < 0; let s = Math.floor(Math.abs(ms) / 1000);
+    const h = Math.floor(s / 3600); s -= h * 3600;
+    const m = Math.floor(s / 60); s -= m * 60;
+    return (neg ? '-' : '') + (h ? h + ':' : '') + ('0' + m).slice(-2) + ':' + ('0' + s).slice(-2);
+  }
+  function ccResumoTropa(a) {
+    return UNITS.filter(([u]) => a[u]).map(([u, n]) => n + ' ' + a[u]).join(' · ') || '—';
+  }
+
+  let _ccPgTimer = null;
+  function ccAbrirPagina() {
+    ccInjetarEstilo();
+    let pg = document.getElementById('twmgr-ccpg');
+    if (!pg) {
+      pg = document.createElement('div'); pg.id = 'twmgr-ccpg';
+      pg.innerHTML =
+        '<div id="twmgr-ccbox">' +
+          '<div id="twmgr-cchead"><span class="t">🎯 Central de Comando</span>' +
+            '<span><button id="twmgr-cc-aferir" class="twmgr-btn twmgr-ghost" style="margin-right:8px" title="Mede a precisão real desta máquina. NÃO envia nada.">📏 Aferir</button>' +
+            '<span id="twmgr-ccx" title="fechar (Esc)">×</span></span></div>' +
+          '<div id="twmgr-ccbody">' +
+            '<div id="twmgr-ccmet" class="twmgr-ccmet"></div>' +
+            '<div id="twmgr-ccfila"></div>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(pg);
+      pg.addEventListener('click', (e) => { if (e.target === pg) ccFecharPagina(); });
+      document.getElementById('twmgr-ccx').addEventListener('click', ccFecharPagina);
+      document.getElementById('twmgr-cc-aferir').addEventListener('click', async (ev) => {
+        const b = ev.currentTarget; b.disabled = true; b.textContent = '📏 medindo…';
+        try { const r = await ccAferir(8); b.textContent = '📏 ' + r.mediana + 'ms'; }
+        catch (e) { b.textContent = '📏 erro'; }
+        setTimeout(() => { b.disabled = false; b.textContent = '📏 Aferir'; }, 4000);
+        ccRenderPagina();
+      });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') ccFecharPagina(); });
+    }
+    pg.classList.add('on');
+    ccManterAcordado(true);   // aproveita o gesto do clique pra destravar o áudio
+    ccRenderPagina();
+    clearInterval(_ccPgTimer);
+    _ccPgTimer = setInterval(ccRenderPagina, 500);
+  }
+  function ccFecharPagina() {
+    const pg = document.getElementById('twmgr-ccpg'); if (pg) pg.classList.remove('on');
+    clearInterval(_ccPgTimer); _ccPgTimer = null;
+  }
+
+  function ccRenderPagina() {
+    const pg = document.getElementById('twmgr-ccpg');
+    if (!pg || !pg.classList.contains('on')) { clearInterval(_ccPgTimer); _ccPgTimer = null; return; }
+    const cc = config.cc || defCC();
+    const fila = cc.fila || [];
+    const vivos = fila.filter((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando');
+    const ult = (cc.afericoes || []).slice(-1)[0];
+
+    // Painel de precisão. O erro medido é o que diz se dá pra confiar um nobre a ela.
+    const erroClasse = !ult ? '' : (Math.abs(ult.erro) <= 10 ? 'bom' : (Math.abs(ult.erro) > 30 ? 'ruim' : ''));
+    const met = document.getElementById('twmgr-ccmet');
+    met.innerHTML =
+      '<div class="twmgr-ccm"><div class="v">' + vivos.length + '</div><div class="l">na fila</div></div>' +
+      '<div class="twmgr-ccm ' + erroClasse + '"><div class="v">' + (ult ? (ult.erro > 0 ? '+' : '') + ult.erro + 'ms' : '—') + '</div><div class="l">último erro</div></div>' +
+      '<div class="twmgr-ccm"><div class="v">' + (cc.biasMs > 0 ? '+' : '') + cc.biasMs + 'ms</div><div class="l">viés aprendido</div></div>' +
+      '<div class="twmgr-ccm"><div class="v">' + (cc.rttMs || '—') + 'ms</div><div class="l">ida-e-volta</div></div>' +
+      '<div class="twmgr-ccm ' + (ccAcordadoOk() ? 'bom' : '') + '"><div class="v">' + (ccAcordadoOk() ? 'on' : 'off') + '</div><div class="l">anti-estrangul.</div></div>';
+
+    const alvo = document.getElementById('twmgr-ccfila');
+    if (!fila.length) {
+      alvo.innerHTML = '<div class="twmgr-ccvazio">Nada agendado.<br><br>Abra a praça de reunião de uma aldeia e use o <b>Agendador rápido</b> pra marcar um comando.</div>';
+      return;
+    }
+    const ordem = fila.slice().sort((a, b) => (a.sendAt || a.alvoMs || 0) - (b.sendAt || b.alvoMs || 0));
+    const agora = ccNow();
+    alvo.innerHTML =
+      '<table class="twmgr-cct"><thead><tr>' +
+        '<th style="width:88px">Estado</th><th style="width:78px">Sai em</th><th>Comando</th>' +
+        '<th style="width:70px">Sai</th><th style="width:70px">Chega</th><th style="width:64px">Erro</th><th style="width:26px"></th>' +
+      '</tr></thead><tbody>' +
+      ordem.map((c) => {
+        const falta = c.sendAt ? c.sendAt - agora : null;
+        const vivo = (c.state === 'armado' || c.state === 'preparado');
+        const chega = c.modo === 'chegada' ? c.alvoMs : (c.durSec ? c.sendAt + c.durSec * 1000 : null);
+        return '<tr>' +
+          '<td><span class="twmgr-ccst ' + c.state + '">' + c.state + '</span></td>' +
+          '<td class="twmgr-cccd' + (vivo && falta != null && falta < 60000 ? ' perto' : '') + '">' + (vivo ? ccFmtFalta(falta) : '—') + '</td>' +
+          '<td>' + (c.kind === 'support' ? '🛡️' : '⚔️') + ' <b>' + c.origin + '</b> → ' + c.x + '|' + c.y +
+            '<div style="font-size:9px;color:#8f7d57">' + ccResumoTropa(c.amounts) + (c.erro ? ' · <span style="color:#e6a89d">' + c.erro + '</span>' : '') + '</div></td>' +
+          '<td>' + ccFmtHora(c.sendAt) + '</td>' +
+          '<td>' + ccFmtHora(chega) + '</td>' +
+          '<td class="twmgr-cccd">' + (c.erroMs == null ? '—' : (c.erroMs > 0 ? '+' : '') + c.erroMs + 'ms') + '</td>' +
+          '<td>' + (vivo ? '<span class="twmgr-del twmgr-cc-rm" data-id="' + c.id + '" title="cancelar">✕</span>' : '') + '</td>' +
+        '</tr>';
+      }).join('') + '</tbody></table>';
+    alvo.querySelectorAll('.twmgr-cc-rm').forEach((el) => el.addEventListener('click', () => {
+      const c = (config.cc.fila || []).find((x) => x.id === el.getAttribute('data-id'));
+      ccRemover(el.getAttribute('data-id'));
+      if (c) pushLog('🎯 Central: ' + ccRotulo(c) + ' cancelado antes de sair.', '', 'planner');
+      ccRenderPagina();
+    }));
+  }
+
+  // ── Agendador rápido, injetado na praça de reunião ──────────────────────────────
+  // Matriz Mínimo / Enviar / Tudo / Disponível, copiada do Nexus porque resolve num
+  // controle só o que o Coordenado não expressa: "manda tudo MENOS X". Sem mínimo por
+  // unidade, "tudo" esvazia a aldeia e sobra preencher número na mão.
+  //
+  // Diferença: o Nexus tem um botão "buscar tropas". Aqui não precisa — na tela da
+  // praça os disponíveis já estão no DOM. Zero requisição pra montar a tela.
+  function ccLerDisponivelDaTela() {
+    const av = {};
+    UNITS.forEach(([u]) => {
+      let n = 0;
+      const el = document.querySelector('a.units-entry-all[data-unit="' + u + '"]');
+      if (el) { const dc = el.getAttribute('data-all-count'); n = parseInt(dc != null ? dc : (el.textContent || '').replace(/\D/g, ''), 10); }
+      av[u] = isNaN(n) ? 0 : n;
+    });
+    return av;
+  }
+
+  function ccInjetarPraca() {
+    if (!/screen=place/.test(location.href)) return;
+    if (document.getElementById('twmgr-ccq')) return;
+    const form = document.querySelector('#command-data-form') || document.querySelector('form[action*="try=confirm"]') || document.querySelector('#content_value');
+    if (!form) return;
+    ccInjetarEstilo();
+    const disp = ccLerDisponivelDaTela();
+    const cel = (u) => '<td style="text-align:center;padding:2px 3px">';
+    const box = document.createElement('div');
+    box.id = 'twmgr-ccq';
+    box.style.cssText = 'margin:10px 0;border:1px solid #7d510a;border-radius:6px;background:#f4e4bc;color:#3b2914;font-size:11px;overflow:hidden';
+    box.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;background:linear-gradient(180deg,#e3c88b,#d3b26a);border-bottom:1px solid #7d510a;font-weight:700">' +
+        '<span>🎯 Agendador rápido — Central de Comando</span>' +
+        '<span><a href="javascript:void(0)" id="twmgr-ccq-fila" style="font-weight:400;margin-right:10px">ver fila</a><span id="twmgr-ccq-tog" style="cursor:pointer">▾</span></span></div>' +
+      '<div id="twmgr-ccq-body" style="padding:8px 10px">' +
+        // 12 colunas de unidade x 4 linhas pedem 978px (medido). A coluna de conteudo do
+        // jogo nem sempre e tao larga, e apertar as colunas deixaria os campos ilegiveis.
+        // Rola dentro do proprio contentor em vez de arrebentar o layout do jogo.
+        '<div style="overflow-x:auto;margin-bottom:8px">' +
+        '<table style="border-collapse:collapse;min-width:900px;width:100%"><tbody>' +
+          '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px"></td>' + UNITS.map(([u, n]) => '<td style="text-align:center;padding:2px 3px">' + unitIcon(u, n) + '</td>').join('') + '</tr>' +
+          '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px" title="quantas ficam em casa">Mínimo</td>' +
+            UNITS.map(([u]) => cel(u) + '<input class="twmgr-ccq-min" data-u="' + u + '" type="number" min="0" value="0" style="width:42px;text-align:center;font-size:11px"></td>').join('') + '</tr>' +
+          '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px">Enviar</td>' +
+            UNITS.map(([u]) => cel(u) + '<input class="twmgr-ccq-qtd" data-u="' + u + '" type="number" min="0" value="0" style="width:42px;text-align:center;font-size:11px"></td>').join('') + '</tr>' +
+          '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px" title="manda tudo que houver, menos o mínimo">Tudo</td>' +
+            UNITS.map(([u]) => cel(u) + '<input class="twmgr-ccq-all" data-u="' + u + '" type="checkbox"></td>').join('') + '</tr>' +
+          '<tr style="border-top:1px solid #c8ab74"><td style="font-size:10px;color:#5c4321;padding:2px 4px">Disponível</td>' +
+            UNITS.map(([u]) => cel(u) + '<span class="twmgr-ccq-av" data-u="' + u + '" style="font-size:10px;color:#6b5330">' + (disp[u] || 0) + '</span></td>').join('') + '</tr>' +
+        '</tbody></table></div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">' +
+          '<label>Alvo<br><input id="twmgr-ccq-alvo" type="text" placeholder="500|600" style="width:88px"></label>' +
+          '<label>Tipo<br><select id="twmgr-ccq-tipo" style="width:80px"><option value="attack">⚔️ Ataque</option><option value="support">🛡️ Apoio</option></select></label>' +
+          '<label>Marcar por<br><select id="twmgr-ccq-modo" style="width:96px"><option value="chegada">Chegada</option><option value="saida">Saída</option></select></label>' +
+          '<label id="twmgr-ccq-lblh">Horário<br><input id="twmgr-ccq-hora" type="datetime-local" step="1" style="width:190px"></label>' +
+          '<label title="deslocamento fino em milissegundos, somado ao horário">± ms<br><input id="twmgr-ccq-ms" type="number" value="0" step="1" style="width:70px"></label>' +
+          '<button id="twmgr-ccq-add" class="btn" style="padding:4px 12px">🎯 Agendar</button>' +
+        '</div>' +
+        '<div id="twmgr-ccq-msg" style="margin-top:7px;font-size:10px;min-height:13px;color:#6b5330"></div>' +
+      '</div>';
+    (form.parentNode === document.body ? form : form).insertAdjacentElement('beforebegin', box);
+
+    const q = (s) => box.querySelector(s);
+    const todos = (s) => Array.prototype.slice.call(box.querySelectorAll(s));
+    // "Tudo" marcado cinza o campo Enviar — o número passa a ser calculado.
+    function sincronizarLinha() {
+      todos('.twmgr-ccq-all').forEach((ck) => {
+        const u = ck.getAttribute('data-u');
+        const inp = box.querySelector('.twmgr-ccq-qtd[data-u="' + u + '"]');
+        inp.disabled = ck.checked;
+        inp.style.background = ck.checked ? '#ddd0b0' : '';
+        if (ck.checked) {
+          const min = parseInt(box.querySelector('.twmgr-ccq-min[data-u="' + u + '"]').value, 10) || 0;
+          inp.value = Math.max(0, (disp[u] || 0) - min);
+        }
+      });
+    }
+    todos('.twmgr-ccq-all').forEach((el) => el.addEventListener('change', sincronizarLinha));
+    todos('.twmgr-ccq-min').forEach((el) => el.addEventListener('input', sincronizarLinha));
+    q('#twmgr-ccq-tog').addEventListener('click', () => {
+      const b = q('#twmgr-ccq-body');
+      const fechado = b.style.display === 'none';
+      b.style.display = fechado ? 'block' : 'none';
+      q('#twmgr-ccq-tog').textContent = fechado ? '▾' : '▸';
+    });
+    q('#twmgr-ccq-fila').addEventListener('click', ccAbrirPagina);
+    // Puxa o alvo que já estiver digitado no formulário do jogo.
+    try {
+      const ai = document.querySelector('input[name="input"]');
+      if (ai && ai.value) q('#twmgr-ccq-alvo').value = ai.value.trim();
+      else {
+        const xi = document.querySelector('input[name="x"]'), yi = document.querySelector('input[name="y"]');
+        if (xi && yi && xi.value && yi.value) q('#twmgr-ccq-alvo').value = xi.value + '|' + yi.value;
+      }
+    } catch (e) {}
+
+    q('#twmgr-ccq-add').addEventListener('click', () => {
+      const msg = q('#twmgr-ccq-msg');
+      const dizer = (t, erro) => { msg.textContent = t; msg.style.color = erro ? '#a52a1a' : '#2d6a2f'; };
+      try {
+        const mc = (q('#twmgr-ccq-alvo').value || '').match(/(\d{1,3})\s*\|\s*(\d{1,3})/);
+        if (!mc) return dizer('Informe o alvo no formato 500|600.', true);
+        const hora = q('#twmgr-ccq-hora').value;
+        if (!hora) return dizer('Informe o horário.', true);
+        const amounts = {};
+        let total = 0, estouro = [];
+        UNITS.forEach(([u, nome]) => {
+          const min = parseInt(box.querySelector('.twmgr-ccq-min[data-u="' + u + '"]').value, 10) || 0;
+          const ck = box.querySelector('.twmgr-ccq-all[data-u="' + u + '"]').checked;
+          const teto = Math.max(0, (disp[u] || 0) - min);
+          let n = ck ? teto : (parseInt(box.querySelector('.twmgr-ccq-qtd[data-u="' + u + '"]').value, 10) || 0);
+          if (n > teto) { estouro.push(nome); n = teto; }
+          if (n > 0) { amounts[u] = n; total += n; }
+        });
+        if (!total) return dizer('Nenhuma tropa selecionada.', true);
+        const alvoMs = arrivalToServerMs(hora) + (parseInt(q('#twmgr-ccq-ms').value, 10) || 0);
+        const cmd = ccAdicionar({
+          origin: CUR_VID, x: mc[1], y: mc[2],
+          kind: q('#twmgr-ccq-tipo').value,
+          amounts: amounts,
+          modo: q('#twmgr-ccq-modo').value,
+          alvoMs: alvoMs,
+        });
+        const aviso = estouro.length ? ' (limitei ' + estouro.join(', ') + ' ao disponível)' : '';
+        dizer('Agendado: ' + ccResumoTropa(amounts) + ' → ' + mc[1] + '|' + mc[2] + aviso + '. Veja a fila pra acompanhar.');
+        pushLog('🎯 Central: ' + ccRotulo(cmd) + ' agendado (' + cmd.modo + ' ' + ccFmtHora(alvoMs) + ').', 'ok', 'planner');
+      } catch (e) { dizer(String(e.message || e), true); }
+    });
+    sincronizarLinha();
+  }
+
+  // Botão no cabeçalho do painel. Injetado depois do buildUI em vez de editado dentro
+  // da string do cabeçalho: mantém a Central inteira num bloco só, no fim do arquivo.
+  function ccBotaoPainel() {
+    const acoes = document.getElementById('twmgr-head-actions');
+    if (!acoes || document.getElementById('twmgr-ccpg-btn')) return;
+    const b = document.createElement('span');
+    b.id = 'twmgr-ccpg-btn';
+    b.title = 'Central de Comando — fila e precisão';
+    b.textContent = '🗓️';
+    b.addEventListener('click', ccAbrirPagina);
+    acoes.insertBefore(b, acoes.firstChild);
+  }
+
   // Enquanto não há interface, a central se opera pelo console. Este é o único ponto
   // em que o script escreve em window — de propósito, pra poder aferir sem armar nada.
   //   await TWMgrCC.aferir(8)        → mede a precisão real desta máquina, sem enviar
@@ -6617,7 +6929,7 @@
   try {
     window.TWMgrCC = {
       aferir: ccAferir, sincronizar: ccSincronizar, sondar: ccSondar,
-      adicionar: ccAdicionar, remover: ccRemover,
+      adicionar: ccAdicionar, remover: ccRemover, abrir: ccAbrirPagina,
       fila: () => (config.cc && config.cc.fila) || [],
       agora: ccNow, deriva: ccDeriva, acordar: ccManterAcordado, acordadoOk: ccAcordadoOk,
     };
@@ -6629,5 +6941,7 @@
   try { enhanceIncomingsPage(); } catch (e) { /* silencioso */ }
   try { desviarResumeAll(); } catch (e) { /* silencioso */ }
   try { ccRetomar(); } catch (e) { console.warn('[TWMgr Central] retomada falhou:', e); }
+  try { ccBotaoPainel(); } catch (e) { /* silencioso */ }
+  try { ccInjetarPraca(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
   try { enhanceMapPage(); } catch (e) { /* silencioso */ }
 })();

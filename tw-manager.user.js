@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.17.0
+// @version      10.18.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.17.0';
+  const VERSION = '10.18.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -6290,7 +6290,12 @@
     // excursão de ruído virar correção permanente, e o ganho alto levava um erro de
     // 600ms a virar +240 de viés num passo só. Ver a nota em ccRealimentar: a causa raiz
     // era a realimentação estar no sinal errado, mas estes números pioraram o estrago.
-    BIAS_TETO: 150,
+    // O viés agora carrega a correção INTEIRA (era dividida com o meioRtt, que saiu da
+    // conta). Latência de ida real medida: ~184ms, e pode ser bem pior numa hora ruim —
+    // então o teto tem que caber isso com folga. Não é o teto largo que causou a saturação
+    // anterior: aquilo foi realimentação no sinal errado, já corrigida. Com o sinal certo
+    // o laço tem ponto de equilíbrio e o teto é só rede de segurança.
+    BIAS_TETO: 2000,
     BIAS_GANHO: 0.25,
     ATRASO_TOLERADO: 1500,  // passou disso do horário, não dispara — marca como perdido
   };
@@ -6393,9 +6398,11 @@
   async function ccAquecer() {
     try { await fetch(CC_PING + '?w=' + Math.random(), { method: 'HEAD', cache: 'no-store', credentials: 'omit' }); } catch (e) {}
   }
-  // Metade do ida-e-volta = tempo estimado até o POST CHEGAR no servidor.
+  // Metade do ida-e-volta da sonda. NÃO entra mais no cálculo do disparo — ficou provado
+  // que não tem relação com o custo real de um POST na praça (85ms estimados contra ~184ms
+  // reais), e somá-lo ao viés aprendido fazia as duas correções brigarem até saturarem
+  // juntas. Sobrevive só como número exibido no painel.
   function ccMeioRtt() {
-    if (!config.cc.compensarRede) return 0;
     return Math.min(600, Math.max(0, Math.round((config.cc.rttMs || 0) / 2)));
   }
 
@@ -6459,7 +6466,6 @@
   function ccDispararAgora(cmd) {
     cmd.state = 'disparando';
     cmd.fireAt = ccNow();
-    const meio = ccMeioRtt();
     save();
     const t0 = performance.now();
     fetch(cmd.payload.action, {
@@ -6476,9 +6482,11 @@
       } else {
         cmd.state = 'enviado'; cmd.sentAt = ccNow(); cmd.erro = null;
       }
-      // Estimativa própria — só diagnóstico. Quem move o viés é a chegada que o jogo
-      // publica, conferida alguns segundos depois (o comando precisa aparecer na lista).
-      ccRealimentar(cmd, (cmd.fireAt + meio) - cmd.sendAt, false);
+      // Diagnóstico: o quanto ANTES da hora pedida o POST saiu. Não é o erro — o erro
+      // depende da viagem até o servidor, que só a chegada publicada pelo jogo revela.
+      // (Era aqui que eu somava meioRtt e chamava de "erro líquido"; o número concordava
+      // comigo mesmo e escondia 100ms de atraso real.)
+      ccRealimentar(cmd, cmd.fireAt - cmd.sendAt, false);
       if (cmd.state === 'enviado') {
         _ccPorConferir.push(cmd);
         clearTimeout(_ccConferirTimer);
@@ -6592,7 +6600,14 @@
     if (verdadeiro) cmd.erroRealMs = Math.round(erroMs); else cmd.erroMs = Math.round(erroMs);
     if (!verdadeiro) { save(); return; }
     const cc = config.cc;
-    cc.biasMs = Math.max(-CC.BIAS_TETO, Math.min(CC.BIAS_TETO, Math.round(cc.biasMs + erroMs * CC.BIAS_GANHO)));
+    // GANHO ADAPTATIVO. Ganho fixo de 0,25 levava 8 comandos pra corrigir 100ms — e cada
+    // um desses custa tropa de verdade. Com 1/(n+1) o primeiro salta pro valor medido
+    // inteiro (corrige já), e a partir daí vira média corrida, que absorve o ruído da
+    // rede em vez de perseguir cada oscilação. O piso mantém o laço vivo se a latência
+    // mudar depois de muitas amostras.
+    cc.nReal = (cc.nReal || 0) + 1;
+    const ganho = Math.max(CC.BIAS_GANHO, 1 / cc.nReal);
+    cc.biasMs = Math.max(-CC.BIAS_TETO, Math.min(CC.BIAS_TETO, Math.round(cc.biasMs + erroMs * ganho)));
     cc.afericoes = (cc.afericoes || []).concat([{ t: cmd.sentAt || ccNow(), erro: cmd.erroRealMs, estimado: cmd.erroMs, bias: cc.biasMs, oculta: document.hidden, acordado: ccAcordadoOk() }]).slice(-50);
     save();
   }
@@ -6680,9 +6695,18 @@
         if (config.cc.manterAcordado) ccManterAcordado(true);
         if (cmd.sendAt - ccNow() > CC.AQUECER_ANTES) await ccAquecer();
 
-        // Dispara meio ida-e-volta antes, pra o POST CHEGAR na hora, menos o atraso fixo
-        // que os disparos anteriores mostraram.
-        const alvoChamada = cmd.sendAt - ccMeioRtt() - config.cc.biasMs;
+        // UM termo só, e isso é a lição mais cara desta noite.
+        //
+        // Antes era `sendAt - meioRtt - viés`: duas correções somadas, uma CHUTADA (meia
+        // sonda HEAD num arquivo estático) e outra APRENDIDA. O aprendido tinha que brigar
+        // contra o chute, e os dois saturaram juntos — meioRtt travado em 600, viés em 150.
+        // Resultado medido contra o jogo: comando 748ms ADIANTADO. 600+150=750.
+        //
+        // A sonda HEAD já tinha se mostrado sem relação com o custo real de um POST na
+        // praça (85ms estimados contra ~184ms reais). Ela não pertence a esta conta. O viés
+        // aprende a latência inteira a partir da chegada que o jogo publica, que é a única
+        // medida honesta disponível. ccSondar continua existindo, mas só pra exibição.
+        const alvoChamada = cmd.sendAt - config.cc.biasMs;
         const real = await ccEsperarPreciso(alvoChamada);
         cmd.atrasoEscadaMs = Math.round(real - alvoChamada);
         ccDispararAgora(cmd);       // sem await: o próximo da onda não pode esperar a resposta

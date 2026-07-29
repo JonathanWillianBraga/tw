@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.11.0
+// @version      10.12.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.11.0';
+  const VERSION = '10.12.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -204,7 +204,17 @@
     sendDelayMs: 500,      // 3ª entrada: delay entre envios sucessivos (não manda todos de uma vez)
     state: {},             // { [vid]: { knightId, name, level, status, finishAt } } — cache p/ UI
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), reservations: {} });
+  // Central de Comando — núcleo de precisão. O bloco de código dela fica no FIM do
+  // arquivo; só o default mora aqui, porque def() roda no carregamento.
+  const defCC = () => ({
+    fila: [],               // comandos agendados (sobrevivem a F5)
+    biasMs: 0,              // atraso próprio do agendador, aprendido disparo a disparo
+    rttMs: 0,               // última mediana de ida-e-volta medida
+    compensarRede: true,    // dispara meio RTT antes, pra o POST CHEGAR na hora
+    manterAcordado: true,   // oscilador silencioso: impede o Chrome de estrangular a aba
+    afericoes: [],          // histórico de erro medido (últimas 50)
+  });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -372,6 +382,13 @@
       });
     });
     if (!c.planner.activeId || !c.planner.attacks.some((a) => a.id === c.planner.activeId)) c.planner.activeId = c.planner.attacks[0].id;
+    if (!c.cc) c.cc = defCC();
+    if (!Array.isArray(c.cc.fila)) c.cc.fila = [];
+    if (!Array.isArray(c.cc.afericoes)) c.cc.afericoes = [];
+    if (typeof c.cc.biasMs !== 'number' || !isFinite(c.cc.biasMs)) c.cc.biasMs = 0;
+    if (typeof c.cc.rttMs !== 'number' || !isFinite(c.cc.rttMs)) c.cc.rttMs = 0;
+    if (typeof c.cc.compensarRede !== 'boolean') c.cc.compensarRede = true;
+    if (typeof c.cc.manterAcordado !== 'boolean') c.cc.manterAcordado = true;
     if (!c.planner.blindagem) c.planner.blindagem = defBlindagem();
     if (typeof c.planner.blindagem.threadUrl !== 'string') c.planner.blindagem.threadUrl = '';
     if (!Array.isArray(c.planner.blindagem.rows)) c.planner.blindagem.rows = [];
@@ -413,7 +430,7 @@
   let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, uiTimer = null;
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || _ocupadoAvulso > 0; }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.
@@ -441,6 +458,9 @@
     }
     if (lockOther()) return 'outra aba assumiu';
     if (captchaBlocked()) return 'bot-check na tela';
+    // A Central tem prioridade: um disparo de precisão não pode disputar a rede nem a
+    // trava com um ciclo de saque. Os laços longos param e retomam no tick seguinte.
+    if (mod !== 'cc' && ccJanelaCritica()) return 'Central disparando';
     claimLock();
     return null;
   }
@@ -4334,6 +4354,9 @@
       // levaria segundos que a tropa não tem. Adia pro próximo ciclo. (Ideia do Nexus, que usa uma
       // janela de segurança de 60s antes de qualquer auto-reload.)
       if (desviarSaidaProxima(60000)) { pushLog('Auto-F5 adiado: tem desvio saindo em menos de 1 min.', '', 'desv'); return; }
+      // Mesma razão pra Central: recarregar no meio da escada de espera mata o timer, e
+      // a retomada custa segundos que um trem de nobre não tem.
+      if (ccJanelaCritica(60000)) { pushLog('Auto-F5 adiado: a Central tem disparo em menos de 1 min.', '', 'planner'); return; }
       location.reload();
     } catch (e) {}
   }
@@ -6130,10 +6153,481 @@
     } catch (e) {}
   }
 
+  // ════════════════════════════════════════════════════════════════════════════════
+  // CENTRAL DE COMANDO — núcleo de precisão (sem interface ainda)
+  //
+  // Substitui o miolo de tempo do Coordenado. Hoje schedulePlannerFire() prepara 12s
+  // antes e dispara com um setTimeout cru. Três limites conhecidos:
+  //   1. setTimeout longo escorrega — em aba de fundo o Chrome o estrangula pra 1/min;
+  //   2. o preparo mora numa CLOSURE: um F5 entre preparar e disparar perde o comando;
+  //   3. não compensa nada — nem a latência da rede, nem o próprio atraso do timer.
+  // O resultado prático é erro de centenas de ms a vários segundos. Serve pra apoio,
+  // não serve pra trem de nobre nem snipe.
+  //
+  // Aqui o compromisso vive no localStorage e o disparo desce uma escada de quatro
+  // fases, com a rede compensada e o erro do disparo anterior realimentado.
+  //
+  // O QUE ESTA CENTRAL NÃO CONSEGUE FAZER, e é honesto dizer: o relógio de referência
+  // é o Timing do próprio jogo, que o TW calibra na resposta do carregamento de página.
+  // O erro dele contra o relógio real do servidor é da ordem de meio RTT de page load
+  // (uns 20-60ms) e NÃO dá pra medir isso do cliente com confiança. ccSincronizar()
+  // estima esse desvio pelo cabeçalho Date, mas fica como DIAGNÓSTICO — não é aplicado
+  // sozinho, porque o Date pode vir de um proxy e piorar em vez de melhorar.
+  // O que a central corrige é o que ela consegue medir: o atraso do próprio agendador
+  // e o tempo de rede. Contra o relógio do jogo, o alvo de 10ms é real.
+  //
+  // MEDIDO ANTES DE ESCREVER (navegador, escada isolada, 12-20 rodadas por cenário):
+  //     thread livre ............ mediana 0ms   · pior  0ms
+  //     thread ocupada .......... mediana 9,4ms · pior 21ms · DISPERSÃO 20ms
+  // A dispersão é o número que manda. Viés de laço fechado corrige erro CONSTANTE; não
+  // corrige espalhamento. Ou seja: sob thread ocupada não existem 10ms, com escada
+  // nenhuma. Por isso devoParar() devolve 'Central disparando' na janela crítica e os
+  // laços longos saem da frente — silenciar os outros módulos não é conforto, é o que
+  // compra a precisão. O viés cuida só do resto, que é o atraso fixo.
+  // ════════════════════════════════════════════════════════════════════════════════
+
+  const CC = {
+    BLOCO_MS: 30000,        // espera longa fatiada; timer curto reagendado não acumula deriva
+    // Onde o setTimeout entrega pra fase de cessão. Medido com a thread ocupada, 20 e
+    // 250 empatam com 60 (mediana 9,4ms nos três) — a contenção domina e a folga não
+    // muda nada. 60ms fica por ser folga suficiente pra absorver um setTimeout que
+    // chegue atrasado, sem esticar a cessão a ponto de gerar lixo.
+    FOLGA_ACORDADO: 60,
+    FOLGA_ESTRANGULADO: 30000, // aba de fundo SEM keep-awake: acorda muito antes e paga cedendo
+    CEDER_ATE: 3,           // últimos 3ms: espera ocupada
+    TETO_OCUPADO: 5000,     // trava de segurança da espera ocupada
+    AQUECER_ANTES: 2000,    // abre/renova a conexão pra o POST não pagar handshake
+    PREPARAR_ANTES: 15000,  // refaz o try=confirm com payload fresco
+    ACORDAR_ANTES: 300000,  // liga o keep-awake 5 min antes do disparo
+    JANELA_CRITICA: 60000,  // nesta janela os outros módulos e o Auto-F5 recuam
+    SONDAS: 5,              // requisições HEAD por medição de rede
+    BIAS_TETO: 400,         // limite do viés aprendido, pra um outlier não desregular tudo
+    BIAS_GANHO: 0.4,        // correção parcial: converge sem oscilar
+    ATRASO_TOLERADO: 1500,  // passou disso do horário, não dispara — marca como perdido
+  };
+
+  // defCC() fica lá em cima, junto dos outros def*: def() é chamado no carregamento e
+  // `const` não sofre hoisting — declarar aqui daria ReferenceError antes do painel abrir.
+
+  // ── Relógio ancorado ────────────────────────────────────────────────────────────
+  // serverNow() deriva de Date.now(), que dá saltos (NTP, suspensão da máquina).
+  // performance.now() é monotônico. Ancora um par das duas e conta a partir dele.
+  const _ccAnc = { perf: 0, srv: 0, ok: false };
+  function ccAncorar() {
+    _ccAnc.perf = performance.now();
+    _ccAnc.srv = serverNow();
+    _ccAnc.ok = true;
+    return _ccAnc;
+  }
+  function ccNow() {
+    if (!_ccAnc.ok) ccAncorar();
+    return _ccAnc.srv + (performance.now() - _ccAnc.perf);
+  }
+  // Quanto o modelo se afastou do relógio bruto do jogo. Grande = a âncora envelheceu
+  // ou o relógio da máquina pulou. NUNCA re-ancorar perto de um disparo: um salto de
+  // âncora no meio da escada de espera é exatamente o erro que queremos evitar.
+  function ccDeriva() { return _ccAnc.ok ? Math.round(serverNow() - ccNow()) : 0; }
+  function ccReancorarSeSeguro() {
+    if (ccJanelaCritica(CC.ACORDAR_ANTES)) return false;
+    ccAncorar();
+    return true;
+  }
+
+  const ccDormir = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+  // Cede o laço de eventos sem dormir. setTimeout(0) aninhado é preso em 4ms pelo
+  // navegador; MessageChannel não é — dá umas dezenas de microssegundos por volta.
+  //
+  // O canal é ÚNICO e reaproveitado, e isso não é elegância: a primeira versão criava
+  // um MessageChannel por volta. Medido no navegador, 20 rodadas de cada:
+  //     canal novo por volta ... mediana 0ms, p90 6,9ms, PIOR 20ms
+  //     canal reaproveitado .... mediana 0ms, p90   0ms, pior 8,4ms
+  // Eu estava fabricando milhares de objetos por disparo e colhendo a coleta de lixo
+  // exatamente no instante que precisava ser limpo. A fila de resolvedores existe
+  // porque dois comandos podem estar cedendo ao mesmo tempo.
+  const _ccMC = (function () { try { return new MessageChannel(); } catch (e) { return null; } })();
+  const _ccCederFila = [];
+  if (_ccMC) _ccMC.port1.onmessage = () => { const f = _ccCederFila.shift(); if (f) f(); };
+  function ccCeder() {
+    if (!_ccMC) return new Promise((r) => setTimeout(r, 0));
+    return new Promise((r) => { _ccCederFila.push(r); _ccMC.port2.postMessage(0); });
+  }
+
+  // ── Manter a aba acordada ───────────────────────────────────────────────────────
+  // Aba de fundo tem setTimeout estrangulado pra 1 disparo por minuto depois de 5 min.
+  // Um oscilador de áudio inaudível marca a aba como "tocando mídia" e ela deixa de ser
+  // estrangulada. Depende de gesto do usuário pra sair do estado suspenso — o clique em
+  // "armar" serve; por isso ccManterAcordado(true) deve ser chamado a partir de um clique.
+  let _ccAudio = null;
+  function ccManterAcordado(ligar) {
+    try {
+      if (ligar) {
+        if (_ccAudio) { try { _ccAudio.ctx.resume(); } catch (e) {} return _ccAudio.ctx.state === 'running'; }
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return false;
+        const ctx = new AC();
+        const osc = ctx.createOscillator(), g = ctx.createGain();
+        g.gain.value = 0.0001;   // inaudível, mas não zero: em zero o Chrome descarta o grafo
+        osc.frequency.value = 40;
+        osc.connect(g); g.connect(ctx.destination); osc.start();
+        try { ctx.resume(); } catch (e) {}
+        _ccAudio = { ctx: ctx, osc: osc, g: g };
+        return ctx.state === 'running';
+      }
+      if (_ccAudio) { try { _ccAudio.osc.stop(); _ccAudio.ctx.close(); } catch (e) {} _ccAudio = null; }
+      return true;
+    } catch (e) { return false; }
+  }
+  function ccAcordadoOk() { return !!(_ccAudio && _ccAudio.ctx && _ccAudio.ctx.state === 'running'); }
+
+  // ── Rede ────────────────────────────────────────────────────────────────────────
+  // Alvo estático e minúsculo no MESMO host do jogo: mede o ida-e-volta real da conexão
+  // que o POST vai usar (HTTP/2 multiplexa tudo numa conexão só) sem fazer o servidor
+  // renderizar nada. HEAD num game.php custaria uma página inteira de processamento.
+  const CC_PING = '/graphic/dots/green.png';
+  async function ccSondar(n) {
+    const rtts = [];
+    for (let i = 0; i < (n || CC.SONDAS); i++) {
+      const t0 = performance.now();
+      try { await fetch(CC_PING + '?_=' + i + '_' + Math.random(), { method: 'HEAD', cache: 'no-store', credentials: 'omit' }); }
+      catch (e) { break; }
+      rtts.push(performance.now() - t0);
+      await ccDormir(40);
+    }
+    if (!rtts.length) return null;
+    const ord = rtts.slice().sort((a, b) => a - b);
+    const med = ord[Math.floor(ord.length / 2)];
+    config.cc.rttMs = Math.round(med);
+    save();
+    return { min: Math.round(ord[0]), mediana: Math.round(med), max: Math.round(ord[ord.length - 1]), jitter: Math.round(ord[ord.length - 1] - ord[0]), n: rtts.length };
+  }
+  // Só reabre/renova a conexão. Descarta o resultado de propósito.
+  async function ccAquecer() {
+    try { await fetch(CC_PING + '?w=' + Math.random(), { method: 'HEAD', cache: 'no-store', credentials: 'omit' }); } catch (e) {}
+  }
+  // Metade do ida-e-volta = tempo estimado até o POST CHEGAR no servidor.
+  function ccMeioRtt() {
+    if (!config.cc.compensarRede) return 0;
+    return Math.min(600, Math.max(0, Math.round((config.cc.rttMs || 0) / 2)));
+  }
+
+  // ── Escada de espera ────────────────────────────────────────────────────────────
+  const _ccTimers = {};
+  // Fase grossa: fatia a espera em blocos e reagenda. Um setTimeout de 4h escorrega
+  // (e morre se a aba suspender); em blocos de 30s o erro fica preso ao último trecho.
+  function ccEsperarGrosso(id, alvoMs, fn) {
+    clearTimeout(_ccTimers[id]);
+    const falta = alvoMs - ccNow();
+    if (falta <= CC.BLOCO_MS) { _ccTimers[id] = setTimeout(fn, Math.max(0, falta)); return; }
+    _ccTimers[id] = setTimeout(() => ccEsperarGrosso(id, alvoMs, fn), CC.BLOCO_MS);
+  }
+  function ccCancelarEspera(id) { clearTimeout(_ccTimers[id]); delete _ccTimers[id]; }
+
+  // Fases fina, cedendo e ocupada. Devolve o instante real em que soltou.
+  async function ccEsperarPreciso(alvoMs) {
+    for (;;) {
+      const falta = alvoMs - ccNow();
+      // Sem keep-awake numa aba de fundo o setTimeout é estrangulado: acorda muito
+      // antes e paga o resto cedendo, que o Chrome não estrangula do mesmo jeito.
+      const folga = (document.hidden && !ccAcordadoOk()) ? CC.FOLGA_ESTRANGULADO : CC.FOLGA_ACORDADO;
+      if (falta <= folga) break;
+      await ccDormir(Math.min(falta - folga, CC.BLOCO_MS));
+    }
+    while (alvoMs - ccNow() > CC.CEDER_ATE) await ccCeder();
+    // Espera ocupada nos últimos milissegundos: é o único jeito de acertar abaixo do
+    // grão do agendador do navegador. Custa CPU por ~3ms. O teto é trava de segurança.
+    const limite = performance.now() + CC.TETO_OCUPADO;
+    while (ccNow() < alvoMs && performance.now() < limite) { /* ocupado de propósito */ }
+    return ccNow();
+  }
+
+  // ── Janela crítica ──────────────────────────────────────────────────────────────
+  // Tem disparo chegando nos próximos N ms? O Auto-F5 e os laços longos consultam isto
+  // pra sair da frente. Um reload ou uma trava roubada no meio da escada custa o comando.
+  function ccJanelaCritica(janelaMs) {
+    const lim = ccNow() + (janelaMs || CC.JANELA_CRITICA);
+    return ((config.cc && config.cc.fila) || []).some((c) =>
+      (c.state === 'armado' || c.state === 'preparado') && c.sendAt && c.sendAt <= lim && c.sendAt > ccNow() - CC.ATRASO_TOLERADO);
+  }
+
+  // ── Preparo e disparo ───────────────────────────────────────────────────────────
+  // Duas etapas, como o resto do script — mas com o payload PERSISTIDO, não numa
+  // closure. O token CSRF muda a cada carregamento de página, então o payload é
+  // carimbado: na retomada, payload de outra sessão é descartado e refeito.
+  async function ccPreparar(cmd) {
+    const p = await fakePrepare(cmd.origin, cmd.x, cmd.y, cmd.amounts, cmd.kind);
+    cmd.payload = { action: p.action, params: p.params, h: CSRF };
+    if (p.dur) cmd.durSec = p.dur;
+    return p;
+  }
+  function ccPayloadValido(cmd) { return !!(cmd.payload && cmd.payload.h === CSRF && cmd.payload.action); }
+
+  // Escrita adiantada: grava a INTENÇÃO antes de agir. Se a aba morrer entre o POST e a
+  // resposta, a retomada encontra 'disparando' e trata como INCERTO — nunca reenvia.
+  // Mandar um nobre duas vezes é pior do que não mandar.
+  async function ccDisparar(cmd) {
+    cmd.state = 'disparando';
+    cmd.fireAt = ccNow();
+    save();
+    const corpo = new URLSearchParams(cmd.payload.params).toString();
+    const t0 = performance.now();
+    let t2 = '';
+    try {
+      const r = await fetch(cmd.payload.action, {
+        method: 'POST', credentials: 'include', cache: 'no-store',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: corpo,
+      });
+      t2 = await r.text();
+    } catch (e) {
+      // Rede caiu no meio: NÃO dá pra saber se o servidor recebeu. Incerto, não falha.
+      cmd.state = 'incerto'; cmd.erro = 'rede caiu durante o envio (' + (e.message || e) + ')'; save();
+      throw new Error('incerto: ' + cmd.erro);
+    }
+    cmd.rttEnvioMs = Math.round(performance.now() - t0);
+    if (/n[aã]o tem tropas suficientes|not enough|insuficient/i.test(t2)) {
+      cmd.state = 'falhou'; cmd.erro = 'tropas insuficientes'; save();
+      throw new Error('recusado: tropas insuficientes');
+    }
+    // "Selecione uma aldeia alvo" é ambíguo: é também o estado normal da praça DEPOIS
+    // de um envio dar certo. Tratado como incerto em todo o script; aqui idem.
+    if (/selecione uma aldeia alvo/i.test(t2)) {
+      cmd.state = 'incerto'; cmd.erro = 'resposta ambígua — confira na tela de comandos'; save();
+      throw new Error('incerto: ' + cmd.erro);
+    }
+    cmd.state = 'enviado'; cmd.sentAt = ccNow(); cmd.erro = null; save();
+    return true;
+  }
+
+  // ── Laço fechado ────────────────────────────────────────────────────────────────
+  // Mede o atraso do PRÓPRIO agendador (instante real em que a chamada saiu, menos o
+  // instante pretendido) e corrige parcialmente. Ganho < 1 pra convergir sem oscilar.
+  // Note o que isto NÃO mede: o relógio do servidor. Ver o cabeçalho do bloco.
+  function ccRealimentar(cmd, erroMs) {
+    cmd.erroMs = Math.round(erroMs);
+    const cc = config.cc;
+    cc.biasMs = Math.max(-CC.BIAS_TETO, Math.min(CC.BIAS_TETO, Math.round(cc.biasMs + erroMs * CC.BIAS_GANHO)));
+    cc.afericoes = (cc.afericoes || []).concat([{ t: cmd.sentAt || ccNow(), erro: cmd.erroMs, bias: cc.biasMs, oculta: document.hidden, acordado: ccAcordadoOk() }]).slice(-50);
+    save();
+  }
+
+  // ── Ciclo de vida de um comando ─────────────────────────────────────────────────
+  // rascunho → armado → preparado → disparando → enviado
+  //                              ↘ falhou / incerto / perdido
+  function ccCalcularSaida(cmd) {
+    if (cmd.modo === 'saida') { cmd.sendAt = cmd.alvoMs; return true; }
+    if (!cmd.durSec) return false;               // chegada precisa da duração exata
+    cmd.sendAt = cmd.alvoMs - cmd.durSec * 1000;
+    return true;
+  }
+
+  function ccAgendar(cmd) {
+    ccCancelarEspera(cmd.id);
+    const prepAt = cmd.sendAt - CC.PREPARAR_ANTES;
+    ccEsperarGrosso(cmd.id, Math.min(prepAt, cmd.sendAt - CC.AQUECER_ANTES), () => ccExecutar(cmd));
+  }
+
+  async function ccExecutar(cmd) {
+    if (cmd.state !== 'armado' && cmd.state !== 'preparado') return;
+    return ocupado(async () => {
+      try {
+        // Payload fresco: tropa pode ter mudado e o token pode ter virado desde o armar.
+        if (cmd.sendAt - ccNow() > CC.AQUECER_ANTES || !ccPayloadValido(cmd)) {
+          await ccPreparar(cmd);
+          // Em modo chegada a duração pode ter mudado (composição/nobre a mais):
+          // recalcula a saída com a duração que o servidor acabou de devolver.
+          if (cmd.modo === 'chegada') ccCalcularSaida(cmd);
+          cmd.state = 'preparado'; save();
+        }
+        if (ccNow() > cmd.sendAt + CC.ATRASO_TOLERADO) {
+          cmd.state = 'perdido'; cmd.erro = 'a hora passou antes do preparo terminar'; save();
+          pushLog('⏱️ Central: ' + ccRotulo(cmd) + ' PERDIDO — ' + cmd.erro, 'err', 'planner');
+          return;
+        }
+        await ccAquecer();
+        // Dispara meio RTT antes, pra o POST CHEGAR na hora, menos o atraso que o
+        // agendador vem mostrando nos disparos anteriores.
+        const alvoChamada = cmd.sendAt - ccMeioRtt() - config.cc.biasMs;
+        const real = await ccEsperarPreciso(alvoChamada);
+        await ccDisparar(cmd);
+        ccRealimentar(cmd, real - alvoChamada);
+        pushLog('🎯 Central: ' + ccRotulo(cmd) + ' enviado — erro do agendador ' + cmd.erroMs + 'ms, ida-e-volta ' + cmd.rttEnvioMs + 'ms.', 'ok', 'planner');
+      } catch (e) {
+        const em = String(e.message || e);
+        if (!/^incerto:/.test(em) && cmd.state === 'disparando') { cmd.state = 'incerto'; cmd.erro = em; }
+        else if (cmd.state !== 'incerto' && cmd.state !== 'enviado') { cmd.state = 'falhou'; cmd.erro = em; }
+        save();
+        pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + em, /^incerto:/.test(em) ? '' : 'err', 'planner');
+      } finally {
+        if (!ccJanelaCritica(CC.ACORDAR_ANTES)) ccManterAcordado(false);
+      }
+    });
+  }
+
+  function ccRotulo(cmd) { return (cmd.kind || 'attack') + ' ' + cmd.origin + ' → ' + cmd.x + '|' + cmd.y; }
+
+  // Tick de manutenção: resolve durações pendentes, descarta o que passou, reagenda.
+  let ccTimer = null;
+  async function ccTick() {
+    clearTimeout(ccTimer);
+    const fila = (config.cc && config.cc.fila) || [];
+    const vivos = fila.filter((c) => c.state === 'armado' || c.state === 'preparado');
+    if (!vivos.length) { ccManterAcordado(false); return; }
+    if (captchaBlocked()) { ccTimer = setTimeout(ccTick, 30000); return; }
+    for (const cmd of vivos) {
+      if (!ccCalcularSaida(cmd)) {
+        // Modo chegada sem duração: uma confirmação só pra descobrir o tempo de viagem.
+        // O servidor devolve a duração EXATA — melhor que qualquer tabela de velocidade.
+        try { await ccPreparar(cmd); ccCalcularSaida(cmd); }
+        catch (e) { cmd.state = 'falhou'; cmd.erro = 'não consegui a duração: ' + (e.message || e); save(); continue; }
+      }
+      if (!cmd.sendAt) continue;
+      if (ccNow() > cmd.sendAt + CC.ATRASO_TOLERADO) {
+        cmd.state = 'perdido';
+        cmd.erro = 'a hora de sair passou com a aba fechada';
+        pushLog('⏱️ Central: ' + ccRotulo(cmd) + ' PERDIDO — ' + cmd.erro, 'err', 'planner');
+        continue;
+      }
+      ccAgendar(cmd);
+    }
+    if (config.cc.manterAcordado && ccJanelaCritica(CC.ACORDAR_ANTES)) ccManterAcordado(true);
+    if (!ccJanelaCritica(CC.ACORDAR_ANTES)) ccReancorarSeSeguro();
+    save();
+    ccTimer = setTimeout(ccTick, 30000);
+  }
+
+  // Retomada depois de F5. Payload de outra sessão é descartado (token velho).
+  // Comando que ficou em 'disparando' vira INCERTO e nunca é reenviado sozinho.
+  function ccRetomar() {
+    if (!config.cc) config.cc = defCC();
+    const fila = config.cc.fila || [];
+    let incertos = 0;
+    fila.forEach((c) => {
+      if (c.state === 'disparando') { c.state = 'incerto'; c.erro = 'a aba caiu durante o envio — confira na tela de comandos'; incertos++; }
+      if (c.payload && c.payload.h !== CSRF) { c.payload = null; if (c.state === 'preparado') c.state = 'armado'; }
+    });
+    // Faxina: enviados/falhados com mais de 12h saem da fila (ela crescia sem limite).
+    const corte = ccNow() - 12 * 3600 * 1000;
+    config.cc.fila = fila.filter((c) => (c.state === 'armado' || c.state === 'preparado') || (c.sentAt || c.alvoMs || 0) > corte);
+    save();
+    if (incertos) pushLog('🎯 Central: ' + incertos + ' comando(s) ficaram INCERTOS (a aba caiu no envio). Não vou reenviar — confira na tela de comandos.', 'err', 'planner');
+    ccTick();
+  }
+
+  // ── API da fila (a interface vem depois; por ora dá pra usar pelo console) ───────
+  // ccAdicionar({ origin, x, y, kind, amounts, modo:'chegada'|'saida', quandoLocal:'2026-07-28T21:00:00' })
+  function ccAdicionar(o) {
+    if (!config.cc) config.cc = defCC();
+    const alvoMs = o.alvoMs || arrivalToServerMs(o.quandoLocal);
+    if (!alvoMs) throw new Error('horário inválido');
+    if (!o.origin || !o.x || !o.y) throw new Error('informe origem e alvo');
+    if (!o.amounts || !Object.keys(o.amounts).length) throw new Error('informe as tropas');
+    const cmd = {
+      id: genId(), origin: String(o.origin), x: String(o.x), y: String(o.y),
+      kind: o.kind || 'attack', amounts: o.amounts,
+      modo: o.modo === 'saida' ? 'saida' : 'chegada',
+      alvoMs: alvoMs, durSec: null, sendAt: 0, payload: null,
+      state: 'armado', erro: null, sentAt: null, erroMs: null, rttEnvioMs: null,
+    };
+    config.cc.fila.push(cmd); save();
+    ccManterAcordado(true);   // chamado a partir de um clique: aproveita o gesto do usuário
+    ccTick();
+    return cmd;
+  }
+  function ccRemover(id) {
+    if (!config.cc) return false;
+    const c = config.cc.fila.find((x) => x.id === id);
+    if (!c) return false;
+    ccCancelarEspera(id);
+    config.cc.fila = config.cc.fila.filter((x) => x.id !== id);
+    save();
+    return true;
+  }
+
+  // ── Aferição ────────────────────────────────────────────────────────────────────
+  // Mede a precisão da escada de espera SEM ENVIAR NADA. É o jeito de saber se os 10ms
+  // são reais nesta máquina/rede antes de confiar um trem de nobre à central.
+  // Rode no console: await ccAferir(8)
+  async function ccAferir(n) {
+    const rodadas = n || 8;
+    ccAncorar();
+    const rede = await ccSondar(8);
+    const erros = [];
+    for (let i = 0; i < rodadas; i++) {
+      const alvo = ccNow() + 3000 + (i % 3) * 250;   // varia a fase pra não cair sempre no mesmo grão
+      await ccAquecer();
+      const real = await ccEsperarPreciso(alvo);
+      erros.push(Math.round((real - alvo) * 1000) / 1000);
+    }
+    const ord = erros.slice().sort((a, b) => a - b);
+    const r = {
+      erroMs: erros,
+      mediana: ord[Math.floor(ord.length / 2)],
+      pior: ord[ord.length - 1],
+      rede: rede,
+      meioRtt: ccMeioRtt(),
+      biasAtual: config.cc.biasMs,
+      derivaDaAncora: ccDeriva(),
+      abaOculta: document.hidden,
+      keepAwake: ccAcordadoOk(),
+    };
+    pushLog('🎯 Aferição: erro mediano ' + r.mediana + 'ms (pior ' + r.pior + 'ms) · rede ' + (rede ? rede.mediana + 'ms ±' + rede.jitter : 'n/d') + ' · keep-awake ' + (r.keepAwake ? 'on' : 'off'), 'ok', 'planner');
+    return r;
+  }
+
+  // Diagnóstico do relógio: compara o Timing do jogo com o cabeçalho Date do servidor.
+  // NÃO aplica correção — o Date pode vir de proxy/CDN e tem grão de 1 segundo. Serve
+  // pra saber se vale a pena buscar precisão abaixo disso. Rode: await ccSincronizar()
+  async function ccSincronizar(maxSondas) {
+    const N = maxSondas || 25;
+    let anterior = null;
+    for (let i = 0; i < N; i++) {
+      const t0 = performance.now();
+      let hdr = null;
+      try {
+        const r = await fetch(CC_PING + '?s=' + i + '_' + Math.random(), { method: 'HEAD', cache: 'no-store', credentials: 'omit' });
+        hdr = r.headers.get('date');
+      } catch (e) { break; }
+      const t1 = performance.now();
+      if (!hdr) return { ok: false, motivo: 'servidor não devolve cabeçalho Date' };
+      const seg = Date.parse(hdr);
+      if (isNaN(seg)) return { ok: false, motivo: 'cabeçalho Date ilegível: ' + hdr };
+      if (anterior != null && seg > anterior) {
+        // A virada de segundo caiu entre o fim da resposta anterior e esta. O melhor
+        // palpite do instante da virada é o meio da ida desta requisição.
+        const instante = _ccAnc.srv + ((t0 + (t1 - t0) / 2) - _ccAnc.perf);
+        return {
+          ok: true,
+          desvioMs: Math.round(seg - instante),
+          incertezaMs: Math.round((t1 - t0) / 2),
+          sondas: i + 1,
+          nota: 'positivo = o relógio do jogo está ATRASADO em relação ao Date do servidor. Diagnóstico apenas; não foi aplicado.',
+        };
+      }
+      anterior = seg;
+      await ccDormir(45);
+    }
+    return { ok: false, motivo: 'não peguei a virada de segundo em ' + N + ' sondas' };
+  }
+
+  // Enquanto não há interface, a central se opera pelo console. Este é o único ponto
+  // em que o script escreve em window — de propósito, pra poder aferir sem armar nada.
+  //   await TWMgrCC.aferir(8)        → mede a precisão real desta máquina, sem enviar
+  //   await TWMgrCC.sincronizar()    → diagnóstico do relógio contra o Date do servidor
+  //   TWMgrCC.fila()                 → estado dos comandos
+  try {
+    window.TWMgrCC = {
+      aferir: ccAferir, sincronizar: ccSincronizar, sondar: ccSondar,
+      adicionar: ccAdicionar, remover: ccRemover,
+      fila: () => (config.cc && config.cc.fila) || [],
+      agora: ccNow, deriva: ccDeriva, acordar: ccManterAcordado, acordadoOk: ccAcordadoOk,
+    };
+  } catch (e) {}
+
   buildUI();
   try { enhanceUnitsPage(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
   try { unitsScheduleAuto(); } catch (e) { /* silencioso: scheduler é opcional */ }
   try { enhanceIncomingsPage(); } catch (e) { /* silencioso */ }
   try { desviarResumeAll(); } catch (e) { /* silencioso */ }
+  try { ccRetomar(); } catch (e) { console.warn('[TWMgr Central] retomada falhou:', e); }
   try { enhanceMapPage(); } catch (e) { /* silencioso */ }
 })();

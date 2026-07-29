@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.18.0
+// @version      10.19.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.18.0';
+  const VERSION = '10.19.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -6290,13 +6290,19 @@
     // excursão de ruído virar correção permanente, e o ganho alto levava um erro de
     // 600ms a virar +240 de viés num passo só. Ver a nota em ccRealimentar: a causa raiz
     // era a realimentação estar no sinal errado, mas estes números pioraram o estrago.
-    // O viés agora carrega a correção INTEIRA (era dividida com o meioRtt, que saiu da
-    // conta). Latência de ida real medida: ~184ms, e pode ser bem pior numa hora ruim —
-    // então o teto tem que caber isso com folga. Não é o teto largo que causou a saturação
-    // anterior: aquilo foi realimentação no sinal errado, já corrigida. Com o sinal certo
-    // o laço tem ponto de equilíbrio e o teto é só rede de segurança.
-    BIAS_TETO: 2000,
-    BIAS_GANHO: 0.25,
+    // O viés carrega a correção INTEIRA (era dividida com o meioRtt, que saiu da conta).
+    // Latência de ida real medida: ~184ms, e pode ser bem pior numa hora ruim.
+    //
+    // Os números abaixo vieram de LER O NEXUS, não de chute meu — os anteriores eu tinha
+    // inventado e os dois primeiros testes reais mostraram no que dá. Lá:
+    //     _EWMA_ALPHA 0.3 · _EWMA_SPIKE_DAMPED_ALPHA 0.05 · _EWMA_DAMP_BAND_MS 2000
+    //     _DRIFT_GUARD_THRESHOLD_MS 50 · _OFFSET_COMPENSATION_CAP_MS 5000
+    //     _EWMA_TARGET_BIAS_MS 2
+    BIAS_TETO: 5000,
+    EWMA_ALFA: 0.3,          // aprendizado normal
+    EWMA_ALFA_PICO: 0.05,    // amostra fora da banda: entra, mas quase não move
+    EWMA_BANDA_MS: 2000,     // acima disto a amostra é considerada pico
+    GUARDA_DERIVA_MS: 50,    // escada atrasou mais que isto -> a amostra não ensina nada
     ATRASO_TOLERADO: 1500,  // passou disso do horário, não dispara — marca como perdido
   };
 
@@ -6600,14 +6606,28 @@
     if (verdadeiro) cmd.erroRealMs = Math.round(erroMs); else cmd.erroMs = Math.round(erroMs);
     if (!verdadeiro) { save(); return; }
     const cc = config.cc;
-    // GANHO ADAPTATIVO. Ganho fixo de 0,25 levava 8 comandos pra corrigir 100ms — e cada
-    // um desses custa tropa de verdade. Com 1/(n+1) o primeiro salta pro valor medido
-    // inteiro (corrige já), e a partir daí vira média corrida, que absorve o ruído da
-    // rede em vez de perseguir cada oscilação. O piso mantém o laço vivo se a latência
-    // mudar depois de muitas amostras.
+
+    // GUARDA DE DERIVA. Se a MINHA escada atrasou mais que o limite, o erro medido não
+    // fala da rede — fala de mim. Aprender com ele envenena o estimador. A amostra é
+    // registrada e descartada. (No Nexus: _DRIFT_GUARD_THRESHOLD_MS 50.)
+    const deriva = Math.abs(cmd.atrasoEscadaMs || 0);
+    if (deriva > CC.GUARDA_DERIVA_MS) {
+      cc.afericoes = (cc.afericoes || []).concat([{ t: ccNow(), erro: cmd.erroRealMs, descartada: true, deriva: deriva, bias: cc.biasMs }]).slice(-50);
+      pushLog('🎯 Central: amostra descartada do aprendizado — minha escada atrasou ' + deriva + 'ms, o erro não mede a rede.', '', 'planner');
+      save(); return;
+    }
+
+    // EWMA com amortecimento de pico, no lugar da média corrida 1/n que eu tinha.
+    // Dois defeitos do 1/n que só vi lendo o Nexus: o ganho tende a ZERO, então depois
+    // de umas 20 amostras ele para de aprender e não acompanha mudança de rede; e na
+    // PRIMEIRA amostra o ganho é 1, então um único envio ruim define o viés inteiro.
+    // Com α fixo aprende pra sempre; com α reduzido fora da banda, um outlier contribui
+    // pouco em vez de dominar — amortecer é mais robusto que rejeitar.
+    const anterior = (typeof cc.biasMs === 'number') ? cc.biasMs : 0;
+    const pico = Math.abs(erroMs - anterior) > CC.EWMA_BANDA_MS;
+    const alfa = pico ? CC.EWMA_ALFA_PICO : CC.EWMA_ALFA;
+    cc.biasMs = Math.max(-CC.BIAS_TETO, Math.min(CC.BIAS_TETO, Math.round(anterior + erroMs * alfa)));
     cc.nReal = (cc.nReal || 0) + 1;
-    const ganho = Math.max(CC.BIAS_GANHO, 1 / cc.nReal);
-    cc.biasMs = Math.max(-CC.BIAS_TETO, Math.min(CC.BIAS_TETO, Math.round(cc.biasMs + erroMs * ganho)));
     cc.afericoes = (cc.afericoes || []).concat([{ t: cmd.sentAt || ccNow(), erro: cmd.erroRealMs, estimado: cmd.erroMs, bias: cc.biasMs, oculta: document.hidden, acordado: ccAcordadoOk() }]).slice(-50);
     save();
   }

@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.13.0
+// @version      10.14.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.13.0';
+  const VERSION = '10.14.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -4005,10 +4005,19 @@
     // O filtro do assistente pode esconder aldeias que você já está atacando; a lista de comandos cobre esse buraco.
     let attacking = new Set();
     try { attacking = (await getPendingAttack()).coords; } catch (e) {}
-    // Claim: cada bárbaro é atribuído à aldeia MINHA mais próxima que ainda tem cota (maxPerVillage).
-    // Assim evitamos que a mesma aldeia minha sature os N primeiros bárbaros e sobre 0 pras outras.
+    // Cada bárbaro vai pra aldeia minha mais próxima QUE AINDA TENHA COTA (maxPerVillage).
+    //
+    // A versão anterior prometia isso no comentário e fazia outra coisa: escolhia a aldeia mais
+    // próxima na hora de montar o par e, se ela estivesse cheia na hora de distribuir, DESCARTAVA
+    // o bárbaro em vez de passar pra próxima. Num bloco de aldeias juntas — que é o formato normal
+    // de conta — as centrais saturavam e o resto do cerco ia pro lixo. Simulado com 43 aldeias e
+    // 900 bárbaros: 45% dos alvos elegíveis descartados e 29 das 43 aldeias abaixo da cota.
+    //
+    // Agora: monta TODOS os pares dentro do alcance, ordena por distância e distribui — cada
+    // bárbaro entra uma vez só, na origem mais próxima que ainda couber. O alcance limita o
+    // tamanho da lista (maxDist é no máximo umas dezenas de campos).
     const candByOrigin = {}; myV.forEach((s) => candByOrigin[s.vid] = []);
-    const pairs = [];
+    const elegiveis = [];
     for (const b of barb) {
       const coord = b.x + '|' + b.y;
       const last = sentAt[b.vid] || 0;
@@ -4022,23 +4031,29 @@
         if (rAt) { if ((now - rAt) < staleMs) continue; }   // com data: pula se fresco
         else if (staleMs > 0) continue;                      // sem data legível: pula (a não ser que dias=0)
       }
-      let best = null;
+      elegiveis.push({ vid: b.vid, x: b.x, y: b.y, coord: coord, points: b.points, name: b.name, lastAt: last });
+    }
+    const maxDist = cfg.maxDist || 20;
+    const pairs = [];
+    for (const t of elegiveis) {
       for (const s of myV) {
-        const d = fieldDist(s.x, s.y, b.x, b.y);
-        if (d > (cfg.maxDist || 20)) continue;
-        if (!best || d < best.dist) best = { src: s, dist: d };
+        const d = fieldDist(s.x, s.y, t.x, t.y);
+        if (d <= maxDist) pairs.push({ src: s, dist: d, target: t });
       }
-      if (best) pairs.push({ src: best.src, dist: best.dist, target: { vid: b.vid, x: b.x, y: b.y, coord: b.x + '|' + b.y, points: b.points, name: b.name, lastAt: last } });
     }
     pairs.sort((a, b) => a.dist - b.dist);
     const limit = Math.max(1, cfg.maxPerVillage || 20);
+    const jaAtribuido = {};
     for (const p of pairs) {
+      if (jaAtribuido[p.target.vid]) continue;              // um bárbaro, uma origem
       const arr = candByOrigin[p.src.vid];
-      if (arr.length >= limit) continue;
+      if (arr.length >= limit) continue;                    // esta origem encheu — o próximo par cobre
+      jaAtribuido[p.target.vid] = 1;
       arr.push({ vid: p.target.vid, x: p.target.x, y: p.target.y, coord: p.target.coord, points: p.target.points, name: p.target.name, lastAt: p.target.lastAt, dist: p.dist });
     }
+    const alcancaveis = Object.keys(pairs.reduce((m, p) => { m[p.target.vid] = 1; return m; }, {})).length;
     const plan = myV.map((s) => ({ src: s, targets: candByOrigin[s.vid] || [] }));
-    return { myV: myV, plan: plan, barbCount: barb.length, totalCandidates: pairs.length };
+    return { myV: myV, plan: plan, barbCount: barb.length, totalCandidates: alcancaveis };
   }
 
   async function mapTick() {
@@ -5710,13 +5725,22 @@
   const MY_PLAYER_ID = (window.game_data && window.game_data.player && String(window.game_data.player.id)) || '';
   const MY_TRIBE_ID = (window.game_data && window.game_data.player && String(window.game_data.player.ally)) || '0';
 
+  // Falha do player.txt some da tela se ninguém contar: sem ele não dá pra distinguir tribo de
+  // inimigo e mapCategoryOf devolve 'enemy' pra todo mundo — com o filtro de inimigo desligado, a
+  // tribo inteira desaparece do mapa sem explicação. Fica registrado pra o painel avisar.
+  let _mapPlayerFalhou = false;
+
   async function loadMapData(force) {
-    const age = Date.now() - (config.mapUi.dataCachedAt || 0);
-    if (!force && _mapVilCache && age < 6 * 3600 * 1000) return;
+    // O guard antigo era `_mapVilCache && age < 6h`, e _mapVilCache é variável de módulo: sempre
+    // null depois de um F5. Ou seja, o TTL de 6h persistido em dataCachedAt nunca teve efeito e
+    // TODA visita ao mapa rebaixava village.txt + player.txt inteiros — com cache:'no-store', que
+    // proíbe até revalidação. Guardar megabytes no localStorage não cabe (limite de ~5MB), então
+    // quem faz o cache é o navegador: sem no-store ele revalida e responde 304 na maioria das vezes.
+    if (!force && _mapVilCache) return;
     // Cada fetch independente — village.txt é essencial, player.txt é opcional (só distingue tribo/inimigo).
     // TW às vezes rate-limita player.txt (429) — não pode bloquear a feature.
     const fetchTxt = async (url) => {
-      try { const r = await fetch(url, { credentials: 'include', cache: 'no-store' }); if (!r.ok) return null; return await r.text(); }
+      try { const r = await fetch(url, { credentials: 'include', cache: force ? 'reload' : 'default' }); if (!r.ok) return null; return await r.text(); }
       catch (e) { return null; }
     };
     const [rV, rP] = await Promise.all([fetchTxt('/map/village.txt'), fetchTxt('/map/player.txt')]);
@@ -5744,8 +5768,17 @@
       });
       _mapPlayerCache = players;
     }
-    if (!rV) console.warn('[TWMgr Mapa] village.txt falhou — feature desabilitada até a proxima recarga');
-    if (!rP) console.warn('[TWMgr Mapa] player.txt falhou (rate limit?) — sem distincao entre tribo/inimigo, categoriza como enemy');
+    // Avisar no console não serve: ninguém abre o console. Isto tem consequência VISÍVEL no mapa,
+    // então vai pro log do módulo, que é onde o usuário olha.
+    if (!rV) {
+      console.warn('[TWMgr Mapa] village.txt falhou');
+      pushLog('🗺️ Mapa: não consegui baixar village.txt — os filtros não vão funcionar até recarregar a página.', 'err', 'map');
+    }
+    _mapPlayerFalhou = !rP;
+    if (!rP) {
+      console.warn('[TWMgr Mapa] player.txt falhou (rate limit?)');
+      pushLog('🗺️ Mapa: player.txt não veio (o TW costuma limitar) — sem ele não dá pra separar tribo de inimigo, e TODA aldeia de jogador aparece como 🔴 Inimigo, inclusive a da sua tribo. Se o filtro de inimigo estiver desligado, sua tribo some do mapa. Use 🔄 recarregar pra tentar de novo.', 'err', 'map');
+    }
   }
 
   // Sync manual do planner interno da tribo (screen=ally&mode=reservations).
@@ -6140,7 +6173,11 @@
     const ok = await waitTWMap();
     if (!ok) { console.warn('[TWMgr Mapa] TWMap.map.pixelByCoord não disponível — filtros não funcionarão'); return; }
     mapApplyFilters();
-    // Redraw periódico (250ms) — cobre scroll/zoom sem custo perceptivo (só itera aldeias no viewport)
+    // Redraw periódico (250ms) — cobre scroll/zoom. O comentário aqui dizia "só itera aldeias no
+    // viewport", o que é falso: mapCanvasRedraw percorre o cache inteiro e descarta por dentro.
+    // Medido antes de "consertar": 0,62ms por passada com 60 mil aldeias, ou 2,5ms de CPU por
+    // segundo. Não é gargalo, e indexar por coluna seria complexidade sem ganho. Fica como está —
+    // o comentário é que estava mentindo.
     clearInterval(_mapRedrawTimer);
     _mapRedrawTimer = setInterval(mapApplyFilters, 250);
     // Hook opcional: se o TWMap dispara evento de setPos, redesenha imediato

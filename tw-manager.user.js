@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.23.0
+// @version      10.24.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -110,7 +110,7 @@
   };
 
 
-  const VERSION = '10.23.0';
+  const VERSION = '10.24.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -132,7 +132,7 @@
   let _idc = 0;
   function genId() { return 'g' + Date.now().toString(36) + (_idc++).toString(36) + Math.random().toString(36).slice(2, 5); }
 
-  const defScav = () => ({ running: false, nextAt: 0, units: { spear: true, sword: true, axe: true, light: true, heavy: true, knight: false } });
+  const defScav = () => ({ running: false, nextAt: 0, units: { spear: true, sword: true, axe: true, light: true, heavy: true, knight: false }, maxHours: 0 });
   // Por cor: um modo único ('none'|'a'|'b'|'c') + qtd (só p/ a/b; C manda 1x).
   const defFarmMatrix = () => ({ greenEmpty: { mode: 'a', qty: 1 }, greenFull: { mode: 'b', qty: 1 }, yellowEmpty: { mode: 'none', qty: 1 }, yellowFull: { mode: 'none', qty: 1 }, blue: { mode: 'b', qty: 1 } });
   const FARM_COLORS = ['greenEmpty', 'greenFull', 'yellowEmpty', 'yellowFull', 'blue'];
@@ -265,6 +265,7 @@
     c.running = false; // Auto-ATK (Alvos) descontinuado na v9.21 — backend dormente
     if (!c.scav) c.scav = defScav();
     if (!c.scav.units) c.scav.units = defScav().units;
+    if (c.scav.maxHours == null) c.scav.maxHours = 0;
     if (!c.farm) c.farm = defFarm();
     if (!c.farm.sentReports) c.farm.sentReports = {};
     if (c.farm.maxDist == null) c.farm.maxDist = 13;
@@ -980,6 +981,23 @@
     return true;
   }
 
+  // Duração REAL de cada nível de coleta antes de enviar, lida direto da tela de coleta da aldeia
+  // (screen=place&mode=scavenge) — só chamada quando o "tempo máximo" está ativo, já que é 1 fetch
+  // extra por aldeia. O jogo não entrega essa duração pronta pelo endpoint em massa (scavenge_mass),
+  // só depois que o esquadrão já está a caminho — então tem que ler o valor que o próprio jogo mostra
+  // antes do envio (span.duration), em vez de tentar reproduzir a fórmula.
+  async function getScavDurations(vid) {
+    const res = await fetch('/game.php?village=' + vid + '&screen=place&mode=scavenge', { credentials: 'include' });
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const spans = doc.querySelectorAll('span.duration');
+    if (spans.length !== 4) return {};   // não deu pra mapear nível->duração com segurança (ex.: nível travado sem card)
+    const out = {};
+    spans.forEach((sp, i) => {
+      const m = (sp.textContent || '').trim().match(/^(\d+):([0-5]\d):([0-5]\d)$/);
+      if (m) out[i + 1] = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
+    });
+    return out;
+  }
   async function scavTick() {
     clearTimeout(scavTimer);
     if (!config.scav.running) return;
@@ -992,11 +1010,24 @@
     try { villages = await getAllScavengeState(); }
     catch (e) { pushLog('Coleta: erro ao ler o estado das aldeias (' + (e.message || e) + ').', 'err', 'scav'); config.scav.nextAt = now + 60000; save(); scheduleScav(); return; }
     const selUnits = SCAV_UNITS.map(([u]) => u).filter((u) => config.scav.units[u]);
+    const maxSec = Math.max(0, config.scav.maxHours || 0) * 3600;
     const reqs = [], runningEnds = [], activeSet = {};
     for (const v of villages) {
       if (v.options.some((o) => o.state === 'running')) activeSet[v.vid] = 1;
       v.options.filter((o) => o.state === 'running' && o.endMs).forEach((o) => runningEnds.push(o.endMs));
-      const freeOpts = v.options.filter((o) => o.state === 'free');
+      let freeOpts = v.options.filter((o) => o.state === 'free');
+      if (!freeOpts.length) continue;
+      // Tempo máximo (modo guerra): só manda pros níveis cuja duração REAL (lida da tela) cabe no teto.
+      // Se não der pra confirmar a duração de um nível (erro de rede ou HTML inesperado), NÃO manda pra
+      // ele — por segurança, prefere não coletar a arriscar tropa fora de casa por tempo desconhecido.
+      if (maxSec > 0) {
+        let durs = {};
+        try { durs = await getScavDurations(v.vid); }
+        catch (e) { pushLog('Coleta em ' + v.name + ': erro ao checar duração (' + (e.message || e) + ') — pulando por segurança.', 'err', 'scav'); }
+        const before = freeOpts.length;
+        freeOpts = freeOpts.filter((o) => durs[o.id] != null && durs[o.id] <= maxSec);
+        if (!freeOpts.length && before) { pushLog('Coleta em ' + v.name + ': nenhum nível dentro do tempo máximo (' + config.scav.maxHours + 'h) — pulando.', '', 'scav'); continue; }
+      }
       const avail = {}; let totalUnits = 0;
       selUnits.forEach((u) => { const n = v.avail[u] || 0; if (n > 0) { avail[u] = n; totalUnits += n; } });
       if (!freeOpts.length || totalUnits === 0) continue;
@@ -5028,7 +5059,13 @@
     if (sp) sp.classList.toggle('dim', !on);
   }
   function setStatus(on) { setBtnState('twmgr-start', 'twmgr-stop', on, '● Ativo', '▶ Iniciar'); }
-  function readScavUnits() { config.scav.units = config.scav.units || {}; SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) config.scav.units[u] = el.checked; }); save(); }
+  function readScavUnits() {
+    config.scav.units = config.scav.units || {};
+    SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) config.scav.units[u] = el.checked; });
+    const mh = document.getElementById('twmgr-scav-maxh');
+    if (mh) config.scav.maxHours = Math.max(0, parseFloat((mh.value || '').replace(',', '.')) || 0);
+    save();
+  }
   function scavStart() { readScavUnits(); if (!SCAV_UNITS.some(([u]) => config.scav.units[u])) { pushLog('Coleta: marque ao menos 1 unidade.', 'err', 'scav'); return; } config.scav.running = true; config.scav.nextAt = 0; save(); setScavStatus(true); pushLog('Coleta iniciada em todas as aldeias.', 'ok', 'scav'); scavTick(); }
   function scavStop() { readScavUnits(); config.scav.running = false; save(); clearTimeout(scavTimer); setScavStatus(false); pushLog('Coleta parada.', '', 'scav'); }
   function setScavStatus(on) { setBtnState('twmgr-scav-start', 'twmgr-scav-stop', on, '● Coletando', '▶ Coletar'); }
@@ -5226,6 +5263,8 @@
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
         cardsDiv('scav') +
         sec('Tropas na coleta', '<div class="twmgr-units">' + SCAV_UNITS.map(([u, n]) => '<label><input id="twmgr-su-' + u + '" type="checkbox"> ' + unitIcon(u, n) + ' ' + n + '</label>').join('') + '</div>') +
+        sec('Segurança',
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Nenhum nível de coleta com duração acima disso é enviado — mesmo com tropa livre. 0 = sem limite. Útil em guerra, pra tropa nunca ficar fora de casa por muito tempo.">Tempo máximo por coleta (h, 0=sem limite)</span><input id="twmgr-scav-maxh" class="twmgr-inp" type="number" min="0" step="0.5" value="0" style="width:70px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-scav-start" class="twmgr-btn twmgr-go">▶ Coletar</button><button id="twmgr-scav-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-scav-status" class="twmgr-cstatus"></div>' +
         modLog('scav') +
@@ -5518,6 +5557,8 @@
     document.getElementById('twmgr-cap-test').addEventListener('click', testCaptchaNotif);
 
     SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) el.checked = !!(config.scav.units && config.scav.units[u]); });
+    document.getElementById('twmgr-scav-maxh').value = config.scav.maxHours || 0;
+    document.getElementById('twmgr-scav-maxh').addEventListener('change', readScavUnits);
     document.getElementById('twmgr-scav-start').addEventListener('click', scavStart);
     document.getElementById('twmgr-scav-stop').addEventListener('click', scavStop);
     setScavStatus(config.scav.running);

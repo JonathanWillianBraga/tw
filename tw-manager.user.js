@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.20.0
+// @version      10.21.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.20.0';
+  const VERSION = '10.21.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -208,11 +208,18 @@
   // arquivo; só o default mora aqui, porque def() roda no carregamento.
   const defCC = () => ({
     fila: [],               // comandos agendados (sobrevivem a F5)
-    biasMs: 0,              // atraso próprio do agendador, aprendido disparo a disparo
-    rttMs: 0,               // última mediana de ida-e-volta medida
-    compensarRede: true,    // dispara meio RTT antes, pra o POST CHEGAR na hora
+    biasMs: 0,              // latência aprendida (modo adaptativo)
+    rttMs: 0,               // última mediana de ida-e-volta medida (só exibição)
     manterAcordado: true,   // oscilador silencioso: impede o Chrome de estrangular a aba
     afericoes: [],          // histórico de erro medido (últimas 50)
+    // Os quatro abaixo são o painel de precisão do Nexus, e existem porque não há
+    // resposta universal: cada conexão pede um ajuste. Antes eu tinha isto tudo como
+    // constante fixa no código, sem escape nenhum se o estimador errasse.
+    modo: 'adaptativo',     // 'fixo' (você digita a latência) | 'adaptativo' (ele mede)
+    offsetFixoMs: 0,        // usado no modo fixo
+    estilo: 'estavel',      // 'responsivo' (reage rápido) | 'estavel' (ignora variação curta)
+    maxCorrecaoMs: 1000,    // acima disto o erro é tratado como defeito e ignorado
+    ondaGapMs: 50,          // espaçamento padrão entre comandos de uma onda
   });
   const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), reservations: {} });
   function load() {
@@ -387,8 +394,12 @@
     if (!Array.isArray(c.cc.afericoes)) c.cc.afericoes = [];
     if (typeof c.cc.biasMs !== 'number' || !isFinite(c.cc.biasMs)) c.cc.biasMs = 0;
     if (typeof c.cc.rttMs !== 'number' || !isFinite(c.cc.rttMs)) c.cc.rttMs = 0;
-    if (typeof c.cc.compensarRede !== 'boolean') c.cc.compensarRede = true;
     if (typeof c.cc.manterAcordado !== 'boolean') c.cc.manterAcordado = true;
+    if (c.cc.modo !== 'fixo' && c.cc.modo !== 'adaptativo') c.cc.modo = 'adaptativo';
+    if (c.cc.estilo !== 'responsivo' && c.cc.estilo !== 'estavel') c.cc.estilo = 'estavel';
+    if (typeof c.cc.offsetFixoMs !== 'number' || !isFinite(c.cc.offsetFixoMs)) c.cc.offsetFixoMs = 0;
+    if (typeof c.cc.maxCorrecaoMs !== 'number' || c.cc.maxCorrecaoMs < 100) c.cc.maxCorrecaoMs = 1000;
+    if (typeof c.cc.ondaGapMs !== 'number' || c.cc.ondaGapMs < 50) c.cc.ondaGapMs = 50;
     if (!c.planner.blindagem) c.planner.blindagem = defBlindagem();
     if (typeof c.planner.blindagem.threadUrl !== 'string') c.planner.blindagem.threadUrl = '';
     if (!Array.isArray(c.planner.blindagem.rows)) c.planner.blindagem.rows = [];
@@ -6298,11 +6309,13 @@
     //     _EWMA_ALPHA 0.3 · _EWMA_SPIKE_DAMPED_ALPHA 0.05 · _EWMA_DAMP_BAND_MS 2000
     //     _DRIFT_GUARD_THRESHOLD_MS 50 · _OFFSET_COMPENSATION_CAP_MS 5000
     //     _EWMA_TARGET_BIAS_MS 2
-    BIAS_TETO: 5000,
-    EWMA_ALFA: 0.3,          // aprendizado normal
-    EWMA_ALFA_PICO: 0.05,    // amostra fora da banda: entra, mas quase não move
-    EWMA_BANDA_MS: 2000,     // acima disto a amostra é considerada pico
-    GUARDA_DERIVA_MS: 50,    // escada atrasou mais que isto -> a amostra não ensina nada
+    BIAS_TETO: 5000,         // limite duro do valor aprendido (o do usuário é menor)
+    EWMA_ALFA_RESPONSIVO: 0.3,   // reage rápido a mudança de latência
+    EWMA_ALFA_ESTAVEL: 0.1,      // ignora variação curta; melhor em conexão instável
+    EWMA_ALFA_PICO: 0.05,        // amostra fora da banda: entra, mas quase não move
+    EWMA_BANDA_MS: 2000,         // acima disto a amostra é considerada pico
+    GUARDA_DERIVA_MS: 50,        // escada atrasou mais que isto -> a amostra não ensina nada
+    ONDA_GAP_MIN_MS: 50,         // piso entre dois disparos de uma onda (padrão do Nexus)
     ATRASO_TOLERADO: 1500,  // passou disso do horário, não dispara — marca como perdido
   };
 
@@ -6617,16 +6630,38 @@
       save(); return;
     }
 
+    // TETO DE PLAUSIBILIDADE. Acima disto não é latência, é defeito — e aprender com
+    // defeito estraga o estimador por muitas amostras. O Nexus chama de "Máximo de
+    // correção" e diz na própria tela: "atrasos acima do selecionado são considerados
+    // bugs e ignorados". O padrão deles é 1000ms; o meu era 5000, permissivo demais.
+    const teto = Math.max(100, Math.min(CC.BIAS_TETO, cc.maxCorrecaoMs || 1000));
+    if (Math.abs(erroMs) > teto) {
+      cc.afericoes = (cc.afericoes || []).concat([{ t: ccNow(), erro: cmd.erroRealMs, descartada: true, motivo: 'acima do máximo de correção', bias: cc.biasMs }]).slice(-50);
+      pushLog('🎯 Central: erro de ' + Math.round(erroMs) + 'ms ignorado — acima do máximo de correção (' + teto + 'ms). Isso é defeito, não latência.', '', 'planner');
+      save(); return;
+    }
+
+    // No modo fixo o usuário manda; o estimador nem roda.
+    if (cc.modo === 'fixo') {
+      cc.afericoes = (cc.afericoes || []).concat([{ t: ccNow(), erro: cmd.erroRealMs, modo: 'fixo', bias: cc.offsetFixoMs }]).slice(-50);
+      save(); return;
+    }
+
     // EWMA com amortecimento de pico, no lugar da média corrida 1/n que eu tinha.
     // Dois defeitos do 1/n que só vi lendo o Nexus: o ganho tende a ZERO, então depois
     // de umas 20 amostras ele para de aprender e não acompanha mudança de rede; e na
     // PRIMEIRA amostra o ganho é 1, então um único envio ruim define o viés inteiro.
     // Com α fixo aprende pra sempre; com α reduzido fora da banda, um outlier contribui
     // pouco em vez de dominar — amortecer é mais robusto que rejeitar.
+    //
+    // O α não é um número só: o Nexus deixa o usuário escolher entre reagir rápido e
+    // ignorar variação curta, porque a resposta certa depende de quão instável é a
+    // conexão dele. Não existe valor universal, e fingir que existe foi meu erro.
     const anterior = (typeof cc.biasMs === 'number') ? cc.biasMs : 0;
     const pico = Math.abs(erroMs - anterior) > CC.EWMA_BANDA_MS;
-    const alfa = pico ? CC.EWMA_ALFA_PICO : CC.EWMA_ALFA;
-    cc.biasMs = Math.max(-CC.BIAS_TETO, Math.min(CC.BIAS_TETO, Math.round(anterior + erroMs * alfa)));
+    const alfa = pico ? CC.EWMA_ALFA_PICO
+      : (cc.estilo === 'responsivo' ? CC.EWMA_ALFA_RESPONSIVO : CC.EWMA_ALFA_ESTAVEL);
+    cc.biasMs = Math.max(-teto, Math.min(teto, Math.round(anterior + erroMs * alfa)));
     cc.nReal = (cc.nReal || 0) + 1;
     cc.afericoes = (cc.afericoes || []).concat([{ t: cmd.sentAt || ccNow(), erro: cmd.erroRealMs, estimado: cmd.erroMs, bias: cc.biasMs, oculta: document.hidden, acordado: ccAcordadoOk() }]).slice(-50);
     save();
@@ -6726,7 +6761,8 @@
         // praça (85ms estimados contra ~184ms reais). Ela não pertence a esta conta. O viés
         // aprende a latência inteira a partir da chegada que o jogo publica, que é a única
         // medida honesta disponível. ccSondar continua existindo, mas só pra exibição.
-        const alvoChamada = cmd.sendAt - config.cc.biasMs;
+        const correcao = (config.cc.modo === 'fixo') ? (config.cc.offsetFixoMs || 0) : (config.cc.biasMs || 0);
+        const alvoChamada = cmd.sendAt - correcao;
         const real = await ccEsperarPreciso(alvoChamada);
         cmd.atrasoEscadaMs = Math.round(real - alvoChamada);
         ccDispararAgora(cmd);       // sem await: o próximo da onda não pode esperar a resposta
@@ -6974,6 +7010,23 @@
             '<span id="twmgr-ccx" title="fechar (Esc)">×</span></span></div>' +
           '<div id="twmgr-ccbody">' +
             '<div id="twmgr-ccmet" class="twmgr-ccmet"></div>' +
+            // Painel de ajuste. Existe porque NÃO HÁ resposta universal: a latência é da
+            // sua conexão, não do código. Eu tinha tudo isto como constante fixa, sem
+            // escape nenhum se o estimador errasse — e ele errou duas vezes nos testes.
+            '<details id="twmgr-ccconf" class="twmgr-section" style="margin-bottom:11px">' +
+              '<summary style="cursor:pointer;font-size:10px;color:#c9a24a;font-weight:700;letter-spacing:.5px;text-transform:uppercase">⚙ Ajuste de precisão</summary>' +
+              '<div style="margin-top:9px">' +
+                '<div class="twmgr-row"><span class="twmgr-lbl" title="Adaptativo mede o atraso dos últimos comandos e ajusta sozinho. Fixo usa o valor que você digitar — use se o adaptativo não convergir.">Modo</span>' +
+                  '<select id="twmgr-cc-modo" class="twmgr-inp" style="width:190px"><option value="adaptativo">Adaptativo (ele mede)</option><option value="fixo">Fixo (você define)</option></select></div>' +
+                '<div class="twmgr-row" id="twmgr-cc-row-fixo"><span class="twmgr-lbl" title="Quantos ms antes da hora o comando deve sair, pra compensar a viagem até o servidor.">Offset fixo (ms)</span>' +
+                  '<input id="twmgr-cc-offset" class="twmgr-inp" type="number" step="10" style="width:90px"></div>' +
+                '<div class="twmgr-row" id="twmgr-cc-row-estilo"><span class="twmgr-lbl" title="Responsivo acompanha mudança de latência rápido. Estável ignora variação curta — melhor em conexão instável.">Estilo do ajuste</span>' +
+                  '<select id="twmgr-cc-estilo" class="twmgr-inp" style="width:190px"><option value="estavel">Estável (ignora variação curta)</option><option value="responsivo">Responsivo (reage rápido)</option></select></div>' +
+                '<div class="twmgr-row"><span class="twmgr-lbl" title="Erro acima disto é tratado como defeito e ignorado no aprendizado, em vez de virar correção permanente.">Máximo de correção (ms)</span>' +
+                  '<input id="twmgr-cc-maxcorr" class="twmgr-inp" type="number" min="100" step="100" style="width:90px"></div>' +
+                '<div class="twmgr-hint" style="margin:6px 0 0">O modo adaptativo só aprende com envios em que a <b>própria espera</b> acertou (erro de escada abaixo de ' + CC.GUARDA_DERIVA_MS + 'ms). Amostra ruim é descartada em vez de envenenar a média — o log avisa quando isso acontece.</div>' +
+              '</div>' +
+            '</details>' +
             '<div id="twmgr-ccfila"></div>' +
           '</div>' +
         '</div>';
@@ -6988,6 +7041,21 @@
         ccRenderPagina();
       });
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') ccFecharPagina(); });
+      // Ajuste de precisão: lê do config, salva na hora, e mostra só os campos do modo ativo.
+      const cf = () => (config.cc = config.cc || defCC());
+      const liga = (id, prop, num) => {
+        const el = document.getElementById(id); if (!el) return;
+        el.value = cf()[prop];
+        el.addEventListener('change', () => {
+          const v = num ? (parseInt(el.value, 10) || 0) : el.value;
+          cf()[prop] = num ? Math.max(num === 'pos' ? 100 : -99999, v) : v;
+          el.value = cf()[prop];
+          save(); ccConfVisibilidade(); ccRenderPagina();
+        });
+      };
+      liga('twmgr-cc-modo', 'modo'); liga('twmgr-cc-estilo', 'estilo');
+      liga('twmgr-cc-offset', 'offsetFixoMs', true); liga('twmgr-cc-maxcorr', 'maxCorrecaoMs', 'pos');
+      ccConfVisibilidade();
     }
     pg.classList.add('on');
     ccManterAcordado(true);   // aproveita o gesto do clique pra destravar o áudio
@@ -6995,6 +7063,15 @@
     clearInterval(_ccPgTimer);
     _ccPgTimer = setInterval(ccRenderPagina, 500);
   }
+  // Offset fixo só faz sentido no modo fixo; estilo do ajuste só no adaptativo.
+  function ccConfVisibilidade() {
+    const cc = config.cc || defCC();
+    const rf = document.getElementById('twmgr-cc-row-fixo');
+    const re = document.getElementById('twmgr-cc-row-estilo');
+    if (rf) rf.style.display = cc.modo === 'fixo' ? '' : 'none';
+    if (re) re.style.display = cc.modo === 'fixo' ? 'none' : '';
+  }
+
   function ccFecharPagina() {
     const pg = document.getElementById('twmgr-ccpg'); if (pg) pg.classList.remove('on');
     clearInterval(_ccPgTimer); _ccPgTimer = null;
@@ -7014,7 +7091,9 @@
     met.innerHTML =
       '<div class="twmgr-ccm"><div class="v">' + vivos.length + '</div><div class="l">na fila</div></div>' +
       '<div class="twmgr-ccm ' + erroClasse + '"><div class="v">' + (ult ? (ult.erro > 0 ? '+' : '') + ult.erro + 'ms' : '—') + '</div><div class="l">último erro</div></div>' +
-      '<div class="twmgr-ccm"><div class="v">' + (cc.biasMs > 0 ? '+' : '') + cc.biasMs + 'ms</div><div class="l">viés aprendido</div></div>' +
+      (cc.modo === 'fixo'
+        ? '<div class="twmgr-ccm"><div class="v">' + (cc.offsetFixoMs > 0 ? '+' : '') + cc.offsetFixoMs + 'ms</div><div class="l">offset fixo</div></div>'
+        : '<div class="twmgr-ccm"><div class="v">' + (cc.biasMs > 0 ? '+' : '') + cc.biasMs + 'ms</div><div class="l">viés aprendido (' + (cc.nReal || 0) + ')</div></div>') +
       '<div class="twmgr-ccm"><div class="v">' + (cc.rttMs || '—') + 'ms</div><div class="l">ida-e-volta</div></div>' +
       '<div class="twmgr-ccm ' + (ccAcordadoOk() ? 'bom' : '') + '"><div class="v">' + (ccAcordadoOk() ? 'on' : 'off') + '</div><div class="l">anti-estrangul.</div></div>';
 
@@ -7129,6 +7208,12 @@
           // mostra que não precisa: um campo só, e o valor que o usuário digita é o valor.
           '<label id="twmgr-ccq-lblh">Horário (com ms)<br><input id="twmgr-ccq-hora" type="datetime-local" step="0.001" style="width:210px"></label>' +
           '<label title="deslocamento adicional, somado ao horário acima. Deixe 0 se já digitou os ms no campo ao lado.">± ms extra<br><input id="twmgr-ccq-ms" type="number" value="0" step="1" style="width:80px"></label>' +
+          // Onda montada aqui, em vez de o usuário agendar N vezes na mão — que foi o que
+          // ele fez no primeiro teste, e o resultado ficou impossível de ler porque os N
+          // comandos apareciam idênticos. O piso de 50ms é o padrão do Nexus ("Gap de
+          // Reordenação"); abaixo disso dois disparos se atropelam no motor.
+          '<label title="quantos comandos nesta onda. Cada um sai depois do anterior, espaçado pelo gap.">Qtd<br><input id="twmgr-ccq-qtd-onda" type="number" min="1" max="20" value="1" style="width:56px"></label>' +
+          '<label title="espaçamento entre comandos consecutivos da onda. Mínimo 50ms — abaixo disso os disparos se atropelam.">Gap (ms)<br><input id="twmgr-ccq-gap" type="number" min="50" step="10" value="50" style="width:70px"></label>' +
           '<button id="twmgr-ccq-add" class="btn" style="padding:4px 12px">🎯 Agendar</button>' +
         '</div>' +
         '<div id="twmgr-ccq-msg" style="margin-top:7px;font-size:10px;min-height:13px;color:#6b5330"></div>' +
@@ -7190,17 +7275,31 @@
           if (n > 0) { amounts[u] = n; total += n; }
         });
         if (!total) return dizer('Nenhuma tropa selecionada.', true);
-        const alvoMs = arrivalToServerMs(hora) + (parseInt(q('#twmgr-ccq-ms').value, 10) || 0);
-        const cmd = ccAdicionar({
-          origin: CUR_VID, x: mc[1], y: mc[2],
-          kind: q('#twmgr-ccq-tipo').value,
-          amounts: amounts,
-          modo: q('#twmgr-ccq-modo').value,
-          alvoMs: alvoMs,
-        });
+        const base = arrivalToServerMs(hora) + (parseInt(q('#twmgr-ccq-ms').value, 10) || 0);
+        const qtdOnda = Math.max(1, Math.min(20, parseInt(q('#twmgr-ccq-qtd-onda').value, 10) || 1));
+        const gap = Math.max(CC.ONDA_GAP_MIN_MS, parseInt(q('#twmgr-ccq-gap').value, 10) || CC.ONDA_GAP_MIN_MS);
+        const modo = q('#twmgr-ccq-modo').value;
+        // A tropa de cada comando é a MESMA quantidade: uma onda de 4 leva 4x o total.
+        // Confere antes de agendar, senão o 2º ao 4º falham na hora do disparo por falta
+        // de tropa — e falhar no disparo é bem pior que recusar agora.
+        const faltando = [];
+        Object.keys(amounts).forEach((u) => { if (amounts[u] * qtdOnda > (disp[u] || 0)) faltando.push(u); });
+        if (faltando.length) return dizer('Tropa insuficiente pra ' + qtdOnda + ' comandos: ' + faltando.join(', ') + '. Cada comando da onda leva a quantidade cheia.', true);
+        const criados = [];
+        for (let i = 0; i < qtdOnda; i++) {
+          criados.push(ccAdicionar({
+            origin: CUR_VID, x: mc[1], y: mc[2],
+            kind: q('#twmgr-ccq-tipo').value,
+            amounts: amounts, modo: modo,
+            alvoMs: base + i * gap,
+          }));
+        }
         const aviso = estouro.length ? ' (limitei ' + estouro.join(', ') + ' ao disponível)' : '';
-        dizer('Agendado: ' + ccResumoTropa(amounts) + ' → ' + mc[1] + '|' + mc[2] + aviso + '. Veja a fila pra acompanhar.');
-        pushLog('🎯 Central: ' + ccRotulo(cmd) + ' agendado (' + cmd.modo + ' ' + ccFmtHora(alvoMs) + ').', 'ok', 'planner');
+        dizer(qtdOnda === 1
+          ? 'Agendado: ' + ccResumoTropa(amounts) + ' → ' + mc[1] + '|' + mc[2] + aviso + '. Veja a fila pra acompanhar.'
+          : 'Onda de ' + qtdOnda + ' agendada → ' + mc[1] + '|' + mc[2] + ', espaçada de ' + gap + 'ms' + aviso + '. Veja a fila pra acompanhar.');
+        pushLog('🎯 Central: ' + (qtdOnda === 1 ? '' : 'onda de ' + qtdOnda + ' × ') + ccRotulo(criados[0]) +
+          ' agendado (' + modo + ' ' + ccFmtHora(base) + (qtdOnda > 1 ? ', gap ' + gap + 'ms' : '') + ').', 'ok', 'planner');
       } catch (e) { dizer(String(e.message || e), true); }
     });
     sincronizarLinha();

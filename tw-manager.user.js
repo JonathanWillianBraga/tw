@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.19.0
+// @version      10.20.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.19.0';
+  const VERSION = '10.20.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -7124,8 +7124,11 @@
           '<label>Alvo<br><input id="twmgr-ccq-alvo" type="text" placeholder="500|600" style="width:88px"></label>' +
           '<label>Tipo<br><select id="twmgr-ccq-tipo" style="width:80px"><option value="attack">⚔️ Ataque</option><option value="support">🛡️ Apoio</option></select></label>' +
           '<label>Marcar por<br><select id="twmgr-ccq-modo" style="width:96px"><option value="chegada">Chegada</option><option value="saida">Saída</option></select></label>' +
-          '<label id="twmgr-ccq-lblh">Horário<br><input id="twmgr-ccq-hora" type="datetime-local" step="1" style="width:190px"></label>' +
-          '<label title="deslocamento fino em milissegundos, somado ao horário">± ms<br><input id="twmgr-ccq-ms" type="number" value="0" step="1" style="width:70px"></label>' +
+          // step=0.001 faz o próprio campo aceitar milissegundos (30/07/2026 12:50:35,478).
+          // Antes era step=1 mais uma caixinha "± ms" separada — gambiarra minha, e o Nexus
+          // mostra que não precisa: um campo só, e o valor que o usuário digita é o valor.
+          '<label id="twmgr-ccq-lblh">Horário (com ms)<br><input id="twmgr-ccq-hora" type="datetime-local" step="0.001" style="width:210px"></label>' +
+          '<label title="deslocamento adicional, somado ao horário acima. Deixe 0 se já digitou os ms no campo ao lado.">± ms extra<br><input id="twmgr-ccq-ms" type="number" value="0" step="1" style="width:80px"></label>' +
           '<button id="twmgr-ccq-add" class="btn" style="padding:4px 12px">🎯 Agendar</button>' +
         '</div>' +
         '<div id="twmgr-ccq-msg" style="margin-top:7px;font-size:10px;min-height:13px;color:#6b5330"></div>' +

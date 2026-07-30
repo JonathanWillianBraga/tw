@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.23.0
+// @version      10.24.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.23.0';
+  const VERSION = '10.24.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -6322,6 +6322,7 @@
     EWMA_ALFA_PICO: 0.05,        // amostra fora da banda: entra, mas quase não move
     EWMA_BANDA_MS: 2000,         // acima disto a amostra é considerada pico
     GUARDA_DERIVA_MS: 50,        // escada atrasou mais que isto -> a amostra não ensina nada
+    BANDA_CONSISTENCIA_MS: 200,  // numa onda, atraso acima disto sobre o menor é engasgada do servidor
     // Piso entre dois comandos de uma onda. O Nexus usa 50ms; MEDIDO no br143, 50 não se
     // sustenta. Teste de 5 apoios: eu disparei em 0/50/100/150/200ms — exato, com erro de
     // escada ZERO nos cinco — e o jogo registrou as chegadas com 100/100/137/100ms de
@@ -6646,6 +6647,43 @@
         grupo.forEach((g, i) => {
           g.cmd.chegadaReal = casados[i];
           g.cmd.erroRealMs = Math.round(casados[i] - g.esperada);
+        });
+        // BANDA DE CONSISTÊNCIA. Dentro de uma mesma onda, os comandos deveriam errar
+        // parecido — é a mesma conexão, no mesmo segundo. Quem destoa muito da mediana
+        // não está medindo latência: está medindo uma engasgada do servidor.
+        //
+        // Medido numa onda de 4: erros +41, +59, +927, +927. Os dois primeiros são a
+        // latência real; os dois últimos vieram de uma pausa de ~900ms do servidor no
+        // meio da onda. E 927 passa por baixo do teto de 1000ms, então seria aprendido
+        // como latência permanente. A guarda de deriva não pega isso — ela só olha se a
+        // MINHA espera atrasou, e não atrasou.
+        // (No Nexus: _RECENT_CONSISTENCY_BAND_MS 200.)
+        // A referência é o MAIOR AGRUPAMENTO, com desempate pelo menor valor.
+        //
+        // Mediana não serve: com [41, 59, 927, 927] — a onda real medida — ela cai em 927
+        // e o filtro rejeita justamente os dois bons, porque metade das amostras eram o
+        // defeito e mediana não resiste a 50% de contaminação.
+        // Mínimo também não: com [40, 800, 810, 795] ele aceita só o 40 e rejeita três.
+        // Se 800 for a latência verdadeira e o 40 foi sorte, eu aprenderia o caso melhor
+        // e todo comando cairia atrasado.
+        // O maior agrupamento acerta os dois. O desempate pelo menor vem da física:
+        // latência e engasgada só ATRASAM, nunca adiantam — na dúvida, fique com o grupo
+        // mais rápido, que é o que mais se aproxima do custo real da conexão.
+        const vals = grupo.map((g) => g.cmd.erroRealMs).sort((a, b) => a - b);
+        let referencia = vals[0], melhorN = -1;
+        vals.forEach((v) => {
+          const n = vals.filter((x) => Math.abs(x - v) <= CC.BANDA_CONSISTENCIA_MS).length;
+          if (n > melhorN) { melhorN = n; referencia = v; }
+        });
+        grupo.forEach((g, i) => {
+          const fora = grupo.length > 2 && Math.abs(g.cmd.erroRealMs - referencia) > CC.BANDA_CONSISTENCIA_MS;
+          if (fora) {
+            g.cmd.foraDaBanda = true;
+            pushLog('🎯 Central: ' + ccRotulo(g.cmd) + ' — chegada ' + ccFmtHora(casados[i]) + ', erro REAL ' +
+              (g.cmd.erroRealMs > 0 ? '+' : '') + g.cmd.erroRealMs + 'ms. FORA da banda da onda (referência ' + referencia +
+              'ms) — engasgada do servidor, não latência. Não vai pro aprendizado.', '', 'planner');
+            return;
+          }
           // ESTE é o sinal que alimenta o viés. O erro estimado vira só diagnóstico.
           ccRealimentar(g.cmd, g.cmd.erroRealMs, true);
           pushLog('🎯 Central: ' + ccRotulo(g.cmd) + ' — o jogo registrou chegada ' + ccFmtHora(casados[i]) +

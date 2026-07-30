@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.21.0
+// @version      10.22.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.21.0';
+  const VERSION = '10.22.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -6315,7 +6315,12 @@
     EWMA_ALFA_PICO: 0.05,        // amostra fora da banda: entra, mas quase não move
     EWMA_BANDA_MS: 2000,         // acima disto a amostra é considerada pico
     GUARDA_DERIVA_MS: 50,        // escada atrasou mais que isto -> a amostra não ensina nada
-    ONDA_GAP_MIN_MS: 50,         // piso entre dois disparos de uma onda (padrão do Nexus)
+    // Piso entre dois comandos de uma onda. O Nexus usa 50ms; MEDIDO no br143, 50 não se
+    // sustenta. Teste de 5 apoios: eu disparei em 0/50/100/150/200ms — exato, com erro de
+    // escada ZERO nos cinco — e o jogo registrou as chegadas com 100/100/137/100ms de
+    // intervalo. O servidor processa comandos da mesma conta em fila, ~100ms cada.
+    // Não é o cliente que limita: disparar mais rápido só acumula atraso na entrega.
+    ONDA_GAP_MIN_MS: 100,
     ATRASO_TOLERADO: 1500,  // passou disso do horário, não dispara — marca como perdido
   };
 
@@ -6506,8 +6511,9 @@
       // (Era aqui que eu somava meioRtt e chamava de "erro líquido"; o número concordava
       // comigo mesmo e escondia 100ms de atraso real.)
       ccRealimentar(cmd, cmd.fireAt - cmd.sendAt, false);
+      // Confere daqui a pouco. Se este timer morrer (F5, aba estrangulada), o ccTick
+      // varre a fila e conclui — a conferência não depende mais de nada em memória.
       if (cmd.state === 'enviado') {
-        _ccPorConferir.push(cmd);
         clearTimeout(_ccConferirTimer);
         _ccConferirTimer = setTimeout(() => { ccConferirPendentes().catch(() => {}); }, 8000);
       }
@@ -6537,7 +6543,6 @@
   // estimava meia-viagem com um HEAD num arquivo estático (~85ms), e a ida real de um
   // POST na praça é ~184ms. Realimentar a minha própria estimativa nunca acharia isso —
   // ela concorda consigo mesma. Contra a chegada publicada pelo jogo, acha.
-  const _ccPorConferir = [];
   let _ccConferirTimer = null;
 
   function ccParseChegadaMs(txt) {
@@ -6554,9 +6559,23 @@
   }
 
   // Uma requisição para a onda inteira, não uma por comando.
+  //
+  // Deriva da FILA, que é persistida — não de uma lista em memória com timer, que era a
+  // versão anterior e falhou em todos os cinco comandos do primeiro teste de onda. Um F5
+  // entre o envio e os 8 segundos do timer perdia a conferência pra sempre, e o painel
+  // ficava exibindo a estimativa provisória achando que era o número final.
+  // Assim, qualquer aba que abrir depois conclui o serviço.
+  function ccPendentesDeConferencia() {
+    const agora = ccNow();
+    return ((config.cc && config.cc.fila) || []).filter((c) =>
+      c.state === 'enviado' && c.erroRealMs == null && (c.tentativasConf || 0) < 5 &&
+      c.sentAt && (agora - c.sentAt) > 5000 && (agora - c.sentAt) < 2 * 3600 * 1000);
+  }
+
   async function ccConferirPendentes() {
-    if (!_ccPorConferir.length) return;
-    const lote = _ccPorConferir.splice(0, _ccPorConferir.length);
+    const lote = ccPendentesDeConferencia();
+    if (!lote.length) return;
+    lote.forEach((c) => { c.tentativasConf = (c.tentativasConf || 0) + 1; });
     const origens = Array.from(new Set(lote.map((c) => c.origin)));
     for (const vid of origens) {
       let doc;
@@ -6782,7 +6801,16 @@
     clearTimeout(ccTimer);
     const fila = (config.cc && config.cc.fila) || [];
     const vivos = fila.filter((c) => c.state === 'armado' || c.state === 'preparado');
-    if (!vivos.length) { ccManterAcordado(false); return; }
+    // A varredura de conferência vem ANTES da saída antecipada: com a fila vazia de
+    // comandos vivos, ainda pode haver envio recente esperando ser conferido contra o
+    // jogo. Era esse o buraco — o tick desligava e o erro real nunca era medido.
+    const porConferir = ccPendentesDeConferencia().length;
+    if (porConferir) ccConferirPendentes().catch(() => {});
+    if (!vivos.length) {
+      ccManterAcordado(false);
+      if (porConferir) ccTimer = setTimeout(ccTick, 30000);
+      return;
+    }
     if (captchaBlocked()) { ccTimer = setTimeout(ccTick, 30000); return; }
     for (const cmd of vivos) {
       if (!ccCalcularSaida(cmd)) {
@@ -7213,7 +7241,7 @@
           // comandos apareciam idênticos. O piso de 50ms é o padrão do Nexus ("Gap de
           // Reordenação"); abaixo disso dois disparos se atropelam no motor.
           '<label title="quantos comandos nesta onda. Cada um sai depois do anterior, espaçado pelo gap.">Qtd<br><input id="twmgr-ccq-qtd-onda" type="number" min="1" max="20" value="1" style="width:56px"></label>' +
-          '<label title="espaçamento entre comandos consecutivos da onda. Mínimo 50ms — abaixo disso os disparos se atropelam.">Gap (ms)<br><input id="twmgr-ccq-gap" type="number" min="50" step="10" value="50" style="width:70px"></label>' +
+          '<label title="espaçamento entre comandos consecutivos da onda. Mínimo 100ms: medido no br143, o servidor processa comandos da mesma conta em fila e não entrega mais rápido que isso, por mais cedo que eu dispare.">Gap (ms)<br><input id="twmgr-ccq-gap" type="number" min="100" step="10" value="100" style="width:70px"></label>' +
           '<button id="twmgr-ccq-add" class="btn" style="padding:4px 12px">🎯 Agendar</button>' +
         '</div>' +
         '<div id="twmgr-ccq-msg" style="margin-top:7px;font-size:10px;min-height:13px;color:#6b5330"></div>' +

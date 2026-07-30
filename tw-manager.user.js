@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.22.0
+// @version      10.23.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.22.0';
+  const VERSION = '10.23.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -399,7 +399,14 @@
     if (c.cc.estilo !== 'responsivo' && c.cc.estilo !== 'estavel') c.cc.estilo = 'estavel';
     if (typeof c.cc.offsetFixoMs !== 'number' || !isFinite(c.cc.offsetFixoMs)) c.cc.offsetFixoMs = 0;
     if (typeof c.cc.maxCorrecaoMs !== 'number' || c.cc.maxCorrecaoMs < 100) c.cc.maxCorrecaoMs = 1000;
-    if (typeof c.cc.ondaGapMs !== 'number' || c.cc.ondaGapMs < 50) c.cc.ondaGapMs = 50;
+    if (typeof c.cc.ondaGapMs !== 'number' || c.cc.ondaGapMs < 100) c.cc.ondaGapMs = 100;
+    // Até a 10.22.0 a conferência casava vários comandos com a MESMA linha de chegada e
+    // produzia erros inventados — que foram direto pro estimador. O viés aprendido antes
+    // desta versão não vale nada; zera uma vez e recomeça com dado limpo.
+    if (c.cc.calibVer !== 2) {
+      c.cc.calibVer = 2; c.cc.biasMs = 0; c.cc.nReal = 0; c.cc.afericoes = [];
+      (c.cc.fila || []).forEach((x) => { x.erroRealMs = null; x.chegadaReal = null; x.tentativasConf = 0; });
+    }
     if (!c.planner.blindagem) c.planner.blindagem = defBlindagem();
     if (typeof c.planner.blindagem.threadUrl !== 'string') c.planner.blindagem.threadUrl = '';
     if (!Array.isArray(c.planner.blindagem.rows)) c.planner.blindagem.rows = [];
@@ -6592,25 +6599,58 @@
         const chegada = ccParseChegadaMs(t);
         if (chegada) linhas.push({ coord: mc[1] + '|' + mc[2], chegada: chegada });
       });
+      // CASAMENTO POR ORDEM, e recusa quando é ambíguo.
+      //
+      // Duas tentativas anteriores falharam, e as duas de um jeito instrutivo:
+      //
+      // 1. "a chegada mais próxima" — sem exclusividade, cinco comandos de uma onda
+      //    casaram com a MESMA linha e geraram erros de +161, +61, -39, -139 e -239ms.
+      //    Todos aritmética da mesma chegada. Números inventados, alimentando o estimador.
+      //
+      // 2. exclusividade + janela apertada em volta do desvio mediano — parecia resolver,
+      //    mas simulado com 500ms de desvio sistemático estimou 312 e casou tudo errado.
+      //    É aliasing: com comandos a 100ms de distância e erro de 500ms, o casamento por
+      //    TEMPO é matematicamente ambíguo. Não dá pra saber qual chegada é de qual.
+      //
+      // O que resolve é a ORDEM: o servidor processa os comandos da conta em fila, então
+      // o i-ésimo enviado é o i-ésimo a chegar. E quando nem a ordem basta — quantidade de
+      // chegadas diferente da de comandos — a medição é RECUSADA. Medida errada é pior
+      // que medida nenhuma, porque vira correção permanente no viés.
+      const JANELA_CONF_MS = 5000;
+      const porCoord = {};
       lote.filter((c) => c.origin === vid).forEach((cmd) => {
         const esperada = cmd.modo === 'chegada' ? cmd.alvoMs : (cmd.durSec ? cmd.sendAt + cmd.durSec * 1000 : null);
         if (!esperada) return;
-        const coord = cmd.x + '|' + cmd.y;
-        // A mais próxima da esperada, dentro de 10s. Sem essa janela, uma onda de vários
-        // comandos pro mesmo alvo casaria todos com a mesma linha.
-        let melhor = null;
-        linhas.forEach((l) => {
-          if (l.coord !== coord) return;
-          const d = Math.abs(l.chegada - esperada);
-          if (d <= 10000 && (!melhor || d < melhor.d)) melhor = { d: d, l: l };
+        const k = cmd.x + '|' + cmd.y;
+        (porCoord[k] = porCoord[k] || []).push({ cmd: cmd, esperada: esperada });
+      });
+      Object.keys(porCoord).forEach((coord) => {
+        const grupo = porCoord[coord].sort((a, b) => a.esperada - b.esperada);
+        const cand = linhas.filter((l) => l.coord === coord &&
+          grupo.some((g) => Math.abs(l.chegada - g.esperada) <= JANELA_CONF_MS))
+          .map((l) => l.chegada).sort((a, b) => a - b);
+        let casados = null;
+        if (grupo.length === 1) {
+          casados = cand.length ? [cand.reduce((m, c) => (Math.abs(c - grupo[0].esperada) < Math.abs(m - grupo[0].esperada) ? c : m))] : null;
+        } else if (cand.length === grupo.length) {
+          casados = cand;   // i-ésimo comando -> i-ésima chegada
+        }
+        if (!casados) {
+          grupo.forEach((g) => { if ((g.cmd.tentativasConf || 0) >= 5) g.cmd.confAmbigua = true; });
+          if (grupo[0] && (grupo[0].cmd.tentativasConf || 0) === 5) {
+            pushLog('🎯 Central: não consegui medir o erro de ' + grupo.length + ' comando(s) → ' + coord +
+              ' — achei ' + cand.length + ' chegada(s) na lista, e com número diferente o casamento fica ambíguo. Prefiro não medir a medir errado.', '', 'planner');
+          }
+          return;
+        }
+        grupo.forEach((g, i) => {
+          g.cmd.chegadaReal = casados[i];
+          g.cmd.erroRealMs = Math.round(casados[i] - g.esperada);
+          // ESTE é o sinal que alimenta o viés. O erro estimado vira só diagnóstico.
+          ccRealimentar(g.cmd, g.cmd.erroRealMs, true);
+          pushLog('🎯 Central: ' + ccRotulo(g.cmd) + ' — o jogo registrou chegada ' + ccFmtHora(casados[i]) +
+            ', erro REAL ' + (g.cmd.erroRealMs > 0 ? '+' : '') + g.cmd.erroRealMs + 'ms (eu estimei ' + g.cmd.erroMs + 'ms).', 'ok', 'planner');
         });
-        if (!melhor) return;
-        cmd.chegadaReal = melhor.l.chegada;
-        cmd.erroRealMs = Math.round(melhor.l.chegada - esperada);
-        // ESTE é o sinal que alimenta o viés. O erro estimado vira só diagnóstico.
-        ccRealimentar(cmd, cmd.erroRealMs, true);
-        pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — o jogo registrou chegada ' + ccFmtHora(melhor.l.chegada) +
-          ', erro REAL ' + (cmd.erroRealMs > 0 ? '+' : '') + cmd.erroRealMs + 'ms (eu estimei ' + cmd.erroMs + 'ms).', 'ok', 'planner');
       });
     }
     save(); ccRenderPagina();

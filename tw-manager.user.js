@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.24.0
+// @version      10.25.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.24.0';
+  const VERSION = '10.25.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -127,14 +127,27 @@
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
   const defMap = () => ({
     running: false, nextAt: 0,
-    maxDist: 20, minDaysSinceScout: 2,
+    cicloMin: 30,                         // intervalo entre ciclos (deixa de ser one-shot)
+    maxDist: 20, minDaysSinceScout: 0,    // 0 = nunca reexplora quem já tem relatório com dados
     group: null,                          // grupo com aldeias de origem (vazio = todas)
-    spyReserve: 30, spyCount: 1,          // guardar N spy por aldeia; enviar N spy por bárbaro
+    spyReserve: 30, spyCount: 5,          // guardar N spy por aldeia; enviar N spy por bárbaro
     minPoints: 26, maxPoints: 5000,
     maxPerVillage: 20, delay: 500,
     onlyBarbarians: true,
     sentAt: {},                           // vid do bárbaro -> timestamp do último scout nosso
     lastPreview: [],                      // lista mostrada na tabela
+    // ── Conhecimento acumulado ──────────────────────────────────────────────────
+    barbConhecidos: {},                   // vid -> quando vi pela primeira vez (detecta bárbaro NOVO)
+    ultimoMapaAt: 0,                      // quando recarreguei village.txt pela última vez
+    // ── Blacklists ──────────────────────────────────────────────────────────────
+    // Perda: o assistente pinta de VERMELHO o último saque em que se perdeu tropa. Sai
+    // sozinha quando aparecer relatório verde, amarelo ou azul.
+    blacklistPerda: {},                   // coord -> { at, vid, pts }
+    // Defesa: o relatório de exploração mostrou tropa defensiva. Não sai sozinha.
+    blacklistDefesa: {},                  // coord -> { at, vid, pts, defTotal, removido }
+    relatoriosLidos: {},                  // reportId -> 1 (pra não reler o mesmo relatório)
+    defesaMin: 1,                         // a partir de quantas unidades de defesa entra na lista
+    removerDoAssistente: false,           // apagar os relatórios no jogo (irreversível) — ver nota
   });
   const defPlannerAttack = (name) => ({
     id: genId(), name: name || 'Ataque',
@@ -336,6 +349,19 @@
     if (c.bb.gradStable == null) c.bb.gradStable = 15;
     if (!c.bb.inflight) c.bb.inflight = {};
     if (!c.map) c.map = defMap();
+    // Reformulação do Mapa: de one-shot pra ciclo contínuo, com base de conhecimento e
+    // blacklists. Campos novos entram sem apagar o que já existe.
+    if (typeof c.map.cicloMin !== 'number' || c.map.cicloMin < 5) c.map.cicloMin = 30;
+    if (!c.map.barbConhecidos) c.map.barbConhecidos = {};
+    if (!c.map.blacklistPerda) c.map.blacklistPerda = {};
+    if (!c.map.blacklistDefesa) c.map.blacklistDefesa = {};
+    if (!c.map.relatoriosLidos) c.map.relatoriosLidos = {};
+    if (typeof c.map.defesaMin !== 'number' || c.map.defesaMin < 1) c.map.defesaMin = 1;
+    if (typeof c.map.removerDoAssistente !== 'boolean') c.map.removerDoAssistente = false;
+    if (typeof c.map.ultimoMapaAt !== 'number') c.map.ultimoMapaAt = 0;
+    // A regra passou a ser "tenho ou não tenho informação". A idade do relatório vira
+    // reexploração OPCIONAL, desligada por padrão — quem tinha 2 dias configurado mantém.
+    if (typeof c.map.minDaysSinceScout !== 'number') c.map.minDaysSinceScout = 0;
     if (!c.map.sentAt) c.map.sentAt = {};
     if (!c.map.lastPreview) c.map.lastPreview = [];
     if (c.map.maxDist == null) c.map.maxDist = 20;
@@ -617,9 +643,12 @@
       // separado, que é uma informação diferente e também útil.
       arr = [
         { v: fmtN(s.reach), l: 'no alcance', hl: true },
-        { v: fmtN(s.mapped), l: 'no mundo' },
+        { v: fmtN(s.novos), l: 'bárbaros novos' },
         { v: fmtN(s.sent), l: 'explorados' },
         { v: fmtN(s.left), l: 'de fora' },
+        { v: fmtN(s.blPerda), l: 'bl: perdi tropa' },
+        { v: fmtN(s.blDefesa), l: 'bl: tem defesa' },
+        { v: fmtN(s.mapped), l: 'bárbaros no mundo' },
       ];
     } else if (mod === 'planner') {
       const attacks = (config.planner && config.planner.attacks) || [];
@@ -1323,6 +1352,10 @@
       tickBar(idx);   // idx = quantos JÁ terminaram
       const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
       const tx = +cm[1], ty = +cm[2];
+      // Blacklist do módulo Mapa. É o que dá efeito prático à lista: sem isto, marcar uma
+      // aldeia como "tem defesa" só impediria o explorador de ir, e o Saque continuaria
+      // mandando tropa pro mesmo lugar onde ela morre.
+      if ((config.map.blacklistDefesa || {})[t.coord] || (config.map.blacklistPerda || {})[t.coord]) { skip.def++; continue; }
       if (t.color === 'blue') {
         if (defended[t.reportId]) { skip.def++; continue; }
         // Não deu pra ler o relatório? PULA. Azul é o único que pode ter defesa; mandar sem saber
@@ -4036,12 +4069,84 @@
   function mapUnitsTotal(units) { let t = 0; UNITS.forEach((p) => { t += (units[p[0]] || 0); }); return t; }
   function mapUnitsDesc(units) { return UNITS.filter((p) => (units[p[0]] || 0) > 0).map((p) => p[0] + '=' + units[p[0]]).join(', ') || '(vazio)'; }
 
+  // Quanto tempo esperar por um relatório antes de reexplorar o mesmo alvo. Explorador
+  // voa, chega, e o relatório aparece: em 20 campos isso é questão de minutos. Sem esta
+  // trava o ciclo seguinte reenviaria antes de a informação chegar, queimando tropa.
+  const MAP_ESPERA_RELATORIO_MS = 45 * 60 * 1000;
+
+  // Mantém as duas blacklists a partir do que o assistente mostra.
+  //
+  // PERDA: a cor do último saque. Vermelho = perdi tropa lá. Sai da lista sozinha quando
+  // aparecer relatório verde, amarelo ou azul — que é o sinal de que o saque voltou bem.
+  // DEFESA: entra por leitura de relatório (mapProcessarRelatorios), e NÃO sai sozinha —
+  // tropa defensiva não some porque o próximo saque deu certo.
+  function mapAtualizarBlacklists(sabido) {
+    const cfg = config.map;
+    let entrou = 0, saiu = 0;
+    Object.keys(sabido).forEach((coord) => {
+      const s = sabido[coord];
+      if (s.color === 'red') {
+        if (!cfg.blacklistPerda[coord]) { cfg.blacklistPerda[coord] = { at: Date.now(), vid: s.targetId }; entrou++; }
+      } else if (s.color === 'green' || s.color === 'yellow' || s.color === 'blue') {
+        if (cfg.blacklistPerda[coord]) { delete cfg.blacklistPerda[coord]; saiu++; }
+      }
+    });
+    if (entrou) pushLog('🗺️ ' + entrou + ' aldeia(s) entraram na blacklist de tropa perdida (último saque veio vermelho).', '', 'map');
+    if (saiu) pushLog('🗺️ ' + saiu + ' aldeia(s) saíram da blacklist de tropa perdida (saque voltou bem).', 'ok', 'map');
+    if (entrou || saiu) save();
+  }
+
+  // Lê os relatórios de exploração novos e põe na blacklist quem tem defesa.
+  // Uma requisição por relatório ainda não lido — por isso o registro do que já foi lido.
+  async function mapProcessarRelatorios(sabido, limite) {
+    const cfg = config.map;
+    const pend = Object.keys(sabido).filter((coord) =>
+      sabido[coord].reportId && !cfg.relatoriosLidos[sabido[coord].reportId] &&
+      !cfg.blacklistDefesa[coord] && sabido[coord].temDados);
+    if (!pend.length) return 0;
+    let achou = 0, lidos = 0;
+    for (const coord of pend.slice(0, limite || 20)) {
+      if (devoParar('map')) break;
+      const s = sabido[coord];
+      let def;
+      try { def = await getReportDefenseTotal(s.reportId); }
+      catch (e) { continue; }   // não deu pra ler: NÃO marca como lido, tenta de novo depois
+      cfg.relatoriosLidos[s.reportId] = 1; lidos++;
+      if (def >= (cfg.defesaMin || 1)) {
+        cfg.blacklistDefesa[coord] = { at: Date.now(), vid: s.targetId, defTotal: def, removido: false };
+        achou++;
+        pushLog('🛡️ ' + coord + ' tem defesa (' + def + ' unidades) — entrou na blacklist e sai da rota de exploração e de saque.', '', 'map');
+      }
+      await sleep(250);
+    }
+    if (lidos) save();
+    return achou;
+  }
+
+  // Bárbaro NOVO = vid que não estava no conjunto conhecido. Pega tanto aldeia que virou
+  // bárbara quanto conta deletada. É o que faz o ciclo contínuo ter utilidade.
+  function mapDetectarNovos(barbs) {
+    const cfg = config.map;
+    const agora = Date.now();
+    const primeiraVez = !Object.keys(cfg.barbConhecidos).length;
+    const novos = [];
+    barbs.forEach((b) => {
+      if (!cfg.barbConhecidos[b.vid]) { cfg.barbConhecidos[b.vid] = agora; if (!primeiraVez) novos.push(b); }
+    });
+    if (primeiraVez) pushLog('🗺️ Primeira leitura do mapa: ' + barbs.length + ' bárbaros registrados. A partir do próximo ciclo eu aviso o que for novo.', '', 'map');
+    else if (novos.length) pushLog('🗺️ ' + novos.length + ' bárbaro(s) NOVO(S) desde a última leitura.', 'ok', 'map');
+    save();
+    return novos;
+  }
+
   async function mapPlanTargets() {
     const cfg = config.map;
     let allV;
     try { allV = await getMapVillages(); }
     catch (e) { pushLog('BM: erro ao ler village.txt: ' + (e.message || e), 'err'); return null; }
     const barb = allV.filter((v) => (!cfg.onlyBarbarians || v.player === '0') && v.points >= (cfg.minPoints || 0) && v.points <= (cfg.maxPoints || 99999));
+    const novos = mapDetectarNovos(barb);
+    const idNovo = {}; novos.forEach((b) => { idNovo[b.vid] = 1; });
     let mine;
     try {
       if (cfg.group) { const list = await getVillagesInGroup(cfg.group); mine = list.map((v) => ({ vid: v.vid, coord: v.coord, name: v.coord })); }
@@ -4053,10 +4158,22 @@
     const now = Date.now();
     const staleMs = Math.max(0, (cfg.minDaysSinceScout || 0)) * 86400000;
     const sentAt = cfg.sentAt || {};
-    // "Já explorado": lê o assistente (conta-inteira) uma vez -> coord -> data do último relatório.
-    const explored = {};
-    try { (await getFarmTargets(CUR_VID)).forEach((t) => { if (t.reportId && t.coord) explored[t.coord] = t.reportAt || 0; }); }
-    catch (e) { pushLog('Mapa: não consegui ler os relatórios do assistente (vou considerar todos como não-explorados): ' + (e.message || e), 'err', 'map'); }
+    // O QUE EU JÁ SEI, lido do assistente uma vez (conta inteira).
+    //
+    // A regra deixou de ser "faz quantos dias que escaneei" e passou a ser "tenho ou não
+    // tenho informação". Três estados, e só o primeiro dispensa explorador:
+    //   temDados  -> tem relatório E ele trouxe a muralha: eu sei o que tem lá
+    //   semDados  -> tem relatório mas a muralha veio em branco: o explorador morreu
+    //   ausente   -> nem aparece no assistente: não sei nada
+    // De quebra a cor do último saque entra aqui: VERMELHO é tropa perdida.
+    const sabido = {};   // coord -> { temDados, reportId, wall, color, targetId }
+    try {
+      (await getFarmTargets(CUR_VID)).forEach((t) => {
+        if (!t.coord) return;
+        sabido[t.coord] = { temDados: !!(t.reportId && t.wall != null), reportId: t.reportId, wall: t.wall, color: t.color, targetId: t.targetId, reportAt: t.reportAt || 0 };
+      });
+      mapAtualizarBlacklists(sabido);
+    } catch (e) { pushLog('Mapa: não consegui ler o assistente (vou considerar tudo como não-explorado): ' + (e.message || e), 'err', 'map'); }
     // O filtro do assistente pode esconder aldeias que você já está atacando; a lista de comandos cobre esse buraco.
     let attacking = new Set();
     try { attacking = (await getPendingAttack()).coords; } catch (e) {}
@@ -4076,17 +4193,21 @@
     for (const b of barb) {
       const coord = b.x + '|' + b.y;
       const last = sentAt[b.vid] || 0;
-      // já tem ataque nosso em rota pra lá (o filtro do assistente costuma esconder essas): não explora
+      // blacklist: perdi tropa aí, ou o relatório mostrou defesa. Não gasta explorador.
+      if (cfg.blacklistPerda[coord] || cfg.blacklistDefesa[coord]) continue;
+      // já tem ataque nosso em rota pra lá — inclusive explorador já a caminho: não reenvia
       if (attacking.has(coord)) continue;
-      // trava curta: já mandei explorador há pouco (relatório ainda não chegou/apareceu)
-      if (last && staleMs > 0 && (now - last) < staleMs) continue;
-      // já explorado: pula se JÁ tem relatório FRESCO; relatório velho (> N dias) pode re-explorar
-      if (coord in explored) {
-        const rAt = explored[coord];
-        if (rAt) { if ((now - rAt) < staleMs) continue; }   // com data: pula se fresco
-        else if (staleMs > 0) continue;                      // sem data legível: pula (a não ser que dias=0)
+      // trava curta: mandei explorador há pouco e o relatório ainda não voltou. Sem isto o
+      // ciclo seguinte reenviaria pro mesmo alvo antes de a informação chegar.
+      if (last && (now - last) < MAP_ESPERA_RELATORIO_MS) continue;
+      // Eu já sei o que tem lá? Só isso dispensa explorador.
+      const s = sabido[coord];
+      if (s && s.temDados) {
+        // Reexploração por idade é OPCIONAL (0 = nunca). A regra principal é ter ou não ter
+        // informação; a idade só existe pra quem quiser atualizar intel velho.
+        if (!staleMs || (now - (s.reportAt || 0)) < staleMs) continue;
       }
-      elegiveis.push({ vid: b.vid, x: b.x, y: b.y, coord: coord, points: b.points, name: b.name, lastAt: last });
+      elegiveis.push({ vid: b.vid, x: b.x, y: b.y, coord: coord, points: b.points, name: b.name, lastAt: last, novo: !!idNovo[b.vid] });
     }
     const maxDist = cfg.maxDist || 20;
     const pairs = [];
@@ -4096,7 +4217,9 @@
         if (d <= maxDist) pairs.push({ src: s, dist: d, target: t });
       }
     }
-    pairs.sort((a, b) => a.dist - b.dist);
+    // Bárbaro NOVO passa na frente: é o alvo que ninguém explorou ainda e que pode sumir
+    // (outro jogador nobla) se a gente demorar. Empate resolve por distância, como antes.
+    pairs.sort((a, b) => (b.target.novo ? 1 : 0) - (a.target.novo ? 1 : 0) || a.dist - b.dist);
     const limit = Math.max(1, cfg.maxPerVillage || 20);
     const jaAtribuido = {};
     for (const p of pairs) {
@@ -4108,12 +4231,16 @@
     }
     const alcancaveis = Object.keys(pairs.reduce((m, p) => { m[p.target.vid] = 1; return m; }, {})).length;
     const plan = myV.map((s) => ({ src: s, targets: candByOrigin[s.vid] || [] }));
-    return { myV: myV, plan: plan, barbCount: barb.length, totalCandidates: alcancaveis };
+    return { myV: myV, plan: plan, barbCount: barb.length, totalCandidates: alcancaveis, sabido: sabido, novos: novos.length };
   }
 
   async function mapTick() {
     clearTimeout(mapTimer);
     if (!config.map.running) return;
+    // Ainda não é hora do próximo ciclo. O agendamento é feito em fatias de no máximo 60s
+    // (ver scheduleMap) porque um setTimeout de 30 minutos escorrega e morre se a aba
+    // suspender; quem decide se chegou a hora é este teste, não o timer.
+    if (config.map.nextAt && Date.now() < config.map.nextAt) { scheduleMap(); return; }
     if (lockOther()) { mapTimer = setTimeout(mapTick, 5000); return; }
     if (captchaBlocked()) { mapTimer = setTimeout(mapTick, 30000); return; }
     claimLock();
@@ -4142,12 +4269,21 @@
         // O Mapa põe running=false só no fim; aqui a guarda usa lock e bot-check, que é o que
         // importa num laço de aldeias × até 20 alvos cada (chega a 7 minutos).
         {
-          const pare = devoParar(null);
+          const pare = devoParar('map');
           if (pare) {
-            // One-shot: interrompido é interrompido. Sem apagar a flag, o módulo ficaria eternamente
-            // "rodando" — segurando a trava e bloqueando as outras abas sem estar fazendo nada.
-            cfg.running = false; save(); setMapStatus(false); refreshCards('map');
-            pushLog('Mapa: interrompido — ' + pare + '. ' + sentTotal + ' explorador(es) já enviado(s); clique Iniciar pra continuar de onde parou.', 'err', 'map');
+            // Com ciclo contínuo, ser interrompido pela trava ou pelo bot-check NÃO é o
+            // mesmo que você mandar parar: naquele caso o módulo segue ligado e tenta de
+            // novo. Só o botão Parar desliga (e aí running já está false).
+            save(); refreshCards('map');
+            if (cfg.running) {
+              const espera = 5 * 60000;
+              cfg.nextAt = Date.now() + espera; save();
+              pushLog('🗺️ Ciclo interrompido — ' + pare + '. ' + sentTotal + ' explorador(es) enviado(s); tento de novo em 5 min.', '', 'map');
+              mapTimer = setTimeout(mapTick, espera);
+            } else {
+              setMapStatus(false);
+              pushLog('🗺️ Mapa parado. ' + sentTotal + ' explorador(es) enviado(s) neste ciclo.', '', 'map');
+            }
             return;
           }
         }
@@ -4180,13 +4316,35 @@
       pushLog(p.src.name + ' (' + p.src.coord + '): ' + parts.join(' · '), '', 'map');
     }
     Object.keys(cfg.sentAt).forEach((k) => { if (now - cfg.sentAt[k] > 30 * 86400000) delete cfg.sentAt[k]; });
-    cfg.stats = { mapped: plan.barbCount, reach: plan.totalCandidates, sent: sentTotal, left: leftTotal };
-    cfg.running = false;   // ONE-SHOT: termina e PARA (rodar de novo = clicar Iniciar)
+
+    // Lê os relatórios novos e alimenta a blacklist de defesa. Depois do envio, de
+    // propósito: o que interessa é o relatório que já existe, e enquanto isso os
+    // exploradores que acabaram de sair estão voando.
+    let comDefesa = 0;
+    if (plan.sabido) { try { comDefesa = await mapProcessarRelatorios(plan.sabido, 20); } catch (e) {} }
+
+    cfg.stats = {
+      mapped: plan.barbCount, reach: plan.totalCandidates, sent: sentTotal, left: leftTotal,
+      novos: plan.novos || 0,
+      blPerda: Object.keys(cfg.blacklistPerda || {}).length,
+      blDefesa: Object.keys(cfg.blacklistDefesa || {}).length,
+    };
+
+    // CICLO CONTÍNUO. Antes era one-shot — terminava e desligava, e você tinha que clicar
+    // Iniciar de novo. Agora fica ligado: a cada ciclo relê o mapa, detecta bárbaro novo e
+    // manda explorador no que ainda não tem informação.
+    const intervalo = Math.max(5, cfg.cicloMin || 30) * 60000;
+    cfg.nextAt = Date.now() + intervalo;
     save();
-    setMapStatus(false);
     refreshCards('map');
-    pushLog('Mapa: concluído — ' + sentTotal + ' explorador(es) enviado(s). Clique Iniciar pra rodar de novo.', 'ok', 'map');
+    pushLog('🗺️ Ciclo concluído — ' + sentTotal + ' explorador(es) enviado(s)' +
+      (plan.novos ? ', ' + plan.novos + ' bárbaro(s) novo(s)' : '') +
+      (comDefesa ? ', ' + comDefesa + ' com defesa detectada' : '') +
+      '. Próximo em ' + Math.round(intervalo / 60000) + ' min.', 'ok', 'map');
+    mapTimer = setTimeout(mapTick, intervalo);
   }
+  // Fatia a espera em no máximo 60s e reagenda. Quem decide se chegou a hora é o teste no
+  // topo do mapTick — assim um ciclo de 30 min sobrevive a aba estrangulada e a F5.
   function scheduleMap() { clearTimeout(mapTimer); if (!config.map.running) return; mapTimer = setTimeout(mapTick, Math.min(Math.max((config.map.nextAt || 0) - Date.now(), 1000), 60000)); }
 
   async function mapPreview() {
@@ -4239,6 +4397,64 @@
         return '<div style="display:grid;grid-template-columns:60px 34px 44px 1fr 44px;gap:4px;padding:2px 4px;border-bottom:1px solid rgba(255,255,255,.04);font-size:10px;color:#cdbb92"><span style="color:#ffd76a">' + esc(t.coord) + '</span><span style="text-align:right">' + t.dist + '</span><span style="text-align:right">' + (t.pts || 0) + '</span><span style="color:#8f7d57;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="de ' + esc(t.srcName || '') + '">' + esc(t.src) + '</span><span style="text-align:right;color:' + (t.lastAt ? '#8f7d57' : '#8fe39a') + '">' + last + '</span></div>';
       }).join('');
   }
+  // Qual das três listas está visível. Fica em memória — é preferência de tela, não estado.
+  let _mapSub = 'alvos';
+  function mapMostrarSub(qual) {
+    _mapSub = qual;
+    const lista = document.getElementById('twmgr-bm-list'), bl = document.getElementById('twmgr-bm-bl');
+    if (!lista || !bl) return;
+    lista.style.display = qual === 'alvos' ? '' : 'none';
+    bl.style.display = qual === 'alvos' ? 'none' : '';
+    document.querySelectorAll('.twmgr-bm-sub').forEach((b) => b.classList.toggle('on', b.getAttribute('data-sub') === qual));
+    if (qual !== 'alvos') renderMapBlacklist(qual);
+  }
+
+  function renderMapBlacklist(qual) {
+    const box = document.getElementById('twmgr-bm-bl'); if (!box) return;
+    const cfg = config.map;
+    const mapa = qual === 'perda' ? (cfg.blacklistPerda || {}) : (cfg.blacklistDefesa || {});
+    const chaves = Object.keys(mapa).sort((a, b) => (mapa[b].at || 0) - (mapa[a].at || 0));
+    if (!chaves.length) {
+      box.innerHTML = '<div style="color:#8f7d57;text-align:center;padding:14px;font-size:10px">— lista vazia —<br><br>' +
+        (qual === 'perda'
+          ? 'Entra aqui quem devolveu o saque em <b>vermelho</b> (você perdeu tropa). Sai sozinho quando um saque voltar verde, amarelo ou azul.'
+          : 'Entra aqui quem o relatório de exploração mostrou com <b>tropa defensiva</b>. Não sai sozinho — tire na mão quando achar que mudou.') + '</div>';
+      return;
+    }
+    const agora = Date.now();
+    box.innerHTML =
+      '<div style="display:grid;grid-template-columns:64px 1fr 52px 22px;gap:4px;padding:3px 5px;border-bottom:1px solid #4a3b28;font-size:9px;color:#e8d29a;font-weight:600">' +
+        '<span>alvo</span><span>' + (qual === 'defesa' ? 'defesa vista' : 'motivo') + '</span><span style="text-align:right">há</span><span></span></div>' +
+      chaves.map((coord) => {
+        const r = mapa[coord];
+        const dias = r.at ? Math.round((agora - r.at) / 86400000) : null;
+        const quando = dias == null ? '—' : (dias === 0 ? 'hoje' : dias + 'd');
+        const meio = qual === 'defesa'
+          ? '<span style="color:#ff8b7c">' + (r.defTotal || '?') + ' unidades</span>' + (r.removido ? ' <span style="color:#8f7d57">· apagado do assistente</span>' : '')
+          : '<span style="color:#8f7d57">saque voltou vermelho</span>';
+        return '<div style="display:grid;grid-template-columns:64px 1fr 52px 22px;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:10px;color:#cdbb92;align-items:center">' +
+          '<span style="color:#ffd76a">' + esc(coord) + '</span>' + meio +
+          '<span style="text-align:right;color:#8f7d57">' + quando + '</span>' +
+          '<span class="twmgr-del twmgr-bm-unbl" data-coord="' + esc(coord) + '" data-lista="' + qual + '" title="tirar da blacklist">✕</span></div>';
+      }).join('');
+    box.querySelectorAll('.twmgr-bm-unbl').forEach((el) => el.addEventListener('click', () => {
+      const c = el.getAttribute('data-coord'), l = el.getAttribute('data-lista');
+      delete (l === 'perda' ? config.map.blacklistPerda : config.map.blacklistDefesa)[c];
+      save(); renderMapBlacklist(l); renderMapCounts();
+      pushLog('🗺️ ' + c + ' saiu da blacklist (' + (l === 'perda' ? 'tropa perdida' : 'defesa') + ') — volta a ser alvo de exploração e de saque.', '', 'map');
+    }));
+  }
+
+  function renderMapCounts() {
+    const cfg = config.map;
+    const p = document.getElementById('twmgr-bm-nperda'); if (p) p.textContent = Object.keys(cfg.blacklistPerda || {}).length;
+    const d = document.getElementById('twmgr-bm-ndefesa'); if (d) d.textContent = Object.keys(cfg.blacklistDefesa || {}).length;
+    const n = document.getElementById('twmgr-bm-next');
+    if (n) n.textContent = (cfg.running && cfg.nextAt > Date.now())
+      ? 'próximo ciclo em ' + Math.max(0, Math.round((cfg.nextAt - Date.now()) / 60000)) + ' min'
+      : (cfg.running ? 'rodando…' : 'parado');
+  }
+
   function readMapCfg() {
     const c = config.map, g = (id) => document.getElementById(id);
     if (g('twmgr-bm-group')) c.group = g('twmgr-bm-group').value || null;
@@ -4250,6 +4466,9 @@
     if (g('twmgr-bm-reserve')) c.spyReserve = Math.max(0, parseInt(g('twmgr-bm-reserve').value, 10) || 0);
     if (g('twmgr-bm-spy')) c.spyCount = Math.max(1, parseInt(g('twmgr-bm-spy').value, 10) || 1);
     if (g('twmgr-bm-delay')) { const v = parseInt(g('twmgr-bm-delay').value, 10); c.delay = (isNaN(v) || v < 0) ? 500 : v; }
+    if (g('twmgr-bm-ciclo')) c.cicloMin = Math.max(5, parseInt(g('twmgr-bm-ciclo').value, 10) || 30);
+    if (g('twmgr-bm-defmin')) c.defesaMin = Math.max(1, parseInt(g('twmgr-bm-defmin').value, 10) || 1);
+    if (g('twmgr-bm-rmassist')) c.removerDoAssistente = !!g('twmgr-bm-rmassist').checked;
     save();
   }
   function setMapStatus(on) { setBtnState('twmgr-bm-start', 'twmgr-bm-stop', on, '● Mapeando', '▶ Iniciar'); }
@@ -4257,10 +4476,11 @@
     readMapCfg();
     config.map.running = true; config.map.nextAt = 0; save();
     setMapStatus(true);
-    pushLog('Mapa iniciado — distância ≤ ' + config.map.maxDist + ', ' + config.map.spyCount + ' explorador/alvo, reserva ' + config.map.spyReserve + '.', 'ok', 'map');
+    pushLog('🗺️ Mapa ligado — ciclo a cada ' + config.map.cicloMin + ' min, raio ≤ ' + config.map.maxDist +
+      ' campos por aldeia, ' + config.map.spyCount + ' explorador/alvo, reserva ' + config.map.spyReserve + '.', 'ok', 'map');
     mapTick();
   }
-  function mapStop() { readMapCfg(); config.map.running = false; save(); clearTimeout(mapTimer); setMapStatus(false); pushLog('Mapa parado.', '', 'map'); }
+  function mapStop() { readMapCfg(); config.map.running = false; save(); clearTimeout(mapTimer); setMapStatus(false); renderMapCounts(); pushLog('🗺️ Mapa desligado.', '', 'map'); }
   async function mapRefreshCache() { _mapVillagesCache = null; try { const v = await getMapVillages(true); pushLog('Mapa recarregado — ' + v.length + ' aldeias no mundo (' + v.filter((x) => x.player === '0').length + ' bárbaras).', 'ok', 'map'); } catch (e) { pushLog('Mapa: recarregar falhou (' + (e.message || e) + ').', 'err', 'map'); } }
 
   // ==================== DETECTOR DE CAPTCHA ====================
@@ -4954,24 +5174,37 @@
         modLog('bb') +
       '</div>' +
       '<div id="twmgr-tab-map" style="display:none">' +
-        hint('🗺️ Manda <b>exploradores</b> pros bárbaros ainda não escaneados (ou há +N dias). Roda uma vez e para.') +
+        hint('🗺️ Fica <b>ligado por ciclos</b>. A cada ciclo relê o mapa, acha bárbaro novo no seu raio e manda explorador em quem <b>você ainda não conhece</b> — quem não está no assistente de saque, ou está mas o relatório não trouxe nada. Quem já tem explorador a caminho é pulado.') +
         cardsDiv('map') +
         sec('Origem',
           '<div class="twmgr-row"><span class="twmgr-lbl">Grupo origem (vazio = todas)</span><select id="twmgr-bm-group" class="twmgr-inp" style="width:150px"></select></div>' +
           '<div style="text-align:right;margin-top:2px"><button id="twmgr-bm-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button> <button id="twmgr-bm-refmap" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="recarrega /map/village.txt">↻ mapa</button></div>') +
         sec('Filtros de alvo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-bm-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:66px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Sem escanear há (dias)</span><input id="twmgr-bm-days" class="twmgr-inp" type="number" min="0" step="0.5" value="2" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="0 = nunca reexplora quem já tem relatório com dados. Acima de 0, reexplora intel mais velho que isso.">Reexplorar intel com + de (dias)</span><input id="twmgr-bm-days" class="twmgr-inp" type="number" min="0" step="0.5" value="0" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Pontos de/até</span><span><input id="twmgr-bm-minpts" class="twmgr-inp" type="number" min="0" value="26" style="width:56px"> a <input id="twmgr-bm-maxpts" class="twmgr-inp" type="number" min="1" value="5000" style="width:56px"></span></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Máx alvos por aldeia/ciclo</span><input id="twmgr-bm-maxper" class="twmgr-inp" type="number" min="1" value="20" style="width:66px"></div>') +
         sec('Exploradores',
           '<div class="twmgr-row"><span class="twmgr-lbl">Reserva de spy (guardar/aldeia)</span><input id="twmgr-bm-reserve" class="twmgr-inp" type="number" min="0" value="30" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Spy por alvo</span><input id="twmgr-bm-spy" class="twmgr-inp" type="number" min="1" value="1" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Delay entre envios (ms)</span><input id="twmgr-bm-delay" class="twmgr-inp" type="number" min="0" step="100" value="500" style="width:66px"></div>') +
+        sec('Ciclo',
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="De quanto em quanto tempo ele relê o mapa e procura bárbaro novo.">Intervalo do ciclo (min)</span><input id="twmgr-bm-ciclo" class="twmgr-inp" type="number" min="5" step="5" value="30" style="width:66px"></div>' +
+          '<div id="twmgr-bm-next" style="font-size:10px;color:#8f7d57;text-align:right"></div>') +
+        sec('Blacklist',
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="A partir de quantas unidades de defesa no relatório a aldeia entra na blacklist.">Defesa mínima p/ blacklist</span><input id="twmgr-bm-defmin" class="twmgr-inp" type="number" min="1" value="1" style="width:66px"></div>' +
+          '<label class="twmgr-check" title="Apaga os relatórios da aldeia no jogo, o que a tira da listagem do assistente. NÃO TEM DESFAZER."><input id="twmgr-bm-rmassist" type="checkbox"> Apagar do assistente de saque no jogo <b style="color:#e6a89d">(irreversível)</b></label>' +
+          '<div class="twmgr-hint" style="margin:0">O Saque já pula quem está em qualquer uma das duas listas, mesmo com essa opção desligada.</div>') +
         '<div class="twmgr-actions"><button id="twmgr-bm-preview" class="twmgr-btn twmgr-ghost">💡 Prévia</button><button id="twmgr-bm-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-bm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-bm-status" class="twmgr-cstatus"></div>' +
-        '<div style="margin-top:8px;font-size:11px;color:#e8d29a">Alvos detectados: <b id="twmgr-bm-count">0</b></div>' +
+        // Três listas na mesma área, alternadas — alvos do próximo ciclo e as duas blacklists.
+        '<div id="twmgr-bm-subtabs" style="display:flex;gap:4px;margin:9px 0 0">' +
+          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="alvos" style="flex:1;padding:4px;font-size:10px">🎯 Alvos (<span id="twmgr-bm-count">0</span>)</button>' +
+          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="perda" style="flex:1;padding:4px;font-size:10px">💀 Perdi tropa (<span id="twmgr-bm-nperda">0</span>)</button>' +
+          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="defesa" style="flex:1;padding:4px;font-size:10px">🛡️ Tem defesa (<span id="twmgr-bm-ndefesa">0</span>)</button>' +
+        '</div>' +
         '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:8px;margin-top:4px"></div>' +
+        '<div id="twmgr-bm-bl" style="max-height:220px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:8px;margin-top:4px;display:none"></div>' +
         modLog('map') +
       '</div>' +
       '<div id="twmgr-tab-planner" style="display:none">' +
@@ -5270,14 +5503,18 @@
 
     // Bárbaros do Mapa (BM)
     document.getElementById('twmgr-bm-dist').value = config.map.maxDist != null ? config.map.maxDist : 20;
-    document.getElementById('twmgr-bm-days').value = config.map.minDaysSinceScout != null ? config.map.minDaysSinceScout : 2;
+    document.getElementById('twmgr-bm-days').value = config.map.minDaysSinceScout != null ? config.map.minDaysSinceScout : 0;
+    document.getElementById('twmgr-bm-ciclo').value = config.map.cicloMin != null ? config.map.cicloMin : 30;
+    document.getElementById('twmgr-bm-defmin').value = config.map.defesaMin != null ? config.map.defesaMin : 1;
+    document.getElementById('twmgr-bm-rmassist').checked = !!config.map.removerDoAssistente;
     document.getElementById('twmgr-bm-minpts').value = config.map.minPoints != null ? config.map.minPoints : 26;
     document.getElementById('twmgr-bm-maxpts').value = config.map.maxPoints != null ? config.map.maxPoints : 5000;
     document.getElementById('twmgr-bm-maxper').value = config.map.maxPerVillage != null ? config.map.maxPerVillage : 20;
     document.getElementById('twmgr-bm-reserve').value = config.map.spyReserve != null ? config.map.spyReserve : 30;
     document.getElementById('twmgr-bm-spy').value = config.map.spyCount != null ? config.map.spyCount : 1;
     document.getElementById('twmgr-bm-delay').value = config.map.delay != null ? config.map.delay : 500;
-    ['twmgr-bm-group', 'twmgr-bm-dist', 'twmgr-bm-days', 'twmgr-bm-minpts', 'twmgr-bm-maxpts', 'twmgr-bm-maxper', 'twmgr-bm-reserve', 'twmgr-bm-spy', 'twmgr-bm-delay'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMapCfg); });
+    ['twmgr-bm-group', 'twmgr-bm-dist', 'twmgr-bm-days', 'twmgr-bm-minpts', 'twmgr-bm-maxpts', 'twmgr-bm-maxper', 'twmgr-bm-reserve', 'twmgr-bm-spy', 'twmgr-bm-delay', 'twmgr-bm-ciclo', 'twmgr-bm-defmin', 'twmgr-bm-rmassist'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMapCfg); });
+    document.querySelectorAll('.twmgr-bm-sub').forEach((b) => b.addEventListener('click', () => mapMostrarSub(b.getAttribute('data-sub'))));
     document.getElementById('twmgr-bm-reload').addEventListener('click', fillGroupSelects);
     document.getElementById('twmgr-bm-refmap').addEventListener('click', mapRefreshCache);
     document.getElementById('twmgr-bm-preview').addEventListener('click', mapPreview);
@@ -5285,6 +5522,8 @@
     document.getElementById('twmgr-bm-stop').addEventListener('click', mapStop);
     setMapStatus(config.map.running);
     renderMapPreview();
+    renderMapCounts();
+    mapMostrarSub('alvos');
 
     document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.getAttribute('data-tab'))));
     // Toggle expandir/recolher o log por módulo

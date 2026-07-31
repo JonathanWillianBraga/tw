@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.25.0
+// @version      10.26.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -110,7 +110,7 @@
   };
 
 
-  const VERSION = '10.25.0';
+  const VERSION = '10.26.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -660,7 +660,8 @@
       arr = [
         { v: fmtN(s.inRange), l: 'no raio', hl: true },
         { v: fmtN(s.lockedNow), l: 'travadas agora' },
-        { v: fmtN(s.total), l: 'travadas ao todo', wide: true },
+        { v: fmtN(s.total), l: 'travadas ao todo' },
+        { v: fmtN(s.redSkipped), l: 'puladas (relatório vermelho)', wide: true },
       ];
     } else if (mod === 'planner') {
       const attacks = (config.planner && config.planner.attacks) || [];
@@ -4775,10 +4776,20 @@
     const myV = [];
     mine.forEach((v) => { const cm = (v.coord || '').match(/(\d+)\|(\d+)/); if (cm) myV.push({ x: +cm[1], y: +cm[2] }); });
     if (!myV.length) { pushLog('Cadeado: nenhuma aldeia própria encontrada.', 'err', 'lock'); config.lock.nextAt = now + 300000; save(); scheduleLock(); return; }
+    // Relatório vermelho (mesma classificação que o Saque já usa, via dot do assistente de farm) =
+    // último ataque nosso lá se deu mal -> pula, não trava aldeia com relatório vermelho.
+    const redSet = new Set();
+    try { (await getFarmTargets(CUR_VID)).forEach((t) => { if (t.color === 'red' && t.coord) redSet.add(t.coord); }); }
+    catch (e) { pushLog('Cadeado: não consegui ler os relatórios do assistente (seguindo sem o filtro de vermelho nesse ciclo): ' + (e.message || e), 'err', 'lock'); }
     const maxDist = config.lock.maxDist || 10, minPts = config.lock.minPoints || 0;
     // "no raio de TODAS as suas aldeias" = distância até a MAIS PERTO das suas aldeias, não de uma só.
-    const inRange = allV.filter((b) => b.player === '0' && b.points >= minPts && myV.some((s) => fieldDist(s.x, s.y, b.x, b.y) <= maxDist))
-      .sort((a, b) => b.points - a.points);   // mais pontos primeiro
+    let redSkipped = 0;
+    const inRange = allV.filter((b) => {
+      if (b.player !== '0' || b.points < minPts) return false;
+      if (!myV.some((s) => fieldDist(s.x, s.y, b.x, b.y) <= maxDist)) return false;
+      if (redSet.has(b.x + '|' + b.y)) { redSkipped++; return false; }
+      return true;
+    }).sort((a, b) => b.points - a.points);   // mais pontos primeiro
     config.lock.reserved = config.lock.reserved || {};
     let lockedNow = 0, restored = 0;
     for (const b of inRange) {
@@ -4802,11 +4813,11 @@
         await sleep(400 + Math.floor(Math.random() * 300));
       } catch (e) { pushLog('Cadeado em ' + b.name + ' (' + b.x + '|' + b.y + '): ' + (e.message || e), 'err', 'lock'); }
     }
-    config.lock.stats = { inRange: inRange.length, total: Object.keys(config.lock.reserved).length, lockedNow: lockedNow };
+    config.lock.stats = { inRange: inRange.length, total: Object.keys(config.lock.reserved).length, lockedNow: lockedNow, redSkipped: redSkipped };
     config.lock.nextAt = now + Math.max(60, config.lock.interval || 1800) * 1000;
     save();
     refreshCards('lock');
-    pushLog('Cadeado: ciclo concluído — ' + lockedNow + ' nova(s) travada(s)' + (restored ? ', ' + restored + ' restaurada(s)' : '') + ' (' + inRange.length + ' no raio, ' + Object.keys(config.lock.reserved).length + ' travadas ao todo). Próximo em ' + Math.round((config.lock.interval || 1800) / 60) + ' min.', 'ok', 'lock');
+    pushLog('Cadeado: ciclo concluído — ' + lockedNow + ' nova(s) travada(s)' + (restored ? ', ' + restored + ' restaurada(s)' : '') + ' (' + inRange.length + ' no raio, ' + Object.keys(config.lock.reserved).length + ' travadas ao todo, ' + redSkipped + ' pulada(s) por relatório vermelho). Próximo em ' + Math.round((config.lock.interval || 1800) / 60) + ' min.', 'ok', 'lock');
     scheduleLock();
   }
   function scheduleLock() { clearTimeout(lockTimer); if (!config.lock.running) return; lockTimer = setTimeout(lockTick, Math.min(Math.max((config.lock.nextAt || 0) - Date.now(), 1000), 60000)); }
@@ -5558,7 +5569,7 @@
         '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:8px;margin-top:4px"></div>' +
         modLog('map') +
         sec('🔒 Cadeado automático',
-          '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Rastreia bárbaras no raio de TODAS as suas aldeias (a mais perto conta) e tranca (reserva pra tribo) as com pontuação mínima, das mais fortes pras mais fracas. Nunca destrava o que já travou — só soma.</div>' +
+          '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Rastreia bárbaras no raio de TODAS as suas aldeias (a mais perto conta) e tranca (reserva pra tribo) as com pontuação mínima, das mais fortes pras mais fracas. Pula quem tem relatório vermelho (mesma classificação do Saque). Nunca destrava o que já travou — só soma.</div>' +
           cardsDiv('lock') +
           '<div class="twmgr-row"><span class="twmgr-lbl">Raio (campos, X)</span><input id="twmgr-lk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="10" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Pontos mín. (Y)</span><input id="twmgr-lk-pts" class="twmgr-inp" type="number" min="0" value="500" style="width:80px"></div>' +

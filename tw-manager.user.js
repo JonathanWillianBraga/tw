@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.25.0
+// @version      10.26.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.25.0';
+  const VERSION = '10.26.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -4116,11 +4116,41 @@
         cfg.blacklistDefesa[coord] = { at: Date.now(), vid: s.targetId, defTotal: def, removido: false };
         achou++;
         pushLog('🛡️ ' + coord + ' tem defesa (' + def + ' unidades) — entrou na blacklist e sai da rota de exploração e de saque.', '', 'map');
+        if (cfg.removerDoAssistente && s.targetId) {
+          try { await mapApagarDoAssistente(s.targetId, coord); cfg.blacklistDefesa[coord].removido = true; }
+          catch (e) { pushLog('🗑️ ' + coord + ': não consegui apagar do assistente (' + (e.message || e) + '). A blacklist continua valendo.', 'err', 'map'); }
+          await sleep(400);
+        }
       }
       await sleep(250);
     }
     if (lidos) save();
     return achou;
+  }
+
+  // Apaga os relatórios de uma aldeia no jogo, o que a tira da listagem do assistente.
+  //
+  // A assinatura foi capturada da requisição real (interceptada e bloqueada, pra não
+  // apagar nada durante a descoberta), porque eu não tinha como deduzi-la do fixture:
+  //     POST screen=report&ajaxaction=delete_one&json=1&h=<csrf>
+  //     body: id=<id da ALDEIA ALVO>   (não do relatório — o fixture confirma: o argumento
+  //                                     de deleteReport(49269) casa com a linha village_49269)
+  // "delete_one" é o nome deles; o efeito é apagar TODOS os relatórios daquela aldeia.
+  //
+  // NÃO TEM DESFAZER. Só roda com o interruptor ligado, e cada remoção vai pro log com a
+  // coordenada — se um dia der errado, fica o registro do que foi tirado.
+  async function mapApagarDoAssistente(targetId, coord) {
+    const r = await fetch('/game.php?village=' + CUR_VID + '&screen=report&ajaxaction=delete_one&json=1&h=' + CSRF, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+      body: 'id=' + encodeURIComponent(targetId),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const txt = await r.text();
+    // Resposta é JSON. Se vier erro explícito, não considera apagado.
+    try { const j = JSON.parse(txt); if (j && j.error) throw new Error(String(j.error).slice(0, 80)); } catch (e) { if (e instanceof SyntaxError) { /* não-JSON: segue */ } else throw e; }
+    pushLog('🗑️ ' + coord + ' — relatórios apagados no jogo; saiu da listagem do assistente de saque.', '', 'map');
+    return true;
   }
 
   // Bárbaro NOVO = vid que não estava no conjunto conhecido. Pega tanto aldeia que virou
@@ -5193,7 +5223,7 @@
           '<div id="twmgr-bm-next" style="font-size:10px;color:#8f7d57;text-align:right"></div>') +
         sec('Blacklist',
           '<div class="twmgr-row"><span class="twmgr-lbl" title="A partir de quantas unidades de defesa no relatório a aldeia entra na blacklist.">Defesa mínima p/ blacklist</span><input id="twmgr-bm-defmin" class="twmgr-inp" type="number" min="1" value="1" style="width:66px"></div>' +
-          '<label class="twmgr-check" title="Apaga os relatórios da aldeia no jogo, o que a tira da listagem do assistente. NÃO TEM DESFAZER."><input id="twmgr-bm-rmassist" type="checkbox"> Apagar do assistente de saque no jogo <b style="color:#e6a89d">(irreversível)</b></label>' +
+          '<label class="twmgr-check" title="Quando uma aldeia entrar na blacklist por DEFESA, apaga os relatórios dela no jogo — o que a tira da listagem do assistente. Não afeta a blacklist de tropa perdida. NÃO TEM DESFAZER: pra voltar, a aldeia teria que reaparecer sozinha na busca do assistente."><input id="twmgr-bm-rmassist" type="checkbox"> Apagar do assistente quem tem defesa <b style="color:#e6a89d">(irreversível)</b></label>' +
           '<div class="twmgr-hint" style="margin:0">O Saque já pula quem está em qualquer uma das duas listas, mesmo com essa opção desligada.</div>') +
         '<div class="twmgr-actions"><button id="twmgr-bm-preview" class="twmgr-btn twmgr-ghost">💡 Prévia</button><button id="twmgr-bm-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-bm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-bm-status" class="twmgr-cstatus"></div>' +

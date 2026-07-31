@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.27.0
+// @version      10.28.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.27.0';
+  const VERSION = '10.28.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -210,6 +210,7 @@
     showIntel: true,           // exibir ⚠ (defesa conhecida) e ⛰N (muralha) baseado em farm.defended
     showReservations: true,    // exibir ⌛Xh nas aldeias reservadas pela tribo
     showCobertura: true,       // moldura colorida por estado de exploração (base do módulo Mapa)
+    showRange: false,          // área alcançada pelo raio do módulo Mapa, em volta das suas aldeias
     dimMode: 'off',            // 'off' (sem escurecer) | 'dim' (bloco preto sobre filtradas)
     dimOpacity: 0.15,          // opacidade das aldeias filtradas (só usado quando dimMode = 'dim')
     reservations: {},          // { [coord]: { at, expiresAt, playerName } } — sync manual
@@ -462,6 +463,7 @@
     if (typeof c.mapUi.showIntel !== 'boolean') c.mapUi.showIntel = true;
     if (typeof c.mapUi.showReservations !== 'boolean') c.mapUi.showReservations = true;
     if (typeof c.mapUi.showCobertura !== 'boolean') c.mapUi.showCobertura = true;
+    if (typeof c.mapUi.showRange !== 'boolean') c.mapUi.showRange = false;
     if (c.mapUi.dimMode !== 'off' && c.mapUi.dimMode !== 'dim') c.mapUi.dimMode = 'off';
     if (c.mapUi.dimOpacity == null) c.mapUi.dimOpacity = 0.15;
     if (!c.mapUi.reservations || typeof c.mapUi.reservations !== 'object') c.mapUi.reservations = {};
@@ -6362,6 +6364,38 @@
     const coberturaIntel = (cfg.showCobertura && config.map && config.map.intel) || null;
     const dimEnabled = cfg.dimMode === 'dim';
 
+    // ALCANCE DO MÓDULO MAPA: a área que o raio configurado cobre, em volta de cada aldeia
+    // sua. Desenhado ANTES das aldeias pra ficar por baixo, e como UM caminho só com um
+    // fill: 43 elipses preenchidas separadamente empilhariam transparência e virariam uma
+    // mancha sólida; num caminho único o preenchimento sai uniforme e o que se vê é a
+    // UNIÃO — que é justamente a pergunta "até onde eu alcanço".
+    // Elipse e não círculo porque o tile do TW não é quadrado (53x47).
+    if (cfg.showRange) {
+      const raio = (config.map && config.map.maxDist) || 20;
+      const rx = raio * tw, ry = raio * th;
+      const minhas = [];
+      _mapVilCache.forEach((v) => {
+        if (v.playerId !== MY_PLAYER_ID) return;
+        if (v.x < xMin - raio || v.x > xMax + raio || v.y < yMin - raio || v.y > yMax + raio) return;
+        minhas.push(v);
+      });
+      if (minhas.length) {
+        ctx.beginPath();
+        minhas.forEach((v) => {
+          let p; try { p = T.map.pixelByCoord(v.x, v.y); } catch (e) { return; }
+          const cx = (Array.isArray(p) ? p[0] : p.x) - mapOffset[0] + tw / 2;
+          const cy = (Array.isArray(p) ? p[1] : p.y) - mapOffset[1] + th / 2;
+          ctx.moveTo(cx + rx, cy);
+          ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        });
+        ctx.fillStyle = 'rgba(212,175,55,.10)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(212,175,55,.55)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+
     _mapVilCache.forEach((vil, vid) => {
       if (vil.x < xMin || vil.x > xMax || vil.y < yMin || vil.y > yMax) return;
       let wx, wy;
@@ -6509,6 +6543,7 @@
         check('twmgr-map-intel', 'Mostrar intel (⚠ tropas · ⛰ muralha)', cfg.showIntel) +
         check('twmgr-map-rsv', 'Mostrar reservas da tribo (⌛)', cfg.showReservations) +
         check('twmgr-map-cob', 'Mostrar cobertura de exploração', cfg.showCobertura) +
+        check('twmgr-map-range', 'Mostrar meu alcance (raio do módulo Mapa)', cfg.showRange) +
         '<div id="twmgr-map-cob-leg" style="font-size:9px;line-height:1.7;margin:2px 0 6px 4px"></div>' +
         check('twmgr-map-dim', 'Escurecer aldeias filtradas (bloco preto)', cfg.dimMode === 'dim') +
         '<div style="margin-top:6px;border-top:1px dashed #b89a5a;padding-top:6px;font-size:10px;color:#5a3c0f">' +
@@ -6557,6 +6592,7 @@
     document.getElementById('twmgr-map-intel').addEventListener('change', (e) => { cfg.showIntel = e.target.checked; save_(); });
     document.getElementById('twmgr-map-rsv').addEventListener('change', (e) => { cfg.showReservations = e.target.checked; save_(); });
     document.getElementById('twmgr-map-cob').addEventListener('change', (e) => { cfg.showCobertura = e.target.checked; save_(); mapRenderLegendaCobertura(); });
+    document.getElementById('twmgr-map-range').addEventListener('change', (e) => { cfg.showRange = e.target.checked; save_(); });
     mapRenderLegendaCobertura();
     document.getElementById('twmgr-map-dim').addEventListener('change', (e) => { cfg.dimMode = e.target.checked ? 'dim' : 'off'; save_(); });
     document.getElementById('twmgr-map-rsv-sync').addEventListener('click', async () => {

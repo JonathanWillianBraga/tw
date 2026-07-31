@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.30.0
+// @version      10.30.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.30.0';
+  const VERSION = '10.30.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -977,6 +977,48 @@
     sendTimer = setTimeout(processDue, Math.min(Math.max(Math.max(0, next - now), 1000), 60000));
   }
 
+  // Extrai o objeto de definições das coletas (custo, duração, pré-requisito) do HTML.
+  //
+  // A primeira versão usava expressão regular e falhou contra a página real: um `.*?` até
+  // `}}` para no PRIMEIRO fechamento duplo, e o objeto tem chaves aninhadas (cada opção
+  // carrega um premium_boost dentro). O sintoma foi "não achei os custos de desbloqueio".
+  // Agora varre balanceando chaves e ignorando o que está dentro de string — não depende
+  // de o JSON estar formatado de um jeito específico.
+  function scavExtrairDefs(html) {
+    let i = -1;
+    const anc = html.indexOf('ScavengeMassScreen(');
+    if (anc >= 0) i = html.indexOf('{', anc);
+    if (i < 0) {
+      // Plano B: acha qualquer custo de desbloqueio e volta até o começo do objeto raiz.
+      const u = html.indexOf('"unlock_cost"');
+      if (u < 0) return null;
+      i = html.lastIndexOf('{"1":', u);
+      if (i < 0) return null;
+    }
+    let nivel = 0, emStr = false, escapado = false;
+    for (let j = i; j < html.length; j++) {
+      const c = html[j];
+      if (emStr) {
+        if (escapado) escapado = false;
+        else if (c === '\\') escapado = true;
+        else if (c === '"') emStr = false;
+        continue;
+      }
+      if (c === '"') { emStr = true; continue; }
+      if (c === '{') nivel++;
+      else if (c === '}') {
+        nivel--;
+        if (nivel === 0) {
+          try {
+            const o = JSON.parse(html.slice(i, j + 1));
+            return (o && o['1'] && o['1'].unlock_cost) ? o : null;
+          } catch (e) { return null; }
+        }
+      }
+    }
+    return null;
+  }
+
   async function getAllScavengeState() {
     const res = await fetch('/game.php?village=' + CUR_VID + '&screen=place&mode=scavenge_mass', { credentials: 'include' });
     const html = await res.text();
@@ -1013,10 +1055,7 @@
     });
     // Custo e pré-requisito de cada opção vêm num JSON separado, no construtor da tela.
     // Pendurado no próprio array: quem já usava esta função continua funcionando igual.
-    try {
-      const c = html.match(/new ScavengeMassScreen\(\s*(\{"1":\{[\s\S]*?\}\})\s*,/);
-      if (c) out.defs = JSON.parse(c[1]);
-    } catch (e) { /* sem os custos o desbloqueio se desliga sozinho, o resto segue */ }
+    out.defs = scavExtrairDefs(html);
     return out;
   }
 

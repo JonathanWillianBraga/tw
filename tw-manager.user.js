@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.24.0
+// @version      10.25.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -110,7 +110,7 @@
   };
 
 
-  const VERSION = '10.24.0';
+  const VERSION = '10.25.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -167,6 +167,12 @@
     onlyBarbarians: true,
     sentAt: {},                           // vid do bárbaro -> timestamp do último scout nosso
     lastPreview: [],                      // lista mostrada na tabela
+  });
+  const defLock = () => ({
+    running: false, nextAt: 0,
+    maxDist: 10, minPoints: 500, interval: 1800,   // raio em campos (X), pontos mín. (Y), reciclo em segundos (30min padrão)
+    reserved: {},                          // vid do bárbaro -> timestamp de quando O SCRIPT travou (nunca destrava sozinho)
+    stats: {},
   });
   const defPlannerAttack = (name) => ({
     id: genId(), name: name || 'Ataque',
@@ -387,6 +393,11 @@
     if (c.map.maxPerVillage == null) c.map.maxPerVillage = 20;
     if (c.map.delay == null) c.map.delay = 500;
     if (c.map.onlyBarbarians == null) c.map.onlyBarbarians = true;
+    if (!c.lock) c.lock = defLock();
+    if (c.lock.maxDist == null) c.lock.maxDist = 10;
+    if (c.lock.minPoints == null) c.lock.minPoints = 500;
+    if (c.lock.interval == null) c.lock.interval = 1800;
+    if (!c.lock.reserved) c.lock.reserved = {};
     if (!c.captcha) c.captcha = defCaptcha();
     if (c.captcha.enabled == null) c.captcha.enabled = true;
     if (c.captcha.browserNotif == null) c.captcha.browserNotif = true;
@@ -478,10 +489,10 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null;
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || (config.obra && config.obra.running) || _ocupadoAvulso > 0; }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || (config.obra && config.obra.running) || (config.lock && config.lock.running) || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.
@@ -643,6 +654,13 @@
         { v: fmtN(s.mapped), l: 'no alcance', hl: true },
         { v: fmtN(s.sent), l: 'explorados' },
         { v: fmtN(s.left), l: 'de fora' },
+      ];
+    } else if (mod === 'lock') {
+      const s = (config.lock.stats || {});
+      arr = [
+        { v: fmtN(s.inRange), l: 'no raio', hl: true },
+        { v: fmtN(s.lockedNow), l: 'travadas agora' },
+        { v: fmtN(s.total), l: 'travadas ao todo', wide: true },
       ];
     } else if (mod === 'planner') {
       const attacks = (config.planner && config.planner.attacks) || [];
@@ -4729,6 +4747,86 @@
   function mapStop() { readMapCfg(); config.map.running = false; save(); clearTimeout(mapTimer); setMapStatus(false); pushLog('Mapa parado.', '', 'map'); }
   async function mapRefreshCache() { _mapVillagesCache = null; try { const v = await getMapVillages(true); pushLog('Mapa recarregado — ' + v.length + ' aldeias no mundo (' + v.filter((x) => x.player === '0').length + ' bárbaras).', 'ok', 'map'); } catch (e) { pushLog('Mapa: recarregar falhou (' + (e.message || e) + ').', 'err', 'map'); } }
 
+  // ==================== CADEADO (reserva automática de aldeia bárbara p/ tribo) ====================
+  // Endpoint confirmado via DevTools (não chutado): GET /game.php?village=X&screen=info_village&id=Y
+  // &ajaxaction=toggle_reserve_village&json=1&h=CSRF — é um TOGGLE (chamar de novo tira o cadeado).
+  // Por isso o script guarda em config.lock.reserved quem ELE JÁ travou e nunca chama de novo em cima
+  // — sem essa memória, rodar 2x seguidas destravaria tudo que já tinha travado.
+  async function toggleReserveVillage(targetVid) {
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=info_village&id=' + targetVid + '&ajaxaction=toggle_reserve_village&json=1&h=' + CSRF, { credentials: 'include' });
+    const txt = await res.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (!j || !j.response || !j.response.code) throw new Error('resposta inesperada (' + (txt || '').slice(0, 100).replace(/\s+/g, ' ') + ')');
+    return j.response;   // { code, village, type: 'add'|'remove', id }
+  }
+  async function lockTick() {
+    clearTimeout(lockTimer);
+    if (!config.lock.running) return;
+    if (lockOther()) { lockTimer = setTimeout(lockTick, 5000); return; }
+    if (captchaBlocked()) { lockTimer = setTimeout(lockTick, 30000); return; }
+    claimLock();
+    const now = Date.now();
+    if ((config.lock.nextAt || 0) > now) { scheduleLock(); return; }
+    let allV, mine;
+    try { allV = await getMapVillages(); }
+    catch (e) { pushLog('Cadeado: erro ao ler village.txt (' + (e.message || e) + ').', 'err', 'lock'); config.lock.nextAt = now + 60000; save(); scheduleLock(); return; }
+    try { mine = await getAllVillages(); }
+    catch (e) { pushLog('Cadeado: erro ao listar minhas aldeias (' + (e.message || e) + ').', 'err', 'lock'); config.lock.nextAt = now + 60000; save(); scheduleLock(); return; }
+    const myV = [];
+    mine.forEach((v) => { const cm = (v.coord || '').match(/(\d+)\|(\d+)/); if (cm) myV.push({ x: +cm[1], y: +cm[2] }); });
+    if (!myV.length) { pushLog('Cadeado: nenhuma aldeia própria encontrada.', 'err', 'lock'); config.lock.nextAt = now + 300000; save(); scheduleLock(); return; }
+    const maxDist = config.lock.maxDist || 10, minPts = config.lock.minPoints || 0;
+    // "no raio de TODAS as suas aldeias" = distância até a MAIS PERTO das suas aldeias, não de uma só.
+    const inRange = allV.filter((b) => b.player === '0' && b.points >= minPts && myV.some((s) => fieldDist(s.x, s.y, b.x, b.y) <= maxDist))
+      .sort((a, b) => b.points - a.points);   // mais pontos primeiro
+    config.lock.reserved = config.lock.reserved || {};
+    let lockedNow = 0, restored = 0;
+    for (const b of inRange) {
+      const pare = devoParar('lock');
+      if (pare) { pushLog('Cadeado: interrompido — ' + pare + '. ' + lockedNow + ' travada(s) nesse ciclo até agora.', 'err', 'lock'); config.lock.nextAt = now + 30000; save(); scheduleLock(); return; }
+      if (config.lock.reserved[b.vid]) continue;   // já travamos essa antes, não mexe (evita destravar)
+      try {
+        const r = await toggleReserveVillage(b.vid);
+        if (r.type !== 'add') {
+          // já estava travada por fora do nosso controle (manual, ou outra sessão) — desfizemos sem
+          // querer; desfaz o desfazer e só então passa a rastrear.
+          await sleep(300);
+          await toggleReserveVillage(b.vid);
+          restored++;
+          pushLog('Cadeado: ' + b.name + ' (' + b.x + '|' + b.y + ') já estava travada — restaurada.', '', 'lock');
+        } else {
+          lockedNow++;
+          pushLog('Cadeado: 🔒 ' + b.name + ' (' + b.x + '|' + b.y + ', ' + fmtN(b.points) + ' pts).', 'ok', 'lock');
+        }
+        config.lock.reserved[b.vid] = now;
+        await sleep(400 + Math.floor(Math.random() * 300));
+      } catch (e) { pushLog('Cadeado em ' + b.name + ' (' + b.x + '|' + b.y + '): ' + (e.message || e), 'err', 'lock'); }
+    }
+    config.lock.stats = { inRange: inRange.length, total: Object.keys(config.lock.reserved).length, lockedNow: lockedNow };
+    config.lock.nextAt = now + Math.max(60, config.lock.interval || 1800) * 1000;
+    save();
+    refreshCards('lock');
+    pushLog('Cadeado: ciclo concluído — ' + lockedNow + ' nova(s) travada(s)' + (restored ? ', ' + restored + ' restaurada(s)' : '') + ' (' + inRange.length + ' no raio, ' + Object.keys(config.lock.reserved).length + ' travadas ao todo). Próximo em ' + Math.round((config.lock.interval || 1800) / 60) + ' min.', 'ok', 'lock');
+    scheduleLock();
+  }
+  function scheduleLock() { clearTimeout(lockTimer); if (!config.lock.running) return; lockTimer = setTimeout(lockTick, Math.min(Math.max((config.lock.nextAt || 0) - Date.now(), 1000), 60000)); }
+  function readLockCfg() {
+    const c = config.lock, g = (id) => document.getElementById(id);
+    if (g('twmgr-lk-dist')) c.maxDist = Math.max(1, parseFloat((g('twmgr-lk-dist').value || '').replace(',', '.')) || 10);
+    if (g('twmgr-lk-pts')) c.minPoints = Math.max(0, parseInt(g('twmgr-lk-pts').value, 10) || 0);
+    if (g('twmgr-lk-int')) c.interval = Math.max(1, parseInt(g('twmgr-lk-int').value, 10) || 30) * 60;
+    save();
+  }
+  function setLockStatus(on) { setBtnState('twmgr-lk-start', 'twmgr-lk-stop', on, '● Rastreando', '▶ Iniciar'); }
+  function lockStart() {
+    readLockCfg();
+    config.lock.running = true; config.lock.nextAt = 0; save();
+    setLockStatus(true);
+    pushLog('Cadeado iniciado — raio ≤ ' + config.lock.maxDist + ' campos, ' + config.lock.minPoints + '+ pts, reciclo a cada ' + Math.round((config.lock.interval || 1800) / 60) + ' min.', 'ok', 'lock');
+    lockTick();
+  }
+  function lockStop() { readLockCfg(); config.lock.running = false; save(); clearTimeout(lockTimer); setLockStatus(false); pushLog('Cadeado parado.', '', 'lock'); }
+
   // ==================== DETECTOR DE CAPTCHA ====================
   // Detecta popups de bot-check do TW e captchas hCaptcha/reCAPTCHA, dispara notificação
   // do navegador + POST em ntfy.sh/{topico}. Cooldown pra não spammar.
@@ -4995,7 +5093,7 @@
     });
     const ring = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('twmgr-run', !!on && !lockOther()); };
     ring('twmgr-btab-bb', config.bb && config.bb.running);
-    ring('twmgr-btab-map', config.map && config.map.running);
+    ring('twmgr-btab-map', (config.map && config.map.running) || (config.lock && config.lock.running));
     ring('twmgr-btab-scav', config.scav.running);
     ring('twmgr-btab-farm', config.farm.running);
     ring('twmgr-btab-wall', config.wall && config.wall.running);
@@ -5459,6 +5557,15 @@
         '<div style="margin-top:8px;font-size:11px;color:#e8d29a">Alvos detectados: <b id="twmgr-bm-count">0</b></div>' +
         '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:8px;margin-top:4px"></div>' +
         modLog('map') +
+        sec('🔒 Cadeado automático',
+          '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Rastreia bárbaras no raio de TODAS as suas aldeias (a mais perto conta) e tranca (reserva pra tribo) as com pontuação mínima, das mais fortes pras mais fracas. Nunca destrava o que já travou — só soma.</div>' +
+          cardsDiv('lock') +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Raio (campos, X)</span><input id="twmgr-lk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="10" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Pontos mín. (Y)</span><input id="twmgr-lk-pts" class="twmgr-inp" type="number" min="0" value="500" style="width:80px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Repetir rastreamento (min)</span><input id="twmgr-lk-int" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>' +
+          '<div class="twmgr-actions"><button id="twmgr-lk-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-lk-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+          '<div id="twmgr-lk-status" class="twmgr-cstatus"></div>' +
+          modLog('lock')) +
       '</div>' +
       '<div id="twmgr-tab-planner" style="display:none">' +
         hint('🎯 Coordenado: monte vários ataques independentes — cada um com seu próprio alvo, aldeias e tropas — e arme cada um separadamente (o botão libera um novo ataque em branco assim que você arma). Cada aldeia pode mandar <b>várias ondas</b> (+ onda) dentro do mesmo ataque. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
@@ -5818,6 +5925,15 @@
     setMapStatus(config.map.running);
     renderMapPreview();
 
+    // Cadeado automático
+    document.getElementById('twmgr-lk-dist').value = config.lock.maxDist != null ? config.lock.maxDist : 10;
+    document.getElementById('twmgr-lk-pts').value = config.lock.minPoints != null ? config.lock.minPoints : 500;
+    document.getElementById('twmgr-lk-int').value = Math.round((config.lock.interval || 1800) / 60);
+    ['twmgr-lk-dist', 'twmgr-lk-pts', 'twmgr-lk-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readLockCfg); });
+    document.getElementById('twmgr-lk-start').addEventListener('click', lockStart);
+    document.getElementById('twmgr-lk-stop').addEventListener('click', lockStop);
+    setLockStatus(config.lock.running);
+
     document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.getAttribute('data-tab'))));
     // Toggle expandir/recolher o log por módulo
     document.querySelectorAll('.twmgr-modlog-head').forEach((h) => h.addEventListener('click', () => {
@@ -5827,7 +5943,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'paladin', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'lock', 'planner', 'paladin', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -5862,6 +5978,7 @@
     if (config.build.running) { rlog('Edifícios retomado.', 'build'); scheduleBuild(); }
     if (config.bb && config.bb.running) { rlog('Cultivo retomado.', 'bb'); scheduleBB(); }
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); scheduleMap(); }
+    if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); scheduleLock(); }
     if (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) {
       config.planner.attacks.forEach((atk) => { if (!atk.running) return; (atk.rows || []).forEach((r) => { if (r.state === 'scheduled') r.state = 'armed'; }); });
       rlog('🎯 Coordenado retomado.', 'planner');

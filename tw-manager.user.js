@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.29.0
+// @version      10.30.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.29.0';
+  const VERSION = '10.30.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -101,7 +101,19 @@
   let _idc = 0;
   function genId() { return 'g' + Date.now().toString(36) + (_idc++).toString(36) + Math.random().toString(36).slice(2, 5); }
 
-  const defScav = () => ({ running: false, nextAt: 0, units: { spear: true, sword: true, axe: true, light: true, heavy: true, knight: false } });
+  const defScav = () => ({
+    running: false, nextAt: 0,
+    units: { spear: true, sword: true, axe: true, light: true, heavy: true, knight: false },
+    // Desbloqueio automático das coletas. Roda junto do ciclo de coleta, que já lê o
+    // estado de todas as aldeias numa requisição só — então descobrir o que dá pra
+    // desbloquear não custa requisição nenhuma a mais.
+    autoUnlock: false,
+    unlockAte: 4,          // desbloqueia até esta opção (1 Pequena … 4 Extrema)
+    unlockPuxar: true,     // faltando recurso, puxa de outras aldeias imediatamente
+    unlockReserva: 5000,   // a doadora nunca fica abaixo disto em cada recurso
+    unlockMaxOrigens: 5,   // quantas aldeias no máximo contribuem por desbloqueio
+    faltouRecurso: {},     // vid -> { nome, opcao, falta:{wood,stone,iron}, at } — o que travou
+  });
   // Por cor: um modo único ('none'|'a'|'b'|'c') + qtd (só p/ a/b; C manda 1x).
   const defFarmMatrix = () => ({ greenEmpty: { mode: 'a', qty: 1 }, greenFull: { mode: 'b', qty: 1 }, yellowEmpty: { mode: 'none', qty: 1 }, yellowFull: { mode: 'none', qty: 1 }, blue: { mode: 'b', qty: 1 } });
   const FARM_COLORS = ['greenEmpty', 'greenFull', 'yellowEmpty', 'yellowFull', 'blue'];
@@ -253,6 +265,12 @@
     } catch (e) {}
     c.running = false; // Auto-ATK (Alvos) descontinuado na v9.21 — backend dormente
     if (!c.scav) c.scav = defScav();
+    if (typeof c.scav.autoUnlock !== 'boolean') c.scav.autoUnlock = false;
+    if (typeof c.scav.unlockAte !== 'number' || c.scav.unlockAte < 1 || c.scav.unlockAte > 4) c.scav.unlockAte = 4;
+    if (typeof c.scav.unlockPuxar !== 'boolean') c.scav.unlockPuxar = true;
+    if (typeof c.scav.unlockReserva !== 'number' || c.scav.unlockReserva < 0) c.scav.unlockReserva = 5000;
+    if (typeof c.scav.unlockMaxOrigens !== 'number' || c.scav.unlockMaxOrigens < 1) c.scav.unlockMaxOrigens = 5;
+    if (!c.scav.faltouRecurso) c.scav.faltouRecurso = {};
     if (!c.scav.units) c.scav.units = defScav().units;
     if (!c.farm) c.farm = defFarm();
     if (!c.farm.sentReports) c.farm.sentReports = {};
@@ -965,7 +983,7 @@
     const m = html.match(/\[\{"village_id":[\s\S]*?\}\]/);
     if (!m) throw new Error('dados de coleta em massa não encontrados');
     let arr; try { arr = JSON.parse(m[0]); } catch (e) { throw new Error('falha ao ler dados de coleta'); }
-    return arr.map((v) => {
+    const out = arr.map((v) => {
       const carryFactor = parseFloat(v.unit_carry_factor) || 1;
       const home = v.unit_counts_home || {};
       const availRaw = {}; SCAV_UNITS.forEach(([u]) => { availRaw[u] = parseInt(home[u], 10) || 0; });
@@ -975,11 +993,164 @@
       for (let id = 1; id <= 4; id++) {
         const o = v.options && v.options[id];
         let state = 'locked', endMs = 0;
-        if (o) { if (o.is_locked) state = 'locked'; else if (o.scavenging_squad) { state = 'running'; endMs = (o.scavenging_squad.return_time || 0) * 1000; } else state = 'free'; }
-        options.push({ id: id, state: state, endMs: endMs });
+        let desbloqueando = 0;
+        if (o) {
+          if (o.is_locked) { state = 'locked'; desbloqueando = (o.unlock_time || 0) * 1000; }
+          else if (o.scavenging_squad) { state = 'running'; endMs = (o.scavenging_squad.return_time || 0) * 1000; }
+          else state = 'free';
+        }
+        options.push({ id: id, state: state, endMs: endMs, desbloqueandoAte: desbloqueando });
       }
-      return { vid: String(v.village_id), name: v.village_name || ('ID ' + v.village_id), carryFactor: carryFactor, avail: avail, options: options };
+      // res e storage_max vêm na MESMA resposta e eram descartados. O desbloqueio
+      // automático precisa deles pra saber se a aldeia banca o custo — de graça.
+      const res = v.res || {};
+      return {
+        vid: String(v.village_id), name: v.village_name || ('ID ' + v.village_id),
+        carryFactor: carryFactor, avail: avail, options: options,
+        res: { wood: parseInt(res.wood, 10) || 0, stone: parseInt(res.stone, 10) || 0, iron: parseInt(res.iron, 10) || 0 },
+        storageMax: parseInt(v.storage_max, 10) || 0,
+      };
     });
+    // Custo e pré-requisito de cada opção vêm num JSON separado, no construtor da tela.
+    // Pendurado no próprio array: quem já usava esta função continua funcionando igual.
+    try {
+      const c = html.match(/new ScavengeMassScreen\(\s*(\{"1":\{[\s\S]*?\}\})\s*,/);
+      if (c) out.defs = JSON.parse(c[1]);
+    } catch (e) { /* sem os custos o desbloqueio se desliga sozinho, o resto segue */ }
+    return out;
+  }
+
+  // ── DESBLOQUEIO AUTOMÁTICO DAS COLETAS ──────────────────────────────────────────
+  // Endpoint capturado da requisição real (interceptada e bloqueada, pra não desbloquear
+  // nada durante a descoberta):
+  //     POST screen=scavenge_api&ajaxaction=start_unlock
+  //     body: village_id=<vid>&option_id=<1..4>&h=<csrf>
+  async function scavStartUnlock(vid, optionId) {
+    const r = await fetch('/game.php?village=' + vid + '&screen=scavenge_api&ajaxaction=start_unlock', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+      body: 'village_id=' + encodeURIComponent(vid) + '&option_id=' + encodeURIComponent(optionId) + '&h=' + CSRF,
+    });
+    const t = await r.text();
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    try { const j = JSON.parse(t); if (j && j.error) throw new Error(String(j.error).slice(0, 90)); } catch (e) { if (!(e instanceof SyntaxError)) throw e; }
+    return true;
+  }
+
+  const RES3 = ['wood', 'stone', 'iron'];
+
+  // Qual a PRÓXIMA opção que esta aldeia pode desbloquear. Respeita o pré-requisito (a 3
+  // exige a 2, e assim por diante) e o teto que o usuário definiu. Devolve null se não há
+  // nada a fazer — inclusive quando já existe um desbloqueio em andamento, porque o jogo
+  // só permite um por aldeia de cada vez.
+  function scavProximaOpcao(v, defs, ate) {
+    if (v.options.some((o) => o.desbloqueandoAte)) return null;
+    for (let id = 1; id <= Math.min(4, ate || 4); id++) {
+      const o = v.options.find((x) => x.id === id);
+      if (!o || o.state !== 'locked') continue;
+      const d = defs && defs[String(id)];
+      if (!d) return null;
+      const prereq = d.prerequisite_option_ids || [];
+      const faltaPre = prereq.some((p) => { const po = v.options.find((x) => x.id === p); return !po || po.state === 'locked'; });
+      if (faltaPre) continue;   // ainda não dá; talvez a próxima do laço sirva
+      return { id: id, nome: d.name || ('Coleta ' + id), custo: d.unlock_cost || {} };
+    }
+    return null;
+  }
+
+  // Puxa o que falta de UMA OU MAIS aldeias, imediatamente.
+  // Escolhe as doadoras mais PERTO primeiro (transporte leva tempo) entre as que têm sobra
+  // acima da reserva. Cada doadora precisa de mercador livre, e isso só dá pra saber
+  // lendo a aldeia — por isso a leitura de mercado acontece só nas candidatas, não em todas.
+  async function scavPuxarRecursos(destino, falta, estados, coords) {
+    const cfg = config.scav;
+    const reserva = Math.max(0, cfg.unlockReserva || 0);
+    const dCoord = coords[destino.vid];
+    if (!dCoord) throw new Error('sem coordenada da aldeia de destino');
+    const restante = {}; RES3.forEach((k) => { restante[k] = Math.max(0, falta[k] || 0); });
+    const candidatas = estados
+      .filter((v) => v.vid !== destino.vid && coords[v.vid] && RES3.some((k) => restante[k] && (v.res[k] - reserva) > 0))
+      .map((v) => {
+        const a = coords[v.vid].split('|'), b = dCoord.split('|');
+        return { v: v, dist: fieldDist(+a[0], +a[1], +b[0], +b[1]) };
+      })
+      .sort((x, y) => x.dist - y.dist)
+      .slice(0, Math.max(1, cfg.unlockMaxOrigens || 5));
+    let usadas = 0;
+    for (const c of candidatas) {
+      if (!RES3.some((k) => restante[k] > 0)) break;
+      if (devoParar('scav')) break;
+      let mercado;
+      try { mercado = await getMarketState(c.v.vid); } catch (e) { continue; }
+      let cap = Math.max(0, mercado.capacity || 0);   // capacidade dos mercadores livres
+      if (cap <= 0) continue;
+      const envio = { wood: 0, stone: 0, iron: 0 };
+      RES3.forEach((k) => {
+        if (cap <= 0 || restante[k] <= 0) return;
+        const sobra = Math.max(0, (c.v.res[k] || 0) - reserva);
+        const n = Math.min(restante[k], sobra, cap);
+        if (n > 0) { envio[k] = n; cap -= n; }
+      });
+      const total = RES3.reduce((s, k) => s + envio[k], 0);
+      if (total <= 0) continue;
+      try {
+        await sendMarketResources(c.v.vid, dCoord, envio);
+        RES3.forEach((k) => { restante[k] = Math.max(0, restante[k] - envio[k]); c.v.res[k] -= envio[k]; });
+        usadas++;
+        pushLog('🚚 ' + c.v.name + ' → ' + destino.name + ': ' + RES3.filter((k) => envio[k]).map((k) => envio[k] + ' ' + k).join(', ') +
+          ' (' + Math.round(c.dist * 10) / 10 + ' campos)', 'ok', 'scav');
+      } catch (e) { pushLog('🚚 ' + c.v.name + ' → ' + destino.name + ': envio falhou (' + (e.message || e) + ').', 'err', 'scav'); }
+      await sleep(400);
+    }
+    const aindaFalta = RES3.reduce((s, k) => s + restante[k], 0);
+    return { usadas: usadas, aindaFalta: aindaFalta, restante: restante };
+  }
+
+  async function scavAutoUnlock(estados) {
+    const cfg = config.scav;
+    if (!cfg.autoUnlock) return;
+    const defs = estados.defs;
+    if (!defs) { pushLog('⛏️ Não achei os custos de desbloqueio nesta tela — desbloqueio automático pulado neste ciclo.', '', 'scav'); return; }
+    let coords = {};
+    try { (await getAllVillages()).forEach((v) => { if (v.coord) coords[v.vid] = v.coord; }); } catch (e) {}
+    cfg.faltouRecurso = {};
+    let abertos = 0, puxadas = 0, semRecurso = 0;
+    for (const v of estados) {
+      if (devoParar('scav')) break;
+      const alvo = scavProximaOpcao(v, defs, cfg.unlockAte);
+      if (!alvo) continue;
+      const falta = {}; let precisa = 0;
+      RES3.forEach((k) => { const f = Math.max(0, (alvo.custo[k] || 0) - (v.res[k] || 0)); falta[k] = f; precisa += f; });
+      if (!precisa) {
+        try {
+          await scavStartUnlock(v.vid, alvo.id);
+          abertos++;
+          pushLog('⛏️ ' + v.name + ': desbloqueando ' + alvo.nome + '.', 'ok', 'scav');
+        } catch (e) { pushLog('⛏️ ' + v.name + ': não consegui desbloquear ' + alvo.nome + ' (' + (e.message || e) + ').', 'err', 'scav'); }
+        await sleep(400);
+        continue;
+      }
+      // Falta recurso. Puxa de uma ou mais aldeias AGORA — o transporte leva tempo, então
+      // quanto antes sair, antes chega. O desbloqueio em si fica pro próximo ciclo, quando
+      // o recurso tiver pousado; tentar agora só daria erro do servidor.
+      cfg.faltouRecurso[v.vid] = { nome: v.name, opcao: alvo.nome, falta: falta, at: Date.now() };
+      semRecurso++;
+      if (!cfg.unlockPuxar) continue;
+      try {
+        const r = await scavPuxarRecursos(v, falta, estados, coords);
+        if (r.usadas) {
+          puxadas++;
+          pushLog('⛏️ ' + v.name + ': faltava recurso pra ' + alvo.nome + ' — puxei de ' + r.usadas + ' aldeia(s)' +
+            (r.aindaFalta ? ', ainda faltam ' + RES3.filter((k) => r.restante[k]).map((k) => r.restante[k] + ' ' + k).join(', ') : ', completo') +
+            '. Desbloqueio no próximo ciclo, quando chegar.', '', 'scav');
+        }
+      } catch (e) { pushLog('⛏️ ' + v.name + ': não consegui puxar recurso (' + (e.message || e) + ').', 'err', 'scav'); }
+    }
+    save();
+    renderScavFalta();
+    if (abertos || puxadas || semRecurso) {
+      pushLog('⛏️ Desbloqueio: ' + abertos + ' aberto(s)' + (semRecurso ? ' · ' + semRecurso + ' sem recurso' : '') + (puxadas ? ' · ' + puxadas + ' com transporte a caminho' : '') + '.', 'ok', 'scav');
+    }
   }
 
   function distribute(count, weights) {
@@ -1021,6 +1192,9 @@
     let villages;
     try { villages = await getAllScavengeState(); }
     catch (e) { pushLog('Coleta: erro ao ler o estado das aldeias (' + (e.message || e) + ').', 'err', 'scav'); config.scav.nextAt = now + 60000; save(); scheduleScav(); return; }
+    // Desbloqueio antes de despachar: a mesma leitura já traz opções, recursos e custos,
+    // então descobrir o que dá pra abrir não custa requisição nenhuma a mais.
+    try { await scavAutoUnlock(villages); } catch (e) { pushLog('⛏️ Desbloqueio automático falhou (' + (e.message || e) + ') — a coleta segue normal.', 'err', 'scav'); }
     const selUnits = SCAV_UNITS.map(([u]) => u).filter((u) => config.scav.units[u]);
     const reqs = [], runningEnds = [], activeSet = {};
     for (const v of villages) {
@@ -4957,6 +5131,32 @@
     if (sp) sp.classList.toggle('dim', !on);
   }
   function setStatus(on) { setBtnState('twmgr-start', 'twmgr-stop', on, '● Ativo', '▶ Iniciar'); }
+  function readScavUnlockCfg() {
+    const c = config.scav, g = (id) => document.getElementById(id);
+    if (g('twmgr-scav-unlock')) c.autoUnlock = !!g('twmgr-scav-unlock').checked;
+    if (g('twmgr-scav-unlock-ate')) c.unlockAte = Math.max(1, Math.min(4, parseInt(g('twmgr-scav-unlock-ate').value, 10) || 4));
+    if (g('twmgr-scav-unlock-puxar')) c.unlockPuxar = !!g('twmgr-scav-unlock-puxar').checked;
+    if (g('twmgr-scav-unlock-res')) c.unlockReserva = Math.max(0, parseInt(g('twmgr-scav-unlock-res').value, 10) || 0);
+    if (g('twmgr-scav-unlock-org')) c.unlockMaxOrigens = Math.max(1, Math.min(20, parseInt(g('twmgr-scav-unlock-org').value, 10) || 5));
+    save();
+  }
+
+  // Quem está travado por falta de recurso, e quanto falta. Sem isto o usuário não teria
+  // como saber por que uma aldeia não abriu a coleta — ficaria parecendo que não funciona.
+  function renderScavFalta() {
+    const box = document.getElementById('twmgr-scav-falta'); if (!box) return;
+    const f = config.scav.faltouRecurso || {};
+    const ks = Object.keys(f);
+    if (!ks.length) { box.innerHTML = ''; return; }
+    box.innerHTML = '<div class="twmgr-sec-h" style="margin:0 0 4px">Travadas por falta de recurso (' + ks.length + ')</div>' +
+      ks.slice(0, 12).map((vid) => {
+        const r = f[vid];
+        const falta = RES3.filter((k) => r.falta[k]).map((k) => fmtN(r.falta[k]) + ' ' + ({ wood: 'mad', stone: 'arg', iron: 'fer' })[k]).join(' · ');
+        return '<div style="font-size:10px;color:#cdbb92;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)">' +
+          '<span style="color:#ffd76a">' + esc(r.nome) + '</span> <span style="color:#8f7d57">' + esc(r.opcao) + '</span> — <span style="color:#e6a89d">' + falta + '</span></div>';
+      }).join('') + (ks.length > 12 ? '<div style="font-size:9px;color:#8f7d57;padding:2px 0">…e mais ' + (ks.length - 12) + '</div>' : '');
+  }
+
   function readScavUnits() { config.scav.units = config.scav.units || {}; SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) config.scav.units[u] = el.checked; }); save(); }
   function scavStart() { readScavUnits(); if (!SCAV_UNITS.some(([u]) => config.scav.units[u])) { pushLog('Coleta: marque ao menos 1 unidade.', 'err', 'scav'); return; } config.scav.running = true; config.scav.nextAt = 0; save(); setScavStatus(true); pushLog('Coleta iniciada em todas as aldeias.', 'ok', 'scav'); scavTick(); }
   function scavStop() { readScavUnits(); config.scav.running = false; save(); clearTimeout(scavTimer); setScavStatus(false); pushLog('Coleta parada.', '', 'scav'); }
@@ -5155,6 +5355,15 @@
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
         cardsDiv('scav') +
         sec('Tropas na coleta', '<div class="twmgr-units">' + SCAV_UNITS.map(([u, n]) => '<label><input id="twmgr-su-' + u + '" type="checkbox"> ' + unitIcon(u, n) + ' ' + n + '</label>').join('') + '</div>') +
+        sec('Desbloqueio automático',
+          '<label class="twmgr-check" title="A cada ciclo, abre a próxima coleta de cada aldeia que já puder ser aberta."><input id="twmgr-scav-unlock" type="checkbox"> Desbloquear coletas automaticamente</label>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Desbloquear até</span><select id="twmgr-scav-unlock-ate" class="twmgr-inp" style="width:150px">' +
+            '<option value="1">1 · Pequena</option><option value="2">2 · Média</option><option value="3">3 · Grande</option><option value="4">4 · Extrema</option></select></div>' +
+          '<label class="twmgr-check" title="Faltando recurso, manda o que falta de outras aldeias suas na mesma hora. O desbloqueio acontece no ciclo seguinte, quando o transporte chegar."><input id="twmgr-scav-unlock-puxar" type="checkbox"> Puxar recurso de outras aldeias quando faltar</label>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="A aldeia que doa nunca fica abaixo disto em cada recurso.">Reserva da doadora (cada recurso)</span><input id="twmgr-scav-unlock-res" class="twmgr-inp" type="number" min="0" step="500" value="5000" style="width:80px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Quantas aldeias no máximo contribuem para um mesmo desbloqueio. As mais próximas primeiro.">Máx. de aldeias doadoras</span><input id="twmgr-scav-unlock-org" class="twmgr-inp" type="number" min="1" max="20" value="5" style="width:66px"></div>' +
+          '<div class="twmgr-hint" style="margin:0">Custo: <b>1</b> 25/30/25 · <b>2</b> 250/300/250 · <b>3</b> 1k/1,2k/1k · <b>4</b> 10k/12k/10k. Cada aldeia abre uma de cada vez, e a de cima exige a de baixo.</div>' +
+          '<div id="twmgr-scav-falta" style="margin-top:6px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-scav-start" class="twmgr-btn twmgr-go">▶ Coletar</button><button id="twmgr-scav-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-scav-status" class="twmgr-cstatus"></div>' +
         modLog('scav') +
@@ -5427,6 +5636,14 @@
     document.getElementById('twmgr-cap-test').addEventListener('click', testCaptchaNotif);
 
     SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) el.checked = !!(config.scav.units && config.scav.units[u]); });
+    document.getElementById('twmgr-scav-unlock').checked = !!config.scav.autoUnlock;
+    document.getElementById('twmgr-scav-unlock-ate').value = String(config.scav.unlockAte || 4);
+    document.getElementById('twmgr-scav-unlock-puxar').checked = config.scav.unlockPuxar !== false;
+    document.getElementById('twmgr-scav-unlock-res').value = config.scav.unlockReserva != null ? config.scav.unlockReserva : 5000;
+    document.getElementById('twmgr-scav-unlock-org').value = config.scav.unlockMaxOrigens || 5;
+    ['twmgr-scav-unlock', 'twmgr-scav-unlock-ate', 'twmgr-scav-unlock-puxar', 'twmgr-scav-unlock-res', 'twmgr-scav-unlock-org']
+      .forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readScavUnlockCfg); });
+    renderScavFalta();
     document.getElementById('twmgr-scav-start').addEventListener('click', scavStart);
     document.getElementById('twmgr-scav-stop').addEventListener('click', scavStop);
     setScavStatus(config.scav.running);

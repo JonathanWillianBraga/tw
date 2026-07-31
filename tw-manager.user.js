@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.28.0
+// @version      10.29.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.28.0';
+  const VERSION = '10.29.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -4202,6 +4202,26 @@
     return novos;
   }
 
+  // Exploradores em casa de TODAS as aldeias, numa requisição só.
+  //
+  // A tela de coleta em massa devolve unit_counts_home de cada aldeia — a tropa em casa
+  // inteira, não só as unidades de coleta. Ler de lá custa 1 requisição; ler aldeia por
+  // aldeia custaria 43. É a leitura em massa que estava pendente da auditoria de terça.
+  async function mapEspioesEmCasa() {
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=place&mode=scavenge_mass', { credentials: 'include' });
+    const html = await res.text();
+    const m = html.match(/\[\{"village_id":[\s\S]*?\}\]/);
+    if (!m) throw new Error('não achei os dados de coleta em massa');
+    const arr = JSON.parse(m[0]);
+    const out = {};
+    arr.forEach((v) => {
+      const bruto = parseInt((v.unit_counts_home || {}).spy, 10) || 0;
+      const reservado = ((config.reservations || {})[String(v.village_id)] || {}).spy || 0;
+      out[String(v.village_id)] = Math.max(0, bruto - reservado);
+    });
+    return out;
+  }
+
   // Grava o estado de conhecimento de cada bárbaro DENTRO DO RAIO. Fora do raio não entra:
   // não é buraco no conhecimento, é lugar onde eu nem pretendo olhar — e guardar o mundo
   // inteiro estouraria o localStorage sem informar nada.
@@ -4314,12 +4334,39 @@
     // Bárbaro NOVO passa na frente: é o alvo que ninguém explorou ainda e que pode sumir
     // (outro jogador nobla) se a gente demorar. Empate resolve por distância, como antes.
     pairs.sort((a, b) => (b.target.novo ? 1 : 0) - (a.target.novo ? 1 : 0) || a.dist - b.dist);
-    const limit = Math.max(1, cfg.maxPerVillage || 20);
+
+    // COTA POR ORIGEM LIMITADA PELO EXPLORADOR QUE A ALDEIA TEM.
+    //
+    // Sem isto, a atribuição acontecia só por distância e cota, e a checagem de tropa só
+    // vinha depois, na hora de enviar: alvo atribuído a uma aldeia sem explorador era
+    // simplesmente descartado, mesmo com outra aldeia perto cheia de explorador sobrando.
+    // Era o mesmo defeito da cota que corrigi na v10.14.0 — atribuir sem olhar capacidade.
+    // Com a cota real, a aldeia sem tropa recebe cota 0 e o alvo escorre pra próxima.
+    //
+    // Custa 1 requisição pra todas as aldeias (tela de coleta em massa). Se ela falhar,
+    // volta ao comportamento antigo em vez de travar o ciclo.
+    const baseLimit = Math.max(1, cfg.maxPerVillage || 20);
+    const spyPorAlvo = Math.max(1, cfg.spyCount || 1);
+    const reservaSpy = Math.max(0, cfg.spyReserve || 0);
+    let espioes = null;
+    try { espioes = await mapEspioesEmCasa(); }
+    catch (e) { pushLog('🗺️ Não consegui ler os exploradores de todas as aldeias (' + (e.message || e) + ') — vou planejar sem olhar capacidade, como antes.', '', 'map'); }
+    const limitePorOrigem = {};
+    let semNenhum = 0;
+    myV.forEach((s) => {
+      if (!espioes) { limitePorOrigem[s.vid] = baseLimit; return; }
+      const cabe = Math.floor(Math.max(0, (espioes[s.vid] || 0) - reservaSpy) / spyPorAlvo);
+      limitePorOrigem[s.vid] = Math.min(baseLimit, cabe);
+      if (!cabe) semNenhum++;
+    });
+    if (espioes && semNenhum) pushLog('🗺️ ' + semNenhum + ' de ' + myV.length + ' aldeia(s) sem explorador suficiente neste ciclo — os alvos delas foram para as vizinhas que têm.', '', 'map');
     const jaAtribuido = {};
     for (const p of pairs) {
       if (jaAtribuido[p.target.vid]) continue;              // um bárbaro, uma origem
       const arr = candByOrigin[p.src.vid];
-      if (arr.length >= limit) continue;                    // esta origem encheu — o próximo par cobre
+      // Cota da origem: o menor entre o teto que você configurou e o que a tropa dela
+      // aguenta. Origem sem explorador tem cota 0 e o alvo escorre pra próxima do par.
+      if (arr.length >= (limitePorOrigem[p.src.vid] != null ? limitePorOrigem[p.src.vid] : baseLimit)) continue;
       jaAtribuido[p.target.vid] = 1;
       arr.push({ vid: p.target.vid, x: p.target.x, y: p.target.y, coord: p.target.coord, points: p.target.points, name: p.target.name, lastAt: p.target.lastAt, dist: p.dist });
     }

@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.26.0
+// @version      10.27.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -110,7 +110,7 @@
   };
 
 
-  const VERSION = '10.26.0';
+  const VERSION = '10.27.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -4760,6 +4760,19 @@
     if (!j || !j.response || !j.response.code) throw new Error('resposta inesperada (' + (txt || '').slice(0, 100).replace(/\s+/g, ' ') + ')');
     return j.response;   // { code, village, type: 'add'|'remove', id }
   }
+  // Cor do ÚLTIMO relatório contra essa aldeia (green/yellow/blue/red), lida do popup real de info da
+  // aldeia — endpoint confirmado via DevTools (não chutado): GET .../screen=map&ajax=map_info&source=
+  // <minha>&target=<alvo>. Preferido ao assistente de farm (getFarmTargets) porque o assistente NÃO
+  // lista aldeias abandonadas/de baixo recurso — um caso real escapou o filtro por causa disso.
+  async function getLastAttackColor(targetVid) {
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=map&ajax=map_info&source=' + CUR_VID + '&target=' + targetVid, { credentials: 'include' });
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const cell = doc.getElementById('info_last_attack');
+    if (!cell) return null;   // nunca atacamos essa aldeia -> sem relatório
+    const img = cell.querySelector('img[src*="/dots/"]');
+    const m = img ? (img.getAttribute('src') || '').match(/dots\/(\w+)\./) : null;
+    return m ? m[1] : null;
+  }
   async function lockTick() {
     clearTimeout(lockTimer);
     if (!config.lock.running) return;
@@ -4776,26 +4789,22 @@
     const myV = [];
     mine.forEach((v) => { const cm = (v.coord || '').match(/(\d+)\|(\d+)/); if (cm) myV.push({ x: +cm[1], y: +cm[2] }); });
     if (!myV.length) { pushLog('Cadeado: nenhuma aldeia própria encontrada.', 'err', 'lock'); config.lock.nextAt = now + 300000; save(); scheduleLock(); return; }
-    // Relatório vermelho (mesma classificação que o Saque já usa, via dot do assistente de farm) =
-    // último ataque nosso lá se deu mal -> pula, não trava aldeia com relatório vermelho.
-    const redSet = new Set();
-    try { (await getFarmTargets(CUR_VID)).forEach((t) => { if (t.color === 'red' && t.coord) redSet.add(t.coord); }); }
-    catch (e) { pushLog('Cadeado: não consegui ler os relatórios do assistente (seguindo sem o filtro de vermelho nesse ciclo): ' + (e.message || e), 'err', 'lock'); }
     const maxDist = config.lock.maxDist || 10, minPts = config.lock.minPoints || 0;
     // "no raio de TODAS as suas aldeias" = distância até a MAIS PERTO das suas aldeias, não de uma só.
-    let redSkipped = 0;
-    const inRange = allV.filter((b) => {
-      if (b.player !== '0' || b.points < minPts) return false;
-      if (!myV.some((s) => fieldDist(s.x, s.y, b.x, b.y) <= maxDist)) return false;
-      if (redSet.has(b.x + '|' + b.y)) { redSkipped++; return false; }
-      return true;
-    }).sort((a, b) => b.points - a.points);   // mais pontos primeiro
+    const inRange = allV.filter((b) => b.player === '0' && b.points >= minPts && myV.some((s) => fieldDist(s.x, s.y, b.x, b.y) <= maxDist))
+      .sort((a, b) => b.points - a.points);   // mais pontos primeiro
     config.lock.reserved = config.lock.reserved || {};
-    let lockedNow = 0, restored = 0;
+    let lockedNow = 0, restored = 0, redSkipped = 0;
     for (const b of inRange) {
       const pare = devoParar('lock');
       if (pare) { pushLog('Cadeado: interrompido — ' + pare + '. ' + lockedNow + ' travada(s) nesse ciclo até agora.', 'err', 'lock'); config.lock.nextAt = now + 30000; save(); scheduleLock(); return; }
       if (config.lock.reserved[b.vid]) continue;   // já travamos essa antes, não mexe (evita destravar)
+      // Só checa relatório de quem AINDA não travamos — mantém o custo de rede proporcional só às
+      // candidatas novas do ciclo, não ao raio inteiro de novo toda vez.
+      let color = null;
+      try { color = await getLastAttackColor(b.vid); }
+      catch (e) { pushLog('Cadeado: erro ao checar relatório de ' + b.name + ' (' + (e.message || e) + ') — pulando por segurança.', 'err', 'lock'); continue; }
+      if (color === 'red') { redSkipped++; await sleep(150); continue; }
       try {
         const r = await toggleReserveVillage(b.vid);
         if (r.type !== 'add') {
@@ -5569,7 +5578,7 @@
         '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:8px;margin-top:4px"></div>' +
         modLog('map') +
         sec('🔒 Cadeado automático',
-          '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Rastreia bárbaras no raio de TODAS as suas aldeias (a mais perto conta) e tranca (reserva pra tribo) as com pontuação mínima, das mais fortes pras mais fracas. Pula quem tem relatório vermelho (mesma classificação do Saque). Nunca destrava o que já travou — só soma.</div>' +
+          '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Rastreia bárbaras no raio de TODAS as suas aldeias (a mais perto conta) e tranca (reserva pra tribo) as com pontuação mínima, das mais fortes pras mais fracas. Pula quem tem relatório vermelho no último ataque (checado aldeia por aldeia, cobre até abandonadas). Nunca destrava o que já travou — só soma.</div>' +
           cardsDiv('lock') +
           '<div class="twmgr-row"><span class="twmgr-lbl">Raio (campos, X)</span><input id="twmgr-lk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="10" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Pontos mín. (Y)</span><input id="twmgr-lk-pts" class="twmgr-inp" type="number" min="0" value="500" style="width:80px"></div>' +

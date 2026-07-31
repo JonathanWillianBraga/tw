@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.26.0
+// @version      10.27.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.26.0';
+  const VERSION = '10.27.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -146,6 +146,11 @@
     // Defesa: o relatório de exploração mostrou tropa defensiva. Não sai sozinha.
     blacklistDefesa: {},                  // coord -> { at, vid, pts, defTotal, removido }
     relatoriosLidos: {},                  // reportId -> 1 (pra não reler o mesmo relatório)
+    // COBERTURA DE EXPLORAÇÃO, guardada de forma compacta pra caber no localStorage:
+    // coord -> código. É o que responde "até onde eu já enxerguei" quando desenhado no mapa.
+    // Sem isto o conhecimento morria no fim de cada ciclo e a tela nunca via.
+    intel: {},                            // "500|600" -> 1..6 (ver MAP_INTEL)
+    intelAt: 0,                           // quando foi atualizado pela última vez
     defesaMin: 1,                         // a partir de quantas unidades de defesa entra na lista
     removerDoAssistente: false,           // apagar os relatórios no jogo (irreversível) — ver nota
   });
@@ -204,6 +209,7 @@
     showBadge: true,           // exibir badge de pontos em cada aldeia
     showIntel: true,           // exibir ⚠ (defesa conhecida) e ⛰N (muralha) baseado em farm.defended
     showReservations: true,    // exibir ⌛Xh nas aldeias reservadas pela tribo
+    showCobertura: true,       // moldura colorida por estado de exploração (base do módulo Mapa)
     dimMode: 'off',            // 'off' (sem escurecer) | 'dim' (bloco preto sobre filtradas)
     dimOpacity: 0.15,          // opacidade das aldeias filtradas (só usado quando dimMode = 'dim')
     reservations: {},          // { [coord]: { at, expiresAt, playerName } } — sync manual
@@ -455,6 +461,7 @@
     if (typeof c.mapUi.showBadge !== 'boolean') c.mapUi.showBadge = true;
     if (typeof c.mapUi.showIntel !== 'boolean') c.mapUi.showIntel = true;
     if (typeof c.mapUi.showReservations !== 'boolean') c.mapUi.showReservations = true;
+    if (typeof c.mapUi.showCobertura !== 'boolean') c.mapUi.showCobertura = true;
     if (c.mapUi.dimMode !== 'off' && c.mapUi.dimMode !== 'dim') c.mapUi.dimMode = 'off';
     if (c.mapUi.dimOpacity == null) c.mapUi.dimOpacity = 0.15;
     if (!c.mapUi.reservations || typeof c.mapUi.reservations !== 'object') c.mapUi.reservations = {};
@@ -4069,6 +4076,30 @@
   function mapUnitsTotal(units) { let t = 0; UNITS.forEach((p) => { t += (units[p[0]] || 0); }); return t; }
   function mapUnitsDesc(units) { return UNITS.filter((p) => (units[p[0]] || 0) > 0).map((p) => p[0] + '=' + units[p[0]]).join(', ') || '(vazio)'; }
 
+  // Estados de conhecimento por aldeia. Guardados como número — com milhares de aldeias
+  // no raio, a diferença entre gravar um código e gravar um objeto é centenas de KB no
+  // localStorage, que tem limite de ~5MB.
+  const MAP_INTEL = {
+    OK: 1,        // tenho relatório com dados: sei o que tem lá
+    VAZIO: 2,     // tenho relatório, mas veio sem informação (o explorador morreu)
+    NADA: 3,      // nem aparece no assistente: não sei nada
+    ROTA: 4,      // explorador a caminho agora
+    BL_PERDA: 5,  // blacklist: perdi tropa
+    BL_DEFESA: 6, // blacklist: tem defesa
+  };
+  const MAP_INTEL_COR = {
+    1: '#3fce54',   // verde   — explorado, sei o que tem
+    2: '#e8c96a',   // âmbar   — explorei e não vi nada
+    3: '#7a6a4a',   // cinza   — buraco no meu conhecimento
+    4: '#5aa9e6',   // azul    — explorador voando
+    5: '#c9722a',   // laranja — perdi tropa
+    6: '#e0483c',   // vermelho— tem defesa
+  };
+  const MAP_INTEL_NOME = {
+    1: 'explorado', 2: 'explorei, sem info', 3: 'nunca explorado',
+    4: 'explorador a caminho', 5: 'perdi tropa', 6: 'tem defesa',
+  };
+
   // Quanto tempo esperar por um relatório antes de reexplorar o mesmo alvo. Explorador
   // voa, chega, e o relatório aparece: em 20 campos isso é questão de minutos. Sem esta
   // trava o ciclo seguinte reenviaria antes de a informação chegar, queimando tropa.
@@ -4169,6 +4200,37 @@
     return novos;
   }
 
+  // Grava o estado de conhecimento de cada bárbaro DENTRO DO RAIO. Fora do raio não entra:
+  // não é buraco no conhecimento, é lugar onde eu nem pretendo olhar — e guardar o mundo
+  // inteiro estouraria o localStorage sem informar nada.
+  function mapGravarIntel(barb, myV, sabido, attacking) {
+    const cfg = config.map;
+    const maxDist = cfg.maxDist || 20;
+    const intel = {};
+    let dentro = 0, conhecidas = 0;
+    barb.forEach((b) => {
+      const coord = b.x + '|' + b.y;
+      let perto = false;
+      for (const s of myV) { if (fieldDist(s.x, s.y, b.x, b.y) <= maxDist) { perto = true; break; } }
+      if (!perto) return;
+      dentro++;
+      let cod;
+      if (cfg.blacklistDefesa[coord]) cod = MAP_INTEL.BL_DEFESA;
+      else if (cfg.blacklistPerda[coord]) cod = MAP_INTEL.BL_PERDA;
+      else if (attacking.has(coord)) cod = MAP_INTEL.ROTA;
+      else {
+        const s = sabido[coord];
+        cod = !s ? MAP_INTEL.NADA : (s.temDados ? MAP_INTEL.OK : MAP_INTEL.VAZIO);
+      }
+      if (cod === MAP_INTEL.OK || cod === MAP_INTEL.BL_DEFESA) conhecidas++;
+      intel[coord] = cod;
+    });
+    cfg.intel = intel;
+    cfg.intelAt = Date.now();
+    save();
+    return { dentro: dentro, conhecidas: conhecidas, pct: dentro ? Math.round(conhecidas * 100 / dentro) : 0 };
+  }
+
   async function mapPlanTargets() {
     const cfg = config.map;
     let allV;
@@ -4261,7 +4323,8 @@
     }
     const alcancaveis = Object.keys(pairs.reduce((m, p) => { m[p.target.vid] = 1; return m; }, {})).length;
     const plan = myV.map((s) => ({ src: s, targets: candByOrigin[s.vid] || [] }));
-    return { myV: myV, plan: plan, barbCount: barb.length, totalCandidates: alcancaveis, sabido: sabido, novos: novos.length };
+    const cobertura = mapGravarIntel(barb, myV, sabido, attacking);
+    return { myV: myV, plan: plan, barbCount: barb.length, totalCandidates: alcancaveis, sabido: sabido, novos: novos.length, cobertura: cobertura };
   }
 
   async function mapTick() {
@@ -6215,6 +6278,28 @@
     return [53, 47];   // default histórico
   }
 
+  // Legenda da cobertura, com a contagem de cada estado e o percentual explorado.
+  // O percentual é o que responde a pergunta direta: "quanto do meu raio eu já enxerguei?"
+  function mapRenderLegendaCobertura() {
+    const el = document.getElementById('twmgr-map-cob-leg'); if (!el) return;
+    if (!config.mapUi.showCobertura) { el.innerHTML = ''; return; }
+    const intel = (config.map && config.map.intel) || {};
+    const chaves = Object.keys(intel);
+    if (!chaves.length) {
+      el.innerHTML = '<span style="color:#8f7d57">Sem dados ainda — rode um ciclo do módulo Mapa (ou a Prévia) pra preencher.</span>';
+      return;
+    }
+    const cont = {};
+    chaves.forEach((k) => { cont[intel[k]] = (cont[intel[k]] || 0) + 1; });
+    const conhecidas = (cont[MAP_INTEL.OK] || 0) + (cont[MAP_INTEL.BL_DEFESA] || 0);
+    const pct = Math.round(conhecidas * 100 / chaves.length);
+    el.innerHTML =
+      '<div style="color:#ffd76a;font-weight:700;margin-bottom:2px">' + pct + '% do seu raio explorado <span style="color:#8f7d57;font-weight:400">(' + conhecidas + ' de ' + chaves.length + ')</span></div>' +
+      [1, 2, 3, 4, 5, 6].filter((c) => cont[c]).map((c) =>
+        '<div><span style="display:inline-block;width:9px;height:9px;border:2px solid ' + MAP_INTEL_COR[c] + ';margin-right:5px;vertical-align:middle"></span>' +
+        '<span style="color:#cdbb92">' + MAP_INTEL_NOME[c] + '</span> <b style="color:#e8d29a">' + cont[c] + '</b></div>').join('');
+  }
+
   function mapCanvasRedraw() {
     if (!_mapVilCache) return;
     const T = window.TWMap;
@@ -6273,6 +6358,8 @@
     }
     // Reservas da tribo (sync manual): coord -> { expiresAt, playerName }
     const reservations = (cfg.showReservations && cfg.reservations) || {};
+    // Cobertura de exploração, gravada pelo módulo Mapa a cada ciclo.
+    const coberturaIntel = (cfg.showCobertura && config.map && config.map.intel) || null;
     const dimEnabled = cfg.dimMode === 'dim';
 
     _mapVilCache.forEach((vil, vid) => {
@@ -6300,6 +6387,18 @@
         // Filtrada: só escurece se o usuário optou por 'dim'. Padrão 'off' não desenha nada.
         if (dimEnabled) { ctx.fillStyle = 'rgba(0,0,0,' + (1 - dim) + ')'; ctx.fillRect(px, py, tw, th); }
         return;
+      }
+
+      // COBERTURA DE EXPLORAÇÃO: moldura colorida pelo que eu sei daquela aldeia.
+      // Desenhada como borda em vez de preenchimento pra não esconder o gráfico do jogo —
+      // o padrão das cores no conjunto é que responde "até onde eu já enxerguei".
+      if (cfg.showCobertura && coberturaIntel) {
+        const cod = coberturaIntel[vil.x + '|' + vil.y];
+        if (cod) {
+          ctx.strokeStyle = MAP_INTEL_COR[cod] || '#888';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(px + 1, py + 1, tw - 2, th - 2);
+        }
       }
 
       // Badge de pontos (canto inferior direito)
@@ -6409,6 +6508,8 @@
         check('twmgr-map-badge', 'Mostrar pontos na aldeia', cfg.showBadge) +
         check('twmgr-map-intel', 'Mostrar intel (⚠ tropas · ⛰ muralha)', cfg.showIntel) +
         check('twmgr-map-rsv', 'Mostrar reservas da tribo (⌛)', cfg.showReservations) +
+        check('twmgr-map-cob', 'Mostrar cobertura de exploração', cfg.showCobertura) +
+        '<div id="twmgr-map-cob-leg" style="font-size:9px;line-height:1.7;margin:2px 0 6px 4px"></div>' +
         check('twmgr-map-dim', 'Escurecer aldeias filtradas (bloco preto)', cfg.dimMode === 'dim') +
         '<div style="margin-top:6px;border-top:1px dashed #b89a5a;padding-top:6px;font-size:10px;color:#5a3c0f">' +
           '<div id="twmgr-map-counts">—</div>' +
@@ -6455,6 +6556,8 @@
     document.getElementById('twmgr-map-badge').addEventListener('change', (e) => { cfg.showBadge = e.target.checked; save_(); });
     document.getElementById('twmgr-map-intel').addEventListener('change', (e) => { cfg.showIntel = e.target.checked; save_(); });
     document.getElementById('twmgr-map-rsv').addEventListener('change', (e) => { cfg.showReservations = e.target.checked; save_(); });
+    document.getElementById('twmgr-map-cob').addEventListener('change', (e) => { cfg.showCobertura = e.target.checked; save_(); mapRenderLegendaCobertura(); });
+    mapRenderLegendaCobertura();
     document.getElementById('twmgr-map-dim').addEventListener('change', (e) => { cfg.dimMode = e.target.checked ? 'dim' : 'off'; save_(); });
     document.getElementById('twmgr-map-rsv-sync').addEventListener('click', async () => {
       const btn = document.getElementById('twmgr-map-rsv-sync');

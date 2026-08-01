@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.1.0
+// @version      11.1.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -109,7 +109,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.1.0';
+  const VERSION = '11.1.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -299,6 +299,8 @@
     intervalMin: 2,
     lastCount: 0,
     jaEnviados: {},   // id do comando -> 1. Sem isto ele reenviava TODOS a cada ciclo.
+    recuoAte: 0,      // 429: nao tenta antes disto
+    recuoMs: 0,       // recuo atual, dobra a cada 429
   });
   const defObra = () => ({
     running: false,
@@ -474,6 +476,9 @@
     if (c.etiqueta.intervalMin == null) c.etiqueta.intervalMin = 2;
     if (c.etiqueta.lastCount == null) c.etiqueta.lastCount = 0;
     if (!c.etiqueta.jaEnviados) c.etiqueta.jaEnviados = {};
+    if (c.etiqueta.recuoAte == null) c.etiqueta.recuoAte = 0;
+    if (c.etiqueta.recuoMs == null) c.etiqueta.recuoMs = 0;
+    if (c.etiqueta.intervalMin < 2) c.etiqueta.intervalMin = 2;
     if (!c.lock) c.lock = defLock();
     if (c.lock.maxDist == null) c.lock.maxDist = 10;
     if (c.lock.minPoints == null) c.lock.minPoints = 500;
@@ -5557,6 +5562,7 @@
     const vid = CUR_VID;
     const base = '/game.php?village=' + vid + '&screen=overview_villages&mode=incomings&type=unignored&subtype=attacks';
     const res = await fetch(base + '&page=-1', { credentials: 'include', cache: 'no-store' });
+    if (res.status === 429) throw new Error('429');
     if (!res.ok) throw new Error('lista de recebidos: HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const table = doc.getElementById('incomings_table');
@@ -5587,6 +5593,7 @@
     });
     // CONFERE A RESPOSTA. Na versao original o resultado era descartado: se o formulario
     // do jogo mudasse, ele rodaria pra sempre sem etiquetar e o log diria que deu certo.
+    if (r2.status === 429) throw new Error('429');
     if (!r2.ok) throw new Error('etiquetar: HTTP ' + r2.status);
     const t2 = await r2.text();
     const d2 = new DOMParser().parseFromString(t2, 'text/html');
@@ -5605,17 +5612,38 @@
     if (!config.etiqueta.running) return;
     if (lockOther() || captchaBlocked()) { etiquetaTimer = setTimeout(etiquetaTick, 15000); return; }
     claimLock();
+    const cfg = config.etiqueta;
+    // 429 = o servidor pediu pra desacelerar. Insistir no mesmo intervalo e o pior que se
+    // pode fazer: piora o limite e nao etiqueta nada. Espera o recuo passar.
+    if (cfg.recuoAte && Date.now() < cfg.recuoAte) {
+      etiquetaTimer = setTimeout(etiquetaTick, Math.min(cfg.recuoAte - Date.now() + 500, 60000));
+      return;
+    }
+    let espera = Math.max(2, cfg.intervalMin || 2) * 60000;
     try {
       const r = await etiquetaCheckAndLabel();
+      if (cfg.recuoMs) { cfg.recuoMs = 0; cfg.recuoAte = 0; save(); }   // voltou a passar
       refreshCards('etiqueta');
       if (r.novos) pushLog('🏷️ Etiqueta: ' + r.novos + ' comando(s) novo(s) etiquetado(s) (' + r.total + ' na lista).', 'ok', 'etiqueta');
-    } catch (e) { pushLog('🏷️ Etiqueta: ' + (e.message || e), 'err', 'etiqueta'); }
-    etiquetaTimer = setTimeout(etiquetaTick, Math.max(1, config.etiqueta.intervalMin || 2) * 60000);
+    } catch (e) {
+      if (String(e.message || e) === '429') {
+        // Dobra o recuo a cada recusa, ate 30 min. Volta ao normal no primeiro sucesso.
+        cfg.recuoMs = Math.min(Math.max(cfg.recuoMs * 2, 5 * 60000), 30 * 60000);
+        cfg.recuoAte = Date.now() + cfg.recuoMs;
+        espera = cfg.recuoMs;
+        save();
+        pushLog('🏷️ Etiqueta: o servidor pediu pra desacelerar (429). Recuando ' + Math.round(cfg.recuoMs / 60000) +
+                ' min. Se isso repetir, o gargalo pode nao ser este modulo — Mapa e Saque tambem leem overview_villages com page=-1.', '', 'etiqueta');
+      } else {
+        pushLog('🏷️ Etiqueta: ' + (e.message || e), 'err', 'etiqueta');
+      }
+    }
+    etiquetaTimer = setTimeout(etiquetaTick, espera);
   }
 
   function readEtiquetaCfg() {
     const el = document.getElementById('twmgr-et-interval');
-    if (el) config.etiqueta.intervalMin = Math.max(1, parseInt(el.value, 10) || 2);
+    if (el) config.etiqueta.intervalMin = Math.max(2, parseInt(el.value, 10) || 3);
     save();
   }
   function setEtiquetaStatus(on) { setBtnState('twmgr-et-start', 'twmgr-et-stop', on, '● Ativo', '▶ Iniciar ciclo'); }
@@ -6474,7 +6502,7 @@
         hint('🏷️ Usa o recurso <b>nativo</b> do TW (o botão "Etiqueta" da tela de ataques recebidos) pra rotular sozinho a unidade mais lenta provável de cada ataque que vem vindo. Quanto mais cedo depois do envio o check roda, mais precisa fica — o próprio jogo assume que o comando "acabou de sair". Cada comando é etiquetado <b>uma vez só</b>.') +
         cardsDiv('etiqueta') +
         sec('Verificação periódica',
-          '<div class="twmgr-row"><span class="twmgr-lbl" title="1 a 3 min pega os ataques recém-enviados com boa precisão. Mais que isso, a adivinhação do jogo piora.">Intervalo (min)</span><input id="twmgr-et-interval" class="twmgr-inp" type="number" min="1" value="2" style="width:66px"></div>') +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="1 a 3 min pega os ataques recém-enviados com boa precisão. Mais que isso, a adivinhação do jogo piora.">Intervalo (min)</span><input id="twmgr-et-interval" class="twmgr-inp" type="number" min="2" value="3" style="width:66px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-et-start" class="twmgr-btn twmgr-go">▶ Iniciar ciclo</button><button id="twmgr-et-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         modLog('etiqueta') +
       '</div>' +

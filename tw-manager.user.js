@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.2.0
+// @version      11.2.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -20,6 +20,20 @@
 (function () {
   'use strict';
   if (typeof window.game_data === 'undefined' || !window.game_data.village) return;
+
+  // TRAVA DE INICIALIZACAO DUPLA — nao existia, e a ausencia e invisivel ate doer.
+  //
+  // Se o script roda duas vezes na mesma pagina (script instalado duas vezes no gestor,
+  // iframe de mesma origem que tambem casa com game.php, ou reinjecao), voce fica com
+  // DOIS paineis sobrepostos parecendo um, DOIS ouvintes em cada botao — um clique dispara
+  // duas vezes — e DOIS conjuntos de temporizadores. Todas as requisicoes dobram, em
+  // silencio. Foi assim que apareceu "ciclo iniciado" duas vezes com 1s de diferenca no log
+  // do usuario, e 86 leituras de screen=place pra 43 aldeias.
+  //
+  // Roda so no documento de topo: dentro de iframe nao ha nada util a fazer.
+  if (window.top !== window.self) return;
+  if (window.__twMgrAtivo) { console.warn('[TWMgr] ja havia uma instancia nesta pagina — esta foi ignorada.'); return; }
+  window.__twMgrAtivo = true;
 
   const UNITS = [
     ['spear', 'Lanc.'], ['sword', 'Espad.'], ['axe', 'Bárb.'], ['archer', 'Arq.'],
@@ -110,7 +124,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.2.0';
+  const VERSION = '11.2.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -6267,6 +6281,10 @@
 
   function buildUI() {
     injectStyles();
+    // Segunda linha de defesa: mesmo com a trava lá em cima, nunca cria um painel se já
+    // houver um. Dois elementos com o mesmo id fazem getElementById devolver o primeiro, e
+    // aí metade da fiação vai parar no painel errado — sintoma dificílimo de diagnosticar.
+    if (document.getElementById('twmgr-panel')) { console.warn('[TWMgr] painel ja existe — buildUI ignorado.'); return; }
     const p = document.createElement('div'); p.id = 'twmgr-panel';
     const tabBtn = (n, ico, label) => '<div id="twmgr-btab-' + n + '" class="twmgr-tab" data-tab="' + n + '"><span class="twmgr-tab-ico">' + ico + '</span><span class="twmgr-tab-lbl">' + label + '</span></div>';
     // Saque: matriz estilo FarmGod — A/B/C são checkboxes; regra "1 por linha" garantida no JS (marcar um desmarca os outros).

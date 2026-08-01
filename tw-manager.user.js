@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.2.6
+// @version      11.2.7
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -124,7 +124,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.2.6';
+  const VERSION = '11.2.7';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -491,6 +491,10 @@
     if (c.etiqueta.intervalMin == null) c.etiqueta.intervalMin = 2;
     if (c.etiqueta.lastCount == null) c.etiqueta.lastCount = 0;
     if (!c.etiqueta.jaEnviados) c.etiqueta.jaEnviados = {};
+    // O registro de "ja enviados" foi envenenado ate a v11.2.6: a validacao aprovava
+    // qualquer resposta, entao comandos NAO etiquetados eram marcados como feitos e nunca
+    // mais seriam tentados. Zera uma vez.
+    if (c.etiqueta.limpezaVer !== 2) { c.etiqueta.limpezaVer = 2; c.etiqueta.jaEnviados = {}; }
     if (c.etiqueta.recuoAte == null) c.etiqueta.recuoAte = 0;
     if (c.etiqueta.recuoMs == null) c.etiqueta.recuoMs = 0;
     if (c.etiqueta.intervalMin < 2) c.etiqueta.intervalMin = 2;
@@ -5665,8 +5669,13 @@
   //   nao faz sentido. E o campo id_<id>=on que ele mandava nao existe no formulario.
   const ETIQUETA_MAX_IDS = 400;   // teto de seguranca pro corpo do POST
 
-  // Le a lista e devolve, por id de comando, o TEXTO da linha. O texto e o que muda quando
-  // a etiqueta e aplicada — e o unico jeito honesto de saber se funcionou.
+  // Le a lista e devolve, por id de comando, o ROTULO — o texto de .quickedit-label, que e
+  // exatamente o que a etiqueta muda ("Ataque" vira "Explorador", "Nobre", "Ariete"...).
+  //
+  // A versao anterior comparava o texto da LINHA INTEIRA, e a linha tem a coluna "Chega
+  // em" com uma contagem regressiva que muda a cada segundo. Antes !== depois era SEMPRE
+  // verdadeiro, entao a validacao "por efeito" que eu escrevi pra nao me deixar errar
+  // aprovava qualquer coisa — inclusive um POST que nao etiquetou nada.
   function etiquetaLerLista(doc) {
     const out = {};
     const table = doc.getElementById('incomings_table');
@@ -5674,8 +5683,9 @@
     table.querySelectorAll('input[type="hidden"][name^="command_ids["]').forEach((inp) => {
       const m = (inp.getAttribute('name') || '').match(/command_ids\[(\d+)\]/);
       if (!m) return;
-      const tr = inp.closest('tr');
-      out[m[1]] = tr ? (tr.textContent || '').replace(/\s+/g, ' ').trim() : '';
+      const td = inp.closest('td');
+      const lbl = td ? td.querySelector('.quickedit-label') : null;
+      out[m[1]] = lbl ? (lbl.textContent || '').replace(/\s+/g, ' ').trim() : '';
     });
     return out;
   }

@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.0.0
+// @version      11.1.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -109,7 +109,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.0.0';
+  const VERSION = '11.1.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -291,6 +291,15 @@
     maxCorrecaoMs: 1000,    // acima disto o erro é tratado como defeito e ignorado
     ondaGapMs: 50,          // espaçamento padrão entre comandos de uma onda
   });
+  // Etiqueta (johan) — usa o botao nativo "Etiqueta" da tela de ataques recebidos, que
+  // faz o SERVIDOR adivinhar a unidade mais lenta pelo tempo de viagem restante. Quanto
+  // mais cedo depois do envio, mais precisa a adivinhacao — dai o ciclo curto.
+  const defEtiqueta = () => ({
+    running: false,
+    intervalMin: 2,
+    lastCount: 0,
+    jaEnviados: {},   // id do comando -> 1. Sem isto ele reenviava TODOS a cada ciclo.
+  });
   const defObra = () => ({
     running: false,
     groups: { fullAtk: null, fullDef: null, farmAtk: null, fastDef: null, fastNobre: null },   // grupo nativo do TW -> perfil
@@ -307,7 +316,7 @@
     nextAt: 0,
     demand: {},              // { [vid]: { b, cost, coord, profile } }
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), reservations: {} });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -461,6 +470,10 @@
     if (c.map.maxPerVillage == null) c.map.maxPerVillage = 20;
     if (c.map.delay == null) c.map.delay = 500;
     if (c.map.onlyBarbarians == null) c.map.onlyBarbarians = true;
+    if (!c.etiqueta) c.etiqueta = defEtiqueta();
+    if (c.etiqueta.intervalMin == null) c.etiqueta.intervalMin = 2;
+    if (c.etiqueta.lastCount == null) c.etiqueta.lastCount = 0;
+    if (!c.etiqueta.jaEnviados) c.etiqueta.jaEnviados = {};
     if (!c.lock) c.lock = defLock();
     if (c.lock.maxDist == null) c.lock.maxDist = 10;
     if (c.lock.minPoints == null) c.lock.minPoints = 500;
@@ -577,10 +590,10 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || _ocupadoAvulso > 0; }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.
@@ -763,6 +776,13 @@
         { v: fmtN(s.lockedNow), l: 'travadas agora' },
         { v: fmtN(s.total), l: 'travadas ao todo' },
         { v: fmtN(s.redSkipped), l: 'puladas (relatório vermelho)', wide: true },
+      ];
+    } else if (mod === 'etiqueta') {
+      const e = config.etiqueta || {};
+      arr = [
+        { v: fmtN(e.lastCount || 0), l: 'na lista', hl: true },
+        { v: fmtN(Object.keys(e.jaEnviados || {}).length), l: 'ja etiquetados' },
+        { v: (e.intervalMin || 2) + ' min', l: 'intervalo' },
       ];
     } else if (mod === 'planner') {
       const attacks = (config.planner && config.planner.attacks) || [];
@@ -5521,6 +5541,99 @@
   }
   function lockStop() { readLockCfg(); config.lock.running = false; save(); clearTimeout(lockTimer); setLockStatus(false); pushLog('Cadeado parado.', '', 'lock'); }
 
+  // ==================== ETIQUETA (auto-rotular ataques recebidos) ====================
+  // Modulo do johan. O TW ja tem o recurso: na tela de ataques recebidos, selecionar os
+  // comandos e clicar "Etiqueta" faz o SERVIDOR adivinhar a unidade mais lenta pelo tempo
+  // de viagem restante, assumindo que o comando acabou de sair. Quanto mais cedo depois do
+  // envio, mais precisa a adivinhacao — dai o ciclo curto (padrao 2 min).
+  //
+  // Duas mudancas minhas sobre a versao dele, e as duas por medicao do formulario real
+  // (capturado na tela, nao deduzido):
+  //   subtype=attacks em vez de all — 'all' traz apoio junto, e etiquetar apoio recebido
+  //   nao faz sentido. E o campo id_<id>=on que ele mandava nao existe no formulario.
+  const ETIQUETA_MAX_IDS = 400;   // teto de seguranca pro corpo do POST
+
+  async function etiquetaCheckAndLabel() {
+    const vid = CUR_VID;
+    const base = '/game.php?village=' + vid + '&screen=overview_villages&mode=incomings&type=unignored&subtype=attacks';
+    const res = await fetch(base + '&page=-1', { credentials: 'include', cache: 'no-store' });
+    if (!res.ok) throw new Error('lista de recebidos: HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const table = doc.getElementById('incomings_table');
+    if (!table) return { total: 0, novos: 0 };
+    const ids = [];
+    table.querySelectorAll('input[type="hidden"][name^="command_ids["]').forEach((inp) => {
+      const m = (inp.getAttribute('name') || '').match(/command_ids\[(\d+)\]/);
+      if (m) ids.push(m[1]);
+    });
+    config.etiqueta.lastCount = ids.length;
+    // SO OS QUE AINDA NAO FORAM. A versao original reenviava a lista inteira a cada ciclo:
+    // com 50 ataques a caminho, eram 30 POSTs grandes por hora sem efeito nenhum, e
+    // justamente quando voce esta sob ataque — a pior hora pra gastar requisicao.
+    const ja = config.etiqueta.jaEnviados || (config.etiqueta.jaEnviados = {});
+    const novos = ids.filter((id) => !ja[id]).slice(0, ETIQUETA_MAX_IDS);
+    // Faxina: comando que saiu da lista (chegou ou foi cancelado) nao precisa ser lembrado.
+    const vivos = {}; ids.forEach((id) => { vivos[id] = 1; });
+    Object.keys(ja).forEach((id) => { if (!vivos[id]) delete ja[id]; });
+    if (!novos.length) { save(); return { total: ids.length, novos: 0 }; }
+    const body = new URLSearchParams();
+    body.set('h', CSRF);
+    novos.forEach((id) => { body.append('command_ids[' + id + ']', 'true'); });
+    body.set('label', 'Etiqueta');
+    const r2 = await fetch(base.replace('&type=', '&action=process&type='), {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+      body: body.toString(),
+    });
+    // CONFERE A RESPOSTA. Na versao original o resultado era descartado: se o formulario
+    // do jogo mudasse, ele rodaria pra sempre sem etiquetar e o log diria que deu certo.
+    if (!r2.ok) throw new Error('etiquetar: HTTP ' + r2.status);
+    const t2 = await r2.text();
+    const d2 = new DOMParser().parseFromString(t2, 'text/html');
+    const eb = d2.querySelector('.error_box');
+    if (eb) throw new Error('o jogo recusou: ' + (eb.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80));
+    if (!d2.getElementById('incomings_table') && !/success|sucesso/i.test(t2)) {
+      throw new Error('resposta inesperada — o formulario do jogo pode ter mudado');
+    }
+    novos.forEach((id) => { ja[id] = 1; });
+    save();
+    return { total: ids.length, novos: novos.length };
+  }
+
+  async function etiquetaTick() {
+    clearTimeout(etiquetaTimer);
+    if (!config.etiqueta.running) return;
+    if (lockOther() || captchaBlocked()) { etiquetaTimer = setTimeout(etiquetaTick, 15000); return; }
+    claimLock();
+    try {
+      const r = await etiquetaCheckAndLabel();
+      refreshCards('etiqueta');
+      if (r.novos) pushLog('🏷️ Etiqueta: ' + r.novos + ' comando(s) novo(s) etiquetado(s) (' + r.total + ' na lista).', 'ok', 'etiqueta');
+    } catch (e) { pushLog('🏷️ Etiqueta: ' + (e.message || e), 'err', 'etiqueta'); }
+    etiquetaTimer = setTimeout(etiquetaTick, Math.max(1, config.etiqueta.intervalMin || 2) * 60000);
+  }
+
+  function readEtiquetaCfg() {
+    const el = document.getElementById('twmgr-et-interval');
+    if (el) config.etiqueta.intervalMin = Math.max(1, parseInt(el.value, 10) || 2);
+    save();
+  }
+  function setEtiquetaStatus(on) { setBtnState('twmgr-et-start', 'twmgr-et-stop', on, '● Ativo', '▶ Iniciar ciclo'); }
+  function etiquetaStart() {
+    readEtiquetaCfg();
+    config.etiqueta.running = true; save();
+    setEtiquetaStatus(true);
+    pushLog('🏷️ Etiqueta: ciclo iniciado — check a cada ' + config.etiqueta.intervalMin + ' min.', 'ok', 'etiqueta');
+    etiquetaTick();
+  }
+  function etiquetaStop() {
+    readEtiquetaCfg();
+    config.etiqueta.running = false; save();
+    clearTimeout(etiquetaTimer);
+    setEtiquetaStatus(false);
+    pushLog('🏷️ Etiqueta: ciclo parado.', '', 'etiqueta');
+  }
+
   // ==================== DETECTOR DE CAPTCHA ====================
   // Detecta popups de bot-check do TW e captchas hCaptcha/reCAPTCHA, dispara notificação
   // do navegador + POST em ntfy.sh/{topico}. Cooldown pra não spammar.
@@ -6055,7 +6168,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'paladin', 'obra', 'log'].forEach((n) => {
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -6078,7 +6191,7 @@
     const modLog = (mod) => '<div class="twmgr-modlog"><div class="twmgr-modlog-head" data-modlog="' + mod + '">▸ Log do módulo (<span id="twmgr-modlog-count-' + mod + '">0</span>)</div><div id="twmgr-modlog-body-' + mod + '" class="twmgr-modlog-body" style="display:none"></div></div>';
     p.innerHTML =
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
@@ -6356,6 +6469,14 @@
         '<div id="twmgr-pd-status" class="twmgr-cstatus"></div>' +
         sec('Status por aldeia', '<div id="twmgr-pd-status-list"></div>') +
         modLog('paladin') +
+      '</div>' +
+      '<div id="twmgr-tab-etiqueta" style="display:none">' +
+        hint('🏷️ Usa o recurso <b>nativo</b> do TW (o botão "Etiqueta" da tela de ataques recebidos) pra rotular sozinho a unidade mais lenta provável de cada ataque que vem vindo. Quanto mais cedo depois do envio o check roda, mais precisa fica — o próprio jogo assume que o comando "acabou de sair". Cada comando é etiquetado <b>uma vez só</b>.') +
+        cardsDiv('etiqueta') +
+        sec('Verificação periódica',
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="1 a 3 min pega os ataques recém-enviados com boa precisão. Mais que isso, a adivinhação do jogo piora.">Intervalo (min)</span><input id="twmgr-et-interval" class="twmgr-inp" type="number" min="1" value="2" style="width:66px"></div>') +
+        '<div class="twmgr-actions"><button id="twmgr-et-start" class="twmgr-btn twmgr-go">▶ Iniciar ciclo</button><button id="twmgr-et-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+        modLog('etiqueta') +
       '</div>' +
       '<div id="twmgr-tab-obra" style="display:none">' +
         hint('🏛️ Constrói cada aldeia automaticamente de acordo com o perfil do grupo do TW em que ela estiver. Basta adicionar a aldeia num dos 5 grupos no próprio jogo — o resto é sozinho. <b>Pesquisa do Ferreiro (escolher a tropa) ainda é manual</b>, só o nível do prédio é controlado por aqui.') +
@@ -6679,6 +6800,11 @@
     document.getElementById('twmgr-bm-preview').addEventListener('click', mapPreview);
     document.getElementById('twmgr-bm-start').addEventListener('click', mapStart);
     document.getElementById('twmgr-bm-stop').addEventListener('click', mapStop);
+    document.getElementById('twmgr-et-interval').value = config.etiqueta.intervalMin != null ? config.etiqueta.intervalMin : 2;
+    document.getElementById('twmgr-et-interval').addEventListener('change', readEtiquetaCfg);
+    document.getElementById('twmgr-et-start').addEventListener('click', etiquetaStart);
+    document.getElementById('twmgr-et-stop').addEventListener('click', etiquetaStop);
+    setEtiquetaStatus(config.etiqueta.running);
     setMapStatus(config.map.running);
     renderMapPreview();
     renderMapCounts();
@@ -6702,7 +6828,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'lock', 'planner', 'paladin', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -6737,6 +6863,7 @@
     if (config.build.running) { rlog('Edifícios retomado.', 'build'); scheduleBuild(); }
     if (config.bb && config.bb.running) { rlog('Cultivo retomado.', 'bb'); scheduleBB(); }
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); scheduleMap(); }
+    if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); etiquetaTick(); }
     if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); scheduleLock(); }
     if (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) {
       config.planner.attacks.forEach((atk) => { if (!atk.running) return; (atk.rows || []).forEach((r) => { if (r.state === 'scheduled') r.state = 'armed'; }); });

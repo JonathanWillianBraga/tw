@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.1.1
+// @version      11.2.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -44,6 +44,7 @@
   };
 
   const SCAV_UNITS = [['spear', 'Lanc.'], ['sword', 'Espad.'], ['axe', 'Bárb.'], ['light', 'C.leve'], ['heavy', 'C.pes.'], ['knight', 'Palad.']];
+  const FARM_DEF_ZERO_TTL_MS = 6 * 3600 * 1000;   // 'sem defesa' vale por 6h; 'tem defesa' nao expira
   const CARRY = { spear: 25, sword: 15, axe: 10, archer: 10, spy: 0, light: 80, marcher: 50, heavy: 50, ram: 0, catapult: 0, knight: 100, snob: 0 };
   const POP = { spear: 1, sword: 1, axe: 1, light: 4, heavy: 6, knight: 10 };
   const LOOT_FACTOR = { 1: 0.1, 2: 0.25, 3: 0.5, 4: 0.75 };
@@ -109,7 +110,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.1.1';
+  const VERSION = '11.2.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1423,6 +1424,29 @@
   function scheduleScav() { clearTimeout(scavTimer); if (!config.scav.running) return; scavTimer = setTimeout(scavTick, Math.min(Math.max((config.scav.nextAt || 0) - Date.now(), 1000), 60000)); }
 
   let _farmPagesInfo = null;   // diagnóstico: quantas páginas do assistente foram lidas no último ciclo
+  // Memoria curta do assistente, COMPARTILHADA entre os modulos.
+  //
+  // Saque, Muralha e Mapa liam a lista inteira cada um por conta — e ela e paginada, entao
+  // cada leitura sao varias requisicoes. Medido na conta do usuario: 22 leituras de am_farm
+  // por MINUTO, ~1.320/h. Como os tres rodam em ciclos que se cruzam, quase sempre estao
+  // olhando o mesmo estado com segundos de diferenca.
+  // 90s e curto o bastante pra nao perder relatorio recem-chegado e longo o bastante pra
+  // fundir as leituras dos tres num ciclo. Quem precisa do dado fresco passa forcar=true.
+  const FARM_ALVOS_TTL_MS = 90000;
+  let _farmAlvosCache = null, _farmAlvosAt = 0, _farmAlvosVoo = null;
+
+  async function getFarmTargetsCached(vid, forcar) {
+    const agora = Date.now();
+    if (!forcar && _farmAlvosCache && (agora - _farmAlvosAt) < FARM_ALVOS_TTL_MS) return _farmAlvosCache;
+    // Se ja ha uma leitura em voo, espera ELA em vez de abrir outra: sem isto, dois modulos
+    // que acordam juntos disparam duas leituras completas antes de qualquer cache existir.
+    if (_farmAlvosVoo) return _farmAlvosVoo;
+    _farmAlvosVoo = getFarmTargets(vid).then((r) => {
+      _farmAlvosCache = r; _farmAlvosAt = Date.now(); _farmAlvosVoo = null; return r;
+    }, (e) => { _farmAlvosVoo = null; throw e; });
+    return _farmAlvosVoo;
+  }
+
   async function getFarmTargets(vid) {
     const rows = [], seen = {};
     // Ordenação fixa por distância em todas as páginas — é o que os próprios links de paginação
@@ -1649,7 +1673,7 @@
     const colorTxt = (t) => ({ green: 'verde', yellow: 'amarelo', blue: 'azul', red: 'vermelho' }[t.color] || t.color) + (t.full ? ' cheio' : ' vazio');
     // Lê os alvos (assistente = conta inteira) e os templates uma vez só.
     let targets;
-    try { targets = await getFarmTargets(CUR_VID); }
+    try { targets = await getFarmTargetsCached(CUR_VID, true); }
     catch (e) { pushLog('Saque: erro ao ler os alvos do assistente (' + (e.message || e) + ').', 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
     if (_farmPagesInfo && _farmPagesInfo.pages > 1) pushLog('Saque: assistente tem ' + _farmPagesInfo.pages + ' página(s) — ' + _farmPagesInfo.alvos + ' alvo(s) no total.', '', 'farm');
     let tpl = null;
@@ -1729,7 +1753,20 @@
       // mandando tropa pro mesmo lugar onde ela morre.
       if ((config.map.blacklistDefesa || {})[t.coord] || (config.map.blacklistPerda || {})[t.coord]) { skip.def++; continue; }
       if (t.color === 'blue') {
-        if (defended[t.reportId]) { skip.def++; continue; }
+        // CACHE POR COORDENADA, e o ZERO tambem entra.
+        //
+        // Antes a chave era o reportId e so gravava quando havia defesa. Duas falhas que se
+        // multiplicavam: aldeia vazia (a maioria) era relida TODO ciclo pra sempre, e o
+        // reportId muda a cada saque — o proprio ato de farmar invalidava o cache que existe
+        // pra evitar reler. Medido na conta do usuario: 92 leituras de relatorio por MINUTO,
+        // ~5.520/h, e foi o que derrubou tudo em 429.
+        // A pergunta certa e "esta ALDEIA tem defesa", nao "este RELATORIO tem defesa".
+        // Defesa encontrada nao expira (tropa nao some porque o tempo passou); o zero vale
+        // por algumas horas, tempo em que uma aldeia vazia dificilmente virou fortaleza.
+        const dc = defended[t.coord];
+        if (dc && (dc.defTotal > 0 || (now - (dc.at || 0)) < FARM_DEF_ZERO_TTL_MS)) {
+          if (dc.defTotal > 0) { skip.def++; continue; }
+        } else {
         // Não deu pra ler o relatório? PULA. Azul é o único que pode ter defesa; mandar sem saber
         // é o erro mais caro do módulo. Errar pra menos custa um saque; errar pra mais custa tropa.
         let defTotal = 0;
@@ -1739,11 +1776,11 @@
           errReasons['azul sem leitura de defesa: ' + String(e.message || e).slice(0, 60)] = (errReasons['azul sem leitura de defesa: ' + String(e.message || e).slice(0, 60)] || 0) + 1;
           continue;
         }
+        defended[t.coord] = { at: now, coord: t.coord, x: tx, y: ty, defTotal: defTotal, wall: t.wall };
         if (defTotal > 0) {
-          // Registra intel rico (usado depois no mapa) e ALERTA no log.
-          defended[t.reportId] = { at: now, coord: t.coord, x: tx, y: ty, defTotal: defTotal, wall: t.wall };
           pushLog('⚠ ALERTA: ' + t.coord + ' tem ' + defTotal + ' tropa(s) de defesa (relatório azul) — registrado no intel', 'err', 'farm');
           skip.def++; continue;
+        }
         }
       }
       const cell = t._cell, mode = cell.mode, qty = Math.max(1, cell.qty || 1);
@@ -1967,7 +2004,7 @@
     const COOLDOWN = 6 * 3600 * 1000;   // não re-manda no mesmo report por 6h
     // Alvos com muralha na faixa (assistente = conta inteira), MAIORES primeiro.
     let eligible = [];
-    try { eligible = (await getFarmTargets(CUR_VID)).filter((t) => t.reportId && t.coord && t.wall != null && t.wall >= wMin && t.wall <= wMax && !(demo[t.reportId] && (now - demo[t.reportId] < COOLDOWN))); }
+    try { eligible = (await getFarmTargetsCached(CUR_VID)).filter((t) => t.reportId && t.coord && t.wall != null && t.wall >= wMin && t.wall <= wMax && !(demo[t.reportId] && (now - demo[t.reportId] < COOLDOWN))); }
     catch (e) { pushLog('Muralha: erro ao ler os alvos do assistente (' + (e.message || e) + ').', 'err', 'wall'); config.wall.nextAt = now + 120000; save(); scheduleWall(); return; }
     eligible.sort((a, b) => (b.wall || 0) - (a.wall || 0));
     const pendingWalls = eligible.length;
@@ -3601,14 +3638,40 @@
   // Timer de PRECISÃO: agenda um recheck exatamente duração+30s depois do fim do treino atual dessa
   // aldeia — independente de onde o check periódico (2ª entrada) está no próprio ciclo. É o 2º dos
   // "2 checks" pedidos: garante reenvio quase imediato ao terminar, sem depender só do polling genérico.
+  const PALADIN_PISO_MS = 15000;      // piso do recheck; o antigo era 1s e criava laço
+  const PALADIN_MIN_ENTRE_MS = 30000; // intervalo mínimo entre dois rechecks da mesma aldeia
+  const paladinUltimoPreciso = {};    // vid -> quando o recheck de precisão rodou pela última vez
+
   function paladinSchedulePrecise(vid, finishAtMs) {
     if (!finishAtMs) return;
+    const agora = Date.now();
+    const fireAt = finishAtMs + 30000;   // +30s de buffer (cobre o delay entre envios da 3ª entrada)
+
+    // LAÇO DE 1 SEGUNDO — foi isto que derrubou a conta em HTTP 429.
+    //
+    // Quando o jogo devolvia um finish_time JÁ VENCIDO (paladino que terminou, ou estado
+    // preso), o `Math.max(1000, ...)` fazia o recheck cair no piso de 1s. O temporizador
+    // APAGAVA A SI MESMO antes de chamar o recheck, então a guarda de duplicidade logo
+    // abaixo não encontrava nada e deixava reagendar — 1s de novo, para sempre, com um
+    // screen=statue por volta.
+    // Medido na conta do usuário: 7 requisições por minuto com só este módulo ligado,
+    // 420/h, e o servidor passou a recusar TUDO com 429, inclusive dos outros módulos.
+    //
+    // Duas travas, porque uma só já falhou: não agenda pra hora vencida (o check periódico
+    // cobre), e não deixa a mesma aldeia repetir antes do intervalo mínimo.
+    if (fireAt <= agora) return;
+    const ultimo = paladinUltimoPreciso[vid] || 0;
+    if (agora - ultimo < PALADIN_MIN_ENTRE_MS) return;
+
     const cur = paladinPreciseTimers[vid];
     if (cur && cur.finishAt === finishAtMs) return;   // já agendado pra esse horário exato
     if (cur) clearTimeout(cur.id);
-    const fireAt = finishAtMs + 30000;   // +30s de buffer (cobre o delay entre envios da 3ª entrada)
-    const delay = Math.max(1000, fireAt - Date.now());
-    const id = setTimeout(() => { delete paladinPreciseTimers[vid]; paladinCheckAndSend(vid); }, delay);
+    const delay = Math.max(PALADIN_PISO_MS, fireAt - agora);
+    const id = setTimeout(() => {
+      delete paladinPreciseTimers[vid];
+      paladinUltimoPreciso[vid] = Date.now();
+      paladinCheckAndSend(vid);
+    }, delay);
     paladinPreciseTimers[vid] = { id: id, finishAt: finishAtMs };
   }
 
@@ -5104,7 +5167,7 @@
     // De quebra a cor do último saque entra aqui: VERMELHO é tropa perdida.
     const sabido = {};   // coord -> { temDados, reportId, wall, color, targetId }
     try {
-      (await getFarmTargets(CUR_VID)).forEach((t) => {
+      (await getFarmTargetsCached(CUR_VID)).forEach((t) => {
         if (!t.coord) return;
         sabido[t.coord] = { temDados: !!(t.reportId && t.wall != null), reportId: t.reportId, wall: t.wall, color: t.color, targetId: t.targetId, reportAt: t.reportAt || 0 };
       });

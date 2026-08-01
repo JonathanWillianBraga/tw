@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.30.1
+// @version      10.31.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -79,7 +79,7 @@
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
 
-  const VERSION = '10.30.1';
+  const VERSION = '10.31.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -5981,7 +5981,11 @@
 
   function makeDraggable(panel, handle) {
     let sx, sy, ox, oy, drag = false;
-    handle.addEventListener('mousedown', (e) => { if (e.target.closest('#twmgr-min,#twmgr-logbtn,#twmgr-upd-btn')) return; drag = true; sx = e.clientX; sy = e.clientY; const r = panel.getBoundingClientRect(); ox = r.left; oy = r.top; panel.style.right = 'auto'; e.preventDefault(); });
+    // Exceção pela ÁREA, não pela lista de ids: a lista antiga não tinha o botão da
+    // Central, então clicar nele iniciava um arrasto e o `right:auto` jogava o painel pra
+    // esquerda — parecia que o botão só funcionava depois de o painel se mexer. Excluir o
+    // bloco de ações inteiro resolve pra qualquer botão que venha depois.
+    handle.addEventListener('mousedown', (e) => { if (e.target.closest('#twmgr-head-actions')) return; drag = true; sx = e.clientX; sy = e.clientY; const r = panel.getBoundingClientRect(); ox = r.left; oy = r.top; panel.style.right = 'auto'; e.preventDefault(); });
     document.addEventListener('mousemove', (e) => { if (!drag) return; panel.style.left = (ox + e.clientX - sx) + 'px'; panel.style.top = (oy + e.clientY - sy) + 'px'; });
     document.addEventListener('mouseup', () => { drag = false; });
   }
@@ -6675,7 +6679,7 @@
     // Elipse e não círculo porque o tile do TW não é quadrado (53x47).
     if (cfg.showRange) {
       const raio = (config.map && config.map.maxDist) || 20;
-      const rx = raio * tw, ry = raio * th;
+      const r2 = raio * raio;
       const minhas = [];
       _mapVilCache.forEach((v) => {
         if (v.playerId !== MY_PLAYER_ID) return;
@@ -6683,19 +6687,41 @@
         minhas.push(v);
       });
       if (minhas.length) {
-        ctx.beginPath();
-        minhas.forEach((v) => {
-          let p; try { p = T.map.pixelByCoord(v.x, v.y); } catch (e) { return; }
-          const cx = (Array.isArray(p) ? p[0] : p.x) - mapOffset[0] + tw / 2;
-          const cy = (Array.isArray(p) ? p[1] : p.y) - mapOffset[1] + th / 2;
-          ctx.moveTo(cx + rx, cy);
-          ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-        });
-        ctx.fillStyle = 'rgba(212,175,55,.10)';
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(212,175,55,.55)';
-        ctx.lineWidth = 2;
-        ctx.stroke();
+        // PREENCHE TILE A TILE, não desenha círculos.
+        //
+        // A versão anterior desenhava uma elipse por aldeia. Mesmo unindo o preenchimento
+        // num caminho só, os CONTORNOS de cada círculo continuavam aparecendo e com 43
+        // aldeias viravam um emaranhado — o usuário descreveu como "muito poluído".
+        // Pintando os tiles que estão no alcance de ALGUMA aldeia, as bordas internas
+        // simplesmente não existem: o que sobra é uma mancha única, como a da relíquia.
+        //
+        // Uma chamada de pixelByCoord só, e o resto por aritmética: a grade é regular, e
+        // 600 chamadas por redraw a 4 quadros por segundo seriam desperdício.
+        let p0; try { p0 = T.map.pixelByCoord(xMin, yMin); } catch (e) { p0 = null; }
+        if (p0) {
+          const bx = (Array.isArray(p0) ? p0[0] : p0.x) - mapOffset[0];
+          const by = (Array.isArray(p0) ? p0[1] : p0.y) - mapOffset[1];
+          ctx.fillStyle = 'rgba(90,169,230,.20)';
+          for (let ty = yMin; ty <= yMax; ty++) {
+            // Pinta em FAIXAS horizontais contínuas em vez de um retângulo por tile:
+            // menos chamadas e, principalmente, sem costura visível entre tiles vizinhos.
+            let inicio = -1;
+            for (let tx = xMin; tx <= xMax + 1; tx++) {
+              let dentro = false;
+              if (tx <= xMax) {
+                for (let k = 0; k < minhas.length; k++) {
+                  const dx = minhas[k].x - tx, dy = minhas[k].y - ty;
+                  if (dx * dx + dy * dy <= r2) { dentro = true; break; }
+                }
+              }
+              if (dentro && inicio < 0) inicio = tx;
+              else if (!dentro && inicio >= 0) {
+                ctx.fillRect(bx + (inicio - xMin) * tw, by + (ty - yMin) * th, (tx - inicio) * tw, th);
+                inicio = -1;
+              }
+            }
+          }
+        }
       }
     }
 
@@ -7986,8 +8012,14 @@
   }
 
   function ccInjetarPraca() {
-    if (!/screen=place/.test(location.href)) return;
     if (document.getElementById('twmgr-ccq')) return;
+    const url = new URLSearchParams(location.search);
+    const tela = url.get('screen'), modo = url.get('mode');
+    // A praça tem oito abas (Comandos, Tropas, Coletando, Coleta em Massa, Simulador,
+    // Aldeias próximas, Apoio em massa, Modelos) e todas são screen=place. Sem olhar o
+    // mode, o agendador aparecia em todas — inclusive na de coleta, onde não faz sentido.
+    // Só a de Comandos (sem mode, ou mode=command) e a tela de informações da aldeia.
+    if (!(tela === 'place' && (!modo || modo === 'command'))) return;
     const form = document.querySelector('#command-data-form') || document.querySelector('form[action*="try=confirm"]') || document.querySelector('#content_value');
     if (!form) return;
     ccInjetarEstilo();

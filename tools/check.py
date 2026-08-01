@@ -97,19 +97,38 @@ def sem_strings_nem_comentarios(src):
 
 
 def checa_duplicados(limpo):
-    """Identificadores declarados 2x no mesmo nivel de indentacao do IIFE (2 espacos).
-    Foi assim que o CARRY duplicado derrubou o script na v10.5.0."""
-    vistos = {}
+    """const/let declarados 2x no mesmo bloco. O script nao carrega quando isso acontece.
+
+    A primeira versao so olhava indentacao de 2 espacos (o escopo do IIFE), porque foi
+    assim que o CARRY duplicado derrubou a v10.5.0. So que o mesmo erro DENTRO de uma
+    funcao quebra igual, e passou batido: em ccInjetarPraca eu declarei `const q` para os
+    parametros da URL e ja existia um `const q` mais abaixo para consultar o DOM. O
+    check.py deu 'ok, 0 avisos' e o script inteiro nao carregava.
+
+    Agora vale em qualquer profundidade. O escopo e aproximado pela indentacao: quando ela
+    diminui, os escopos mais internos sao descartados — e por isso dois blocos irmaos no
+    mesmo nivel (dois `if` seguidos, por exemplo) podem reusar o nome sem alarme falso.
+    """
+    pilha = []   # lista de (indent, {nome: linha})
     for num, linha in enumerate(limpo.split("\n"), 1):
-        m = re.match(r"^  (?:const|let|var|function|async function)\s+([A-Za-z_$][\w$]*)", linha)
+        if not linha.strip():
+            continue
+        ind = len(linha) - len(linha.lstrip(" "))
+        while pilha and pilha[-1][0] > ind:
+            pilha.pop()
+        m = re.match(r"^\s*(?:const|let|var|function|async function)\s+([A-Za-z_$][\w$]*)", linha)
         if not m:
             continue
+        if not pilha or pilha[-1][0] < ind:
+            pilha.append((ind, {}))
+        escopo = pilha[-1][1]
         nome = m.group(1)
-        if nome in vistos:
-            erros.append("identificador '%s' declarado 2x no escopo do IIFE "
-                         "(linhas %d e %d) — o script nao carrega" % (nome, vistos[nome], num))
+        if nome in escopo:
+            onde = "no escopo do IIFE" if ind == 2 else "no mesmo bloco (indentacao %d)" % ind
+            erros.append("identificador '%s' declarado 2x %s "
+                         "(linhas %d e %d) — o script nao carrega" % (nome, onde, escopo[nome], num))
         else:
-            vistos[nome] = num
+            escopo[nome] = num
 
 
 def checa_balanceamento(limpo):

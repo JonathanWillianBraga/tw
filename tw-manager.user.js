@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.2.1
+// @version      11.2.2
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -124,7 +124,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.2.1';
+  const VERSION = '11.2.2';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -6962,25 +6962,41 @@
     const rlog = (m, mod) => { if (!resumeQuiet && !lockOther()) pushLog(m, 'ok', mod); };
 
     if (!resumeQuiet && anyRunning() && lockOther()) pushLog('Outra aba já está ativa; esta ficará em espera.', 'err');
-    if (config.running) { rlog('Auto-ATK retomado.'); processDue(); }
-    if (config.scav.running) { rlog('Coleta retomada.', 'scav'); scheduleScav(); }
-    if (config.farm.running) { rlog('Saque retomado.', 'farm'); scheduleFarm(); }
-    if (config.wall.running) { rlog('Muralha retomada.', 'wall'); scheduleWall(); }
-    if (config.recruit.running) { rlog('Recrutar retomado.', 'recruit'); scheduleRecruit(); }
-    if (config.fakes.running) { config.fakes.gen.forEach((f) => { if (f.state === 'scheduled') f.state = 'armed'; }); rlog('Fakes rearmados.', 'fakes'); fakeTick(); }
-    if (config.market.running) { rlog('Mercado retomado.', 'market'); scheduleMarket(); }
-    if (config.build.running) { rlog('Edifícios retomado.', 'build'); scheduleBuild(); }
-    if (config.bb && config.bb.running) { rlog('Cultivo retomado.', 'bb'); scheduleBB(); }
-    if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); scheduleMap(); }
-    if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); etiquetaTick(); }
-    if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); scheduleLock(); }
+
+    // RETOMADA ESCALONADA. Antes, todo módulo ligado retomava em t=0 — e cinco deles
+    // chamam o próprio ciclo direto, disparando na hora. O painel de rede do usuário
+    // mostrou três requisições nossas tomando 429 no carregamento da página, junto com as
+    // 128 que o próprio jogo já faz pra montar a tela. A rajada era garantida.
+    //
+    // Agora cada módulo entra com alguns segundos de diferença. O primeiro espera um
+    // pouco de propósito: a página ainda está carregando os recursos dela, e é o pior
+    // momento possível pra competir por banda e por limite de requisição.
+    const RETOMA_INICIAL_MS = 6000, RETOMA_ESPACO_MS = 4000;
+    let _retomaN = 0;
+    const retomar = (fn) => {
+      const atraso = RETOMA_INICIAL_MS + (_retomaN++) * RETOMA_ESPACO_MS;
+      setTimeout(() => { try { fn(); } catch (e) { console.warn('[TWMgr] retomada falhou:', e); } }, atraso);
+    };
+
+    if (config.running) { rlog('Auto-ATK retomado.'); retomar(processDue); }
+    if (config.scav.running) { rlog('Coleta retomada.', 'scav'); retomar(scheduleScav); }
+    if (config.farm.running) { rlog('Saque retomado.', 'farm'); retomar(scheduleFarm); }
+    if (config.wall.running) { rlog('Muralha retomada.', 'wall'); retomar(scheduleWall); }
+    if (config.recruit.running) { rlog('Recrutar retomado.', 'recruit'); retomar(scheduleRecruit); }
+    if (config.fakes.running) { config.fakes.gen.forEach((f) => { if (f.state === 'scheduled') f.state = 'armed'; }); rlog('Fakes rearmados.', 'fakes'); retomar(fakeTick); }
+    if (config.market.running) { rlog('Mercado retomado.', 'market'); retomar(scheduleMarket); }
+    if (config.build.running) { rlog('Edifícios retomado.', 'build'); retomar(scheduleBuild); }
+    if (config.bb && config.bb.running) { rlog('Cultivo retomado.', 'bb'); retomar(scheduleBB); }
+    if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); retomar(scheduleMap); }
+    if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); retomar(etiquetaTick); }
+    if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); retomar(scheduleLock); }
     if (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) {
       config.planner.attacks.forEach((atk) => { if (!atk.running) return; (atk.rows || []).forEach((r) => { if (r.state === 'scheduled') r.state = 'armed'; }); });
       rlog('🎯 Coordenado retomado.', 'planner');
-      plannerTick();
+      retomar(plannerTick);
     }
-    if (config.paladin && config.paladin.running) { rlog('Paladino retomado.', 'paladin'); paladinTick(); }
-    if (config.obra && config.obra.running) { rlog('🏛️ Obra retomada.', 'obra'); obraTick(); }
+    if (config.paladin && config.paladin.running) { rlog('Paladino retomado.', 'paladin'); retomar(paladinTick); }
+    if (config.obra && config.obra.running) { rlog('🏛️ Obra retomada.', 'obra'); retomar(obraTick); }
     closeStaleLiveLogs();   // barra de progresso de ciclo que morreu no reload desta página
     installBotHooks();
     startCaptchaWatcher();

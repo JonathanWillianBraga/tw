@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      10.31.0
+// @version      11.0.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -74,12 +74,42 @@
     wall:       { name: 'Muralha',       ico: '🧱', max: 20 },
   };
   const tplToPlan = (text) => (text || '').split('\n').map((l) => l.trim().match(/^([a-z_]+)\s+(\d+)$/i)).filter(Boolean).filter((m) => BUILD_META[m[1].toLowerCase()]).map((m) => ({ b: m[1].toLowerCase(), lvl: Math.max(1, Math.min(BUILD_META[m[1].toLowerCase()].max, +m[2])), en: true }));
+  // Nomes completos (não abreviados) como aparecem na tabela "Ainda não disponível" de screen=main —
+  // diferente de BUILD_META.name, que é abreviado pra UI (ex.: "Ed. principal" vs "Edifício principal").
+  const LOCKED_REQ_NAME_TO_KEY = {
+    'Edifício principal': 'main', 'Quartel': 'barracks', 'Estábulo': 'stable', 'Oficina': 'garage',
+    'Torre de vigia': 'watchtower', 'Academia': 'snob', 'Ferreiro': 'smith', 'Praça de reunião': 'place',
+    'Estátua': 'statue', 'Mercado': 'market', 'Bosque': 'wood', 'Poço de argila': 'stone', 'Mina de ferro': 'iron',
+    'Fazenda': 'farm', 'Armazém': 'storage', 'Esconderijo': 'hide', 'Muralha': 'wall',
+  };
   const planToTpl = (plan) => (plan || []).map((it) => it.b + ' ' + it.lvl).join('\n');
   const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
   const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
 
+  // ==================== OBRA — templates dos 5 perfis (Fazenda e Armazém NÃO entram aqui na
+  // maioria dos perfis: são condicionais, decididos em tempo real por obraSpecialPriority(). O
+  // Fast Nobre é exceção — quebra essa regra e sobe Armazém de forma proativa, por isso tem
+  // "storage" embutido no template mesmo. Níveis finais e prioridades vieram direto da dicção do
+  // usuário, guardada em memória (tw_village_building_plans.md). ====================
+  // Regra do usuário (calibrada 2x): gap mais suave que a versão anterior. Perfis com Quartel como
+  // prioridade: quando minas batem 15, Quartel já está em 18. Perfis com Estábulo como prioridade
+  // (Farm ATK, Fast Nobre): quando minas batem 15, Estábulo está em 12 (bem mais discreto). Minas
+  // sempre em trio sincronizado wood/stone/iron.
+  const OBRA_TPL_FULL_ATK = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nmain 6\nwood 8\nstone 8\niron 8\nstable 1\ngarage 1\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nbarracks 18\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 20\nmain 12\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\ngarage 2\nmarket 15\nbarracks 23\nmain 17\nwood 25\nstone 25\niron 25\nmain 20\nstable 15\nbarracks 25\nmarket 20\nwood 30\nstone 30\niron 30\nstable 20';
+  const OBRA_TPL_FULL_DEF = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nstable 1\nmain 6\nwood 8\nstone 8\niron 8\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nbarracks 18\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 20\nwall 10\nmain 12\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\nmarket 15\nbarracks 23\nmain 17\nwood 25\nstone 25\niron 25\nmain 20\nbarracks 25\nmarket 20\nwood 30\nstone 30\niron 30\nwall 15\nwall 20';
+  const OBRA_TPL_FARM_ATK = 'main 3\nstable 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nstable 5\nwood 5\nstone 5\niron 5\nbarracks 1\nmain 6\nwood 8\nstone 8\niron 8\ngarage 1\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nstable 12\nbarracks 10\nwood 15\nstone 15\niron 15\nmarket 10\nstable 15\nbarracks 15\nmain 12\nwood 20\nstone 20\niron 20\nmain 15\ngarage 2\nmarket 15\nstable 18\nbarracks 20\nmain 17\nwood 25\nstone 25\niron 25\nmain 20\nstable 20\nbarracks 23\nmarket 20\nwood 30\nstone 30\niron 30\nbarracks 25';
+  const OBRA_TPL_FAST_DEF = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nstable 1\nsmith 10\nmain 6\nwood 8\nstone 8\niron 8\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nbarracks 18\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 20\nsmith 15\nwall 10\nmain 12\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\nmarket 15\nbarracks 23\nmain 17\nwood 25\nstone 25\niron 25\nmain 20\nstable 15\nbarracks 25\nmarket 20\nwood 30\nstone 30\niron 30\nwall 15\nwall 20';
+  const OBRA_TPL_FAST_NOBRE = 'main 3\nstable 1\nstatue 1\nsmith 5\nstorage 5\nwood 3\nstone 3\niron 3\nstable 5\nsmith 10\nwood 5\nstone 5\niron 5\nbarracks 1\nmain 6\nstorage 10\nsmith 15\nwood 8\nstone 8\niron 8\nmarket 5\nstorage 15\ngarage 1\nwood 12\nstone 12\niron 12\nstable 12\nbarracks 10\nsmith 20\nmain 10\nstorage 20\nwood 15\nstone 15\niron 15\nmarket 10\nstable 15\nbarracks 15\nmain 12\nwood 20\nstone 20\niron 20\nmain 15\nstorage 24\ngarage 2\nstable 18\nmain 17\nwood 25\nstone 25\niron 25\nmain 20\nsnob 1\nbarracks 20\nstorage 27\nstable 20\nwood 30\nstone 30\niron 30\nbarracks 25\nstorage 30';
+  const OBRA_PROFILES = ['fullAtk', 'fullDef', 'farmAtk', 'fastDef', 'fastNobre'];
+  const OBRA_PROFILE_META = {
+    fullAtk:   { name: 'Full ATK',   tpl: OBRA_TPL_FULL_ATK,   storageProativo: false, priorityBuilding: 'barracks' },
+    fullDef:   { name: 'Full DEF',   tpl: OBRA_TPL_FULL_DEF,   storageProativo: false, priorityBuilding: 'barracks' },
+    farmAtk:   { name: 'Farm ATK',   tpl: OBRA_TPL_FARM_ATK,   storageProativo: false, priorityBuilding: 'stable' },
+    fastDef:   { name: 'Fast DEF',   tpl: OBRA_TPL_FAST_DEF,   storageProativo: false, priorityBuilding: 'barracks' },
+    fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
+  };
 
-  const VERSION = '10.31.0';
+  const VERSION = '11.0.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -104,6 +134,7 @@
   const defScav = () => ({
     running: false, nextAt: 0,
     units: { spear: true, sword: true, axe: true, light: true, heavy: true, knight: false },
+    maxHours: 0,           // (johan) nenhum nivel de coleta com duracao acima disto e enviado. 0 = sem limite
     // Desbloqueio automático das coletas. Roda junto do ciclo de coleta, que já lê o
     // estado de todas as aldeias numa requisição só — então descobrir o que dá pra
     // desbloquear não custa requisição nenhuma a mais.
@@ -122,9 +153,10 @@
   const defRecruit = () => ({
     running: false, nextAt: 0, interval: 600, targetHours: 2, refillBelowMin: 30,
     groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
+    groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo (mantido p/ Edifícios/Cultivo)
   });
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
-  const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, mintSources: {}, thresholdPct: 50, maxDist: 15, inflight: {} });
+  const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, mintSources: {}, thresholdPct: 50, maxDist: 15, groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {} });
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
   // Cultivo — 3 fases (batem com os cards: f1 = main<20 · f2 = main 20 e stable<15 · f3 = graduada/recrutando).
   // FASE 1: leva o Ed. principal até 20 + o que ele depende (armazém "lidera" p/ bancar os níveis; fazenda leve p/ pop). Sem estábulo.
@@ -165,6 +197,12 @@
     intelAt: 0,                           // quando foi atualizado pela última vez
     defesaMin: 1,                         // a partir de quantas unidades de defesa entra na lista
     removerDoAssistente: false,           // apagar os relatórios no jogo (irreversível) — ver nota
+  });
+  const defLock = () => ({
+    running: false, nextAt: 0,
+    maxDist: 10, minPoints: 500, interval: 1800,   // raio em campos (X), pontos mín. (Y), reciclo em segundos (30min padrão)
+    reserved: {},                          // vid do bárbaro -> timestamp de quando O SCRIPT travou (nunca destrava sozinho)
+    stats: {},
   });
   const defPlannerAttack = (name) => ({
     id: genId(), name: name || 'Ataque',
@@ -253,7 +291,23 @@
     maxCorrecaoMs: 1000,    // acima disto o erro é tratado como defeito e ignorado
     ondaGapMs: 50,          // espaçamento padrão entre comandos de uma onda
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), reservations: {} });
+  const defObra = () => ({
+    running: false,
+    groups: { fullAtk: null, fullDef: null, farmAtk: null, fastDef: null, fastNobre: null },   // grupo nativo do TW -> perfil
+    interval: 600,          // seg. entre ciclos (padrão 10 min)
+    maxQueue: 5,            // fila de construção máx. por aldeia
+    reserveMin: 0,          // reserva mín. de cada recurso antes de construir — 0 = desliga; usar pra sobrar recurso pro Recrutar
+    farmFreePopMin: 800,    // gatilho Fazenda: só upa quando população livre (max-atual) cai abaixo disso
+    storageFillPct: 60,     // gatilho Armazém: só upa quando algum recurso atinge X% da capacidade (Fast Nobre ignora, é proativo)
+    autoResearch: true,     // pesquisa automática no Ferreiro, seguindo a ordem de OBRA_RESEARCH_ORDER por perfil
+    plans: {
+      fullAtk: tplToPlan(OBRA_TPL_FULL_ATK), fullDef: tplToPlan(OBRA_TPL_FULL_DEF), farmAtk: tplToPlan(OBRA_TPL_FARM_ATK),
+      fastDef: tplToPlan(OBRA_TPL_FAST_DEF), fastNobre: tplToPlan(OBRA_TPL_FAST_NOBRE),
+    },
+    nextAt: 0,
+    demand: {},              // { [vid]: { b, cost, coord, profile } }
+  });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -272,6 +326,7 @@
     if (typeof c.scav.unlockMaxOrigens !== 'number' || c.scav.unlockMaxOrigens < 1) c.scav.unlockMaxOrigens = 5;
     if (!c.scav.faltouRecurso) c.scav.faltouRecurso = {};
     if (!c.scav.units) c.scav.units = defScav().units;
+    if (c.scav.maxHours == null) c.scav.maxHours = 0;
     if (!c.farm) c.farm = defFarm();
     if (!c.farm.sentReports) c.farm.sentReports = {};
     if (c.farm.maxDist == null) c.farm.maxDist = 13;
@@ -323,6 +378,7 @@
     if (!c.recruit.profiles.def) c.recruit.profiles.def = { targets: {} };
     if (!c.recruit.overrides) c.recruit.overrides = {};
     if (!c.recruit.queueEst) c.recruit.queueEst = {};
+    if (!Array.isArray(c.recruit.groups)) c.recruit.groups = [];
     if (c.recruit.targetHours == null) c.recruit.targetHours = 2;
     if (c.recruit.refillBelowMin == null) c.recruit.refillBelowMin = 30;
     if (c.recruit.interval == null) c.recruit.interval = 600;
@@ -346,6 +402,12 @@
     if (c.market.destCoord == null) c.market.destCoord = '';
     if (c.market.thresholdPct == null) c.market.thresholdPct = 50;
     if (c.market.maxDist == null) c.market.maxDist = 15;
+    if (c.market.groupSolidario == null) c.market.groupSolidario = '';
+    if (c.market.solidarioThresholdPct == null) c.market.solidarioThresholdPct = 50;
+    if (c.market.solidarioMaxDist == null) c.market.solidarioMaxDist = 20;
+    if (c.market.solidarioDonorPct == null) c.market.solidarioDonorPct = 50;
+    if (c.market.solidarioDonorMinPct == null) c.market.solidarioDonorMinPct = 50;
+    if (c.market.solidarioGargaloKeepPct == null) c.market.solidarioGargaloKeepPct = 90;
     if (!c.market.inflight) c.market.inflight = {};
     if (!c.recruit.demand) c.recruit.demand = {};
     if (!c.build) c.build = defBuild();
@@ -399,6 +461,11 @@
     if (c.map.maxPerVillage == null) c.map.maxPerVillage = 20;
     if (c.map.delay == null) c.map.delay = 500;
     if (c.map.onlyBarbarians == null) c.map.onlyBarbarians = true;
+    if (!c.lock) c.lock = defLock();
+    if (c.lock.maxDist == null) c.lock.maxDist = 10;
+    if (c.lock.minPoints == null) c.lock.minPoints = 500;
+    if (c.lock.interval == null) c.lock.interval = 1800;
+    if (!c.lock.reserved) c.lock.reserved = {};
     if (!c.captcha) c.captcha = defCaptcha();
     if (c.captcha.enabled == null) c.captcha.enabled = true;
     if (c.captcha.browserNotif == null) c.captcha.browserNotif = true;
@@ -492,16 +559,28 @@
     if (c.paladin.checkIntervalMin == null) c.paladin.checkIntervalMin = 240;
     if (c.paladin.sendDelayMs == null) c.paladin.sendDelayMs = 500;
     if (!c.paladin.state || typeof c.paladin.state !== 'object') c.paladin.state = {};
+    if (!c.obra) c.obra = defObra();
+    if (!c.obra.groups || typeof c.obra.groups !== 'object') c.obra.groups = defObra().groups;
+    OBRA_PROFILES.forEach((p) => { if (c.obra.groups[p] === undefined) c.obra.groups[p] = null; });
+    if (c.obra.interval == null) c.obra.interval = 600;
+    if (c.obra.maxQueue == null) c.obra.maxQueue = 5;
+    if (c.obra.reserveMin == null) c.obra.reserveMin = 0;
+    if (c.obra.farmFreePopMin == null) c.obra.farmFreePopMin = 800;
+    if (c.obra.storageFillPct == null) c.obra.storageFillPct = 60;
+    if (c.obra.autoResearch == null) c.obra.autoResearch = true;
+    if (!c.obra.plans) c.obra.plans = {};
+    OBRA_PROFILES.forEach((p) => { if (!Array.isArray(c.obra.plans[p]) || !c.obra.plans[p].length) c.obra.plans[p] = tplToPlan(OBRA_PROFILE_META[p].tpl); });
+    if (!c.obra.demand || typeof c.obra.demand !== 'object') c.obra.demand = {};
     (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
     return c;
   }
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, uiTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null;
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || _ocupadoAvulso > 0; }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.
@@ -677,6 +756,14 @@
         { v: fmtN(s.blDefesa), l: 'bl: tem defesa' },
         { v: fmtN(s.mapped), l: 'bárbaros no mundo' },
       ];
+    } else if (mod === 'lock') {
+      const s = (config.lock.stats || {});
+      arr = [
+        { v: fmtN(s.inRange), l: 'no raio', hl: true },
+        { v: fmtN(s.lockedNow), l: 'travadas agora' },
+        { v: fmtN(s.total), l: 'travadas ao todo' },
+        { v: fmtN(s.redSkipped), l: 'puladas (relatório vermelho)', wide: true },
+      ];
     } else if (mod === 'planner') {
       const attacks = (config.planner && config.planner.attacks) || [];
       const rows = attacks.reduce((acc, a) => acc.concat(a.rows || []), []);
@@ -702,6 +789,14 @@
         { v: fmtN(training), l: 'treinando' },
         { v: fmtN(home), l: 'livres (aguard.)' },
         { v: fmtN(other), l: 'outros/sem palad.' },
+      ];
+    } else if (mod === 'obra') {
+      const s = (config.obra && config.obra.stats) || {};
+      arr = [
+        { v: fmtN(s.villages), l: 'aldeias mapeadas', hl: true },
+        { v: fmtN(s.built), l: 'obras na fila (últ. ciclo)' },
+        { v: fmtN(s.researched), l: 'pesquisas (últ. ciclo)' },
+        { v: fmtN(Object.keys(config.obra.demand || {}).length), l: 'aguard. recurso' },
       ];
     }
     renderCards(mod, arr);
@@ -1220,6 +1315,23 @@
     return true;
   }
 
+  // Duração REAL de cada nível de coleta antes de enviar, lida direto da tela de coleta da aldeia
+  // (screen=place&mode=scavenge) — só chamada quando o "tempo máximo" está ativo, já que é 1 fetch
+  // extra por aldeia. O jogo não entrega essa duração pronta pelo endpoint em massa (scavenge_mass),
+  // só depois que o esquadrão já está a caminho — então tem que ler o valor que o próprio jogo mostra
+  // antes do envio (span.duration), em vez de tentar reproduzir a fórmula.
+  async function getScavDurations(vid) {
+    const res = await fetch('/game.php?village=' + vid + '&screen=place&mode=scavenge', { credentials: 'include' });
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const spans = doc.querySelectorAll('span.duration');
+    if (spans.length !== 4) return {};   // não deu pra mapear nível->duração com segurança (ex.: nível travado sem card)
+    const out = {};
+    spans.forEach((sp, i) => {
+      const m = (sp.textContent || '').trim().match(/^(\d+):([0-5]\d):([0-5]\d)$/);
+      if (m) out[i + 1] = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
+    });
+    return out;
+  }
   async function scavTick() {
     clearTimeout(scavTimer);
     if (!config.scav.running) return;
@@ -1235,11 +1347,24 @@
     // então descobrir o que dá pra abrir não custa requisição nenhuma a mais.
     try { await scavAutoUnlock(villages); } catch (e) { pushLog('⛏️ Desbloqueio automático falhou (' + (e.message || e) + ') — a coleta segue normal.', 'err', 'scav'); }
     const selUnits = SCAV_UNITS.map(([u]) => u).filter((u) => config.scav.units[u]);
+    const maxSec = Math.max(0, config.scav.maxHours || 0) * 3600;
     const reqs = [], runningEnds = [], activeSet = {};
     for (const v of villages) {
       if (v.options.some((o) => o.state === 'running')) activeSet[v.vid] = 1;
       v.options.filter((o) => o.state === 'running' && o.endMs).forEach((o) => runningEnds.push(o.endMs));
-      const freeOpts = v.options.filter((o) => o.state === 'free');
+      let freeOpts = v.options.filter((o) => o.state === 'free');
+      if (!freeOpts.length) continue;
+      // Tempo máximo (modo guerra): só manda pros níveis cuja duração REAL (lida da tela) cabe no teto.
+      // Se não der pra confirmar a duração de um nível (erro de rede ou HTML inesperado), NÃO manda pra
+      // ele — por segurança, prefere não coletar a arriscar tropa fora de casa por tempo desconhecido.
+      if (maxSec > 0) {
+        let durs = {};
+        try { durs = await getScavDurations(v.vid); }
+        catch (e) { pushLog('Coleta em ' + v.name + ': erro ao checar duração (' + (e.message || e) + ') — pulando por segurança.', 'err', 'scav'); }
+        const before = freeOpts.length;
+        freeOpts = freeOpts.filter((o) => durs[o.id] != null && durs[o.id] <= maxSec);
+        if (!freeOpts.length && before) { pushLog('Coleta em ' + v.name + ': nenhum nível dentro do tempo máximo (' + config.scav.maxHours + 'h) — pulando.', '', 'scav'); continue; }
+      }
       const avail = {}; let totalUnits = 0;
       selUnits.forEach((u) => { const n = v.avail[u] || 0; if (n > 0) { avail[u] = n; totalUnits += n; } });
       if (!freeOpts.length || totalUnits === 0) continue;
@@ -2191,12 +2316,21 @@
 
   async function resolveTargets() {
     const r = config.recruit, map = {};
-    const add = (list, prof) => (list || []).forEach((v) => { if (map[v.vid]) return; map[v.vid] = { name: v.coord || v.vid, targets: r.profiles[prof].targets }; });
+    const add = (list, targets) => (list || []).forEach((v) => { if (map[v.vid]) return; map[v.vid] = { name: v.coord || v.vid, targets: targets }; });
     let atkV = [], defV = [];
     if (r.groupAtk) { try { atkV = await getVillagesInGroup(r.groupAtk); } catch (e) { pushLog('Recrutar: erro grupo ATK: ' + (e.message || e), 'err'); } }
     if (r.groupDef) { try { defV = await getVillagesInGroup(r.groupDef); } catch (e) { pushLog('Recrutar: erro grupo DEF: ' + (e.message || e), 'err'); } }
-    add(atkV, 'atk'); add(defV, 'def');
-    if (r.groupAtk || r.groupDef) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} } // reseta grupo p/ "todos"
+    add(atkV, r.profiles.atk.targets); add(defV, r.profiles.def.targets);
+    // Grupos adicionais livres (quantos o usuário quiser, cada um ligado a 1 grupo do TW) — resolvidos DEPOIS
+    // do ATK/DEF fixo, então uma aldeia que já está no ATK/DEF antigo mantém o comportamento de sempre.
+    for (const g of (r.groups || [])) {
+      if (!g.groupId) continue;
+      let vs = [];
+      try { vs = await getVillagesInGroup(g.groupId); } catch (e) { pushLog('Recrutar: erro no grupo "' + (g.name || g.id) + '": ' + (e.message || e), 'err'); continue; }
+      add(vs, g.targets || {});
+    }
+    const anyGroup = r.groupAtk || r.groupDef || (r.groups || []).some((g) => g.groupId);
+    if (anyGroup) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} } // reseta grupo p/ "todos"
     Object.entries(r.overrides || {}).forEach(([vid, o]) => { map[vid] = { name: o.name || vid, targets: o.targets }; });
     return map;
   }
@@ -2349,13 +2483,75 @@
       '</div>').join('');
     return '<div style="font-size:11px;color:#e8d29a;margin:6px 0 2px">' + label + '</div>' + rows;
   }
+  let _twGroupsCache = [];
   async function fillGroupSelects() {
     let groups = [];
     try { groups = await getGroups(); } catch (e) { pushLog('Recrutar: erro ao listar grupos: ' + (e.message || e), 'err'); return; }
+    _twGroupsCache = groups;
     [['twmgr-r-gatk', config.recruit.groupAtk], ['twmgr-r-gdef', config.recruit.groupDef], ['twmgr-bb-group', config.bb.group], ['twmgr-bm-group', config.map && config.map.group], ['twmgr-farm-group', config.farm && config.farm.group]].forEach(([id, cur]) => {
       const sel = document.getElementById(id); if (!sel) return;
       sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((g) => '<option value="' + g.id + '"' + (String(cur) === String(g.id) ? ' selected' : '') + '>' + esc(g.name) + '</option>').join('');
     });
+    renderRecruitGroups();
+  }
+  // ---- Grupos adicionais livres do Recrutar (quantos o usuário quiser, cada um ligado a 1 grupo do TW) ----
+  function recruitGroupCardHTML(g) {
+    const opts = '<option value="">— nenhum —</option>' + _twGroupsCache.map((gr) => '<option value="' + gr.id + '"' + (String(g.groupId || '') === String(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
+    const t = g.targets || {};
+    const rows = RUNITS.map(([u, n]) =>
+      '<div style="display:flex;align-items:center;gap:5px;margin:1px 0">' +
+      '<input type="checkbox" class="twmgr-rg-on" data-gid="' + g.id + '" data-unit="' + u + '"' + (t[u] !== undefined ? ' checked' : '') + '>' +
+      unitIcon(u, n) + '<span style="flex:1;font-size:10px">' + n + '</span>' +
+      '<input class="twmgr-rg-t twmgr-inp" data-gid="' + g.id + '" data-unit="' + u + '" type="number" min="0" placeholder="∞" value="' + (t[u] != null ? t[u] : '') + '" style="width:60px" title="alvo (vazio = contínuo)">' +
+      '</div>').join('');
+    return '<div class="twmgr-rg-card" data-gid="' + g.id + '" style="border:1px solid #3a2c1a;border-radius:6px;padding:6px;margin-bottom:6px">' +
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">' +
+      '<input class="twmgr-rg-name twmgr-inp" data-gid="' + g.id + '" type="text" placeholder="nome do perfil" value="' + esc(g.name || '') + '" style="flex:1;font-size:11px">' +
+      '<select class="twmgr-rg-grp twmgr-inp" data-gid="' + g.id + '" style="width:130px">' + opts + '</select>' +
+      '<span class="twmgr-rg-rm" data-gid="' + g.id + '" title="remover grupo" style="cursor:pointer;color:#ff7568;padding:0 4px;font-weight:bold">✕</span>' +
+      '</div>' + rows + '</div>';
+  }
+  function renderRecruitGroups() {
+    const box = document.getElementById('twmgr-rg-list'); if (!box) return;
+    const groups = config.recruit.groups || [];
+    box.innerHTML = groups.length ? groups.map(recruitGroupCardHTML).join('') : '<div style="color:#8f7d57;text-align:center;padding:8px;font-size:10px">— nenhum grupo adicional (use o botão abaixo) —</div>';
+  }
+  function bindRecruitGroupsHandlers() {
+    const box = document.getElementById('twmgr-rg-list'); if (!box) return;
+    box.addEventListener('change', (e) => {
+      const el = e.target, gid = el.getAttribute('data-gid'); if (!gid) return;
+      const g = (config.recruit.groups || []).find((x) => x.id === gid); if (!g) return;
+      if (el.classList.contains('twmgr-rg-name')) g.name = el.value;
+      else if (el.classList.contains('twmgr-rg-grp')) g.groupId = el.value || null;
+      else if (el.classList.contains('twmgr-rg-on') || el.classList.contains('twmgr-rg-t')) {
+        const u = el.getAttribute('data-unit');
+        const cb = box.querySelector('.twmgr-rg-on[data-gid="' + gid + '"][data-unit="' + u + '"]');
+        const inp = box.querySelector('.twmgr-rg-t[data-gid="' + gid + '"][data-unit="' + u + '"]');
+        const hasNum = inp && inp.value.trim() !== '';
+        g.targets = g.targets || {};
+        if (!cb.checked && !hasNum) { delete g.targets[u]; }
+        else {
+          const v = hasNum ? parseInt(inp.value, 10) : null;
+          g.targets[u] = (v != null && !Number.isNaN(v)) ? v : null;
+          if (hasNum) cb.checked = true;
+        }
+      }
+      save();
+    });
+    box.addEventListener('click', (e) => {
+      const el = e.target, gid = el.getAttribute('data-gid'); if (!gid) return;
+      if (el.classList.contains('twmgr-rg-rm')) {
+        if (!confirm('Remover este grupo?')) return;
+        config.recruit.groups = (config.recruit.groups || []).filter((x) => x.id !== gid);
+        save(); renderRecruitGroups();
+      }
+    });
+  }
+  function recruitAddGroup() {
+    config.recruit.groups = config.recruit.groups || [];
+    const id = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    config.recruit.groups.push({ id: id, name: 'Grupo ' + (config.recruit.groups.length + 1), groupId: null, targets: {} });
+    save(); renderRecruitGroups();
   }
   function readRecruitCfg() {
     const r = config.recruit;
@@ -2379,7 +2575,12 @@
     save();
   }
   function setRecruitStatus(on) { setBtnState('twmgr-r-start', 'twmgr-r-stop', on, '● Recrutando', '▶ Recrutar'); }
-  function recruitStart() { readRecruitCfg(); if (!config.recruit.groupAtk && !config.recruit.groupDef) { pushLog('Recrutar: mapeie ao menos 1 grupo (ATK ou DEF).', 'err', 'recruit'); return; } config.recruit.running = true; config.recruit.nextAt = 0; save(); setRecruitStatus(true); pushLog('Recrutar iniciado.', 'ok', 'recruit'); recruitTick(); }
+  function recruitStart() {
+    readRecruitCfg();
+    const hasCustom = (config.recruit.groups || []).some((g) => g.groupId);
+    if (!config.recruit.groupAtk && !config.recruit.groupDef && !hasCustom) { pushLog('Recrutar: mapeie ao menos 1 grupo (ATK, DEF ou um grupo adicional).', 'err', 'recruit'); return; }
+    config.recruit.running = true; config.recruit.nextAt = 0; save(); setRecruitStatus(true); pushLog('Recrutar iniciado.', 'ok', 'recruit'); recruitTick();
+  }
   function recruitStop() { readRecruitCfg(); config.recruit.running = false; save(); clearTimeout(recruitTimer); setRecruitStatus(false); pushLog('Recrutar parado.', '', 'recruit'); }
   async function runRecruitDiag() {
     pushLog('Diag Recrutar: lendo grupos e tela train…');
@@ -3573,6 +3774,7 @@
     if ((config.market.nextAt || 0) > now) { scheduleMarket(); return; }
     try {
       if (config.market.mode === 'equilibrio') await equilibrioPass();
+      else if (config.market.mode === 'solidario') await solidarioPass();
       else if (config.market.mode === 'cunhar') await cunharPass();
       else await cunhagemPass();
     } catch (e) { pushLog('Mercado: erro no ciclo (' + (e.message || e) + ').', 'err', 'market'); }
@@ -3723,6 +3925,119 @@
     save();
     pushLog('Equilíbrio: ciclo concluído — ' + sent + ' transferência(s), limiar ' + Math.round(pct * 100) + '%.', 'ok', 'market');
   }
+
+  // ---- Solidário: as aldeias do grupo escolhido SÓ RECEBEM (nunca doam). Doadoras são TODAS as outras
+  // aldeias (qualquer uma fora do grupo), testadas da mais próxima pra mais longe — se a mais próxima não
+  // tiver mercador livre/recurso suficiente, tenta a próxima mais próxima, e assim por diante. Proteções:
+  // 1) piso normal = % (editável) do recurso mais baixo que a doadora TEM agora, com piso mínimo absoluto de segurança.
+  // 2) gargalo (ninguém passa no piso normal): a mais próxima cede só a fatia acima de X% (editável, padrão 90%)
+  //    do que ela já tem — ou seja, fica sempre com pelo menos X% do que possui, nunca esvazia.
+  const SOLID_MIN_SEND = 100;
+  const SOLID_ABS_MIN = { wood: 500, stone: 500, iron: 200 };   // piso mínimo absoluto do doador, só de segurança (não editável)
+  async function solidarioPass() {
+    const gid = config.market.groupSolidario;
+    if (!gid) { pushLog('Solidário: nenhum grupo selecionado.', 'err', 'market'); return; }
+    let recvMembers = [];
+    try { recvMembers = (await getVillagesInGroup(gid)).map((x) => ({ vid: x.vid, coord: x.coord, name: x.coord })); }
+    catch (e) { pushLog('Solidário: erro ao listar grupo (' + (e.message || e) + ').', 'err', 'market'); return; }
+    recvMembers = recvMembers.filter((v) => v.coord);
+    if (!recvMembers.length) { pushLog('Solidário: grupo sem aldeias, nada a fazer.', '', 'market'); return; }
+    const recvSetIds = {}; recvMembers.forEach((v) => { recvSetIds[v.vid] = true; });
+    let allV = [];
+    try { allV = await getAllVillages(); } catch (e) { pushLog('Solidário: erro ao listar todas as aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
+    const donorPool = allV.filter((v) => v.coord && !recvSetIds[v.vid]);
+    if (!donorPool.length) { pushLog('Solidário: nenhuma aldeia fora do grupo pra doar.', 'err', 'market'); return; }
+    const donorSet = {}, recvSet = {}, totRes = { wood: 0, stone: 0, iron: 0 };
+    const pct = (config.market.solidarioThresholdPct != null ? config.market.solidarioThresholdPct : 50) / 100;
+    const donorPct = (config.market.solidarioDonorPct != null ? config.market.solidarioDonorPct : 50) / 100;
+    const donorMinPct = (config.market.solidarioDonorMinPct != null ? config.market.solidarioDonorMinPct : 50) / 100;
+    const keepPct = (config.market.solidarioGargaloKeepPct != null ? config.market.solidarioGargaloKeepPct : 90) / 100;
+    const maxDist = config.market.solidarioMaxDist != null ? config.market.solidarioMaxDist : 20;
+    const now = Date.now();
+    config.market.inflight = config.market.inflight || {};
+    Object.keys(config.market.inflight).forEach((vid) => {
+      config.market.inflight[vid] = (config.market.inflight[vid] || []).filter((e) => e.arriveAt > now);
+      if (!config.market.inflight[vid].length) delete config.market.inflight[vid];
+    });
+    const inSum = (vid, r) => (config.market.inflight[vid] || []).reduce((s, e) => s + (e.r === r ? e.amt : 0), 0);
+    // piso normal do doador pro recurso r: % do recurso mais baixo que ELE tem agora (protege mais quem já tá capenga
+    // em algum recurso, mesmo doando um recurso abundante), com piso mínimo absoluto por baixo.
+    const donorFloor = (s, r) => Math.max((Math.min(s.cur.wood, s.cur.stone, s.cur.iron)) * donorPct, SOLID_ABS_MIN[r] || 0);
+    // piso INDEPENDENTE do limiar de carência (thr): "quão cheia preciso estar desse recurso pra não ser
+    // considerada carente demais pra doar ele". Separado de thr de propósito — se o limiar de carência for
+    // configurado agressivo (ex.: 85%, "deixa todo mundo quase cheio"), isso NÃO pode travar todo mundo de
+    // doar, senão nenhuma aldeia nunca fica "cheia o bastante" e o Solidário para de mandar qualquer coisa.
+    const donorMinFor = (s) => s.storage * donorMinPct;
+    const st = [];
+    for (const v of recvMembers.concat(donorPool)) {
+      let m; try { m = await getMarketState(v.vid); } catch (e) { continue; }
+      if (!m.storage) continue;
+      st.push({ vid: v.vid, coord: v.coord, name: v.name, isRecv: !!recvSetIds[v.vid], cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, storage: m.storage, thr: m.storage * pct });
+      await sleep(120);
+    }
+    let sent = 0;
+    for (const r of ['wood', 'stone', 'iron']) {
+      const receivers = st.filter((s) => s.isRecv).map((s) => ({ s: s, eff: s.cur[r] + inSum(s.vid, r) }))
+        .filter((x) => x.eff < x.s.thr).map((x) => ({ s: x.s, def: x.s.thr - x.eff })).sort((a, b) => b.def - a.def);
+      for (const rec of receivers) {
+        if (rec.def <= 0) continue;
+        let covered = false;
+        // passo normal: só doa quem tem excedente acima do próprio piso (recurso mais baixo × %), mais perto primeiro.
+        // "s.cur[r] >= donorMinFor(s)" é essencial: sem isso, uma aldeia carente NESSE MESMO recurso podia ainda
+        // passar no piso do doador (que usa o recurso mais baixo dela como base, uma conta separada) e acabar
+        // doando o próprio recurso que está faltando nela. Usa donorMinPct (independente do limiar de carência).
+        // "!s.isRecv" garante que só aldeias FORA do grupo Solidário entram como doadoras.
+        const donors = st.filter((s) => !s.isRecv && s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] >= donorMinFor(s) && s.cur[r] > donorFloor(s, r))
+          .map((s) => ({ s: s, exc: s.cur[r] - donorFloor(s, r), d: coordDist(s.coord, rec.s.coord) }))
+          .filter((x) => x.d <= maxDist)
+          .sort((a, b) => a.d - b.d);
+        for (const don of donors) {
+          if (rec.def <= 0) { covered = true; break; }
+          const amount = Math.floor(Math.min(don.exc, rec.def, don.s.cap));
+          if (amount < SOLID_MIN_SEND) continue;   // essa doadora não ajuda o bastante -> tenta a próxima mais perto
+          try {
+            const pkg = { wood: 0, stone: 0, iron: 0 }; pkg[r] = amount;
+            const dur = await sendMarketResources(don.s.vid, rec.s.coord, pkg);
+            sent++; donorSet[don.s.vid] = 1; recvSet[rec.s.vid] = 1; totRes[r] += amount; covered = true;
+            don.s.cur[r] -= amount; don.s.cap -= amount; rec.def -= amount; don.exc -= amount;
+            config.market.inflight[rec.s.vid] = config.market.inflight[rec.s.vid] || [];
+            config.market.inflight[rec.s.vid].push({ r: r, amt: amount, arriveAt: now + ((dur && dur > 0 ? dur : 3600) * 1000) });
+            pushLog('Solidário: ' + don.s.name + ' → ' + rec.s.coord + ' (' + amount + ' ' + ({ wood: 'madeira', stone: 'argila', iron: 'ferro' }[r]) + ')', 'ok', 'market');
+            await sleep(400 + Math.floor(Math.random() * 300));
+          } catch (e) { pushLog('Solidário em ' + don.s.name + ': ' + (e.message || e), 'err', 'market'); }
+        }
+        // gargalo geral: ninguém passou no piso normal desse recurso -> a mais próxima cede só a fatia
+        // acima de keepPct (padrão 90%) do que ela TEM agora, ficando sempre com pelo menos keepPct do que possui.
+        if (!covered && rec.def > 0) {
+          // mesma proteção do passo normal: mesmo no gargalo, nunca puxa de quem já está carente NESSE recurso,
+          // e nunca de quem é do próprio grupo Solidário (só recebe, nunca doa).
+          const fallback = st.filter((s) => !s.isRecv && s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] >= donorMinFor(s) && s.cur[r] > 0)
+            .map((s) => ({ s: s, d: coordDist(s.coord, rec.s.coord) }))
+            .filter((x) => x.d <= maxDist)
+            .sort((a, b) => a.d - b.d);
+          for (const don of fallback) {
+            if (rec.def <= 0) break;
+            const amount = Math.floor(Math.min(don.s.cur[r] * (1 - keepPct), rec.def, don.s.cap));
+            if (amount < SOLID_MIN_SEND) continue;
+            try {
+              const pkg = { wood: 0, stone: 0, iron: 0 }; pkg[r] = amount;
+              const dur = await sendMarketResources(don.s.vid, rec.s.coord, pkg);
+              sent++; donorSet[don.s.vid] = 1; recvSet[rec.s.vid] = 1; totRes[r] += amount;
+              don.s.cur[r] -= amount; don.s.cap -= amount; rec.def -= amount;
+              config.market.inflight[rec.s.vid] = config.market.inflight[rec.s.vid] || [];
+              config.market.inflight[rec.s.vid].push({ r: r, amt: amount, arriveAt: now + ((dur && dur > 0 ? dur : 3600) * 1000) });
+              pushLog('Solidário (gargalo, mantendo ' + Math.round(keepPct * 100) + '% da doadora): ' + don.s.name + ' → ' + rec.s.coord + ' (' + amount + ' ' + ({ wood: 'madeira', stone: 'argila', iron: 'ferro' }[r]) + ')', 'ok', 'market');
+              await sleep(400 + Math.floor(Math.random() * 300));
+            } catch (e) { pushLog('Solidário em ' + don.s.name + ': ' + (e.message || e), 'err', 'market'); }
+            break;   // só a mais próxima, uma vez, dose reduzida -> não drena várias aldeias já apertadas
+          }
+        }
+      }
+    }
+    config.market.stats = { sending: Object.keys(donorSet).length, receiving: Object.keys(recvSet).length, wood: totRes.wood, stone: totRes.stone, iron: totRes.iron };
+    save();
+    pushLog('Solidário: ciclo concluído — ' + sent + ' transferência(s), limiar ' + Math.round(pct * 100) + '%.', 'ok', 'market');
+  }
   async function renderMarketSources() {
     const cont = document.getElementById('twmgr-mk-sources'); if (!cont) return;
     let vils = []; try { vils = await getAllVillages(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
@@ -3737,6 +4052,13 @@
     cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-mk-mint" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
     cont.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.addEventListener('change', readMarketCfg));
   }
+  async function fillMarketSolidarioGroupSelect() {
+    const sel = document.getElementById('twmgr-mk-g-solid'); if (!sel) return;
+    let groups = [];
+    try { groups = await getGroups(); } catch (e) { pushLog('Solidário: erro ao listar grupos: ' + (e.message || e), 'err', 'market'); return; }
+    const cur = config.market.groupSolidario;
+    sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((gr) => '<option value="' + gr.id + '"' + (String(cur) === String(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
+  }
   function readMarketCfg() {
     const c = config.market, g = (id) => document.getElementById(id);
     const mode = document.querySelector('input[name="twmgr-mk-mode"]:checked'); if (mode) c.mode = mode.value;
@@ -3745,6 +4067,12 @@
     if (g('twmgr-mk-int')) c.interval = Math.max(1, parseInt(g('twmgr-mk-int').value, 10) || 10) * 60;
     if (g('twmgr-mk-thr')) c.thresholdPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-thr').value, 10) || 50));
     if (g('twmgr-mk-dist')) c.maxDist = Math.max(1, parseFloat((g('twmgr-mk-dist').value || '').replace(',', '.')) || 15);
+    if (g('twmgr-mk-sthr')) c.solidarioThresholdPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-sthr').value, 10) || 50));
+    if (g('twmgr-mk-sdonormin')) c.solidarioDonorMinPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-sdonormin').value, 10) || 50));
+    if (g('twmgr-mk-sdonor')) c.solidarioDonorPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-sdonor').value, 10) || 50));
+    if (g('twmgr-mk-sgargalo')) c.solidarioGargaloKeepPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-sgargalo').value, 10) || 90));
+    if (g('twmgr-mk-sdist')) c.solidarioMaxDist = Math.max(1, parseFloat((g('twmgr-mk-sdist').value || '').replace(',', '.')) || 20);
+    if (g('twmgr-mk-g-solid')) c.groupSolidario = g('twmgr-mk-g-solid').value;
     const src = {}; document.querySelectorAll('.twmgr-mk-src').forEach((cb) => { if (cb.checked) src[cb.getAttribute('data-vid')] = true; }); c.sources = src;
     const mint = {}; document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => { if (cb.checked) mint[cb.getAttribute('data-vid')] = true; }); c.mintSources = mint;
     save();
@@ -3757,13 +4085,16 @@
       if (!Object.values(config.market.sources).some(Boolean)) { pushLog('Cunhagem: selecione ao menos 1 aldeia de origem.', 'err', 'market'); return; }
     }
     if (config.market.mode === 'cunhar' && !Object.values(config.market.mintSources).some(Boolean)) { pushLog('Cunhar: selecione ao menos 1 aldeia pra cunhar.', 'err', 'market'); return; }
+    if (config.market.mode === 'solidario' && !config.market.groupSolidario) { pushLog('Solidário: selecione um grupo.', 'err', 'market'); return; }
     config.market.running = true; config.market.nextAt = 0; save();
     setMarketStatus(true);
     pushLog(config.market.mode === 'equilibrio'
       ? 'Equilíbrio iniciado — limiar ' + config.market.thresholdPct + '% do armazém, distância ≤ ' + config.market.maxDist + '.'
-      : config.market.mode === 'cunhar'
-        ? 'Cunhar iniciado — cunhando o máximo nas aldeias marcadas a cada ' + Math.round((config.market.interval || 600) / 60) + ' min.'
-        : 'Cunhagem iniciada — destino ' + config.market.destCoord + ', deixa ' + config.market.reserve + ' de cada recurso.', 'ok', 'market');
+      : config.market.mode === 'solidario'
+        ? 'Solidário iniciado — grupo ' + config.market.groupSolidario + ', limiar ' + config.market.solidarioThresholdPct + '% do armazém, distância ≤ ' + config.market.solidarioMaxDist + '.'
+        : config.market.mode === 'cunhar'
+          ? 'Cunhar iniciado — cunhando o máximo nas aldeias marcadas a cada ' + Math.round((config.market.interval || 600) / 60) + ' min.'
+          : 'Cunhagem iniciada — destino ' + config.market.destCoord + ', deixa ' + config.market.reserve + ' de cada recurso.', 'ok', 'market');
     marketTick();
   }
   function marketStop() { readMarketCfg(); config.market.running = false; save(); clearTimeout(marketTimer); setMarketStatus(false); pushLog('Mercado parado.', '', 'market'); }
@@ -3801,7 +4132,35 @@
       buildable[b] = !!(btn && btn.getAttribute('href') && !/disabled/.test(btn.className || ''));
     });
     const queueLen = doc.querySelectorAll('#buildqueue tr.sortable_row, #buildqueue tr.lit').length;
-    return { level: level, cost: cost, buildable: buildable, hasBtn: hasBtn, queueLen: queueLen };
+    // Recurso/população — já vêm de graça na mesma página (header do jogo), sem fetch extra. Usado pelo Obra
+    // pros gatilhos condicionais de Fazenda (pop livre) e Armazém (% de recurso cheio).
+    const num = (id) => { const el = doc.getElementById(id); return el ? (parseInt((el.textContent || '').replace(/\D/g, ''), 10) || 0) : 0; };
+    const resInfo = { wood: num('wood'), stone: num('stone'), iron: num('iron'), storageMax: num('storage'), pop: num('pop_current_label'), popMax: num('pop_max_label') };
+    // Tabela "Ainda não disponível" (mesma página): pra cada prédio travado, lista os pré-requisitos AINDA
+    // não cumpridos (span.inactive). Usado pelo Obra pra priorizar o requisito que falta (ex.: Ed.Principal
+    // pra liberar Ferreiro) em vez de cair no próximo item do template por eliminação.
+    const locked = {};
+    doc.querySelectorAll('tr').forEach((tr) => {
+      const reqDiv = tr.querySelector('td div.unmet_req'); if (!reqDiv) return;
+      const link = tr.querySelector('td a[href*="screen="]'); if (!link) return;
+      const sm = (link.getAttribute('href') || '').match(/screen=([a-z_]+)/i);
+      let key = sm ? sm[1].toLowerCase() : null;
+      if (!key || !BUILD_META[key]) {
+        const nmEl = tr.querySelector('img[data-title]');
+        const nm = (link.textContent || (nmEl && nmEl.getAttribute('data-title')) || '').trim();
+        key = LOCKED_REQ_NAME_TO_KEY[nm] || null;
+      }
+      if (!key) return;
+      const reqs = [];
+      reqDiv.querySelectorAll('span.inactive').forEach((sp) => {
+        const m = (sp.textContent || '').trim().match(/^(.+?)\s*\((\d+)\)$/);
+        if (!m) return;
+        const reqKey = LOCKED_REQ_NAME_TO_KEY[m[1].trim()];
+        if (reqKey) reqs.push({ b: reqKey, lvl: +m[2] });
+      });
+      if (reqs.length) locked[key] = reqs;
+    });
+    return { level: level, cost: cost, buildable: buildable, hasBtn: hasBtn, queueLen: queueLen, res: resInfo, locked: locked };
   }
   function computeBuild(state, plan) {
     // ordem estrita: para no 1º item ativo/não atingido que dá pra upar; se não tem recurso, ESPERA (vira demanda)
@@ -3949,6 +4308,231 @@
     setBuildStatus(true); pushLog('Edifícios iniciado — plano ATK com ' + atkN + ' item(ns), DEF com ' + defN + '.', 'ok', 'build'); buildTick();
   }
   function buildStop() { readBuildCfg(); config.build.running = false; save(); clearTimeout(buildTimer); setBuildStatus(false); pushLog('Edifícios parado.', '', 'build'); }
+
+  // ==================== OBRA (construção por perfil, via grupos nativos do TW) ====================
+  // Diferente do Edifícios (só atk/def fixo pra todas as aldeias), aqui cada aldeia entra no fluxo
+  // automaticamente ao ser colocada num dos 5 grupos do jogo — nenhum cadastro manual extra.
+  // Fazenda e Armazém são condicionais (não seguem a ordem estática do template) na maioria dos
+  // perfis: só entram quando o gatilho ao vivo dispara. Fast Nobre quebra essa regra do Armazém
+  // (fica embutido no próprio template, proativo). Pesquisa do Ferreiro (escolher a unidade) NÃO é
+  // automatizada aqui — o endpoint de pesquisa nunca foi investigado/confirmado nesta sessão, só o
+  // NÍVEL do prédio Ferreiro é controlado; escolher a tropa a pesquisar ainda é manual no jogo.
+  async function getGroupProfileMapObra() {
+    const g = config.obra.groups || {}, map = {};
+    for (const p of OBRA_PROFILES) {
+      if (!g[p]) continue;
+      let vs = [];
+      try { vs = await getVillagesInGroup(g[p]); } catch (e) {}
+      vs.forEach((v) => { if (!map[v.vid]) map[v.vid] = { profile: p, coord: v.coord }; });
+    }
+    if (OBRA_PROFILES.some((p) => g[p])) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
+    return map;
+  }
+  // Gatilhos condicionais de Fazenda (pop. livre baixa) e Armazém (recurso acima de X% da capacidade)
+  // — usam res.pop/popMax/wood/stone/iron/storageMax, que getBuildState já extrai de graça da mesma
+  // página (sem fetch extra). Retorna o nome do prédio a priorizar, ou null se nada disparou.
+  function obraSpecialPriority(state, profile) {
+    const cfg = config.obra, res = state.res || {};
+    const freePop = (res.popMax || 0) - (res.pop || 0);
+    if ((state.level.farm || 0) < 30 && state.hasBtn.farm && freePop < (cfg.farmFreePopMin || 800)) return 'farm';
+    if (!OBRA_PROFILE_META[profile].storageProativo) {
+      const cap = res.storageMax || 1;
+      const fillPct = Math.max(res.wood || 0, res.stone || 0, res.iron || 0) / cap * 100;
+      if ((state.level.storage || 0) < 30 && state.hasBtn.storage && fillPct >= (cfg.storageFillPct || 60)) return 'storage';
+    }
+    return null;
+  }
+  const OBRA_MINE_GATE_LEVEL = 10;   // uma mina só é upada além disso se o prédio prioritário também já estiver aqui
+  function computeObra(state, plan, profile) {
+    const cfg = config.obra, reserve = cfg.reserveMin || 0, res = state.res || {};
+    const meta = OBRA_PROFILE_META[profile] || {};
+    const prioLevel = meta.priorityBuilding ? (state.level[meta.priorityBuilding] || 0) : Infinity;
+    const canAfford = (b) => {
+      if (!state.buildable[b]) return false;
+      if (!reserve) return true;
+      const c = state.cost[b] || { wood: 0, stone: 0, iron: 0 };   // reserva mín. de recurso — prioriza o Recrutar quando configurado
+      return (res.wood - c.wood >= reserve) && (res.stone - c.stone >= reserve) && (res.iron - c.iron >= reserve);
+    };
+    const special = obraSpecialPriority(state, profile);
+    if (special && state.hasBtn[special]) {
+      if (canAfford(special)) return { build: { b: special, cost: state.cost[special] }, demand: null };
+      return { build: null, demand: { b: special, cost: state.cost[special] } };
+    }
+    for (const it of plan) {
+      if (it.en === false) continue;
+      if ((state.level[it.b] || 0) >= it.lvl) continue;
+      if (!state.hasBtn[it.b]) {
+        // travado por pré-requisito (ex.: Ferreiro exige Ed.Principal 5) -> prioriza o requisito que falta
+        // em vez de cair no próximo item do template por eliminação (senão o motor nunca "volta" pro travado)
+        const reqs = (state.locked && state.locked[it.b]) || [];
+        for (const req of reqs) {
+          if ((state.level[req.b] || 0) >= req.lvl) continue;
+          if (!state.hasBtn[req.b]) continue;   // o próprio requisito também travado -> não dá pra resolver agora
+          if (canAfford(req.b)) return { build: { b: req.b, cost: state.cost[req.b] }, demand: null };
+          return { build: null, demand: { b: req.b, cost: state.cost[req.b] } };
+        }
+        continue;
+      }
+      // Aldeias "de segunda mão" (conquistadas/compradas) podem já ter mina bem upada com o prédio
+      // prioritário travado (falta Ed.Principal p/ liberar Quartel/Estábulo) — sem isso, o motor cai
+      // pra mina por eliminação. Regra: uma mina que JÁ está em nível 10+ só continua subindo se o
+      // prédio prioritário também já estiver em 10+; minas ainda baixas (bootstrap de aldeia nova)
+      // seguem normal, pois a economia inicial ainda depende delas.
+      if ((it.b === 'wood' || it.b === 'stone' || it.b === 'iron') && (state.level[it.b] || 0) >= OBRA_MINE_GATE_LEVEL && prioLevel < OBRA_MINE_GATE_LEVEL) continue;
+      if (canAfford(it.b)) return { build: { b: it.b, cost: state.cost[it.b] }, demand: null };
+      return { build: null, demand: { b: it.b, cost: state.cost[it.b] } };
+    }
+    return { build: null, demand: null };
+  }
+  // ==================== OBRA — pesquisa automática do Ferreiro ====================
+  // Confirmado via DevTools (capturado ao vivo, não chutado): POST /game.php?village=X&screen=smith
+  // &ajaxaction=research, body "tech_id=<unit>&source=<vid>&h=<csrf>". A tela GET screen=smith embute
+  // BuildingSmith.techs = {...} com o estado de cada tropa pesquisável — mesmo truque de parse
+  // (extractBalancedJSON) usado no módulo Paladino pro receiveKnightsData.
+  const OBRA_RESEARCH_ORDER = {
+    fullAtk:   ['axe', 'spy', 'light', 'ram'],
+    fullDef:   ['spear', 'sword', 'spy'],
+    farmAtk:   ['axe', 'spy', 'light', 'ram'],
+    fastDef:   ['spear', 'sword', 'spy', 'light', 'heavy'],
+    fastNobre: ['axe', 'spy', 'light', 'ram'],
+  };
+  async function getSmithTechs(vid) {
+    const res = await fetch('/game.php?village=' + vid + '&screen=smith', { credentials: 'include' });
+    const html = await res.text();
+    const marker = 'BuildingSmith.techs = ';
+    const idx = html.indexOf(marker);
+    if (idx < 0) throw new Error('BuildingSmith.techs não encontrado (Ferreiro nv.0?)');
+    const json = extractBalancedJSON(html, idx + marker.length);
+    if (!json) throw new Error('parse de BuildingSmith.techs falhou');
+    const data = JSON.parse(json);
+    return (data && data.available) || {};
+  }
+  async function smithResearch(vid, techId) {
+    const b = new URLSearchParams();
+    b.set('tech_id', techId);
+    b.set('source', String(vid));
+    b.set('h', CSRF);
+    const res = await fetch('/game.php?village=' + vid + '&screen=smith&ajaxaction=research', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+      body: b.toString(),
+    });
+    const txt = await res.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (!j || !j.response) throw new Error('resposta inesperada (' + (txt || '').slice(0, 100).replace(/\s+/g, ' ') + ')');
+    return j.response;
+  }
+  // Anda pela ordem de pesquisa do perfil; devolve o techId pesquisado agora, ou null se não fez nada
+  // (já tudo pesquisado / falta prédio / já tem pesquisa em andamento nessa aldeia).
+  async function obraResearchStep(vid, profile) {
+    const order = OBRA_RESEARCH_ORDER[profile] || [];
+    if (!order.length) return null;
+    const techs = await getSmithTechs(vid);
+    for (const techId of order) {
+      const t = techs[techId];
+      if (!t) continue;
+      if ((+t.level || 0) >= 1) continue;        // já pesquisado -> próximo da ordem
+      if (t.error_buildings) return null;        // falta prédio (Estábulo/Oficina/Ferreiro) -> Obra resolve subindo o prédio, espera
+      if (t.can_research) { await smithResearch(vid, techId); return techId; }
+      return null;                                // nem pronto nem livre -> já em andamento, espera
+    }
+    return null;
+  }
+  async function obraTick() {
+    clearTimeout(obraTimer);
+    if (!config.obra.running) return;
+    if (lockOther()) { obraTimer = setTimeout(obraTick, 5000); return; }
+    if (captchaBlocked()) { obraTimer = setTimeout(obraTick, 30000); return; }
+    claimLock();
+    const now = Date.now();
+    if ((config.obra.nextAt || 0) > now) { scheduleObra(); return; }
+    let pmap;
+    try { pmap = await getGroupProfileMapObra(); }
+    catch (e) { pushLog('Obra: erro ao ler os grupos (' + (e.message || e) + ').', 'err', 'obra'); config.obra.nextAt = now + 120000; save(); scheduleObra(); return; }
+    const vids = Object.keys(pmap);
+    if (!vids.length) { pushLog('Obra: mapeie ao menos 1 grupo de perfil na aba Obra.', '', 'obra'); config.obra.nextAt = now + 300000; save(); scheduleObra(); return; }
+    config.obra.demand = {};
+    let built = 0, researched = 0;
+    for (const vid of vids) {
+      const profile = pmap[vid].profile;
+      const plan = (config.obra.plans && config.obra.plans[profile]) || [];
+      let st;
+      try { st = await getBuildState(vid); }
+      catch (e) { pushLog('Obra em ' + (pmap[vid].coord || vid) + ': erro ao ler o estado (' + (e.message || e) + ').', 'err', 'obra'); continue; }
+      const r = computeObra(st, plan, profile);
+      if (r.demand) config.obra.demand[vid] = { b: r.demand.b, cost: r.demand.cost, coord: pmap[vid].coord, profile: profile };
+      if (r.build && st.queueLen < (config.obra.maxQueue || 5)) {
+        try {
+          await enqueueBuild(vid, r.build.b);
+          built++;
+          const bn = (BUILD_META[r.build.b] && BUILD_META[r.build.b].name) || r.build.b;
+          pushLog('Obra: ' + (pmap[vid].coord || vid) + ' [' + OBRA_PROFILE_META[profile].name + '] → ' + bn + ' na fila (custo ' + r.build.cost.wood + '/' + r.build.cost.stone + '/' + r.build.cost.iron + ')', 'ok', 'obra');
+        } catch (e) { pushLog('Obra em ' + (pmap[vid].coord || vid) + ': ' + (e.message || e), 'err', 'obra'); }
+      } else if (r.demand) {
+        const bn = (BUILD_META[r.demand.b] && BUILD_META[r.demand.b].name) || r.demand.b;
+        pushLog((pmap[vid].coord || vid) + ' [' + OBRA_PROFILE_META[profile].name + ']: aguardando recurso p/ ' + bn + ' (' + r.demand.cost.wood + '/' + r.demand.cost.stone + '/' + r.demand.cost.iron + ')', '', 'obra');
+      }
+      if (config.obra.autoResearch) {
+        try {
+          const techId = await obraResearchStep(vid, profile);
+          if (techId) { researched++; pushLog('Obra: ' + (pmap[vid].coord || vid) + ' [' + OBRA_PROFILE_META[profile].name + '] → pesquisando ' + techId, 'ok', 'obra'); }
+        } catch (e) { pushLog('Obra (pesquisa) em ' + (pmap[vid].coord || vid) + ': ' + (e.message || e), 'err', 'obra'); }
+      }
+      await sleep(300);
+    }
+    config.obra.stats = config.obra.stats || {};
+    config.obra.stats.villages = vids.length;
+    config.obra.stats.built = built;
+    config.obra.stats.researched = researched;
+    config.obra.nextAt = now + Math.max(60, config.obra.interval || 600) * 1000;
+    save();
+    refreshCards('obra'); renderObraDemand();
+    pushLog('Obra: ciclo concluído — ' + built + ' obra(s) enfileirada(s). Próximo em ' + Math.round((config.obra.interval || 600) / 60) + ' min.', 'ok', 'obra');
+    scheduleObra();
+  }
+  function scheduleObra() { clearTimeout(obraTimer); if (!config.obra.running) return; obraTimer = setTimeout(obraTick, Math.min(Math.max((config.obra.nextAt || 0) - Date.now(), 1000), 60000)); }
+  function readObraCfg() {
+    const c = config.obra, g = (id) => document.getElementById(id);
+    if (g('twmgr-ob-max')) c.maxQueue = Math.max(1, parseInt(g('twmgr-ob-max').value, 10) || 5);
+    if (g('twmgr-ob-int')) c.interval = Math.max(1, parseInt(g('twmgr-ob-int').value, 10) || 10) * 60;
+    if (g('twmgr-ob-reserve')) c.reserveMin = Math.max(0, parseInt(g('twmgr-ob-reserve').value, 10) || 0);
+    if (g('twmgr-ob-farmpop')) c.farmFreePopMin = Math.max(0, parseInt(g('twmgr-ob-farmpop').value, 10) || 800);
+    if (g('twmgr-ob-storagepct')) c.storageFillPct = Math.max(1, Math.min(100, parseInt(g('twmgr-ob-storagepct').value, 10) || 60));
+    if (g('twmgr-ob-research')) c.autoResearch = !!g('twmgr-ob-research').checked;
+    OBRA_PROFILES.forEach((p) => { const el = g('twmgr-ob-g-' + p); if (el) c.groups[p] = el.value || null; });
+    save();
+  }
+  function setObraStatus(on) { setBtnState('twmgr-ob-start', 'twmgr-ob-stop', on, '● Construindo', '▶ Iniciar'); }
+  function obraStart() {
+    readObraCfg();
+    if (!OBRA_PROFILES.some((p) => config.obra.groups[p])) { pushLog('Obra: mapeie ao menos 1 grupo de perfil.', 'err', 'obra'); return; }
+    config.obra.running = true; config.obra.nextAt = 0; save();
+    setObraStatus(true);
+    pushLog('Obra iniciada.', 'ok', 'obra');
+    obraTick();
+  }
+  function obraStop() { readObraCfg(); config.obra.running = false; save(); clearTimeout(obraTimer); setObraStatus(false); pushLog('Obra parada.', '', 'obra'); }
+  async function fillObraGroupSelects() {
+    let groups = [];
+    try { groups = await getGroups(); } catch (e) { pushLog('Obra: erro ao listar grupos: ' + (e.message || e), 'err', 'obra'); return; }
+    OBRA_PROFILES.forEach((p) => {
+      const sel = document.getElementById('twmgr-ob-g-' + p); if (!sel) return;
+      const cur = config.obra.groups[p];
+      sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((gr) => '<option value="' + gr.id + '"' + (String(cur) === String(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
+    });
+  }
+  function renderObraDemand() {
+    const cont = document.getElementById('twmgr-ob-demand'); if (!cont) return;
+    const demand = config.obra.demand || {};
+    const keys = Object.keys(demand);
+    if (!keys.length) { cont.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— nada aguardando recurso —</div>'; return; }
+    cont.innerHTML = keys.map((vid) => {
+      const d = demand[vid];
+      const bn = (BUILD_META[d.b] && BUILD_META[d.b].name) || d.b;
+      return '<div style="font-size:10px;color:#d3c299;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.05)">' +
+        esc(d.coord || vid) + ' [' + esc((OBRA_PROFILE_META[d.profile] || {}).name || d.profile) + '] → ' + esc(bn) + ' (' + d.cost.wood + '/' + d.cost.stone + '/' + d.cost.iron + ')</div>';
+    }).join('');
+  }
 
   // ==================== MÓDULO BB (aldeias bárbaras conquistadas) ====================
   // Constrói a ladder BB, abastece JIT das aldeias grandes próximas, e ao graduar (EP+estábulo) recruta CL sozinho.
@@ -4838,6 +5422,105 @@
   function mapStop() { readMapCfg(); config.map.running = false; save(); clearTimeout(mapTimer); setMapStatus(false); renderMapCounts(); pushLog('🗺️ Mapa desligado.', '', 'map'); }
   async function mapRefreshCache() { _mapVillagesCache = null; try { const v = await getMapVillages(true); pushLog('Mapa recarregado — ' + v.length + ' aldeias no mundo (' + v.filter((x) => x.player === '0').length + ' bárbaras).', 'ok', 'map'); } catch (e) { pushLog('Mapa: recarregar falhou (' + (e.message || e) + ').', 'err', 'map'); } }
 
+  // ==================== CADEADO (reserva automática de aldeia bárbara p/ tribo) ====================
+  // Endpoint confirmado via DevTools (não chutado): GET /game.php?village=X&screen=info_village&id=Y
+  // &ajaxaction=toggle_reserve_village&json=1&h=CSRF — é um TOGGLE (chamar de novo tira o cadeado).
+  // Por isso o script guarda em config.lock.reserved quem ELE JÁ travou e nunca chama de novo em cima
+  // — sem essa memória, rodar 2x seguidas destravaria tudo que já tinha travado.
+  async function toggleReserveVillage(targetVid) {
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=info_village&id=' + targetVid + '&ajaxaction=toggle_reserve_village&json=1&h=' + CSRF, { credentials: 'include' });
+    const txt = await res.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (!j || !j.response || !j.response.code) throw new Error('resposta inesperada (' + (txt || '').slice(0, 100).replace(/\s+/g, ' ') + ')');
+    return j.response;   // { code, village, type: 'add'|'remove', id }
+  }
+  // Cor do ÚLTIMO relatório contra essa aldeia (green/yellow/blue/red), lida do popup real de info da
+  // aldeia — endpoint confirmado via DevTools (não chutado): GET .../screen=map&ajax=map_info&source=
+  // <minha>&target=<alvo>. Preferido ao assistente de farm (getFarmTargets) porque o assistente NÃO
+  // lista aldeias abandonadas/de baixo recurso — um caso real escapou o filtro por causa disso.
+  async function getLastAttackColor(targetVid) {
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=map&ajax=map_info&source=' + CUR_VID + '&target=' + targetVid, { credentials: 'include' });
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const cell = doc.getElementById('info_last_attack');
+    if (!cell) return null;   // nunca atacamos essa aldeia -> sem relatório
+    const img = cell.querySelector('img[src*="/dots/"]');
+    const m = img ? (img.getAttribute('src') || '').match(/dots\/(\w+)\./) : null;
+    return m ? m[1] : null;
+  }
+  async function lockTick() {
+    clearTimeout(lockTimer);
+    if (!config.lock.running) return;
+    if (lockOther()) { lockTimer = setTimeout(lockTick, 5000); return; }
+    if (captchaBlocked()) { lockTimer = setTimeout(lockTick, 30000); return; }
+    claimLock();
+    const now = Date.now();
+    if ((config.lock.nextAt || 0) > now) { scheduleLock(); return; }
+    let allV, mine;
+    try { allV = await getMapVillages(); }
+    catch (e) { pushLog('Cadeado: erro ao ler village.txt (' + (e.message || e) + ').', 'err', 'lock'); config.lock.nextAt = now + 60000; save(); scheduleLock(); return; }
+    try { mine = await getAllVillages(); }
+    catch (e) { pushLog('Cadeado: erro ao listar minhas aldeias (' + (e.message || e) + ').', 'err', 'lock'); config.lock.nextAt = now + 60000; save(); scheduleLock(); return; }
+    const myV = [];
+    mine.forEach((v) => { const cm = (v.coord || '').match(/(\d+)\|(\d+)/); if (cm) myV.push({ x: +cm[1], y: +cm[2] }); });
+    if (!myV.length) { pushLog('Cadeado: nenhuma aldeia própria encontrada.', 'err', 'lock'); config.lock.nextAt = now + 300000; save(); scheduleLock(); return; }
+    const maxDist = config.lock.maxDist || 10, minPts = config.lock.minPoints || 0;
+    // "no raio de TODAS as suas aldeias" = distância até a MAIS PERTO das suas aldeias, não de uma só.
+    const inRange = allV.filter((b) => b.player === '0' && b.points >= minPts && myV.some((s) => fieldDist(s.x, s.y, b.x, b.y) <= maxDist))
+      .sort((a, b) => b.points - a.points);   // mais pontos primeiro
+    config.lock.reserved = config.lock.reserved || {};
+    let lockedNow = 0, restored = 0, redSkipped = 0;
+    for (const b of inRange) {
+      const pare = devoParar('lock');
+      if (pare) { pushLog('Cadeado: interrompido — ' + pare + '. ' + lockedNow + ' travada(s) nesse ciclo até agora.', 'err', 'lock'); config.lock.nextAt = now + 30000; save(); scheduleLock(); return; }
+      if (config.lock.reserved[b.vid]) continue;   // já travamos essa antes, não mexe (evita destravar)
+      // Só checa relatório de quem AINDA não travamos — mantém o custo de rede proporcional só às
+      // candidatas novas do ciclo, não ao raio inteiro de novo toda vez.
+      let color = null;
+      try { color = await getLastAttackColor(b.vid); }
+      catch (e) { pushLog('Cadeado: erro ao checar relatório de ' + b.name + ' (' + (e.message || e) + ') — pulando por segurança.', 'err', 'lock'); continue; }
+      if (color === 'red') { redSkipped++; await sleep(150); continue; }
+      try {
+        const r = await toggleReserveVillage(b.vid);
+        if (r.type !== 'add') {
+          // já estava travada por fora do nosso controle (manual, ou outra sessão) — desfizemos sem
+          // querer; desfaz o desfazer e só então passa a rastrear.
+          await sleep(300);
+          await toggleReserveVillage(b.vid);
+          restored++;
+          pushLog('Cadeado: ' + b.name + ' (' + b.x + '|' + b.y + ') já estava travada — restaurada.', '', 'lock');
+        } else {
+          lockedNow++;
+          pushLog('Cadeado: 🔒 ' + b.name + ' (' + b.x + '|' + b.y + ', ' + fmtN(b.points) + ' pts).', 'ok', 'lock');
+        }
+        config.lock.reserved[b.vid] = now;
+        await sleep(400 + Math.floor(Math.random() * 300));
+      } catch (e) { pushLog('Cadeado em ' + b.name + ' (' + b.x + '|' + b.y + '): ' + (e.message || e), 'err', 'lock'); }
+    }
+    config.lock.stats = { inRange: inRange.length, total: Object.keys(config.lock.reserved).length, lockedNow: lockedNow, redSkipped: redSkipped };
+    config.lock.nextAt = now + Math.max(60, config.lock.interval || 1800) * 1000;
+    save();
+    refreshCards('lock');
+    pushLog('Cadeado: ciclo concluído — ' + lockedNow + ' nova(s) travada(s)' + (restored ? ', ' + restored + ' restaurada(s)' : '') + ' (' + inRange.length + ' no raio, ' + Object.keys(config.lock.reserved).length + ' travadas ao todo, ' + redSkipped + ' pulada(s) por relatório vermelho). Próximo em ' + Math.round((config.lock.interval || 1800) / 60) + ' min.', 'ok', 'lock');
+    scheduleLock();
+  }
+  function scheduleLock() { clearTimeout(lockTimer); if (!config.lock.running) return; lockTimer = setTimeout(lockTick, Math.min(Math.max((config.lock.nextAt || 0) - Date.now(), 1000), 60000)); }
+  function readLockCfg() {
+    const c = config.lock, g = (id) => document.getElementById(id);
+    if (g('twmgr-lk-dist')) c.maxDist = Math.max(1, parseFloat((g('twmgr-lk-dist').value || '').replace(',', '.')) || 10);
+    if (g('twmgr-lk-pts')) c.minPoints = Math.max(0, parseInt(g('twmgr-lk-pts').value, 10) || 0);
+    if (g('twmgr-lk-int')) c.interval = Math.max(1, parseInt(g('twmgr-lk-int').value, 10) || 30) * 60;
+    save();
+  }
+  function setLockStatus(on) { setBtnState('twmgr-lk-start', 'twmgr-lk-stop', on, '● Rastreando', '▶ Iniciar'); }
+  function lockStart() {
+    readLockCfg();
+    config.lock.running = true; config.lock.nextAt = 0; save();
+    setLockStatus(true);
+    pushLog('Cadeado iniciado — raio ≤ ' + config.lock.maxDist + ' campos, ' + config.lock.minPoints + '+ pts, reciclo a cada ' + Math.round((config.lock.interval || 1800) / 60) + ' min.', 'ok', 'lock');
+    lockTick();
+  }
+  function lockStop() { readLockCfg(); config.lock.running = false; save(); clearTimeout(lockTimer); setLockStatus(false); pushLog('Cadeado parado.', '', 'lock'); }
+
   // ==================== DETECTOR DE CAPTCHA ====================
   // Detecta popups de bot-check do TW e captchas hCaptcha/reCAPTCHA, dispara notificação
   // do navegador + POST em ntfy.sh/{topico}. Cooldown pra não spammar.
@@ -5107,7 +5790,7 @@
     });
     const ring = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('twmgr-run', !!on && !lockOther()); };
     ring('twmgr-btab-bb', config.bb && config.bb.running);
-    ring('twmgr-btab-map', config.map && config.map.running);
+    ring('twmgr-btab-map', (config.map && config.map.running) || (config.lock && config.lock.running));
     ring('twmgr-btab-scav', config.scav.running);
     ring('twmgr-btab-farm', config.farm.running);
     ring('twmgr-btab-wall', config.wall && config.wall.running);
@@ -5117,6 +5800,7 @@
     ring('twmgr-btab-build', config.build.running);
     ring('twmgr-btab-planner', config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running));
     ring('twmgr-btab-paladin', config.paladin && config.paladin.running);
+    ring('twmgr-btab-obra', config.obra && config.obra.running);
     const dot = document.getElementById('twmgr-dot'); if (dot) dot.classList.toggle('on', anyRunning() && !lockOther());
   }
 
@@ -5196,7 +5880,13 @@
       }).join('') + (ks.length > 12 ? '<div style="font-size:9px;color:#8f7d57;padding:2px 0">…e mais ' + (ks.length - 12) + '</div>' : '');
   }
 
-  function readScavUnits() { config.scav.units = config.scav.units || {}; SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) config.scav.units[u] = el.checked; }); save(); }
+  function readScavUnits() {
+    config.scav.units = config.scav.units || {};
+    SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) config.scav.units[u] = el.checked; });
+    const mh = document.getElementById('twmgr-scav-maxh');
+    if (mh) config.scav.maxHours = Math.max(0, parseFloat((mh.value || '').replace(',', '.')) || 0);
+    save();
+  }
   function scavStart() { readScavUnits(); if (!SCAV_UNITS.some(([u]) => config.scav.units[u])) { pushLog('Coleta: marque ao menos 1 unidade.', 'err', 'scav'); return; } config.scav.running = true; config.scav.nextAt = 0; save(); setScavStatus(true); pushLog('Coleta iniciada em todas as aldeias.', 'ok', 'scav'); scavTick(); }
   function scavStop() { readScavUnits(); config.scav.running = false; save(); clearTimeout(scavTimer); setScavStatus(false); pushLog('Coleta parada.', '', 'scav'); }
   function setScavStatus(on) { setBtnState('twmgr-scav-start', 'twmgr-scav-stop', on, '● Coletando', '▶ Coletar'); }
@@ -5365,7 +6055,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'paladin', 'log'].forEach((n) => {
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'paladin', 'obra', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -5388,7 +6078,7 @@
     const modLog = (mod) => '<div class="twmgr-modlog"><div class="twmgr-modlog-head" data-modlog="' + mod + '">▸ Log do módulo (<span id="twmgr-modlog-count-' + mod + '">0</span>)</div><div id="twmgr-modlog-body-' + mod + '" class="twmgr-modlog-body" style="display:none"></div></div>';
     p.innerHTML =
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
@@ -5403,6 +6093,8 @@
           '<div class="twmgr-row"><span class="twmgr-lbl" title="Quantas aldeias no máximo contribuem para um mesmo desbloqueio. As mais próximas primeiro.">Máx. de aldeias doadoras</span><input id="twmgr-scav-unlock-org" class="twmgr-inp" type="number" min="1" max="20" value="5" style="width:66px"></div>' +
           '<div class="twmgr-hint" style="margin:0">Custo: <b>1</b> 25/30/25 · <b>2</b> 250/300/250 · <b>3</b> 1k/1,2k/1k · <b>4</b> 10k/12k/10k. Cada aldeia abre uma de cada vez, e a de cima exige a de baixo.</div>' +
           '<div id="twmgr-scav-falta" style="margin-top:6px"></div>') +
+        sec('Segurança',
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Nenhum nível de coleta com duração acima disso é enviado — mesmo com tropa livre. 0 = sem limite. Útil em guerra, pra tropa nunca ficar fora de casa por muito tempo.">Tempo máximo por coleta (h, 0=sem limite)</span><input id="twmgr-scav-maxh" class="twmgr-inp" type="number" min="0" step="0.5" value="0" style="width:70px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-scav-start" class="twmgr-btn twmgr-go">▶ Coletar</button><button id="twmgr-scav-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-scav-status" class="twmgr-cstatus"></div>' +
         modLog('scav') +
@@ -5448,13 +6140,17 @@
         modLog('wall') +
       '</div>' +
       '<div id="twmgr-tab-recruit" style="display:none">' +
-        hint('Recruta por <b>grupo</b> (ATK/DEF): mantém a fila alvo por edifício e para no alvo de tropas. Vazio = contínuo.') +
+        hint('Recruta por <b>grupo</b> do TW: mantém a fila alvo por edifício e para no alvo de tropas. Vazio = contínuo.') +
         cardsDiv('recruit') +
-        sec('Grupos',
+        sec('Grupos (fixo ATK/DEF)',
           '<div class="twmgr-row"><span class="twmgr-lbl">Grupo ATK</span><select id="twmgr-r-gatk" class="twmgr-inp" style="width:170px"></select></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Grupo DEF</span><select id="twmgr-r-gdef" class="twmgr-inp" style="width:170px"></select></div>' +
           '<div style="text-align:right;margin-top:2px"><button id="twmgr-r-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button></div>') +
         sec('Tropas por perfil', recruitProfileHTML('atk', '⚔️ Perfil ATK') + recruitProfileHTML('def', '🛡️ Perfil DEF')) +
+        sec('Grupos adicionais',
+          '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Crie quantos perfis quiser, cada um ligado a um grupo do TW — igual o ATK/DEF acima, mas sem limite de quantidade.</div>' +
+          '<div id="twmgr-rg-list"></div>' +
+          '<button id="twmgr-rg-add" class="twmgr-btn twmgr-ghost" style="width:100%;margin-top:2px">+ Adicionar grupo</button>') +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Fila alvo (h)</span><input id="twmgr-r-hours" class="twmgr-inp" type="number" min="0.5" step="0.5" value="2" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Repor quando faltar (min)</span><input id="twmgr-r-refill" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>') +
@@ -5486,9 +6182,9 @@
         modLog('fakes') +
       '</div>' +
       '<div id="twmgr-tab-market" style="display:none">' +
-        hint('Mercado: <b>Cunhagem</b> junta recurso num destino; <b>Equilíbrio</b> nivela as aldeias por %; <b>Cunhar</b> cunha moedas de ouro nas aldeias marcadas.') +
+        hint('Mercado: <b>Cunhagem</b> junta recurso num destino; <b>Equilíbrio</b> nivela as aldeias por %; <b>Solidário</b> abastece só o grupo escolhido (que só recebe) com qualquer outra aldeia sua doando; <b>Cunhar</b> cunha moedas de ouro nas aldeias marcadas.') +
         cardsDiv('market') +
-        sec('Modo', '<div class="twmgr-row"><span class="twmgr-lbl">Modo</span><span style="font-size:11px"><label><input type="radio" name="twmgr-mk-mode" value="cunhagem"> 💰 Cunhagem</label> <label><input type="radio" name="twmgr-mk-mode" value="equilibrio"> ⚖️ Equilíbrio</label> <label><input type="radio" name="twmgr-mk-mode" value="cunhar"> 🪙 Cunhar</label></span></div>') +
+        sec('Modo', '<div class="twmgr-row"><span class="twmgr-lbl">Modo</span><span style="font-size:11px"><label><input type="radio" name="twmgr-mk-mode" value="cunhagem"> 💰 Cunhagem</label> <label><input type="radio" name="twmgr-mk-mode" value="equilibrio"> ⚖️ Equilíbrio</label> <label><input type="radio" name="twmgr-mk-mode" value="solidario"> 🤝 Solidário</label> <label><input type="radio" name="twmgr-mk-mode" value="cunhar"> 🪙 Cunhar</label></span></div>') +
         '<div id="twmgr-mk-cunhagem">' +
           sec('Cunhagem',
             '<div class="twmgr-row"><span class="twmgr-lbl">Coordenada destino</span><input id="twmgr-mk-coord" class="twmgr-inp" type="text" placeholder="464|604" style="width:90px"></div>' +
@@ -5501,6 +6197,16 @@
             '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Aldeia acima do limiar doa o excedente pras abaixo, por recurso. Da mais perto primeiro.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Encher armazém até (%)</span><input id="twmgr-mk-thr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="15" style="width:56px"></div>') +
+        '</div>' +
+        '<div id="twmgr-mk-solidario" style="display:none">' +
+          sec('Solidário',
+            '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Aldeias do grupo escolhido SÓ RECEBEM (nunca doam). Doadora é qualquer OUTRA aldeia sua — testa da mais perto pra mais longe, e pula pra próxima se a mais perto não tiver mercador/recurso suficiente. Doadora só cede acima de "% do recurso mais baixo dela" (protege quem já tá capenga). Se ninguém qualificar, a mais próxima cede só a fatia acima de "% que fica na doadora" mesmo assim (nunca esvazia), pra nunca travar construção/pesquisa numa aldeia nova ou bárbara conquistada.</div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl">Grupo Solidário</span><select id="twmgr-mk-g-solid" class="twmgr-inp" style="width:140px"></select></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl">Carente: encher armazém até (%)</span><input id="twmgr-mk-sthr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl" title="Independente do limiar acima — se o limiar de carente for alto (ex.: 85%), esse aqui evita que ninguém nunca qualifique como doador.">Doadora: mín. % de armazém p/ poder doar</span><input id="twmgr-mk-sdonormin" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl">Doadora: piso = % do recurso mais baixo dela</span><input id="twmgr-mk-sdonor" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl">Gargalo: % que fica na doadora</span><input id="twmgr-mk-sgargalo" class="twmgr-inp" type="number" min="1" max="99" value="90" style="width:56px"></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-sdist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:56px"></div>') +
         '</div>' +
         '<div id="twmgr-mk-cunhar" style="display:none">' +
           sec('Cunhar moedas de ouro',
@@ -5596,6 +6302,15 @@
         '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:8px;margin-top:4px"></div>' +
         '<div id="twmgr-bm-bl" style="max-height:220px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:8px;margin-top:4px;display:none"></div>' +
         modLog('map') +
+        sec('🔒 Cadeado automático',
+          '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Rastreia bárbaras no raio de TODAS as suas aldeias (a mais perto conta) e tranca (reserva pra tribo) as com pontuação mínima, das mais fortes pras mais fracas. Pula quem tem relatório vermelho no último ataque (checado aldeia por aldeia, cobre até abandonadas). Nunca destrava o que já travou — só soma.</div>' +
+          cardsDiv('lock') +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Raio (campos, X)</span><input id="twmgr-lk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="10" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Pontos mín. (Y)</span><input id="twmgr-lk-pts" class="twmgr-inp" type="number" min="0" value="500" style="width:80px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Repetir rastreamento (min)</span><input id="twmgr-lk-int" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>' +
+          '<div class="twmgr-actions"><button id="twmgr-lk-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-lk-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+          '<div id="twmgr-lk-status" class="twmgr-cstatus"></div>' +
+          modLog('lock')) +
       '</div>' +
       '<div id="twmgr-tab-planner" style="display:none">' +
         hint('🎯 Coordenado: monte vários ataques independentes — cada um com seu próprio alvo, aldeias e tropas — e arme cada um separadamente (o botão libera um novo ataque em branco assim que você arma). Cada aldeia pode mandar <b>várias ondas</b> (+ onda) dentro do mesmo ataque. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
@@ -5642,6 +6357,25 @@
         sec('Status por aldeia', '<div id="twmgr-pd-status-list"></div>') +
         modLog('paladin') +
       '</div>' +
+      '<div id="twmgr-tab-obra" style="display:none">' +
+        hint('🏛️ Constrói cada aldeia automaticamente de acordo com o perfil do grupo do TW em que ela estiver. Basta adicionar a aldeia num dos 5 grupos no próprio jogo — o resto é sozinho. <b>Pesquisa do Ferreiro (escolher a tropa) ainda é manual</b>, só o nível do prédio é controlado por aqui.') +
+        cardsDiv('obra') +
+        sec('1. Grupos por perfil', OBRA_PROFILES.map((p) =>
+          '<div class="twmgr-row"><span class="twmgr-lbl">' + esc(OBRA_PROFILE_META[p].name) + '</span><select id="twmgr-ob-g-' + p + '" class="twmgr-inp" style="width:170px"></select></div>'
+        ).join('')) +
+        sec('2. Ritmo',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Verificação (min)</span><input id="twmgr-ob-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Fila máx. por aldeia</span><input id="twmgr-ob-max" class="twmgr-inp" type="number" min="1" value="5" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Só constrói se sobrar essa quantidade de CADA recurso depois do gasto — deixa reserva pro Recrutar. 0 = desliga.">Reserva de recurso (0=off)</span><input id="twmgr-ob-reserve" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:80px"></div>') +
+        sec('3. Gatilhos (Fazenda/Armazém condicionais)',
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Upa Fazenda quando a população livre (máx-atual) cair abaixo disso.">Fazenda: pop. livre mín.</span><input id="twmgr-ob-farmpop" class="twmgr-inp" type="number" min="0" step="50" value="800" style="width:80px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Upa Armazém quando algum recurso atingir esse % da capacidade. Fast Nobre ignora (sobe proativo).">Armazém: % cheio p/ upar</span><input id="twmgr-ob-storagepct" class="twmgr-inp" type="number" min="1" max="100" value="60" style="width:66px"></div>') +
+        sec('4. Pesquisa do Ferreiro',
+          '<label class="twmgr-check"><input id="twmgr-ob-research" type="checkbox" checked> Pesquisar automaticamente (segue a ordem de cada perfil, pula se faltar prédio ou já tiver pesquisa em andamento)</label>') +
+        '<div class="twmgr-actions"><button id="twmgr-ob-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-ob-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+        sec('Aguardando recurso', '<div id="twmgr-ob-demand"></div>') +
+        modLog('obra') +
+      '</div>' +
       '<div id="twmgr-tab-log" style="display:none">' +
       '<div class="twmgr-hint">🤖 Alerta de CAPTCHA: avisa (navegador + ntfy) quando a tela de verificação aparece. O bot-check só surge num F5 — por isso o <b>Auto-F5 AFK</b>: se você ficar X min sem mexer, recarrega a página pra forçar a verificação a aparecer e te chamar.</div>' +
       '<label class="twmgr-check"><input id="twmgr-cap-en" type="checkbox"> Detectar CAPTCHA</label>' +
@@ -5683,6 +6417,8 @@
     ['twmgr-scav-unlock', 'twmgr-scav-unlock-ate', 'twmgr-scav-unlock-puxar', 'twmgr-scav-unlock-res', 'twmgr-scav-unlock-org']
       .forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readScavUnlockCfg); });
     renderScavFalta();
+    document.getElementById('twmgr-scav-maxh').value = config.scav.maxHours || 0;
+    document.getElementById('twmgr-scav-maxh').addEventListener('change', readScavUnits);
     document.getElementById('twmgr-scav-start').addEventListener('click', scavStart);
     document.getElementById('twmgr-scav-stop').addEventListener('click', scavStop);
     setScavStatus(config.scav.running);
@@ -5736,6 +6472,9 @@
 
     document.getElementById('twmgr-r-hours').value = config.recruit.targetHours != null ? config.recruit.targetHours : 2;
     document.getElementById('twmgr-r-refill').value = config.recruit.refillBelowMin != null ? config.recruit.refillBelowMin : 30;
+    renderRecruitGroups();
+    bindRecruitGroupsHandlers();
+    document.getElementById('twmgr-rg-add').addEventListener('click', recruitAddGroup);
     fillGroupSelects();
     document.getElementById('twmgr-r-reload').addEventListener('click', fillGroupSelects);
     document.getElementById('twmgr-r-start').addEventListener('click', recruitStart);
@@ -5841,25 +6580,47 @@
     document.getElementById('twmgr-pd-stop').addEventListener('click', paladinStop);
     setPaladinStatus(config.paladin.running);
 
+    // ---- Obra (construção por perfil via grupos) ----
+    document.getElementById('twmgr-ob-int').value = Math.round((config.obra.interval || 600) / 60);
+    document.getElementById('twmgr-ob-max').value = config.obra.maxQueue != null ? config.obra.maxQueue : 5;
+    document.getElementById('twmgr-ob-reserve').value = config.obra.reserveMin != null ? config.obra.reserveMin : 0;
+    document.getElementById('twmgr-ob-farmpop').value = config.obra.farmFreePopMin != null ? config.obra.farmFreePopMin : 800;
+    document.getElementById('twmgr-ob-storagepct').value = config.obra.storageFillPct != null ? config.obra.storageFillPct : 60;
+    document.getElementById('twmgr-ob-research').checked = config.obra.autoResearch !== false;
+    fillObraGroupSelects();
+    renderObraDemand();
+    ['twmgr-ob-int', 'twmgr-ob-max', 'twmgr-ob-reserve', 'twmgr-ob-farmpop', 'twmgr-ob-storagepct', 'twmgr-ob-research'].concat(OBRA_PROFILES.map((p) => 'twmgr-ob-g-' + p))
+      .forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readObraCfg); });
+    document.getElementById('twmgr-ob-start').addEventListener('click', obraStart);
+    document.getElementById('twmgr-ob-stop').addEventListener('click', obraStop);
+    setObraStatus(config.obra.running);
+
     document.getElementById('twmgr-mk-coord').value = config.market.destCoord || '';
     document.getElementById('twmgr-mk-reserve').value = config.market.reserve || 0;
     document.getElementById('twmgr-mk-int').value = Math.round((config.market.interval || 600) / 60);
     document.getElementById('twmgr-mk-thr').value = config.market.thresholdPct != null ? config.market.thresholdPct : 50;
     document.getElementById('twmgr-mk-dist').value = config.market.maxDist != null ? config.market.maxDist : 15;
+    document.getElementById('twmgr-mk-sthr').value = config.market.solidarioThresholdPct != null ? config.market.solidarioThresholdPct : 50;
+    document.getElementById('twmgr-mk-sdonormin').value = config.market.solidarioDonorMinPct != null ? config.market.solidarioDonorMinPct : 50;
+    document.getElementById('twmgr-mk-sdonor').value = config.market.solidarioDonorPct != null ? config.market.solidarioDonorPct : 50;
+    document.getElementById('twmgr-mk-sgargalo').value = config.market.solidarioGargaloKeepPct != null ? config.market.solidarioGargaloKeepPct : 90;
+    document.getElementById('twmgr-mk-sdist').value = config.market.solidarioMaxDist != null ? config.market.solidarioMaxDist : 20;
     const mkModeR = document.querySelector('input[name="twmgr-mk-mode"][value="' + (config.market.mode || 'cunhagem') + '"]'); if (mkModeR) mkModeR.checked = true;
     const applyMkMode = () => {
       const m = (document.querySelector('input[name="twmgr-mk-mode"]:checked') || {}).value || 'cunhagem';
       document.getElementById('twmgr-mk-cunhagem').style.display = m === 'cunhagem' ? 'block' : 'none';
       document.getElementById('twmgr-mk-equilibrio').style.display = m === 'equilibrio' ? 'block' : 'none';
+      document.getElementById('twmgr-mk-solidario').style.display = m === 'solidario' ? 'block' : 'none';
       document.getElementById('twmgr-mk-cunhar').style.display = m === 'cunhar' ? 'block' : 'none';
     };
     renderMarketSources();
     renderMintSources();
+    fillMarketSolidarioGroupSelect();
     document.getElementById('twmgr-mk-all').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.checked = true); readMarketCfg(); });
     document.getElementById('twmgr-mk-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.checked = false); readMarketCfg(); });
     document.getElementById('twmgr-mk-mint-all').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.checked = true); readMarketCfg(); });
     document.getElementById('twmgr-mk-mint-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.checked = false); readMarketCfg(); });
-    ['twmgr-mk-coord', 'twmgr-mk-reserve', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
+    ['twmgr-mk-coord', 'twmgr-mk-reserve', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
     document.querySelectorAll('input[name="twmgr-mk-mode"]').forEach((r) => r.addEventListener('change', () => { readMarketCfg(); applyMkMode(); }));
     applyMkMode();
     document.getElementById('twmgr-mk-start').addEventListener('click', marketStart);
@@ -5923,6 +6684,15 @@
     renderMapCounts();
     mapMostrarSub('alvos');
 
+    // Cadeado automático
+    document.getElementById('twmgr-lk-dist').value = config.lock.maxDist != null ? config.lock.maxDist : 10;
+    document.getElementById('twmgr-lk-pts').value = config.lock.minPoints != null ? config.lock.minPoints : 500;
+    document.getElementById('twmgr-lk-int').value = Math.round((config.lock.interval || 1800) / 60);
+    ['twmgr-lk-dist', 'twmgr-lk-pts', 'twmgr-lk-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readLockCfg); });
+    document.getElementById('twmgr-lk-start').addEventListener('click', lockStart);
+    document.getElementById('twmgr-lk-stop').addEventListener('click', lockStop);
+    setLockStatus(config.lock.running);
+
     document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.getAttribute('data-tab'))));
     // Toggle expandir/recolher o log por módulo
     document.querySelectorAll('.twmgr-modlog-head').forEach((h) => h.addEventListener('click', () => {
@@ -5932,7 +6702,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'paladin'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'lock', 'planner', 'paladin', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -5967,12 +6737,14 @@
     if (config.build.running) { rlog('Edifícios retomado.', 'build'); scheduleBuild(); }
     if (config.bb && config.bb.running) { rlog('Cultivo retomado.', 'bb'); scheduleBB(); }
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); scheduleMap(); }
+    if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); scheduleLock(); }
     if (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) {
       config.planner.attacks.forEach((atk) => { if (!atk.running) return; (atk.rows || []).forEach((r) => { if (r.state === 'scheduled') r.state = 'armed'; }); });
       rlog('🎯 Coordenado retomado.', 'planner');
       plannerTick();
     }
     if (config.paladin && config.paladin.running) { rlog('Paladino retomado.', 'paladin'); paladinTick(); }
+    if (config.obra && config.obra.running) { rlog('🏛️ Obra retomada.', 'obra'); obraTick(); }
     closeStaleLiveLogs();   // barra de progresso de ciclo que morreu no reload desta página
     installBotHooks();
     startCaptchaWatcher();

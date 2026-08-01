@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.2.2
+// @version      11.2.4
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -124,7 +124,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.2.2';
+  const VERSION = '11.2.4';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -2205,10 +2205,18 @@
   }
 
   // Fetch em background da tela units — usado pelo scheduler quando entra em novo bucket.
+  //
+  // RECUO APOS FALHA. Antes, erro era engolido em silencio e o instantaneo nao era salvo —
+  // entao `last !== now` seguia verdadeiro e a proxima checagem tentava de novo. Sob 429
+  // isso virava: TODA pagina aberta dispara a requisicao, e ela sempre falha.
+  // Foi a que apareceu no console do usuario como 429 em overview_villages&mode=units.
+  let _unitsProxTentativa = 0;
   async function unitsFetchAndSnapshot() {
+    if (Date.now() < _unitsProxTentativa) return;
     try {
       const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units', { credentials: 'include' });
-      if (!res.ok) return;
+      if (res.status === 429) { _unitsProxTentativa = Date.now() + 30 * 60000; console.warn('[TWMgr] instantaneo de tropas: 429, tentando de novo em 30 min'); return; }
+      if (!res.ok) { _unitsProxTentativa = Date.now() + 10 * 60000; return; }
       const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
       const p = unitsParseTable(doc);
       if (!p.ok) return;
@@ -2226,7 +2234,11 @@
       const now = unitsBucketKey();
       if (last !== now) unitsFetchAndSnapshot();
     };
-    check(); // ao boot, garante o snapshot do bucket corrente se estiver faltando
+    // NAO no boot imediato. Esta funcao roda em toda pagina, independente de qualquer
+    // modulo estar ligado, e disparava junto com o carregamento — competindo com as ~128
+    // requisicoes que o proprio jogo faz pra montar a tela. Entra depois da fila de
+    // retomada dos modulos, que se estende por ~60s.
+    setTimeout(check, 75000);
     unitsAutoTimer = setInterval(check, 15 * 60 * 1000);
   }
 
@@ -7458,6 +7470,7 @@
   // inimigo e mapCategoryOf devolve 'enemy' pra todo mundo — com o filtro de inimigo desligado, a
   // tribo inteira desaparece do mapa sem explicação. Fica registrado pra o painel avisar.
   let _mapPlayerFalhou = false;
+  let _mapProxTentativa = 0;   // recuo apos 429 nos arquivos de mapa
 
   async function loadMapData(force) {
     // O guard antigo era `_mapVilCache && age < 6h`, e _mapVilCache é variável de módulo: sempre
@@ -7468,9 +7481,18 @@
     if (!force && _mapVilCache) return;
     // Cada fetch independente — village.txt é essencial, player.txt é opcional (só distingue tribo/inimigo).
     // TW às vezes rate-limita player.txt (429) — não pode bloquear a feature.
+    // RECUO APOS 429. village.txt e player.txt sao os maiores downloads do script — podem
+    // ter megabytes. Sem recuo, TODA pagina aberta tentava de novo os dois e falhava de
+    // novo, alimentando o proprio rate limit que causava a falha.
+    if (!force && Date.now() < _mapProxTentativa) return;
+    let bateu429 = false;
     const fetchTxt = async (url) => {
-      try { const r = await fetch(url, { credentials: 'include', cache: force ? 'reload' : 'default' }); if (!r.ok) return null; return await r.text(); }
-      catch (e) { return null; }
+      try {
+        const r = await fetch(url, { credentials: 'include', cache: force ? 'reload' : 'default' });
+        if (r.status === 429) { bateu429 = true; return null; }
+        if (!r.ok) return null;
+        return await r.text();
+      } catch (e) { return null; }
     };
     const [rV, rP] = await Promise.all([fetchTxt('/map/village.txt'), fetchTxt('/map/player.txt')]);
     if (rV) {
@@ -7499,6 +7521,11 @@
     }
     // Avisar no console não serve: ninguém abre o console. Isto tem consequência VISÍVEL no mapa,
     // então vai pro log do módulo, que é onde o usuário olha.
+    if (bateu429) {
+      _mapProxTentativa = Date.now() + 30 * 60000;
+      pushLog('🗺️ Mapa: o servidor recusou os arquivos de mapa (429, requisições demais). Tento de novo em 30 min — os filtros e a cobertura ficam sem dado até lá.', 'err', 'map');
+      return;
+    }
     if (!rV) {
       console.warn('[TWMgr Mapa] village.txt falhou');
       pushLog('🗺️ Mapa: não consegui baixar village.txt — os filtros não vão funcionar até recarregar a página.', 'err', 'map');
@@ -9213,5 +9240,8 @@
   try { ccRetomar(); } catch (e) { console.warn('[TWMgr Central] retomada falhou:', e); }
   try { ccBotaoPainel(); } catch (e) { /* silencioso */ }
   try { ccInjetarPraca(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
-  try { enhanceMapPage(); } catch (e) { /* silencioso */ }
+  // Fora do t=0: loadMapData puxa village.txt e player.txt, os dois maiores downloads do
+  // script, e disparar isso junto com as ~128 requisicoes do carregamento da pagina era
+  // pedir 429. Entra depois da fila de retomada dos modulos.
+  setTimeout(() => { try { enhanceMapPage(); } catch (e) { /* silencioso */ } }, 70000);
 })();

@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.2.5
+// @version      11.2.6
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -124,7 +124,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.2.5';
+  const VERSION = '11.2.6';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -5665,6 +5665,21 @@
   //   nao faz sentido. E o campo id_<id>=on que ele mandava nao existe no formulario.
   const ETIQUETA_MAX_IDS = 400;   // teto de seguranca pro corpo do POST
 
+  // Le a lista e devolve, por id de comando, o TEXTO da linha. O texto e o que muda quando
+  // a etiqueta e aplicada — e o unico jeito honesto de saber se funcionou.
+  function etiquetaLerLista(doc) {
+    const out = {};
+    const table = doc.getElementById('incomings_table');
+    if (!table) return null;
+    table.querySelectorAll('input[type="hidden"][name^="command_ids["]').forEach((inp) => {
+      const m = (inp.getAttribute('name') || '').match(/command_ids\[(\d+)\]/);
+      if (!m) return;
+      const tr = inp.closest('tr');
+      out[m[1]] = tr ? (tr.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    });
+    return out;
+  }
+
   async function etiquetaCheckAndLabel() {
     const vid = CUR_VID;
     const base = '/game.php?village=' + vid + '&screen=overview_villages&mode=incomings&type=unignored&subtype=attacks';
@@ -5672,13 +5687,9 @@
     if (res.status === 429) throw new Error('429');
     if (!res.ok) throw new Error('lista de recebidos: HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    const table = doc.getElementById('incomings_table');
-    if (!table) return { total: 0, novos: 0 };
-    const ids = [];
-    table.querySelectorAll('input[type="hidden"][name^="command_ids["]').forEach((inp) => {
-      const m = (inp.getAttribute('name') || '').match(/command_ids\[(\d+)\]/);
-      if (m) ids.push(m[1]);
-    });
+    const antes = etiquetaLerLista(doc);
+    if (!antes) return { total: 0, novos: 0 };
+    const ids = Object.keys(antes);
     config.etiqueta.lastCount = ids.length;
     // SO OS QUE AINDA NAO FORAM. A versao original reenviava a lista inteira a cada ciclo:
     // com 50 ataques a caminho, eram 30 POSTs grandes por hora sem efeito nenhum, e
@@ -5689,9 +5700,20 @@
     const vivos = {}; ids.forEach((id) => { vivos[id] = 1; });
     Object.keys(ja).forEach((id) => { if (!vivos[id]) delete ja[id]; });
     if (!novos.length) { save(); return { total: ids.length, novos: 0 }; }
+    // DOIS CAMPOS POR COMANDO, com papeis diferentes — confirmado varrendo o formulario
+    // real sem filtro de nome:
+    //     <input name="command_ids[421095069]" type="hidden"   value="true">
+    //     <input name="id_421095069"           type="checkbox" value="on">
+    // O oculto DECLARA que o comando esta na lista; a caixinha e o que o marca como
+    // SELECIONADO. Eu tinha removido a caixinha achando que ela nao existia — minha
+    // consulta so procurava por command_ids — e o servidor passou a receber "estes
+    // comandos existem" com nenhum escolhido. Aceitava sem reclamar e nao etiquetava nada.
     const body = new URLSearchParams();
     body.set('h', CSRF);
-    novos.forEach((id) => { body.append('command_ids[' + id + ']', 'true'); });
+    novos.forEach((id) => {
+      body.append('command_ids[' + id + ']', 'true');
+      body.append('id_' + id, 'on');
+    });
     body.set('label', 'Etiqueta');
     const r2 = await fetch(base.replace('&type=', '&action=process&type='), {
       method: 'POST', credentials: 'include',
@@ -5706,12 +5728,24 @@
     const d2 = new DOMParser().parseFromString(t2, 'text/html');
     const eb = d2.querySelector('.error_box');
     if (eb) throw new Error('o jogo recusou: ' + (eb.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80));
-    if (!d2.getElementById('incomings_table') && !/success|sucesso/i.test(t2)) {
-      throw new Error('resposta inesperada — o formulario do jogo pode ter mudado');
+
+    // VALIDACAO POR EFEITO, nao por aparencia.
+    //
+    // A versao anterior conferia se a resposta ainda tinha a tabela de recebidos. Isso
+    // passa mesmo quando o servidor recebe o POST e NAO FAZ NADA — foi exatamente o que
+    // aconteceu: o log dizia "1 comando etiquetado" e nada tinha sido etiquetado.
+    // Agora compara o TEXTO das linhas antes e depois. Etiqueta aplicada muda o nome do
+    // comando; se nenhum dos que eu mandei mudou, eu nao etiquetei — e digo isso.
+    const depois = etiquetaLerLista(d2) || {};
+    const mudaram = novos.filter((id) => depois[id] !== undefined && depois[id] !== antes[id]);
+    const sumiram = novos.filter((id) => depois[id] === undefined);
+    if (!mudaram.length && !sumiram.length) {
+      throw new Error('o servidor aceitou mas nada mudou — nenhum dos ' + novos.length +
+                      ' comando(s) foi etiquetado. O formulario do jogo pode ter mudado.');
     }
     novos.forEach((id) => { ja[id] = 1; });
     save();
-    return { total: ids.length, novos: novos.length };
+    return { total: ids.length, novos: mudaram.length + sumiram.length };
   }
 
   async function etiquetaTick() {

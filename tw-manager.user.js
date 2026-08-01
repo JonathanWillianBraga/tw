@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.2.4
+// @version      11.2.5
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -124,7 +124,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.2.4';
+  const VERSION = '11.2.5';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -1286,7 +1286,7 @@
     const defs = estados.defs;
     if (!defs) { pushLog('⛏️ Não achei os custos de desbloqueio nesta tela — desbloqueio automático pulado neste ciclo.', '', 'scav'); return; }
     let coords = {};
-    try { (await getAllVillages()).forEach((v) => { if (v.coord) coords[v.vid] = v.coord; }); } catch (e) {}
+    try { (await getAllVillagesCached()).forEach((v) => { if (v.coord) coords[v.vid] = v.coord; }); } catch (e) {}
     cfg.faltouRecurso = {};
     let abertos = 0, puxadas = 0, semRecurso = 0;
     for (const v of estados) {
@@ -1644,7 +1644,7 @@
     let mine;
     try {
       if (cfg.group) { mine = (await getVillagesInGroup(cfg.group)).map((x) => ({ vid: x.vid, coord: x.coord, name: x.coord })); try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
-      else mine = await getAllVillages();
+      else mine = await getAllVillagesCached();
     } catch (e) { pushLog('Saque: erro ao listar aldeias: ' + (e.message || e), 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
     const myV = [], semCoord = [];
     mine.forEach((v) => {
@@ -2006,7 +2006,7 @@
     const now = Date.now();
     if ((config.wall.nextAt || 0) > now) { scheduleWall(); return; }
     let mine;
-    try { mine = await getAllVillages(); }
+    try { mine = await getAllVillagesCached(); }
     catch (e) { pushLog('Muralha: erro ao listar as aldeias (' + (e.message || e) + ').', 'err', 'wall'); config.wall.nextAt = now + 120000; save(); scheduleWall(); return; }
     const myV = [];
     mine.forEach((v) => { const m = (v.coord || '').match(/(\d+)\|(\d+)/); if (m) myV.push({ vid: v.vid, name: v.name || v.coord, coord: v.coord, x: +m[1], y: +m[2] }); });
@@ -2110,6 +2110,24 @@
     });
     return vils;
   }
+  // Memoria curta de getAllVillages, COMPARTILHADA. Ela e chamada por varios modulos e
+  // leva quebra-cache no fim da URL (_=timestamp), entao NUNCA reaproveitava nada — nem o
+  // cache do navegador. Ficou como a ultima fonte de 429 no console do usuario.
+  // A lista de aldeias de uma conta muda em escala de dias; 5 min e conservador.
+  const VILAS_TTL_MS = 5 * 60000;
+  let _vilasCache = null, _vilasAt = 0, _vilasVoo = null;
+
+  async function getAllVillagesCached(forcar) {
+    const agora = Date.now();
+    if (!forcar && _vilasCache && (agora - _vilasAt) < VILAS_TTL_MS) return _vilasCache;
+    if (_vilasVoo) return _vilasVoo;   // ja ha uma leitura em voo: espera ELA
+    _vilasVoo = getAllVillages().then((r) => {
+      if (!r.incompleto) { _vilasCache = r; _vilasAt = Date.now(); }   // nao guarda resultado degradado
+      _vilasVoo = null; return r;
+    }, (e) => { _vilasVoo = null; throw e; });
+    return _vilasVoo;
+  }
+
   async function getAllVillages() {
     // group=0 força "todas as aldeias": a tela overview_villages é stateful por grupo no servidor,
     // e sem isso o fetch volta só as aldeias do último grupo selecionado (contagem oscilava 13→8→3).
@@ -2841,7 +2859,7 @@
   }
   async function renderFakeOrigins() {
     const cont = document.getElementById('twmgr-fk-origins'); if (!cont) return;
-    let vils = []; try { vils = await getAllVillages(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
+    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
     const sel = config.fakes.origins || {};
     cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-fk-origin" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
     cont.querySelectorAll('.twmgr-fk-origin').forEach((cb) => cb.addEventListener('change', readFakesCfg));
@@ -3071,7 +3089,7 @@
 
   async function renderPlannerVillages(atk) {
     const cont = document.getElementById('twmgr-pl-villages'); if (!cont) return;
-    let vils = []; try { vils = await getAllVillages(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
+    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
     _plVilCache = vils;
     const tgtCoord = (atk.targetX && atk.targetY) ? (atk.targetX + '|' + atk.targetY) : '';
     vils.forEach((v) => { v.dist = (v.coord && tgtCoord) ? coordDist(v.coord, tgtCoord) : null; });
@@ -3539,7 +3557,7 @@
     const box = document.getElementById('twmgr-blz-list'); if (!box) return;
     const rows = config.planner.blindagem.rows || [];
     if (!rows.length) { box.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— sem pedidos. Cole a URL e clique Buscar. —</div>'; return; }
-    let vils = []; try { vils = await getAllVillages(); } catch (e) {}
+    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) {}
     const opts = '<option value="">— origem —</option>' + vils.map((v) => '<option value="' + v.vid + '">' + esc(v.name) + '</option>').join('');
     box.innerHTML = rows.map((r) => {
       const s = r.send || { LANC: 0, ESP: 0, SPY: 0, CP: 0 };
@@ -3796,7 +3814,7 @@
   async function renderPaladinVillages() {
     const cont = document.getElementById('twmgr-pd-villages'); if (!cont) return;
     cont.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">carregando…</div>';
-    let vils = []; try { vils = await getAllVillages(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
+    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
     let knights = null, lastErr = null;
     const order = [CUR_VID].concat(vils.map((v) => v.vid)).filter((v, i, arr) => v && arr.indexOf(v) === i);
     for (const vid of order) { try { knights = await getKnightsData(vid); break; } catch (e) { lastErr = e; } }
@@ -3904,7 +3922,7 @@
     const coord = config.market.destCoord || '';
     const reserve = Math.max(0, config.market.reserve || 0);
     let vils = [];
-    try { vils = await getAllVillages(); } catch (e) { pushLog('Cunhagem: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
+    try { vils = await getAllVillagesCached(); } catch (e) { pushLog('Cunhagem: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
     const sel = config.market.sources || {};
     let count = 0; const tot = { wood: 0, stone: 0, iron: 0 };
     for (const v of vils) {
@@ -3966,7 +3984,7 @@
   }
   async function cunharPass() {
     let vils = [];
-    try { vils = await getAllVillages(); } catch (e) { pushLog('Cunhar: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
+    try { vils = await getAllVillagesCached(); } catch (e) { pushLog('Cunhar: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
     const sel = config.market.mintSources || {};
     let count = 0, coins = 0;
     for (const v of vils) {
@@ -3986,7 +4004,7 @@
   function coordDist(a, b) { const pa = a.split('|').map(Number), pb = b.split('|').map(Number); return Math.sqrt((pa[0] - pb[0]) * (pa[0] - pb[0]) + (pa[1] - pb[1]) * (pa[1] - pb[1])); }
   async function equilibrioPass() {
     let vils = [];
-    try { vils = await getAllVillages(); } catch (e) { pushLog('Equilíbrio: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
+    try { vils = await getAllVillagesCached(); } catch (e) { pushLog('Equilíbrio: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
     vils = vils.filter((v) => v.coord);
     const donorSet = {}, recvSet = {}, totRes = { wood: 0, stone: 0, iron: 0 };
     const pct = (config.market.thresholdPct != null ? config.market.thresholdPct : 50) / 100;
@@ -4058,7 +4076,7 @@
     if (!recvMembers.length) { pushLog('Solidário: grupo sem aldeias, nada a fazer.', '', 'market'); return; }
     const recvSetIds = {}; recvMembers.forEach((v) => { recvSetIds[v.vid] = true; });
     let allV = [];
-    try { allV = await getAllVillages(); } catch (e) { pushLog('Solidário: erro ao listar todas as aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
+    try { allV = await getAllVillagesCached(); } catch (e) { pushLog('Solidário: erro ao listar todas as aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
     const donorPool = allV.filter((v) => v.coord && !recvSetIds[v.vid]);
     if (!donorPool.length) { pushLog('Solidário: nenhuma aldeia fora do grupo pra doar.', 'err', 'market'); return; }
     const donorSet = {}, recvSet = {}, totRes = { wood: 0, stone: 0, iron: 0 };
@@ -4154,14 +4172,14 @@
   }
   async function renderMarketSources() {
     const cont = document.getElementById('twmgr-mk-sources'); if (!cont) return;
-    let vils = []; try { vils = await getAllVillages(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
+    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
     const sel = config.market.sources || {};
     cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-mk-src" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
     cont.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.addEventListener('change', readMarketCfg));
   }
   async function renderMintSources() {
     const cont = document.getElementById('twmgr-mk-mint-sources'); if (!cont) return;
-    let vils = []; try { vils = await getAllVillages(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
+    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
     const sel = config.market.mintSources || {};
     cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-mk-mint" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
     cont.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.addEventListener('change', readMarketCfg));
@@ -4741,7 +4759,7 @@
     const tpl = parseTpl(config.bb.tpl);
     const defSet = {}; ((config.bb.defCoords || '').match(/\d{1,3}\|\d{1,3}/g) || []).forEach((c) => defSet[c] = 1);
     const bbSet = {}; vils.forEach((v) => bbSet[v.vid] = 1);
-    let allV = []; try { allV = await getAllVillages(); } catch (e) {}
+    let allV = []; try { allV = await getAllVillagesCached(); } catch (e) {}
     const sources = allV.filter((v) => !bbSet[v.vid] && v.coord);
     const srcState = {};
     // Conserta aldeia do grupo sem coord (getVillagesInGroup às vezes não parseia) — sem isso ela fica órfã
@@ -5175,7 +5193,7 @@
     let mine;
     try {
       if (cfg.group) { const list = await getVillagesInGroup(cfg.group); mine = list.map((v) => ({ vid: v.vid, coord: v.coord, name: v.coord })); }
-      else { const list = await getAllVillages(); mine = list.map((v) => ({ vid: v.vid, coord: v.coord, name: v.name })); }
+      else { const list = await getAllVillagesCached(); mine = list.map((v) => ({ vid: v.vid, coord: v.coord, name: v.name })); }
     } catch (e) { pushLog('BM: erro ao ler minhas aldeias: ' + (e.message || e), 'err'); return null; }
     if (cfg.group) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
     const myV = [];
@@ -5572,7 +5590,7 @@
     let allV, mine;
     try { allV = await getMapVillages(); }
     catch (e) { pushLog('Cadeado: erro ao ler village.txt (' + (e.message || e) + ').', 'err', 'lock'); config.lock.nextAt = now + 60000; save(); scheduleLock(); return; }
-    try { mine = await getAllVillages(); }
+    try { mine = await getAllVillagesCached(); }
     catch (e) { pushLog('Cadeado: erro ao listar minhas aldeias (' + (e.message || e) + ').', 'err', 'lock'); config.lock.nextAt = now + 60000; save(); scheduleLock(); return; }
     const myV = [];
     mine.forEach((v) => { const cm = (v.coord || '').match(/(\d+)\|(\d+)/); if (cm) myV.push({ x: +cm[1], y: +cm[2] }); });
@@ -7038,7 +7056,7 @@
   // A escolha final depende da janela de tempo: o apoio não pode POUSAR antes da hora de voltar,
   // senão não há o que cancelar. Quem chama testa a duração real que o jogo devolve na confirmação.
   async function desviarCandidatos(originVid) {
-    const vils = await getAllVillages();
+    const vils = await getAllVillagesCached();
     const origin = vils.find((v) => String(v.vid) === String(originVid));
     if (!origin || !origin.coord) throw new Error('aldeia origem sem coord (' + originVid + ')');
     return vils
@@ -7410,7 +7428,7 @@
           }
           if (!arriveMs) throw new Error('não consegui ler o horário de chegada desta linha');
           btn.textContent = '⏳…';
-          const vils = await getAllVillages();
+          const vils = await getAllVillagesCached();
           const minha = vils.find((v) => v.coord === coordDestino);
           if (!minha) throw new Error('a aldeia ' + coordDestino + ' não está na sua lista de aldeias');
           config.desviar.marks = config.desviar.marks || [];

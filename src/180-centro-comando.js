@@ -1324,8 +1324,11 @@
   try { enhanceIncomingsPage(); } catch (e) { /* silencioso */ }
   try { desviarResumeAll(); } catch (e) { /* silencioso */ }
   try { ccRetomar(); } catch (e) { console.warn('[TWMgr Central] retomada falhou:', e); }
-  try { ccBotaoPainel(); } catch (e) { /* silencioso */ }
-  try { ccInjetarPraca(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
+  // Agendador rapido (curto e grosso) e o botao 🗓️ DESATIVADOS: a Central de Comando rica
+  // (175-cc-rico.js) assumiu a praca. O motor cc* segue vivo (ccRetomar) so pra nao perder
+  // comandos em config.cc de sessoes antigas; nao injeta mais UI concorrente.
+  // try { ccBotaoPainel(); } catch (e) { /* silencioso */ }
+  // try { ccInjetarPraca(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
   // Fora do t=0: loadMapData puxa village.txt e player.txt, os dois maiores downloads do
   // script, e disparar isso junto com as ~128 requisicoes do carregamento da pagina era
   // pedir 429. Entra depois da fila de retomada dos modulos.

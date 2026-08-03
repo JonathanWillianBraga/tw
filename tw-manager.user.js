@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.3.0
+// @version      11.4.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -124,7 +124,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.3.0';
+  const VERSION = '11.4.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -171,7 +171,18 @@
     groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo (mantido p/ Edifícios/Cultivo)
   });
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
-  const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, mintSources: {}, thresholdPct: 50, maxDist: 15, groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {} });
+  // Cada modo roda de forma INDEPENDENTE (pode ligar Equilíbrio e Solidário ao mesmo tempo, por
+  // exemplo) — por isso running/nextAt/stats vivem por modo, dentro de "modes". Os campos de
+  // configuração (destCoord, reserve, thresholdPct, solidario* etc.) continuam compartilhados no
+  // nível de cima, porque são parâmetros de CADA modo específico, não estado de execução.
+  const MARKET_MODES = ['cunhagem', 'equilibrio', 'solidario', 'cunhar'];
+  const MARKET_MODE_LABEL = { cunhagem: 'Cunhagem', equilibrio: 'Equilíbrio', solidario: 'Solidário', cunhar: 'Cunhar' };
+  const defMarketModeState = () => ({ running: false, nextAt: 0, stats: {} });
+  const defMarket = () => ({
+    modes: { cunhagem: defMarketModeState(), equilibrio: defMarketModeState(), solidario: defMarketModeState(), cunhar: defMarketModeState() },
+    interval: 600, destCoord: '', reserve: 0, sources: {}, mintSources: {}, thresholdPct: 50, maxDist: 15,
+    groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {},
+  });
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
   // Cultivo — 3 fases (batem com os cards: f1 = main<20 · f2 = main 20 e stable<15 · f3 = graduada/recrutando).
   // FASE 1: leva o Ed. principal até 20 + o que ele depende (armazém "lidera" p/ bancar os níveis; fazenda leve p/ pop). Sem estábulo.
@@ -420,7 +431,18 @@
     if (c.fakes.targetsRaw == null) c.fakes.targetsRaw = '';
     if (c.fakes.arrLocal == null) c.fakes.arrLocal = '';
     if (!c.market) c.market = defMarket();
-    if (!c.market.mode) c.market.mode = 'cunhagem';
+    // Migração: cada modo era mutuamente exclusivo (1 running/nextAt/mode pro Mercado inteiro).
+    // Agora cada modo tem seu próprio estado — se o usuário tinha um modo ligado, esse modo
+    // específico continua ligado depois da migração; os outros nascem desligados.
+    if (!c.market.modes) {
+      const wasRunning = !!c.market.running, activeMode = c.market.mode || 'cunhagem';
+      c.market.modes = {};
+      MARKET_MODES.forEach((k) => { c.market.modes[k] = defMarketModeState(); });
+      if (wasRunning && c.market.modes[activeMode]) { c.market.modes[activeMode].running = true; c.market.modes[activeMode].nextAt = c.market.nextAt || 0; }
+      if (c.market.stats) c.market.modes[activeMode].stats = c.market.stats;
+      delete c.market.running; delete c.market.mode; delete c.market.nextAt; delete c.market.stats;
+    }
+    MARKET_MODES.forEach((k) => { if (!c.market.modes[k]) c.market.modes[k] = defMarketModeState(); });
     if (c.market.interval == null) c.market.interval = 600;
     if (c.market.reserve == null) c.market.reserve = 0;
     if (!c.market.sources) c.market.sources = {};
@@ -614,10 +636,12 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
+  const marketTimers = { cunhagem: null, equilibrio: null, solidario: null, cunhar: null };   // 1 timer por modo — rodam de forma independente
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
+  function anyMarketRunning() { return !!(config.market && config.market.modes && MARKET_MODES.some((k) => config.market.modes[k] && config.market.modes[k].running)); }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || anyMarketRunning() || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.
@@ -759,7 +783,9 @@
         { v: fmtN(sent), l: 'enviados' }, { v: fmtN(err), l: 'erros' },
       ];
     } else if (mod === 'market') {
-      const s = (config.market.stats || {});
+      // Soma os 4 modos — podem estar rodando ao mesmo tempo agora, então o card é um agregado.
+      const s = { sending: 0, receiving: 0, wood: 0, stone: 0, iron: 0 };
+      MARKET_MODES.forEach((k) => { const ms = (config.market.modes[k] && config.market.modes[k].stats) || {}; s.sending += ms.sending || 0; s.receiving += ms.receiving || 0; s.wood += ms.wood || 0; s.stone += ms.stone || 0; s.iron += ms.iron || 0; });
       arr = [
         { v: fmtN(s.sending), l: 'enviando', hl: true },
         { v: fmtN(s.receiving), l: 'recebendo' },
@@ -3900,27 +3926,25 @@
     if (/alvo v[aá]lido/i.test(t2)) throw new Error('alvo inválido (confira a coordenada)');
     return dur && dur > 0 ? dur : null;
   }
-  async function marketTick() {
-    clearTimeout(marketTimer);
-    if (!config.market.running) return;
-    if (lockOther()) { marketTimer = setTimeout(marketTick, 5000); return; }
-    if (captchaBlocked()) { marketTimer = setTimeout(marketTick, 30000); return; }
+  const MARKET_PASS = { cunhagem: () => cunhagemPass(), equilibrio: () => equilibrioPass(), solidario: () => solidarioPass(), cunhar: () => cunharPass() };
+  async function marketTick(modeKey) {
+    clearTimeout(marketTimers[modeKey]);
+    const st = config.market.modes[modeKey];
+    if (!st.running) return;
+    if (lockOther()) { marketTimers[modeKey] = setTimeout(() => marketTick(modeKey), 5000); return; }
+    if (captchaBlocked()) { marketTimers[modeKey] = setTimeout(() => marketTick(modeKey), 30000); return; }
     claimLock();
     const now = Date.now();
-    if ((config.market.nextAt || 0) > now) { scheduleMarket(); return; }
-    try {
-      if (config.market.mode === 'equilibrio') await equilibrioPass();
-      else if (config.market.mode === 'solidario') await solidarioPass();
-      else if (config.market.mode === 'cunhar') await cunharPass();
-      else await cunhagemPass();
-    } catch (e) { pushLog('Mercado: erro no ciclo (' + (e.message || e) + ').', 'err', 'market'); }
-    config.market.nextAt = now + Math.max(60, config.market.interval || 600) * 1000;
+    if ((st.nextAt || 0) > now) { scheduleMarket(modeKey); return; }
+    try { await MARKET_PASS[modeKey](); }
+    catch (e) { pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + '): erro no ciclo (' + (e.message || e) + ').', 'err', 'market'); }
+    st.nextAt = now + Math.max(60, config.market.interval || 600) * 1000;
     save();
     refreshCards('market');
-    pushLog('Mercado: próximo ciclo em ' + Math.round((config.market.interval || 600) / 60) + ' min.', '', 'market');
-    scheduleMarket();
+    pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + '): próximo ciclo em ' + Math.round((config.market.interval || 600) / 60) + ' min.', '', 'market');
+    scheduleMarket(modeKey);
   }
-  function scheduleMarket() { clearTimeout(marketTimer); if (!config.market.running) return; marketTimer = setTimeout(marketTick, Math.min(Math.max((config.market.nextAt || 0) - Date.now(), 1000), 60000)); }
+  function scheduleMarket(modeKey) { clearTimeout(marketTimers[modeKey]); const st = config.market.modes[modeKey]; if (!st.running) return; marketTimers[modeKey] = setTimeout(() => marketTick(modeKey), Math.min(Math.max((st.nextAt || 0) - Date.now(), 1000), 60000)); }
 
   async function cunhagemPass() {
     const coord = config.market.destCoord || '';
@@ -3945,7 +3969,7 @@
         await sleep(400 + Math.floor(Math.random() * 400));
       } catch (e) { pushLog('Cunhagem em ' + v.name + ': ' + (e.message || e), 'err', 'market'); }
     }
-    config.market.stats = { sending: count, receiving: coord ? 1 : 0, wood: tot.wood, stone: tot.stone, iron: tot.iron };
+    config.market.modes.cunhagem.stats = { sending: count, receiving: coord ? 1 : 0, wood: tot.wood, stone: tot.stone, iron: tot.iron };
     pushLog('Cunhagem: ciclo concluído — ' + count + ' aldeia(s) enviaram recurso.', 'ok', 'market');
   }
 
@@ -4001,7 +4025,7 @@
       } catch (e) { pushLog('Cunhar em ' + v.name + ': ' + (e.message || e), 'err', 'market'); }
       await sleep(400 + Math.floor(Math.random() * 400));
     }
-    config.market.stats = { sending: count, receiving: 0, wood: coins, stone: 0, iron: 0 };
+    config.market.modes.cunhar.stats = { sending: count, receiving: 0, wood: coins, stone: 0, iron: 0 };
     pushLog('Cunhar: ciclo concluído — ' + coins + ' moeda(s) em ' + count + ' aldeia(s).', 'ok', 'market');
   }
 
@@ -4057,7 +4081,7 @@
         }
       }
     }
-    config.market.stats = { sending: Object.keys(donorSet).length, receiving: Object.keys(recvSet).length, wood: totRes.wood, stone: totRes.stone, iron: totRes.iron };
+    config.market.modes.equilibrio.stats = { sending: Object.keys(donorSet).length, receiving: Object.keys(recvSet).length, wood: totRes.wood, stone: totRes.stone, iron: totRes.iron };
     save();
     pushLog('Equilíbrio: ciclo concluído — ' + sent + ' transferência(s), limiar ' + Math.round(pct * 100) + '%.', 'ok', 'market');
   }
@@ -4170,7 +4194,7 @@
         }
       }
     }
-    config.market.stats = { sending: Object.keys(donorSet).length, receiving: Object.keys(recvSet).length, wood: totRes.wood, stone: totRes.stone, iron: totRes.iron };
+    config.market.modes.solidario.stats = { sending: Object.keys(donorSet).length, receiving: Object.keys(recvSet).length, wood: totRes.wood, stone: totRes.stone, iron: totRes.iron };
     save();
     pushLog('Solidário: ciclo concluído — ' + sent + ' transferência(s), limiar ' + Math.round(pct * 100) + '%.', 'ok', 'market');
   }
@@ -4197,7 +4221,6 @@
   }
   function readMarketCfg() {
     const c = config.market, g = (id) => document.getElementById(id);
-    const mode = document.querySelector('input[name="twmgr-mk-mode"]:checked'); if (mode) c.mode = mode.value;
     if (g('twmgr-mk-coord')) c.destCoord = g('twmgr-mk-coord').value.trim();
     if (g('twmgr-mk-reserve')) c.reserve = Math.max(0, parseInt(g('twmgr-mk-reserve').value, 10) || 0);
     if (g('twmgr-mk-int')) c.interval = Math.max(1, parseInt(g('twmgr-mk-int').value, 10) || 10) * 60;
@@ -4213,27 +4236,27 @@
     const mint = {}; document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => { if (cb.checked) mint[cb.getAttribute('data-vid')] = true; }); c.mintSources = mint;
     save();
   }
-  function setMarketStatus(on) { setBtnState('twmgr-mk-start', 'twmgr-mk-stop', on, '● Enviando', '▶ Enviar'); }
-  function marketStart() {
+  function setMarketStatus(modeKey, on) { setBtnState('twmgr-mk-' + modeKey + '-start', 'twmgr-mk-' + modeKey + '-stop', on, '● Enviando', '▶ Enviar'); }
+  const MARKET_START_MSG = {
+    equilibrio: () => 'Equilíbrio iniciado — limiar ' + config.market.thresholdPct + '% do armazém, distância ≤ ' + config.market.maxDist + '.',
+    solidario: () => 'Solidário iniciado — grupo ' + config.market.groupSolidario + ', limiar ' + config.market.solidarioThresholdPct + '% do armazém, distância ≤ ' + config.market.solidarioMaxDist + '.',
+    cunhar: () => 'Cunhar iniciado — cunhando o máximo nas aldeias marcadas a cada ' + Math.round((config.market.interval || 600) / 60) + ' min.',
+    cunhagem: () => 'Cunhagem iniciada — destino ' + config.market.destCoord + ', deixa ' + config.market.reserve + ' de cada recurso.',
+  };
+  function marketStart(modeKey) {
     readMarketCfg();
-    if (config.market.mode === 'cunhagem') {
+    if (modeKey === 'cunhagem') {
       if (!/^\d+\s*\|\s*\d+$/.test(config.market.destCoord || '')) { pushLog('Cunhagem: coordenada de destino inválida (ex.: 464|604).', 'err', 'market'); return; }
       if (!Object.values(config.market.sources).some(Boolean)) { pushLog('Cunhagem: selecione ao menos 1 aldeia de origem.', 'err', 'market'); return; }
     }
-    if (config.market.mode === 'cunhar' && !Object.values(config.market.mintSources).some(Boolean)) { pushLog('Cunhar: selecione ao menos 1 aldeia pra cunhar.', 'err', 'market'); return; }
-    if (config.market.mode === 'solidario' && !config.market.groupSolidario) { pushLog('Solidário: selecione um grupo.', 'err', 'market'); return; }
-    config.market.running = true; config.market.nextAt = 0; save();
-    setMarketStatus(true);
-    pushLog(config.market.mode === 'equilibrio'
-      ? 'Equilíbrio iniciado — limiar ' + config.market.thresholdPct + '% do armazém, distância ≤ ' + config.market.maxDist + '.'
-      : config.market.mode === 'solidario'
-        ? 'Solidário iniciado — grupo ' + config.market.groupSolidario + ', limiar ' + config.market.solidarioThresholdPct + '% do armazém, distância ≤ ' + config.market.solidarioMaxDist + '.'
-        : config.market.mode === 'cunhar'
-          ? 'Cunhar iniciado — cunhando o máximo nas aldeias marcadas a cada ' + Math.round((config.market.interval || 600) / 60) + ' min.'
-          : 'Cunhagem iniciada — destino ' + config.market.destCoord + ', deixa ' + config.market.reserve + ' de cada recurso.', 'ok', 'market');
-    marketTick();
+    if (modeKey === 'cunhar' && !Object.values(config.market.mintSources).some(Boolean)) { pushLog('Cunhar: selecione ao menos 1 aldeia pra cunhar.', 'err', 'market'); return; }
+    if (modeKey === 'solidario' && !config.market.groupSolidario) { pushLog('Solidário: selecione um grupo.', 'err', 'market'); return; }
+    config.market.modes[modeKey].running = true; config.market.modes[modeKey].nextAt = 0; save();
+    setMarketStatus(modeKey, true);
+    pushLog(MARKET_START_MSG[modeKey](), 'ok', 'market');
+    marketTick(modeKey);
   }
-  function marketStop() { readMarketCfg(); config.market.running = false; save(); clearTimeout(marketTimer); setMarketStatus(false); pushLog('Mercado parado.', '', 'market'); }
+  function marketStop(modeKey) { readMarketCfg(); config.market.modes[modeKey].running = false; save(); clearTimeout(marketTimers[modeKey]); setMarketStatus(modeKey, false); pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + ') parado.', '', 'market'); }
 
   // ==================== EDIFÍCIOS (fila planejada por template ATK/DEF) ====================
   function parseTpl(text) {
@@ -6029,11 +6052,13 @@
       }
     }
     if (document.getElementById('twmgr-cards-fakes')) refreshCards('fakes');
-    const mk = document.getElementById('twmgr-mk-status'); if (mk) {
-      if (!config.market.running) { mk.textContent = ''; }
+    MARKET_MODES.forEach((mkKey) => {
+      const mk = document.getElementById('twmgr-mk-' + mkKey + '-status'); if (!mk) return;
+      const st = config.market.modes[mkKey];
+      if (!st.running) { mk.textContent = ''; }
       else if (lockOther()) { mk.textContent = '⏸ outra aba'; mk.style.color = '#ff7568'; }
-      else { mk.style.color = '#8fe39a'; mk.textContent = (config.market.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.market.nextAt - now) : '● enviando…'; }
-    }
+      else { mk.style.color = '#8fe39a'; mk.textContent = (st.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(st.nextAt - now) : '● enviando…'; }
+    });
     const bl = document.getElementById('twmgr-bld-status'); if (bl) {
       if (!config.build.running) { bl.textContent = ''; }
       else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#ff7568'; }
@@ -6088,7 +6113,7 @@
     ring('twmgr-btab-wall', config.wall && config.wall.running);
     ring('twmgr-btab-recruit', config.recruit.running);
     ring('twmgr-btab-fakes', config.fakes.running);
-    ring('twmgr-btab-market', config.market.running);
+    ring('twmgr-btab-market', anyMarketRunning());
     ring('twmgr-btab-build', config.build.running);
     ring('twmgr-btab-planner', config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running));
     ring('twmgr-btab-paladin', config.paladin && config.paladin.running);
@@ -6479,41 +6504,38 @@
         modLog('fakes') +
       '</div>' +
       '<div id="twmgr-tab-market" style="display:none">' +
-        hint('Mercado: <b>Cunhagem</b> junta recurso num destino; <b>Equilíbrio</b> nivela as aldeias por %; <b>Solidário</b> abastece só o grupo escolhido (que só recebe) com qualquer outra aldeia sua doando; <b>Cunhar</b> cunha moedas de ouro nas aldeias marcadas.') +
+        hint('Mercado: cada modo roda de forma <b>independente</b> — pode ligar quantos quiser ao mesmo tempo (ex.: Equilíbrio + Solidário juntos). <b>Cunhagem</b> junta recurso num destino; <b>Equilíbrio</b> nivela as aldeias por %; <b>Solidário</b> abastece só o grupo escolhido (que só recebe) com qualquer outra aldeia sua doando; <b>Cunhar</b> cunha moedas de ouro nas aldeias marcadas.') +
         cardsDiv('market') +
-        sec('Modo', '<div class="twmgr-row"><span class="twmgr-lbl">Modo</span><span style="font-size:11px"><label><input type="radio" name="twmgr-mk-mode" value="cunhagem"> 💰 Cunhagem</label> <label><input type="radio" name="twmgr-mk-mode" value="equilibrio"> ⚖️ Equilíbrio</label> <label><input type="radio" name="twmgr-mk-mode" value="solidario"> 🤝 Solidário</label> <label><input type="radio" name="twmgr-mk-mode" value="cunhar"> 🪙 Cunhar</label></span></div>') +
-        '<div id="twmgr-mk-cunhagem">' +
-          sec('Cunhagem',
+        sec('💰 Cunhagem',
             '<div class="twmgr-row"><span class="twmgr-lbl">Coordenada destino</span><input id="twmgr-mk-coord" class="twmgr-inp" type="text" placeholder="464|604" style="width:90px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Deixar mínimo (cada rec.)</span><input id="twmgr-mk-reserve" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:72px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Aldeias de origem</span><span style="font-size:9px"><a id="twmgr-mk-all" style="cursor:pointer;color:#e6cf7d">todas</a> · <a id="twmgr-mk-none" style="cursor:pointer;color:#e6cf7d">nenhuma</a></span></div>' +
-            '<div id="twmgr-mk-sources" style="max-height:120px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px"></div>') +
-        '</div>' +
-        '<div id="twmgr-mk-equilibrio" style="display:none">' +
-          sec('Equilíbrio',
+            '<div id="twmgr-mk-sources" style="max-height:120px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px"></div>' +
+            '<div class="twmgr-actions"><button id="twmgr-mk-cunhagem-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-cunhagem-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+            '<div id="twmgr-mk-cunhagem-status" class="twmgr-cstatus"></div>') +
+        sec('⚖️ Equilíbrio',
             '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Aldeia acima do limiar doa o excedente pras abaixo, por recurso. Da mais perto primeiro.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Encher armazém até (%)</span><input id="twmgr-mk-thr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
-            '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="15" style="width:56px"></div>') +
-        '</div>' +
-        '<div id="twmgr-mk-solidario" style="display:none">' +
-          sec('Solidário',
+            '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="15" style="width:56px"></div>' +
+            '<div class="twmgr-actions"><button id="twmgr-mk-equilibrio-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-equilibrio-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+            '<div id="twmgr-mk-equilibrio-status" class="twmgr-cstatus"></div>') +
+        sec('🤝 Solidário',
             '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Aldeias do grupo escolhido SÓ RECEBEM (nunca doam). Doadora é qualquer OUTRA aldeia sua — testa da mais perto pra mais longe, e pula pra próxima se a mais perto não tiver mercador/recurso suficiente. Doadora só cede acima de "% do recurso mais baixo dela" (protege quem já tá capenga). Se ninguém qualificar, a mais próxima cede só a fatia acima de "% que fica na doadora" mesmo assim (nunca esvazia), pra nunca travar construção/pesquisa numa aldeia nova ou bárbara conquistada.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Grupo Solidário</span><select id="twmgr-mk-g-solid" class="twmgr-inp" style="width:140px"></select></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Carente: encher armazém até (%)</span><input id="twmgr-mk-sthr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl" title="Independente do limiar acima — se o limiar de carente for alto (ex.: 85%), esse aqui evita que ninguém nunca qualifique como doador.">Doadora: mín. % de armazém p/ poder doar</span><input id="twmgr-mk-sdonormin" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Doadora: piso = % do recurso mais baixo dela</span><input id="twmgr-mk-sdonor" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Gargalo: % que fica na doadora</span><input id="twmgr-mk-sgargalo" class="twmgr-inp" type="number" min="1" max="99" value="90" style="width:56px"></div>' +
-            '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-sdist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:56px"></div>') +
-        '</div>' +
-        '<div id="twmgr-mk-cunhar" style="display:none">' +
-          sec('Cunhar moedas de ouro',
+            '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-sdist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:56px"></div>' +
+            '<div class="twmgr-actions"><button id="twmgr-mk-solidario-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-solidario-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+            '<div id="twmgr-mk-solidario-status" class="twmgr-cstatus"></div>') +
+        sec('🪙 Cunhar moedas de ouro',
             '<div style="font-size:10px;color:#8f7d57;margin-bottom:4px">Cunha o máximo de moedas na Academia das aldeias marcadas, todo ciclo. Não transfere recurso.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Aldeias que cunham</span><span style="font-size:9px"><a id="twmgr-mk-mint-all" style="cursor:pointer;color:#e6cf7d">todas</a> · <a id="twmgr-mk-mint-none" style="cursor:pointer;color:#e6cf7d">nenhuma</a></span></div>' +
-            '<div id="twmgr-mk-mint-sources" style="max-height:120px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px"></div>') +
-        '</div>' +
-        sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-mk-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
-        '<div class="twmgr-actions"><button id="twmgr-mk-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-mk-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
-        '<div id="twmgr-mk-status" class="twmgr-cstatus"></div>' +
+            '<div id="twmgr-mk-mint-sources" style="max-height:120px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px"></div>' +
+            '<div class="twmgr-actions"><button id="twmgr-mk-cunhar-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-cunhar-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+            '<div id="twmgr-mk-cunhar-status" class="twmgr-cstatus"></div>') +
+        sec('Ritmo (compartilhado pelos modos ligados)', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-mk-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         modLog('market') +
       '</div>' +
       '<div id="twmgr-tab-build" style="display:none">' +
@@ -6910,14 +6932,6 @@
     document.getElementById('twmgr-mk-sdonor').value = config.market.solidarioDonorPct != null ? config.market.solidarioDonorPct : 50;
     document.getElementById('twmgr-mk-sgargalo').value = config.market.solidarioGargaloKeepPct != null ? config.market.solidarioGargaloKeepPct : 90;
     document.getElementById('twmgr-mk-sdist').value = config.market.solidarioMaxDist != null ? config.market.solidarioMaxDist : 20;
-    const mkModeR = document.querySelector('input[name="twmgr-mk-mode"][value="' + (config.market.mode || 'cunhagem') + '"]'); if (mkModeR) mkModeR.checked = true;
-    const applyMkMode = () => {
-      const m = (document.querySelector('input[name="twmgr-mk-mode"]:checked') || {}).value || 'cunhagem';
-      document.getElementById('twmgr-mk-cunhagem').style.display = m === 'cunhagem' ? 'block' : 'none';
-      document.getElementById('twmgr-mk-equilibrio').style.display = m === 'equilibrio' ? 'block' : 'none';
-      document.getElementById('twmgr-mk-solidario').style.display = m === 'solidario' ? 'block' : 'none';
-      document.getElementById('twmgr-mk-cunhar').style.display = m === 'cunhar' ? 'block' : 'none';
-    };
     renderMarketSources();
     renderMintSources();
     fillMarketSolidarioGroupSelect();
@@ -6926,11 +6940,12 @@
     document.getElementById('twmgr-mk-mint-all').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.checked = true); readMarketCfg(); });
     document.getElementById('twmgr-mk-mint-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.checked = false); readMarketCfg(); });
     ['twmgr-mk-coord', 'twmgr-mk-reserve', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
-    document.querySelectorAll('input[name="twmgr-mk-mode"]').forEach((r) => r.addEventListener('change', () => { readMarketCfg(); applyMkMode(); }));
-    applyMkMode();
-    document.getElementById('twmgr-mk-start').addEventListener('click', marketStart);
-    document.getElementById('twmgr-mk-stop').addEventListener('click', marketStop);
-    setMarketStatus(config.market.running);
+    // Cada modo tem seu próprio par Iniciar/Parar — rodam independentes, pode ligar vários ao mesmo tempo.
+    MARKET_MODES.forEach((mkKey) => {
+      document.getElementById('twmgr-mk-' + mkKey + '-start').addEventListener('click', () => marketStart(mkKey));
+      document.getElementById('twmgr-mk-' + mkKey + '-stop').addEventListener('click', () => marketStop(mkKey));
+      setMarketStatus(mkKey, config.market.modes[mkKey].running);
+    });
 
     document.getElementById('twmgr-bld-max').value = config.build.maxQueue || 5;
     document.getElementById('twmgr-bld-int').value = Math.round((config.build.interval || 600) / 60);
@@ -7059,7 +7074,7 @@
     if (config.wall.running) { rlog('Muralha retomada.', 'wall'); retomar(scheduleWall); }
     if (config.recruit.running) { rlog('Recrutar retomado.', 'recruit'); retomar(scheduleRecruit); }
     if (config.fakes.running) { config.fakes.gen.forEach((f) => { if (f.state === 'scheduled') f.state = 'armed'; }); rlog('Fakes rearmados.', 'fakes'); retomar(fakeTick); }
-    if (config.market.running) { rlog('Mercado retomado.', 'market'); retomar(scheduleMarket); }
+    MARKET_MODES.forEach((mkKey) => { if (config.market.modes[mkKey].running) { rlog('Mercado (' + MARKET_MODE_LABEL[mkKey] + ') retomado.', 'market'); retomar(() => scheduleMarket(mkKey)); } });
     if (config.build.running) { rlog('Edifícios retomado.', 'build'); retomar(scheduleBuild); }
     if (config.bb && config.bb.running) { rlog('Cultivo retomado.', 'bb'); retomar(scheduleBB); }
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); retomar(scheduleMap); }

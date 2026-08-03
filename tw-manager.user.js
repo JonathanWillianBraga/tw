@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.8.0
+// @version      11.8.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.8.0';
+  const VERSION = '11.8.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -9952,6 +9952,15 @@
         if (!window.Timing) partes.push('<b style="color:#ff7568">sem relógio do jogo!</b>');
         st.innerHTML = partes.join(' · ');
       }
+      // Viés medido pelo laço fechado (ccMedir). Se ficar em "—" depois de vários envios, a
+      // auto-calibração não está medindo a chegada — aí o ajuste manual é o caminho.
+      const vi = document.getElementById('cc-vies');
+      if (vi) {
+        const k = (config.cmd && config.cmd.calib) || {};
+        vi.innerHTML = 'viés <b style="color:' + (k.n ? '#8fe39a' : '#8f7d57') + '">' +
+          (k.n ? (k.biasMs > 0 ? '+' : '') + Math.round(k.biasMs || 0) + 'ms' : '—') + '</b>' +
+          (k.n ? ' (' + k.n + ' amostra' + (k.n > 1 ? 's' : '') + ')' : ' <span style="color:#6b5c3f">(não calibrou)</span>');
+      }
       const agora = Date.now();
       if (agora - _ccLastRender >= 1000) { _ccLastRender = agora; ccRender(); }
     }
@@ -10161,7 +10170,14 @@
           '<b id="cc-clock" style="color:#ffd76a;font-size:16px;font-variant-numeric:tabular-nums">--:--:--.---</b>' +
         '</div>' +
         '<div id="cc-saude" style="font-size:10px;color:#cbb98f;margin-bottom:4px"></div>' +
-        '<div id="cc-silencio" style="font-size:10px;color:#ffd76a;margin-bottom:8px;min-height:12px"></div>' +
+        '<div id="cc-silencio" style="font-size:10px;color:#ffd76a;margin-bottom:4px;min-height:12px"></div>' +
+        // Ajuste de precisão: o viés adaptativo (ccMedir) deveria corrigir sozinho, mas dá pra
+        // forçar aqui. "Atrasar chegada" positivo = chega mais tarde (corrige quando sai adiantado).
+        '<div style="font-size:10px;color:#8f7d57;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+          '<span title="Se os comandos chegam ADIANTADOS, aumente. Se atrasados, use negativo. Some ao viés que o sistema mede sozinho.">Atrasar chegada <input id="cc-atraso" class="twmgr-inp" type="number" step="10" style="width:60px;font-size:10px;padding:1px">ms</span>' +
+          '<span style="color:#6b5c3f">(+ = mais tarde)</span>' +
+          '<span id="cc-vies" style="margin-left:auto"></span>' +
+        '</div>' +
         row('Alvo',
           '<input id="cc-alvo" class="twmgr-inp" style="width:130px;font-variant-numeric:tabular-nums" placeholder="478|586">' +
           '<span id="cc-alvo-ok" style="font-size:10px;color:#8f7d57"></span>') +
@@ -10326,6 +10342,15 @@
       passoEl.value = config.cmd.passoMs || 50;
       passoEl.addEventListener('change', () => {
         config.cmd.passoMs = Math.max(1, parseInt(passoEl.value, 10) || 50); save(); ccRender();
+      });
+      // Ajuste manual de saída. O campo é "atrasar chegada" (intuitivo): positivo = chega mais
+      // tarde, então guardo o NEGATIVO em ajusteMs (que soma ao lead = adianta a saída).
+      const atrasoEl = document.getElementById('cc-atraso');
+      atrasoEl.value = -(config.cmd.ajusteMs || 0);
+      atrasoEl.addEventListener('change', () => {
+        config.cmd.ajusteMs = -(parseInt(atrasoEl.value, 10) || 0);
+        cmdFila().forEach((c) => { if (c.durMs != null && ccEditavel(c)) cmdRecalc(c); });
+        save(); ccRender();
       });
       const gapEl2 = document.getElementById('cc-trem-gap');
       if (gapEl2) gapEl2.addEventListener('input', () => { ccOndasRender(); });

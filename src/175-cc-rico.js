@@ -1506,9 +1506,12 @@
                  unitIcon(u, rot) + fmtN(q) + extra + '</span>';
         }).filter(Boolean).join(' ');
         return '<label style="display:block;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer">' +
-          '<span style="display:grid;grid-template-columns:18px 74px 52px 78px 52px 1fr;gap:6px;align-items:center;font-size:10px">' +
+          '<span style="display:grid;grid-template-columns:18px 116px 44px 66px 46px 1fr;gap:6px;align-items:center;font-size:10px">' +
             '<input type="checkbox" data-cc-org="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
-            '<span style="color:#e6cf7d" title="' + esc(v.nome || '') + '">' + esc(v.coord || v.vid) + '</span>' +
+            '<span style="overflow:hidden" title="' + esc((v.nome || '') + ' ' + (v.coord || '')) + '">' +
+              '<span style="color:#e6cf7d;white-space:nowrap">' + esc(v.coord || v.vid) + '</span>' +
+              (v.nome ? '<span style="display:block;color:#9c8a5f;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(v.nome) + '</span>' : '') +
+            '</span>' +
             '<span style="color:#8f7d57">' + (L.d == null ? '—' : L.d.toFixed(1) + ' c') + '</span>' +
             '<span style="color:#cbb98f">' + (L.t == null ? '—' : fmt(L.t)) + '</span>' +
             '<span style="color:#8f7d57" title="unidade mais lenta que sai desta aldeia">' + (L.lenta ? esc(rotUn[L.lenta] || L.lenta) : '—') + '</span>' +
@@ -1550,7 +1553,7 @@
       const n = Object.keys(config.cmd.origens || {}).filter((k) => config.cmd.origens[k]).length;
       const alvo = ccAlvo();
       const ch = ccChegadaMs();
-      const base = n + ' origem(ns) marcada(s)' + (alvo ? ' → ' + alvo.coord : '') +
+      const base = n + ' de ' + CCVILAS.length + ' aldeia(s) marcada(s)' + (alvo ? ' → ' + alvo.coord : '') +
                    (ch ? ' · chegando ' + srvClockMs(ch) : '');
       // O trem sai todo da mesma aldeia; avisar aqui evita a surpresa só na hora de armar.
       if (ccTipo() === 'nobre' && n !== 1) {
@@ -1594,6 +1597,15 @@
       });
     }
 
+    // Resumo visual das tropas de um comando: ícone + número, só as unidades > 0.
+    function ccTropaResumo(amounts) {
+      if (!amounts) return '';
+      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+      const listaU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
+      return listaU.filter((u) => (amounts[u] || 0) > 0)
+        .map((u) => '<span style="white-space:nowrap" title="' + esc(rot[u] || u) + '">' + unitIcon(u, rot[u] || u) + fmtN(amounts[u]) + '</span>')
+        .join(' ');
+    }
     function ccRender() {
       const box = document.getElementById('cc-fila'); if (!box) return;
       const f = cmdFila();
@@ -1637,6 +1649,9 @@
           '<span style="text-align:right;color:' + (dev ? erroCor(Math.abs(c.desvioMs)) : '#8f7d57') + '">' + (dev || (falta > 0 ? fmt(falta) : '—')) + '</span>' +
           (c.state === 'novo' || c.state === 'preparado' || c.state === 'armado'
             ? '<span data-cc-ab="' + c.id + '" style="cursor:pointer;color:#ff7568" title="abortar">✕</span>' : '<span></span>') +
+          // Tropas que saem neste comando — largura total, pra não espremer a grade.
+          '<span style="grid-column:1/-1;font-size:9px;color:#b7a373;margin:1px 0 0 46px;line-height:1.6">' +
+            (ccTropaResumo(c.amounts) || '<span style="color:#6b5c3f">— sem tropa —</span>') + '</span>' +
           // Ajuste fino: mexe na CHEGADA e o horário de saída se recalcula sozinho.
           // Some depois que o comando entra no disparo, quando mudar já não é seguro.
           (ccEditavel(c)
@@ -1988,7 +2003,7 @@
             '<label style="cursor:pointer" title="linha &quot;suas próprias&quot; do jogo: inclui o que está fora e em trânsito"><input type="radio" name="cc-fonte" value="total"> suas próprias (inclui fora/trânsito)</label>' +
           '</div>' +
           '<div id="cc-vel-aviso" style="font-size:10px;color:#8f7d57;margin-bottom:3px"></div>' +
-          '<div style="display:grid;grid-template-columns:18px 74px 52px 78px 52px 1fr;gap:6px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
+          '<div style="display:grid;grid-template-columns:18px 116px 44px 66px 46px 1fr;gap:6px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
             '<span></span><span>aldeia</span><span>dist.</span><span>viagem</span><span>mais lenta</span><span>saída</span></div>' +
           '<div id="cc-origens" style="max-height:170px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
           '<div id="cc-resumo" style="font-size:10px;color:#cbb98f;margin-top:3px"></div>' +

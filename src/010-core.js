@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.9.0
+// @version      11.10.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.9.0';
+  const VERSION = '11.10.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -682,8 +682,8 @@
     Object.keys(mods).forEach(renderModLog);
   }
   function logLineHTML(l) {
-    const c = l.k === 'err' ? '#ff7568' : l.k === 'ok' ? '#8fe39a' : '#cbb98f';
-    return '<div style="color:' + c + ';border-bottom:1px solid rgba(255,255,255,.05);padding:2px 0">[' + esc(l.t) + '] ' + esc(l.m) + '</div>';
+    const c = l.k === 'err' ? '#c23a2c' : l.k === 'ok' ? '#2e7d3a' : '#5c4527';
+    return '<div style="color:' + c + ';border-bottom:1px solid rgba(0,0,0,.07);padding:2px 0">[' + esc(l.t) + '] ' + esc(l.m) + '</div>';
   }
   function readLogArr() { try { return JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) { return []; } }
   // Aba Log = só mensagens gerais (sem módulo)
@@ -697,6 +697,6 @@
     const cnt = document.getElementById('twmgr-modlog-count-' + mod);
     const rows = readLogArr().filter((l) => l.mod === mod);
     if (cnt) cnt.textContent = rows.length;
-    if (body) body.innerHTML = rows.length ? rows.map(logLineHTML).join('') : '<div style="color:#8f7d57;padding:6px;font-size:10px">— sem mensagens ainda —</div>';
+    if (body) body.innerHTML = rows.length ? rows.map(logLineHTML).join('') : '<div style="color:#6e5a2a;padding:6px;font-size:10px">— sem mensagens ainda —</div>';
   }
 

@@ -120,23 +120,23 @@
   async function renderBlindagemList() {
     const box = document.getElementById('twmgr-blz-list'); if (!box) return;
     const rows = config.planner.blindagem.rows || [];
-    if (!rows.length) { box.innerHTML = '<div style="font-size:10px;color:#8f7d57;padding:6px;text-align:center">— sem pedidos. Cole a URL e clique Buscar. —</div>'; return; }
+    if (!rows.length) { box.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— sem pedidos. Cole a URL e clique Buscar. —</div>'; return; }
     let vils = []; try { vils = await getAllVillagesCached(); } catch (e) {}
     const opts = '<option value="">— origem —</option>' + vils.map((v) => '<option value="' + v.vid + '">' + esc(v.name) + '</option>').join('');
     box.innerHTML = rows.map((r) => {
       const s = r.send || { LANC: 0, ESP: 0, SPY: 0, CP: 0 };
       const p = r.ped;
       const originSel = opts.replace('value="' + r.originVid + '"', 'value="' + r.originVid + '" selected');
-      return '<div data-blz-id="' + r.id + '" style="border-bottom:1px dashed #3a2c1a;padding:4px 2px;font-size:10px;color:#d3c299">' +
+      return '<div data-blz-id="' + r.id + '" style="border-bottom:1px dashed #dcc78f;padding:4px 2px;font-size:10px;color:#5c4527">' +
         '<div style="display:flex;align-items:center;gap:4px">' +
           '<input type="checkbox" class="blz-chk"' + (r.checked ? ' checked' : '') + '>' +
-          '<b>#' + r.num + '</b> · ' + esc(r.name) + ' <span style="color:#e6cf7d">(' + r.coord + ')</span>' +
+          '<b>#' + r.num + '</b> · ' + esc(r.name) + ' <span style="color:#7a5710">(' + r.coord + ')</span>' +
         '</div>' +
         '<div style="display:flex;align-items:center;gap:4px;margin-top:2px">' +
-          '<span style="color:#8f7d57">origem:</span>' +
+          '<span style="color:#6e5a2a">origem:</span>' +
           '<select class="blz-origin" style="flex:1;font-size:10px">' + originSel + '</select>' +
         '</div>' +
-        '<div style="color:#8f7d57;margin-top:2px">ped: ' + p.LANC + ' LANC / ' + p.ESP + ' ESP / ' + p.SPY + ' SPY / ' + p.CP + ' CP</div>' +
+        '<div style="color:#6e5a2a;margin-top:2px">ped: ' + p.LANC + ' LANC / ' + p.ESP + ' ESP / ' + p.SPY + ' SPY / ' + p.CP + ' CP</div>' +
         '<div style="display:flex;gap:3px;margin-top:2px;flex-wrap:wrap">' +
           '<label style="display:flex;align-items:center;gap:2px">L <input type="number" min="0" class="blz-send" data-u="LANC" value="' + (s.LANC || 0) + '" style="width:52px;font-size:10px"></label>' +
           '<label style="display:flex;align-items:center;gap:2px">E <input type="number" min="0" class="blz-send" data-u="ESP" value="' + (s.ESP || 0) + '" style="width:52px;font-size:10px"></label>' +

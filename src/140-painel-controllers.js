@@ -9,60 +9,60 @@
       else if ((t.nextSendAt || 0) > now) c.textContent = fmt(t.nextSendAt - now);
       else c.textContent = '•••';
     });
-    const g = document.getElementById('twmgr-global'); if (g) { g.textContent = !config.running ? '' : (lockOther() ? '⏸ inativa (outra aba está enviando)' : '● rodando'); g.style.color = lockOther() ? '#ff7568' : '#8fe39a'; }
-    const sc = document.getElementById('twmgr-scav-status'); if (sc) { if (!config.scav.running) { sc.textContent = ''; } else if (lockOther()) { sc.textContent = '⏸ outra aba está ativa'; sc.style.color = '#ff7568'; } else { sc.style.color = '#8fe39a'; sc.textContent = (config.scav.nextAt || 0) > now ? '● próx. verificação: ' + fmt(config.scav.nextAt - now) : '● verificando…'; } }
-    const fs = document.getElementById('twmgr-farm-status'); if (fs) { if (!config.farm.running) { fs.textContent = ''; } else if (lockOther()) { fs.textContent = '⏸ outra aba está ativa'; fs.style.color = '#ff7568'; } else { fs.style.color = '#8fe39a'; fs.textContent = (config.farm.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.farm.nextAt - now) : '● saqueando…'; } }
-    const ws = document.getElementById('twmgr-wall-status'); if (ws) { if (!config.wall.running) { ws.textContent = ''; } else if (lockOther()) { ws.textContent = '⏸ outra aba está ativa'; ws.style.color = '#ff7568'; } else { ws.style.color = '#8fe39a'; ws.textContent = (config.wall.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.wall.nextAt - now) : '● quebrando…'; } }
-    const rs = document.getElementById('twmgr-recruit-status'); if (rs) { if (!config.recruit.running) { rs.textContent = ''; } else if (lockOther()) { rs.textContent = '⏸ outra aba está ativa'; rs.style.color = '#ff7568'; } else { rs.style.color = '#8fe39a'; rs.textContent = (config.recruit.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.recruit.nextAt - now) : '● recrutando…'; } }
+    const g = document.getElementById('twmgr-global'); if (g) { g.textContent = !config.running ? '' : (lockOther() ? '⏸ inativa (outra aba está enviando)' : '● rodando'); g.style.color = lockOther() ? '#c23a2c' : '#2e7d3a'; }
+    const sc = document.getElementById('twmgr-scav-status'); if (sc) { if (!config.scav.running) { sc.textContent = ''; } else if (lockOther()) { sc.textContent = '⏸ outra aba está ativa'; sc.style.color = '#c23a2c'; } else { sc.style.color = '#2e7d3a'; sc.textContent = (config.scav.nextAt || 0) > now ? '● próx. verificação: ' + fmt(config.scav.nextAt - now) : '● verificando…'; } }
+    const fs = document.getElementById('twmgr-farm-status'); if (fs) { if (!config.farm.running) { fs.textContent = ''; } else if (lockOther()) { fs.textContent = '⏸ outra aba está ativa'; fs.style.color = '#c23a2c'; } else { fs.style.color = '#2e7d3a'; fs.textContent = (config.farm.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.farm.nextAt - now) : '● saqueando…'; } }
+    const ws = document.getElementById('twmgr-wall-status'); if (ws) { if (!config.wall.running) { ws.textContent = ''; } else if (lockOther()) { ws.textContent = '⏸ outra aba está ativa'; ws.style.color = '#c23a2c'; } else { ws.style.color = '#2e7d3a'; ws.textContent = (config.wall.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.wall.nextAt - now) : '● quebrando…'; } }
+    const rs = document.getElementById('twmgr-recruit-status'); if (rs) { if (!config.recruit.running) { rs.textContent = ''; } else if (lockOther()) { rs.textContent = '⏸ outra aba está ativa'; rs.style.color = '#c23a2c'; } else { rs.style.color = '#2e7d3a'; rs.textContent = (config.recruit.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.recruit.nextAt - now) : '● recrutando…'; } }
     const clk = document.getElementById('twmgr-srvclock'); if (clk) { try { clk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
     const fks = document.getElementById('twmgr-fk-status');
     if (fks) {
       if (!config.fakes.running) { fks.textContent = ''; }
-      else if (lockOther()) { fks.textContent = '⏸ outra aba'; fks.style.color = '#ff7568'; }
+      else if (lockOther()) { fks.textContent = '⏸ outra aba'; fks.style.color = '#c23a2c'; }
       else {
         const gg = config.fakes.gen || [];
         const pend = gg.filter((f) => f.state === 'armed' || f.state === 'scheduled').length;
         const sent = gg.filter((f) => f.state === 'sent').length;
         const err = gg.filter((f) => f.state === 'error').length;
         const nx = gg.filter((f) => f.sendAt && (f.state === 'scheduled' || f.state === 'armed')).sort((a, b) => a.sendAt - b.sendAt)[0];
-        fks.style.color = '#8fe39a';
+        fks.style.color = '#2e7d3a';
         fks.textContent = '● ' + sent + ' env · ' + pend + ' pend' + (err ? (' · ' + err + ' erro') : '') + (nx ? (' · próx ' + fmt(nx.sendAt - serverNow())) : '');
       }
     }
     if (document.getElementById('twmgr-cards-fakes')) refreshCards('fakes');
     const mk = document.getElementById('twmgr-mk-status'); if (mk) {
       if (!config.market.running) { mk.textContent = ''; }
-      else if (lockOther()) { mk.textContent = '⏸ outra aba'; mk.style.color = '#ff7568'; }
-      else { mk.style.color = '#8fe39a'; mk.textContent = (config.market.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.market.nextAt - now) : '● enviando…'; }
+      else if (lockOther()) { mk.textContent = '⏸ outra aba'; mk.style.color = '#c23a2c'; }
+      else { mk.style.color = '#2e7d3a'; mk.textContent = (config.market.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.market.nextAt - now) : '● enviando…'; }
     }
     const bl = document.getElementById('twmgr-bld-status'); if (bl) {
       if (!config.build.running) { bl.textContent = ''; }
-      else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#ff7568'; }
-      else { bl.style.color = '#8fe39a'; bl.textContent = (config.build.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.build.nextAt - now) : '● construindo…'; }
+      else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#c23a2c'; }
+      else { bl.style.color = '#2e7d3a'; bl.textContent = (config.build.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.build.nextAt - now) : '● construindo…'; }
     }
     const bb = document.getElementById('twmgr-bb-status'); if (bb) {
       if (!config.bb.running) { bb.textContent = ''; }
-      else if (lockOther()) { bb.textContent = '⏸ outra aba'; bb.style.color = '#ff7568'; }
-      else { bb.style.color = '#8fe39a'; bb.textContent = (config.bb.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.bb.nextAt - now) : '● desenvolvendo…'; }
+      else if (lockOther()) { bb.textContent = '⏸ outra aba'; bb.style.color = '#c23a2c'; }
+      else { bb.style.color = '#2e7d3a'; bb.textContent = (config.bb.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.bb.nextAt - now) : '● desenvolvendo…'; }
     }
     const bm = document.getElementById('twmgr-bm-status'); if (bm) {
       if (!config.map || !config.map.running) { bm.textContent = ''; }
-      else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#ff7568'; }
-      else { bm.style.color = '#8fe39a'; bm.textContent = (config.map.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.map.nextAt - now) : '● rastreando…'; }
+      else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#c23a2c'; }
+      else { bm.style.color = '#2e7d3a'; bm.textContent = (config.map.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.map.nextAt - now) : '● rastreando…'; }
     }
     const plClk = document.getElementById('twmgr-pl-srvclock'); if (plClk) { try { plClk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
     const pls = document.getElementById('twmgr-pl-status');
     if (pls) {
       const plAtk = config.planner && plActive();
       if (!plAtk || !plAtk.running) { pls.textContent = ''; }
-      else if (lockOther()) { pls.textContent = '⏸ outra aba'; pls.style.color = '#ff7568'; }
+      else if (lockOther()) { pls.textContent = '⏸ outra aba'; pls.style.color = '#c23a2c'; }
       else {
         const rr = (plAtk.rows || []);
         const pend = rr.filter((r) => r.state === 'armed' || r.state === 'scheduled').length;
         const sent = rr.filter((r) => r.state === 'sent').length;
         const err = rr.filter((r) => r.state === 'error').length;
         const nx = rr.filter((r) => r.sendAt && (r.state === 'scheduled' || r.state === 'armed')).sort((a, b) => a.sendAt - b.sendAt)[0];
-        pls.style.color = '#8fe39a';
+        pls.style.color = '#2e7d3a';
         pls.textContent = '● ' + sent + ' env · ' + pend + ' pend' + (err ? (' · ' + err + ' erro') : '') + (nx ? (' · próx ' + fmt(nx.sendAt - serverNow())) : '');
       }
     }
@@ -71,8 +71,8 @@
     const pds = document.getElementById('twmgr-pd-status');
     if (pds) {
       if (!config.paladin.running) { pds.textContent = ''; }
-      else if (lockOther()) { pds.textContent = '⏸ outra aba'; pds.style.color = '#ff7568'; }
-      else { pds.style.color = '#8fe39a'; pds.textContent = '● ' + Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]).length + ' aldeia(s) no ciclo'; }
+      else if (lockOther()) { pds.textContent = '⏸ outra aba'; pds.style.color = '#c23a2c'; }
+      else { pds.style.color = '#2e7d3a'; pds.textContent = '● ' + Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]).length + ' aldeia(s) no ciclo'; }
     }
     if (document.getElementById('twmgr-pd-status-list')) renderPaladinStatus();
     // Atualiza só o indicador (●) de cada aba de ataque, sem reconstruir a lista (evita "roubar" cliques).
@@ -169,9 +169,9 @@
       ks.slice(0, 12).map((vid) => {
         const r = f[vid];
         const falta = RES3.filter((k) => r.falta[k]).map((k) => fmtN(r.falta[k]) + ' ' + ({ wood: 'mad', stone: 'arg', iron: 'fer' })[k]).join(' · ');
-        return '<div style="font-size:10px;color:#cdbb92;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)">' +
-          '<span style="color:#ffd76a">' + esc(r.nome) + '</span> <span style="color:#8f7d57">' + esc(r.opcao) + '</span> — <span style="color:#e6a89d">' + falta + '</span></div>';
-      }).join('') + (ks.length > 12 ? '<div style="font-size:9px;color:#8f7d57;padding:2px 0">…e mais ' + (ks.length - 12) + '</div>' : '');
+        return '<div style="font-size:10px;color:#5c4527;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)">' +
+          '<span style="color:#9a6f0e">' + esc(r.nome) + '</span> <span style="color:#6e5a2a">' + esc(r.opcao) + '</span> — <span style="color:#a5544a">' + falta + '</span></div>';
+      }).join('') + (ks.length > 12 ? '<div style="font-size:9px;color:#6e5a2a;padding:2px 0">…e mais ' + (ks.length - 12) + '</div>' : '');
   }
 
   function readScavUnits() {
@@ -220,7 +220,7 @@
     const pct = total > 0 ? Math.max(0, Math.min(100, Math.round(done / total * 100))) : 0;
     return '<div style="display:flex;align-items:center;gap:8px">' +
       '<div style="flex:1;height:9px;background:rgba(255,255,255,.09);border-radius:5px;overflow:hidden">' +
-        '<div style="width:' + pct + '%;height:100%;background:#8fe39a;transition:width .25s"></div></div>' +
+        '<div style="width:' + pct + '%;height:100%;background:#2e7d3a;transition:width .25s"></div></div>' +
       '<span style="white-space:nowrap;font-variant-numeric:tabular-nums">' + done + '/' + total + '</span></div>' +
       (right ? ('<div style="margin-top:3px;opacity:.85">' + right + '</div>') : '');
   }

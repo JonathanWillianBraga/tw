@@ -166,7 +166,7 @@
     const table = p.table, colUnits = p.colUnits, totals = p.totals, byVillage = p.byVillage, f = p.force;
     const fmt = (n) => Number(n).toLocaleString('pt-BR');
     const fmtSigned = (n) => (n >= 0 ? '+' : '') + fmt(n);
-    const colorFor = (delta) => delta > 0 ? '#2f7a2f' : (delta < 0 ? '#a52020' : '#6b4a1e');
+    const colorFor = (delta) => delta > 0 ? '#2f7a2f' : (delta < 0 ? '#a52020' : '#584526');
     const arrowFor = (delta) => delta > 0 ? '↑' : (delta < 0 ? '↓' : '·');
 
     // 3) Salva snapshot ANTES de calcular deltas (pra ter o de hoje já disponível).
@@ -177,12 +177,12 @@
     const snap7 = unitsFindSnapshotDaysAgo(7);
     const snap30 = unitsFindSnapshotDaysAgo(30);
     const deltaBlock = (label, snap) => {
-      if (!snap || !snap.force) return '<div style="min-width:110px;color:#8f7d57;font-size:10px">' + label + ': —</div>';
+      if (!snap || !snap.force) return '<div style="min-width:110px;color:#6e5a2a;font-size:10px">' + label + ': —</div>';
       const dTotal = f.total - (snap.force.total || 0);
       const dAtt = f.att - (snap.force.att || 0);
       const dDef = f.def - (snap.force.def || 0);
       return '<div style="min-width:110px;font-size:10px;line-height:1.4">' +
-        '<div style="color:#5a3c0f;font-weight:bold">' + label + '</div>' +
+        '<div style="color:#a9843f;font-weight:bold">' + label + '</div>' +
         '<div style="color:' + colorFor(dTotal) + '">' + arrowFor(dTotal) + ' tropas ' + fmtSigned(dTotal) + '</div>' +
         '<div style="color:' + colorFor(dAtt) + '">' + arrowFor(dAtt) + ' off ' + fmtSigned(dAtt) + '</div>' +
         '<div style="color:' + colorFor(dDef) + '">' + arrowFor(dDef) + ' def ' + fmtSigned(dDef) + '</div>' +
@@ -212,16 +212,16 @@
     // 6) Bloco de resumo + deltas + sparklines + botão CSV.
     const summary = document.createElement('div');
     summary.id = 'twmgr-units-summary';
-    summary.style.cssText = 'margin:6px 0 8px;padding:8px 10px;border:1px solid #7d510a;border-radius:6px;background:linear-gradient(180deg,#f4e4bc,#e8d29a);font-size:12px;color:#3b2914;box-shadow:0 1px 2px rgba(0,0,0,.1)';
-    const item = (label, val, big) => '<div style="display:flex;flex-direction:column;align-items:center;min-width:80px"><div style="font-size:' + (big ? '16px' : '13px') + ';font-weight:bold;font-variant-numeric:tabular-nums">' + fmt(val) + '</div><div style="font-size:10px;color:#6b4a1e">' + label + '</div></div>';
+    summary.style.cssText = 'margin:6px 0 8px;padding:8px 10px;border:1px solid #7d510a;border-radius:6px;background:linear-gradient(180deg,#f4e4bc,#6a4e18);font-size:12px;color:#3b2914;box-shadow:0 1px 2px rgba(0,0,0,.1)';
+    const item = (label, val, big) => '<div style="display:flex;flex-direction:column;align-items:center;min-width:80px"><div style="font-size:' + (big ? '16px' : '13px') + ';font-weight:bold;font-variant-numeric:tabular-nums">' + fmt(val) + '</div><div style="font-size:10px;color:#584526">' + label + '</div></div>';
     const sparkBlock = (label, series, color) => '<div style="display:flex;flex-direction:column;align-items:center;min-width:110px">' +
-      '<div style="font-size:10px;color:#5a3c0f;font-weight:bold">' + label + ' (' + series.length + 'd)</div>' +
+      '<div style="font-size:10px;color:#a9843f;font-weight:bold">' + label + ' (' + series.length + 'd)</div>' +
       unitsSparkline(series, 110, 28, color) +
       '</div>';
     summary.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px">' +
-        '<div style="font-weight:bold;font-size:11px;color:#5a3c0f">🏰 Resumo (TW Manager) · <span style="font-weight:normal;font-size:10px">' + histKeys.length + ' snapshot' + (histKeys.length === 1 ? '' : 's') + ' no histórico</span></div>' +
-        '<button id="twmgr-units-csv" style="padding:2px 8px;font-size:10px;border:1px solid #7d510a;border-radius:4px;background:#e8d29a;cursor:pointer;color:#3b2914">📥 baixar histórico CSV</button>' +
+        '<div style="font-weight:bold;font-size:11px;color:#a9843f">🏰 Resumo (TW Manager) · <span style="font-weight:normal;font-size:10px">' + histKeys.length + ' snapshot' + (histKeys.length === 1 ? '' : 's') + ' no histórico</span></div>' +
+        '<button id="twmgr-units-csv" style="padding:2px 8px;font-size:10px;border:1px solid #7d510a;border-radius:4px;background:#6a4e18;cursor:pointer;color:#3b2914">📥 baixar histórico CSV</button>' +
       '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding-bottom:6px;border-bottom:1px dashed #b89a5a">' +
         item('total tropas', f.total, true) +
@@ -239,10 +239,10 @@
       '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:12px;padding-top:6px;align-items:center">' +
         '<div style="display:flex;flex-direction:column;align-items:center;min-width:110px">' +
-          '<div style="font-size:10px;color:#5a3c0f;font-weight:bold">total (hoje ' + seriesToday.length + 'pt)</div>' +
+          '<div style="font-size:10px;color:#a9843f;font-weight:bold">total (hoje ' + seriesToday.length + 'pt)</div>' +
           unitsSparkline(seriesToday, 110, 28, '#7d510a') +
         '</div>' +
-        sparkBlock('total (30d)', seriesTotal, '#5a3c0f') +
+        sparkBlock('total (30d)', seriesTotal, '#a9843f') +
         sparkBlock('força ⚔️ (30d)', seriesAtt, '#a52020') +
         sparkBlock('def 🛡️ (30d)', seriesDef, '#2f6b2f') +
       '</div>';
@@ -254,14 +254,14 @@
     const nCols = table.querySelectorAll('thead th').length;
     const totalBody = document.createElement('tbody');
     totalBody.id = 'twmgr-units-grandtotal';
-    let cellsHtml = '<td style="padding:4px 6px;color:#5a3c0f">TOTAL GERAL</td><td></td>';
+    let cellsHtml = '<td style="padding:4px 6px;color:#a9843f">TOTAL GERAL</td><td></td>';
     colUnits.forEach((unit) => {
       const n = (unit && totals[unit]) || 0;
       cellsHtml += '<td class="unit-item" style="text-align:center">' + (n > 0 ? fmt(n) : '0') + '</td>';
     });
     const emittedCols = 2 + colUnits.length;
     for (let i = emittedCols; i < nCols; i++) cellsHtml += '<td></td>';
-    totalBody.innerHTML = '<tr style="background:linear-gradient(180deg,#f4e4bc,#e8d29a);font-weight:bold;font-size:13px;color:#3b2914;border-top:2px solid #7d510a">' + cellsHtml + '</tr>';
+    totalBody.innerHTML = '<tr style="background:linear-gradient(180deg,#f4e4bc,#6a4e18);font-weight:bold;font-size:13px;color:#3b2914;border-top:2px solid #7d510a">' + cellsHtml + '</tr>';
     table.appendChild(totalBody);
   }
 
@@ -432,7 +432,7 @@
       unitIcon(u, n) + '<span style="flex:1;font-size:10px">' + n + '</span>' +
       '<input class="twmgr-rt" data-prof="' + prof + '" data-unit="' + u + '" type="number" min="0" placeholder="∞" value="' + (t[u] != null ? t[u] : '') + '" style="width:60px" title="alvo (vazio = contínuo)">' +
       '</div>').join('');
-    return '<div style="font-size:11px;color:#e8d29a;margin:6px 0 2px">' + label + '</div>' + rows;
+    return '<div style="font-size:11px;color:#6a4e18;margin:6px 0 2px">' + label + '</div>' + rows;
   }
   let _twGroupsCache = [];
   async function fillGroupSelects() {
@@ -455,17 +455,17 @@
       unitIcon(u, n) + '<span style="flex:1;font-size:10px">' + n + '</span>' +
       '<input class="twmgr-rg-t twmgr-inp" data-gid="' + g.id + '" data-unit="' + u + '" type="number" min="0" placeholder="∞" value="' + (t[u] != null ? t[u] : '') + '" style="width:60px" title="alvo (vazio = contínuo)">' +
       '</div>').join('');
-    return '<div class="twmgr-rg-card" data-gid="' + g.id + '" style="border:1px solid #3a2c1a;border-radius:6px;padding:6px;margin-bottom:6px">' +
+    return '<div class="twmgr-rg-card" data-gid="' + g.id + '" style="border:1px solid #dcc78f;border-radius:6px;padding:6px;margin-bottom:6px">' +
       '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">' +
       '<input class="twmgr-rg-name twmgr-inp" data-gid="' + g.id + '" type="text" placeholder="nome do perfil" value="' + esc(g.name || '') + '" style="flex:1;font-size:11px">' +
       '<select class="twmgr-rg-grp twmgr-inp" data-gid="' + g.id + '" style="width:130px">' + opts + '</select>' +
-      '<span class="twmgr-rg-rm" data-gid="' + g.id + '" title="remover grupo" style="cursor:pointer;color:#ff7568;padding:0 4px;font-weight:bold">✕</span>' +
+      '<span class="twmgr-rg-rm" data-gid="' + g.id + '" title="remover grupo" style="cursor:pointer;color:#c23a2c;padding:0 4px;font-weight:bold">✕</span>' +
       '</div>' + rows + '</div>';
   }
   function renderRecruitGroups() {
     const box = document.getElementById('twmgr-rg-list'); if (!box) return;
     const groups = config.recruit.groups || [];
-    box.innerHTML = groups.length ? groups.map(recruitGroupCardHTML).join('') : '<div style="color:#8f7d57;text-align:center;padding:8px;font-size:10px">— nenhum grupo adicional (use o botão abaixo) —</div>';
+    box.innerHTML = groups.length ? groups.map(recruitGroupCardHTML).join('') : '<div style="color:#6e5a2a;text-align:center;padding:8px;font-size:10px">— nenhum grupo adicional (use o botão abaixo) —</div>';
   }
   function bindRecruitGroupsHandlers() {
     const box = document.getElementById('twmgr-rg-list'); if (!box) return;

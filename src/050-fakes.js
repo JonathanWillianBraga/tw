@@ -170,8 +170,8 @@
     }
     const sel = config.fakes.origins || {};
     cont.innerHTML = vils.length
-      ? vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-fk-origin" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('')
-      : '<div style="font-size:10px;color:#8a7a55;padding:4px">nenhuma aldeia neste grupo</div>';
+      ? vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-fk-origin" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('')
+      : '<div style="font-size:10px;color:#6e5a2f;padding:4px">nenhuma aldeia neste grupo</div>';
     cont.querySelectorAll('.twmgr-fk-origin').forEach((cb) => cb.addEventListener('change', readFakesCfg));
     const cnt = document.getElementById('twmgr-fk-count'); if (cnt) cnt.textContent = vils.length ? ('(' + vils.length + ')') : '';
   }

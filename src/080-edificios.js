@@ -135,7 +135,7 @@
   function renderBuildPlan() {
     const box = document.getElementById('twmgr-bld-plan'); if (!box) return;
     const plan = (config.build.plans && config.build.plans[_bldActiveProf]) || [];
-    if (!plan.length) { box.innerHTML = '<div style="color:#8f7d57;text-align:center;padding:10px;font-size:10px">— lista vazia (use o + abaixo pra adicionar) —</div>'; return; }
+    if (!plan.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">— lista vazia (use o + abaixo pra adicionar) —</div>'; return; }
     box.innerHTML = plan.map((it, i) => {
       const meta = BUILD_META[it.b] || { name: it.b, ico: '?', max: 30 };
       const disabled = it.en === false ? ' twmgr-bld-off' : '';

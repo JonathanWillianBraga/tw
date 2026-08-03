@@ -4,7 +4,7 @@
     const box = document.getElementById('twmgr-cards-' + mod); if (!box) return;
     box.innerHTML = arr.map((c) =>
       (c.br ? '<div class="twmgr-card-break"></div>' : '') +
-      '<div class="twmgr-card-mini' + (c.wide ? ' twmgr-card-wide' : '') + '"><div class="twmgr-card-v"' + (c.hl ? ' style="color:#5fd3e8"' : '') + '>' + (c.v == null ? '—' : c.v) + '</div><div class="twmgr-card-l">' + c.l + '</div></div>'
+      '<div class="twmgr-card-mini' + (c.wide ? ' twmgr-card-wide' : '') + '"><div class="twmgr-card-v"' + (c.hl ? ' style="color:#1f8fa0"' : '') + '>' + (c.v == null ? '—' : c.v) + '</div><div class="twmgr-card-l">' + c.l + '</div></div>'
     ).join('');
   }
   // Monta e desenha os cards de um módulo a partir de config[...].stats (populado nos ticks).

@@ -796,39 +796,39 @@
     s.textContent = [
       "#twmgr-ccpg{position:fixed;inset:0;z-index:100001;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.62)}",
       "#twmgr-ccpg.on{display:flex}",
-      "#twmgr-ccbox{width:min(1080px,94vw);max-height:88vh;display:flex;flex-direction:column;font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#e9dcc2;background:linear-gradient(160deg,#2a2016,#201810);border:1px solid #b8912e;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.7);overflow:hidden}",
+      "#twmgr-ccbox{width:min(1080px,94vw);max-height:88vh;display:flex;flex-direction:column;font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#4a3418;background:linear-gradient(160deg,#e2cd97,#ecdcb2);border:1px solid #b8912e;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.7);overflow:hidden}",
       "#twmgr-ccbox *{box-sizing:border-box}",
       "#twmgr-cchead{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:linear-gradient(90deg,#6e5015,#9a721c 55%,#caa031);color:#fff;border-bottom:1px solid #8a6a20}",
       "#twmgr-cchead .t{font-weight:700;font-size:13px;letter-spacing:.3px}",
       "#twmgr-ccx{cursor:pointer;font-size:19px;line-height:1;padding:0 4px;opacity:.85}#twmgr-ccx:hover{opacity:1}",
       "#twmgr-ccbody{flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px 14px 14px}",
-      "#twmgr-ccbody::-webkit-scrollbar{width:9px}#twmgr-ccbody::-webkit-scrollbar-thumb{background:#4a3a22;border-radius:4px}",
+      "#twmgr-ccbody::-webkit-scrollbar{width:9px}#twmgr-ccbody::-webkit-scrollbar-thumb{background:#b18f4d;border-radius:4px}",
       ".twmgr-cct{width:100%;border-collapse:collapse;font-size:11px}",
-      ".twmgr-cct th{font-size:9px;color:#ffd76a;font-weight:700;padding:5px 6px;border-bottom:1px solid #6a5320;text-transform:uppercase;text-align:left;letter-spacing:.4px}",
-      ".twmgr-cct td{padding:5px 6px;border-bottom:1px solid rgba(255,255,255,.05);vertical-align:middle}",
+      ".twmgr-cct th{font-size:9px;color:#9a6f0e;font-weight:700;padding:5px 6px;border-bottom:1px solid #b18f4d;text-transform:uppercase;text-align:left;letter-spacing:.4px}",
+      ".twmgr-cct td{padding:5px 6px;border-bottom:1px solid rgba(0,0,0,.07);vertical-align:middle}",
       ".twmgr-cct tr:hover td{background:rgba(212,175,55,.05)}",
       ".twmgr-ccst{font-size:9px;font-weight:700;padding:2px 7px;border-radius:99px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}",
-      ".twmgr-ccst.armado{background:rgba(90,140,220,.18);color:#8fb7f0;border:1px solid #3f6091}",
+      ".twmgr-ccst.armado{background:rgba(90,140,220,.18);color:#3f6091;border:1px solid #3f6091}",
       // As cores seguem duas familias, e isso nao e enfeite: azul/verde = no rumo,
       // ambar/vermelho = precisa de voce. 'preparado' e 'incerto' sairam quase iguais
       // na primeira versao (mesma borda, texto a 23 pontos de distancia) e significam
       // coisas opostas — um esta saudavel, o outro quer dizer "pode ter enviado, va
       // conferir". Confundir os dois custa exercito. 'incerto' tambem e tracejado.
-      ".twmgr-ccst.preparado{background:rgba(70,190,190,.15);color:#6fd8d8;border:1px solid #2f7d7d}",
+      ".twmgr-ccst.preparado{background:rgba(70,190,190,.15);color:#1f8f8f;border:1px solid #2f7d7d}",
       // Bem mais claro que 'incerto', que e ambar: 'disparando' e o instante em que o
       // POST esta no ar, e brilho maior le como "acontecendo agora".
-      ".twmgr-ccst.disparando{background:rgba(255,170,70,.26);color:#fff0d8;border:1px solid #d68a2a}",
-      ".twmgr-ccst.enviado{background:rgba(63,206,84,.15);color:#7ee38c;border:1px solid #2f7d3a}",
-      ".twmgr-ccst.incerto{background:rgba(230,150,40,.16);color:#ffc266;border:1px dashed #c98a22}",
-      ".twmgr-ccst.falhou,.twmgr-ccst.perdido{background:rgba(231,76,60,.16);color:#ff8b7c;border:1px solid #9c3a2c}",
-      ".twmgr-cccd{font-variant-numeric:tabular-nums;font-weight:700;color:#ffd76a;font-family:Consolas,'Courier New',monospace}",
-      ".twmgr-cccd.perto{color:#ff9a5a}",
+      ".twmgr-ccst.disparando{background:rgba(255,170,70,.26);color:#6b4e1e;border:1px solid #d68a2a}",
+      ".twmgr-ccst.enviado{background:rgba(63,206,84,.15);color:#2e7d3a;border:1px solid #2f7d3a}",
+      ".twmgr-ccst.incerto{background:rgba(230,150,40,.16);color:#a9781a;border:1px dashed #c98a22}",
+      ".twmgr-ccst.falhou,.twmgr-ccst.perdido{background:rgba(231,76,60,.16);color:#c23a2c;border:1px solid #9c3a2c}",
+      ".twmgr-cccd{font-variant-numeric:tabular-nums;font-weight:700;color:#9a6f0e;font-family:Consolas,'Courier New',monospace}",
+      ".twmgr-cccd.perto{color:#c2592c}",
       ".twmgr-ccmet{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:11px}",
-      ".twmgr-ccm{flex:1 1 0;min-width:96px;background:linear-gradient(165deg,#241a0e,#181008);border:1px solid #45351d;border-radius:9px;padding:8px 7px;text-align:center}",
-      ".twmgr-ccm .v{font-size:18px;font-weight:800;color:#ffd76a;line-height:1;font-variant-numeric:tabular-nums}",
-      ".twmgr-ccm .l{font-size:8px;color:#9a8a63;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}",
-      ".twmgr-ccm.ruim .v{color:#ff8b7c}", ".twmgr-ccm.bom .v{color:#7ee38c}",
-      ".twmgr-ccvazio{text-align:center;color:#8f7d57;font-size:11px;padding:22px 0}",
+      ".twmgr-ccm{flex:1 1 0;min-width:96px;background:linear-gradient(165deg,#e6d4a4,#ecdcb2);border:1px solid #b18f4d;border-radius:9px;padding:8px 7px;text-align:center}",
+      ".twmgr-ccm .v{font-size:18px;font-weight:800;color:#9a6f0e;line-height:1;font-variant-numeric:tabular-nums}",
+      ".twmgr-ccm .l{font-size:8px;color:#6e5a2f;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}",
+      ".twmgr-ccm.ruim .v{color:#c23a2c}", ".twmgr-ccm.bom .v{color:#2e7d3a}",
+      ".twmgr-ccvazio{text-align:center;color:#6e5a2a;font-size:11px;padding:22px 0}",
       "#twmgr-ccpg-btn{cursor:pointer;font-size:13px;line-height:1;padding:2px 3px;border-radius:5px;opacity:.85;transition:.15s}",
       "#twmgr-ccpg-btn:hover{opacity:1;background:rgba(255,255,255,.14)}",
     ].join('');
@@ -875,7 +875,7 @@
             // sua conexão, não do código. Eu tinha tudo isto como constante fixa, sem
             // escape nenhum se o estimador errasse — e ele errou duas vezes nos testes.
             '<details id="twmgr-ccconf" class="twmgr-section" style="margin-bottom:11px">' +
-              '<summary style="cursor:pointer;font-size:10px;color:#c9a24a;font-weight:700;letter-spacing:.5px;text-transform:uppercase">⚙ Ajuste de precisão</summary>' +
+              '<summary style="cursor:pointer;font-size:10px;color:#8a6410;font-weight:700;letter-spacing:.5px;text-transform:uppercase">⚙ Ajuste de precisão</summary>' +
               '<div style="margin-top:9px">' +
                 '<div class="twmgr-row"><span class="twmgr-lbl" title="Adaptativo mede o atraso dos últimos comandos e ajusta sozinho. Fixo usa o valor que você digitar — use se o adaptativo não convergir.">Modo</span>' +
                   '<select id="twmgr-cc-modo" class="twmgr-inp" style="width:190px"><option value="adaptativo">Adaptativo (ele mede)</option><option value="fixo">Fixo (você define)</option></select></div>' +
@@ -888,15 +888,15 @@
                 '<div class="twmgr-hint" style="margin:6px 0 0">O modo adaptativo só aprende com envios em que a <b>própria espera</b> acertou (erro de escada abaixo de ' + CC.GUARDA_DERIVA_MS + 'ms). Amostra ruim é descartada em vez de envenenar a média — o log avisa quando isso acontece.</div>' +
               '</div>' +
             '</details>' +
-            '<div id="twmgr-cctest" class="twmgr-section" style="display:none;margin-bottom:11px;border:1px solid #7d510a;border-radius:6px;padding:9px 11px;background:#241a0e">' +
-              '<div style="font-size:10px;color:#c9a24a;font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">🧪 Teste de disparo</div>' +
+            '<div id="twmgr-cctest" class="twmgr-section" style="display:none;margin-bottom:11px;border:1px solid #7d510a;border-radius:6px;padding:9px 11px;background:#e6d4a4">' +
+              '<div style="font-size:10px;color:#8a6410;font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">🧪 Teste de disparo</div>' +
               '<div class="twmgr-row"><span class="twmgr-lbl" title="quantas aldeias suas disparam nesta onda, cada uma mira a mesma bárbara">Nº de aldeias</span><input id="twmgr-ct-n" class="twmgr-inp" type="number" min="1" max="8" value="3" style="width:80px"></div>' +
               '<div class="twmgr-row"><span class="twmgr-lbl" title="espaçamento pedido entre disparos consecutivos">Gap (ms)</span><input id="twmgr-ct-gap" class="twmgr-inp" type="number" min="100" step="10" value="150" style="width:80px"></div>' +
               '<div class="twmgr-row"><span class="twmgr-lbl" title="daqui a quantos segundos a onda começa a sair">Sair daqui a (s)</span><input id="twmgr-ct-s" class="twmgr-inp" type="number" min="8" value="20" style="width:80px"></div>' +
               '<div class="twmgr-row"><span class="twmgr-lbl" title="MARCADO: envia 5 exploradores de verdade a uma bárbara (eles espionam e voltam sozinhos). DESMARCADO: só simula — o motor roda mas nada sai.">Envio real (5 explor.)</span><input id="twmgr-ct-real" type="checkbox"></div>' +
               '<div style="display:flex;gap:9px;align-items:center;margin-top:9px">' +
                 '<button id="twmgr-ct-run" class="twmgr-btn" style="padding:4px 14px">Rodar teste</button>' +
-                '<span id="twmgr-ct-msg" style="font-size:10px;color:#8f7d57"></span></div>' +
+                '<span id="twmgr-ct-msg" style="font-size:10px;color:#6e5a2a"></span></div>' +
             '</div>' +
             '<div id="twmgr-ccfila"></div>' +
           '</div>' +
@@ -918,7 +918,7 @@
       document.getElementById('twmgr-ct-run').addEventListener('click', async (ev) => {
         const b = ev.currentTarget, msg = document.getElementById('twmgr-ct-msg');
         const real = document.getElementById('twmgr-ct-real').checked;
-        b.disabled = true; b.textContent = 'montando…'; msg.style.color = '#8f7d57'; msg.textContent = 'lendo aldeias e mapa…';
+        b.disabled = true; b.textContent = 'montando…'; msg.style.color = '#6e5a2a'; msg.textContent = 'lendo aldeias e mapa…';
         try {
           const plano = await ccTeste({
             nOrigens: parseInt(document.getElementById('twmgr-ct-n').value, 10) || 3,
@@ -929,7 +929,7 @@
           msg.style.color = '#2d6a2f';
           msg.textContent = (real ? 'REAL' : 'simulação') + ': ' + plano.origens.length + ' aldeia(s) → bárbara ' +
             plano.alvo.x + '|' + plano.alvo.y + ' (dist ' + plano.dist + '). Acompanhe na fila; o resumo cai no log.';
-        } catch (e) { msg.style.color = '#e6a89d'; msg.textContent = String(e.message || e); }
+        } catch (e) { msg.style.color = '#a5544a'; msg.textContent = String(e.message || e); }
         b.disabled = false; b.textContent = 'Rodar teste';
       });
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') ccFecharPagina(); });
@@ -1009,7 +1009,7 @@
           '<td><span class="twmgr-ccst ' + c.state + '">' + c.state + '</span></td>' +
           '<td class="twmgr-cccd' + (vivo && falta != null && falta < 60000 ? ' perto' : '') + '">' + (vivo ? ccFmtFalta(falta) : '—') + '</td>' +
           '<td>' + (c.kind === 'support' ? '🛡️' : '⚔️') + ' <b>' + c.origin + '</b> → ' + c.x + '|' + c.y +
-            '<div style="font-size:9px;color:#8f7d57">' + ccResumoTropa(c.amounts) + (c.erro ? ' · <span style="color:#e6a89d">' + c.erro + '</span>' : '') + '</div></td>' +
+            '<div style="font-size:9px;color:#6e5a2a">' + ccResumoTropa(c.amounts) + (c.erro ? ' · <span style="color:#a5544a">' + c.erro + '</span>' : '') + '</div></td>' +
           '<td>' + ccFmtHora(c.sendAt) + '</td>' +
           '<td>' + ccFmtHora(chega) + '</td>' +
           // Mostra o erro REAL (chegada publicada pelo jogo) quando já conferido; enquanto
@@ -1094,8 +1094,8 @@
             ccUnidades().map(([u]) => cel(u) + '<input class="twmgr-ccq-qtd" data-u="' + u + '" type="number" min="0" value="0" style="width:42px;text-align:center;font-size:11px"></td>').join('') + '</tr>' +
           '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px" title="manda tudo que houver, menos o mínimo">Tudo</td>' +
             ccUnidades().map(([u]) => cel(u) + '<input class="twmgr-ccq-all" data-u="' + u + '" type="checkbox"></td>').join('') + '</tr>' +
-          '<tr style="border-top:1px solid #c8ab74"><td style="font-size:10px;color:#5c4321;padding:2px 4px">Disponível</td>' +
-            ccUnidades().map(([u]) => cel(u) + '<span class="twmgr-ccq-av" data-u="' + u + '" style="font-size:10px;color:#6b5330">' + (disp[u] || 0) + '</span></td>').join('') + '</tr>' +
+          '<tr style="border-top:1px solid #a9843f"><td style="font-size:10px;color:#5c4321;padding:2px 4px">Disponível</td>' +
+            ccUnidades().map(([u]) => cel(u) + '<span class="twmgr-ccq-av" data-u="' + u + '" style="font-size:10px;color:#584526">' + (disp[u] || 0) + '</span></td>').join('') + '</tr>' +
         '</tbody></table></div>' +
         '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">' +
           '<label>Alvo<br><input id="twmgr-ccq-alvo" type="text" placeholder="500|600" style="width:88px"></label>' +
@@ -1114,7 +1114,7 @@
           '<label title="espaçamento entre comandos consecutivos da onda. Mínimo 100ms: medido no br143, o servidor processa comandos da mesma conta em fila e não entrega mais rápido que isso, por mais cedo que eu dispare.">Gap (ms)<br><input id="twmgr-ccq-gap" type="number" min="100" step="10" value="100" style="width:70px"></label>' +
           '<button id="twmgr-ccq-add" class="btn" style="padding:4px 12px">🎯 Agendar</button>' +
         '</div>' +
-        '<div id="twmgr-ccq-msg" style="margin-top:7px;font-size:10px;min-height:13px;color:#6b5330"></div>' +
+        '<div id="twmgr-ccq-msg" style="margin-top:7px;font-size:10px;min-height:13px;color:#584526"></div>' +
       '</div>';
     (form.parentNode === document.body ? form : form).insertAdjacentElement('beforebegin', box);
 
@@ -1126,7 +1126,7 @@
         const u = ck.getAttribute('data-u');
         const inp = box.querySelector('.twmgr-ccq-qtd[data-u="' + u + '"]');
         inp.disabled = ck.checked;
-        inp.style.background = ck.checked ? '#ddd0b0' : '';
+        inp.style.background = ck.checked ? '#5c4527' : '';
         if (ck.checked) {
           const min = parseInt(box.querySelector('.twmgr-ccq-min[data-u="' + u + '"]').value, 10) || 0;
           inp.value = Math.max(0, (disp[u] || 0) - min);

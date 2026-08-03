@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.11.1
+// @version      11.11.2
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.11.1';
+  const VERSION = '11.11.2';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -9899,6 +9899,13 @@
         el.style.borderBottom = on ? '1px solid #e9d8ac' : '1px solid #c4a35f';
       });
     }
+    // Resumo das tropas em TEXTO puro (pra title/tooltip): "50 Expl., 1000 Lanc."
+    function ccTropaTxt(amounts) {
+      if (!amounts) return 'sem tropa';
+      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+      const listaU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
+      return listaU.filter((u) => (amounts[u] || 0) > 0).map((u) => fmtN(amounts[u]) + ' ' + (rot[u] || u)).join(', ') || 'sem tropa';
+    }
     // Resumo visual das tropas de um comando: ícone + número, só as unidades > 0.
     function ccTropaResumo(amounts) {
       if (!amounts) return '';
@@ -10124,15 +10131,19 @@
         const est = ccEstimaDeComando(c);
         const saiEm = c.sendAt ? c.sendAt : (est != null ? c.arriveAt - est : null);
         const tr = document.createElement('tr');
+        tr.className = 'command-row';
         tr.setAttribute('data-cc-ag', '1');
-        tr.style.background = 'rgba(154,111,14,.14)';
+        tr.style.background = 'rgba(154,111,14,.12)';
+        // Tropas só no hover (title da linha), pra manter one-liner.
+        tr.title = 'Agendado na Central · ' + ccTropaTxt(c.amounts) + (saiEm ? ' · sai ' + srvClockMs(saiEm) : '');
         let html = '';
-        for (let i = 0; i < nc; i++) html += '<td style="padding:3px 6px;vertical-align:top">' +
+        for (let i = 0; i < nc; i++) html += '<td style="padding:4px 6px;white-space:nowrap;color:#7d510a">' +
           (i === 0
-            ? '<b style="color:#7d510a">🕒 ' + esc(rot) + ' agendado</b> → ' + esc(c.x + '|' + c.y) + (nome ? ' ' + esc(nome) : '') +
-              '<div style="font-size:11px;color:#8a6410">sai ' + (saiEm ? srvClockMs(saiEm) : '—') + ' · ' + ccTropaResumo(c.amounts) + '</div>'
-            : i === nc - 2 ? '<span style="color:#7d510a">' + srvClockMs(c.arriveAt) + '</span>'
-            : i === nc - 1 ? '<span class="cc-ov-falta" data-arr="' + c.arriveAt + '" style="color:#7d510a"></span>'
+            ? '🕒 <b>' + esc(rot) + ' agendado</b> → ' + esc(c.x + '|' + c.y) + (nome ? ' ' + esc(nome) : '') +
+              (saiEm ? ' <span style="color:#a98a4a">· sai ' + srvClockMs(saiEm) + '</span>' : '')
+            : i === nc - 2 ? srvClockMs(c.arriveAt)
+            : i === nc - 1 ? '<span class="cc-ov-falta" data-arr="' + c.arriveAt + '"></span>' +
+                '<a href="#" class="cc-ov-x" data-id="' + c.id + '" title="cancelar comando agendado" style="color:#c23a2c;font-weight:bold;margin-left:8px;text-decoration:none">✕</a>'
             : '') + '</td>';
         tr.innerHTML = html;
         let ref = null;
@@ -10140,6 +10151,13 @@
         if (ref) body.insertBefore(tr, ref);
         else if (reais.length && reais[reais.length - 1].nextSibling) body.insertBefore(tr, reais[reais.length - 1].nextSibling);
         else body.appendChild(tr);
+      });
+      body.querySelectorAll('.cc-ov-x').forEach((el) => el.onclick = (ev) => {
+        ev.preventDefault();
+        const c = (config.cmd.fila || []).find((z) => z.id === el.getAttribute('data-id'));
+        cmdAbortar(el.getAttribute('data-id'));
+        if (c) pushLog('🕒 Central: ' + (c.tipo === 'support' ? 'apoio' : 'ataque') + ' agendado → ' + c.x + '|' + c.y + ' cancelado.', '', 'cmd');
+        mountCmdOverview();
       });
       const tick = () => {
         const now = serverNow();

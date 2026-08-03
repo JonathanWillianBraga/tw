@@ -34,4 +34,35 @@ Recrutar, Edifícios e Equilíbrio se conversam: **tropa e obra têm prioridade*
 
 ## Estrutura
 
-- `tw-manager.user.js` — o userscript completo (fonte da verdade).
+O userscript é **modularizado**: a fonte da verdade são os arquivos em `src/`, e o
+`tw-manager.user.js` da raiz é **gerado** a partir deles.
+
+- `src/*.js` — os módulos (**fonte da verdade**). Prefixo numérico define a ordem;
+  `010-core.js` abre a IIFE e `180-centro-comando.js` fecha. Compartilham o mesmo
+  escopo (sem import/export).
+- `tw-manager.user.js` — o userscript montado (**gerado — não edite à mão**). É o que
+  o Tampermonkey baixa pelo `@updateURL`, por isso fica commitado.
+- `tools/build.py` — concatena `src/*.js` → `tw-manager.user.js` (byte a byte).
+- `tools/check.py` — validador (roda no pre-commit).
+
+## Desenvolvimento
+
+> **Sim, quem for mexer no código precisa buildar.** Editar o `tw-manager.user.js`
+> direto não adianta — o próximo build sobrescreve.
+
+```bash
+# 1. edite o módulo certo em src/
+# 2. monte o userscript:
+python tools/build.py
+# 3. valide:
+python tools/check.py
+# 4. commite src/ E o tw-manager.user.js juntos.
+```
+
+Instale o hook que barra commit quebrado (uma vez por clone):
+
+```bash
+cp tools/pre-commit .git/hooks/pre-commit
+```
+
+Detalhes da arquitetura, convenções e mapa dos módulos: veja [CLAUDE.md](CLAUDE.md).

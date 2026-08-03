@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.7.0
+// @version      11.7.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.7.0';
+  const VERSION = '11.7.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -8571,7 +8571,13 @@
       // Preparo: um por vez, pra não sair request em rajada.
       for (const c of pend) {
         if (c.state !== 'novo' || !c.arriveAt) continue;
-        const estimado = (c.durMs != null) ? (c.arriveAt - c.durMs) : c.arriveAt;
+        // BUG do v9.39: sem durMs (comando 'novo'), usava arriveAt como gatilho — aí só
+        // preparava 60s antes da CHEGADA, quando a SAÍDA já tinha passado horas antes, e o
+        // comando morria em "horário já passou". Agora estima a saída pela viagem local
+        // (arriveAt − tempo de viagem); o preparo depois troca pela duração exata do servidor.
+        const est = ccEstimaDeComando(c);
+        const estimado = (c.durMs != null) ? (c.arriveAt - c.durMs)
+                       : (est != null) ? (c.arriveAt - est) : c.arriveAt;
         if (estimado - srvNowP() <= prepLead) { await cmdPreparar(c); break; }
       }
 
@@ -9855,7 +9861,11 @@
       const passo = Math.max(1, config.cmd.passoMs || 50);
       const corDe = { novo: '#cbb98f', preparado: '#ffd76a', armado: '#8fe39a', enviado: '#8fe39a', erro: '#ff7568', abortado: '#8f7d57' };
       box.innerHTML = ccFilaOrdenada().map((c) => {
-        const falta = c.fireAt ? (c.fireAt - agora) : (c.arriveAt - agora);
+        // "falta" = quanto falta pra SAIR (não pra chegar). Preparado, sendAt é a saída exata;
+        // antes disso estima pela viagem local (arriveAt − tempo de viagem).
+        const estFalta = ccEstimaDeComando(c);
+        const saiEm = c.sendAt ? c.sendAt : (estFalta != null ? c.arriveAt - estFalta : c.arriveAt);
+        const falta = saiEm - agora;
         const dev = (c.desvioMs == null) ? '' : ((c.desvioMs >= 0 ? '+' : '') + c.desvioMs + 'ms');
         const vo = CCVILAS.find((z) => String(z.vid) === String(c.origin));
         const org = vo ? (vo.coord || vo.vid) : c.origin;

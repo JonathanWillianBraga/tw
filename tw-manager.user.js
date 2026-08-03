@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.11.0
+// @version      11.11.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.11.0';
+  const VERSION = '11.11.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -10082,6 +10082,9 @@
     // ordenados pela chegada, pra você conferir que encaixam no timing dos comandos reais.
     let _ccOvTimer = null;
     function ccOverviewTabela() {
+      // "Próprios comandos" mora numa <table> dentro de #commands_outgoings.
+      const cont = document.querySelector('#commands_outgoings');
+      if (cont) { const t = cont.querySelector('table'); if (t) return t; }
       let tb = document.querySelector('#commands_table');
       if (tb) return tb;
       // Fallback: pela heading "Próprios comandos" ou por uma tabela com linhas de comando saindo.
@@ -10108,7 +10111,13 @@
         .filter((t) => !t.hasAttribute('data-cc-ag') && t.querySelector('a[href*="screen=info_command"]'));
       const ncol = (reais[0] || body.querySelector('tr'));
       const nc = ncol ? Math.max(2, ncol.querySelectorAll('td').length) : 3;
-      const arrOf = (tr) => { for (const td of tr.querySelectorAll('td')) { const ms = ccParseChegada(td.textContent || ''); if (ms) return ms; } return null; };
+      const arrOf = (tr) => {
+        // O jogo carrega a chegada em data-endtime (epoch em segundos) — mais confiável que o texto.
+        const t = tr.querySelector('.widget-command-timer[data-endtime]');
+        if (t) return (+t.getAttribute('data-endtime')) * 1000;
+        for (const td of tr.querySelectorAll('td')) { const ms = ccParseChegada(td.textContent || ''); if (ms) return ms; }
+        return null;
+      };
       pend.sort((a, b) => a.arriveAt - b.arriveAt).forEach((c) => {
         const nome = ccNomeAlvo(c.x + '|' + c.y);
         const rot = { support: 'Apoio', fake: 'Fake', nobre: 'Nobre' }[c.tipo] || 'Ataque';

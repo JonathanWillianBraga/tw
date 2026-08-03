@@ -48,27 +48,25 @@
     if (/alvo v[aá]lido/i.test(t2)) throw new Error('alvo inválido (confira a coordenada)');
     return dur && dur > 0 ? dur : null;
   }
-  async function marketTick() {
-    clearTimeout(marketTimer);
-    if (!config.market.running) return;
-    if (lockOther()) { marketTimer = setTimeout(marketTick, 5000); return; }
-    if (captchaBlocked()) { marketTimer = setTimeout(marketTick, 30000); return; }
+  const MARKET_PASS = { cunhagem: () => cunhagemPass(), equilibrio: () => equilibrioPass(), solidario: () => solidarioPass(), cunhar: () => cunharPass() };
+  async function marketTick(modeKey) {
+    clearTimeout(marketTimers[modeKey]);
+    const st = config.market.modes[modeKey];
+    if (!st.running) return;
+    if (lockOther()) { marketTimers[modeKey] = setTimeout(() => marketTick(modeKey), 5000); return; }
+    if (captchaBlocked()) { marketTimers[modeKey] = setTimeout(() => marketTick(modeKey), 30000); return; }
     claimLock();
     const now = Date.now();
-    if ((config.market.nextAt || 0) > now) { scheduleMarket(); return; }
-    try {
-      if (config.market.mode === 'equilibrio') await equilibrioPass();
-      else if (config.market.mode === 'solidario') await solidarioPass();
-      else if (config.market.mode === 'cunhar') await cunharPass();
-      else await cunhagemPass();
-    } catch (e) { pushLog('Mercado: erro no ciclo (' + (e.message || e) + ').', 'err', 'market'); }
-    config.market.nextAt = now + Math.max(60, config.market.interval || 600) * 1000;
+    if ((st.nextAt || 0) > now) { scheduleMarket(modeKey); return; }
+    try { await MARKET_PASS[modeKey](); }
+    catch (e) { pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + '): erro no ciclo (' + (e.message || e) + ').', 'err', 'market'); }
+    st.nextAt = now + Math.max(60, config.market.interval || 600) * 1000;
     save();
     refreshCards('market');
-    pushLog('Mercado: próximo ciclo em ' + Math.round((config.market.interval || 600) / 60) + ' min.', '', 'market');
-    scheduleMarket();
+    pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + '): próximo ciclo em ' + Math.round((config.market.interval || 600) / 60) + ' min.', '', 'market');
+    scheduleMarket(modeKey);
   }
-  function scheduleMarket() { clearTimeout(marketTimer); if (!config.market.running) return; marketTimer = setTimeout(marketTick, Math.min(Math.max((config.market.nextAt || 0) - Date.now(), 1000), 60000)); }
+  function scheduleMarket(modeKey) { clearTimeout(marketTimers[modeKey]); const st = config.market.modes[modeKey]; if (!st.running) return; marketTimers[modeKey] = setTimeout(() => marketTick(modeKey), Math.min(Math.max((st.nextAt || 0) - Date.now(), 1000), 60000)); }
 
   async function cunhagemPass() {
     const coord = config.market.destCoord || '';
@@ -93,7 +91,7 @@
         await sleep(400 + Math.floor(Math.random() * 400));
       } catch (e) { pushLog('Cunhagem em ' + v.name + ': ' + (e.message || e), 'err', 'market'); }
     }
-    config.market.stats = { sending: count, receiving: coord ? 1 : 0, wood: tot.wood, stone: tot.stone, iron: tot.iron };
+    config.market.modes.cunhagem.stats = { sending: count, receiving: coord ? 1 : 0, wood: tot.wood, stone: tot.stone, iron: tot.iron };
     pushLog('Cunhagem: ciclo concluído — ' + count + ' aldeia(s) enviaram recurso.', 'ok', 'market');
   }
 
@@ -149,7 +147,7 @@
       } catch (e) { pushLog('Cunhar em ' + v.name + ': ' + (e.message || e), 'err', 'market'); }
       await sleep(400 + Math.floor(Math.random() * 400));
     }
-    config.market.stats = { sending: count, receiving: 0, wood: coins, stone: 0, iron: 0 };
+    config.market.modes.cunhar.stats = { sending: count, receiving: 0, wood: coins, stone: 0, iron: 0 };
     pushLog('Cunhar: ciclo concluído — ' + coins + ' moeda(s) em ' + count + ' aldeia(s).', 'ok', 'market');
   }
 
@@ -205,7 +203,7 @@
         }
       }
     }
-    config.market.stats = { sending: Object.keys(donorSet).length, receiving: Object.keys(recvSet).length, wood: totRes.wood, stone: totRes.stone, iron: totRes.iron };
+    config.market.modes.equilibrio.stats = { sending: Object.keys(donorSet).length, receiving: Object.keys(recvSet).length, wood: totRes.wood, stone: totRes.stone, iron: totRes.iron };
     save();
     pushLog('Equilíbrio: ciclo concluído — ' + sent + ' transferência(s), limiar ' + Math.round(pct * 100) + '%.', 'ok', 'market');
   }
@@ -318,7 +316,7 @@
         }
       }
     }
-    config.market.stats = { sending: Object.keys(donorSet).length, receiving: Object.keys(recvSet).length, wood: totRes.wood, stone: totRes.stone, iron: totRes.iron };
+    config.market.modes.solidario.stats = { sending: Object.keys(donorSet).length, receiving: Object.keys(recvSet).length, wood: totRes.wood, stone: totRes.stone, iron: totRes.iron };
     save();
     pushLog('Solidário: ciclo concluído — ' + sent + ' transferência(s), limiar ' + Math.round(pct * 100) + '%.', 'ok', 'market');
   }
@@ -345,7 +343,6 @@
   }
   function readMarketCfg() {
     const c = config.market, g = (id) => document.getElementById(id);
-    const mode = document.querySelector('input[name="twmgr-mk-mode"]:checked'); if (mode) c.mode = mode.value;
     if (g('twmgr-mk-coord')) c.destCoord = g('twmgr-mk-coord').value.trim();
     if (g('twmgr-mk-reserve')) c.reserve = Math.max(0, parseInt(g('twmgr-mk-reserve').value, 10) || 0);
     if (g('twmgr-mk-int')) c.interval = Math.max(1, parseInt(g('twmgr-mk-int').value, 10) || 10) * 60;
@@ -361,25 +358,25 @@
     const mint = {}; document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => { if (cb.checked) mint[cb.getAttribute('data-vid')] = true; }); c.mintSources = mint;
     save();
   }
-  function setMarketStatus(on) { setBtnState('twmgr-mk-start', 'twmgr-mk-stop', on, '● Enviando', '▶ Enviar'); }
-  function marketStart() {
+  function setMarketStatus(modeKey, on) { setBtnState('twmgr-mk-' + modeKey + '-start', 'twmgr-mk-' + modeKey + '-stop', on, '● Enviando', '▶ Enviar'); }
+  const MARKET_START_MSG = {
+    equilibrio: () => 'Equilíbrio iniciado — limiar ' + config.market.thresholdPct + '% do armazém, distância ≤ ' + config.market.maxDist + '.',
+    solidario: () => 'Solidário iniciado — grupo ' + config.market.groupSolidario + ', limiar ' + config.market.solidarioThresholdPct + '% do armazém, distância ≤ ' + config.market.solidarioMaxDist + '.',
+    cunhar: () => 'Cunhar iniciado — cunhando o máximo nas aldeias marcadas a cada ' + Math.round((config.market.interval || 600) / 60) + ' min.',
+    cunhagem: () => 'Cunhagem iniciada — destino ' + config.market.destCoord + ', deixa ' + config.market.reserve + ' de cada recurso.',
+  };
+  function marketStart(modeKey) {
     readMarketCfg();
-    if (config.market.mode === 'cunhagem') {
+    if (modeKey === 'cunhagem') {
       if (!/^\d+\s*\|\s*\d+$/.test(config.market.destCoord || '')) { pushLog('Cunhagem: coordenada de destino inválida (ex.: 464|604).', 'err', 'market'); return; }
       if (!Object.values(config.market.sources).some(Boolean)) { pushLog('Cunhagem: selecione ao menos 1 aldeia de origem.', 'err', 'market'); return; }
     }
-    if (config.market.mode === 'cunhar' && !Object.values(config.market.mintSources).some(Boolean)) { pushLog('Cunhar: selecione ao menos 1 aldeia pra cunhar.', 'err', 'market'); return; }
-    if (config.market.mode === 'solidario' && !config.market.groupSolidario) { pushLog('Solidário: selecione um grupo.', 'err', 'market'); return; }
-    config.market.running = true; config.market.nextAt = 0; save();
-    setMarketStatus(true);
-    pushLog(config.market.mode === 'equilibrio'
-      ? 'Equilíbrio iniciado — limiar ' + config.market.thresholdPct + '% do armazém, distância ≤ ' + config.market.maxDist + '.'
-      : config.market.mode === 'solidario'
-        ? 'Solidário iniciado — grupo ' + config.market.groupSolidario + ', limiar ' + config.market.solidarioThresholdPct + '% do armazém, distância ≤ ' + config.market.solidarioMaxDist + '.'
-        : config.market.mode === 'cunhar'
-          ? 'Cunhar iniciado — cunhando o máximo nas aldeias marcadas a cada ' + Math.round((config.market.interval || 600) / 60) + ' min.'
-          : 'Cunhagem iniciada — destino ' + config.market.destCoord + ', deixa ' + config.market.reserve + ' de cada recurso.', 'ok', 'market');
-    marketTick();
+    if (modeKey === 'cunhar' && !Object.values(config.market.mintSources).some(Boolean)) { pushLog('Cunhar: selecione ao menos 1 aldeia pra cunhar.', 'err', 'market'); return; }
+    if (modeKey === 'solidario' && !config.market.groupSolidario) { pushLog('Solidário: selecione um grupo.', 'err', 'market'); return; }
+    config.market.modes[modeKey].running = true; config.market.modes[modeKey].nextAt = 0; save();
+    setMarketStatus(modeKey, true);
+    pushLog(MARKET_START_MSG[modeKey](), 'ok', 'market');
+    marketTick(modeKey);
   }
-  function marketStop() { readMarketCfg(); config.market.running = false; save(); clearTimeout(marketTimer); setMarketStatus(false); pushLog('Mercado parado.', '', 'market'); }
+  function marketStop(modeKey) { readMarketCfg(); config.market.modes[modeKey].running = false; save(); clearTimeout(marketTimers[modeKey]); setMarketStatus(modeKey, false); pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + ') parado.', '', 'market'); }
 

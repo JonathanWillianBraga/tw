@@ -1,0 +1,1788 @@
+  // ==================== MAPA — filtros e badges na tela do jogo ====================
+  // Enriquece screen=map com painel de controle (só bárbaros / só minhas / só tribo / filtro por
+  // pontos), atenua aldeias fora do filtro (opacity, sem quebrar clique) e badge de pontos.
+
+  let _mapVilCache = null;        // Map: vid -> { x, y, playerId, points }
+  let _mapPlayerCache = null;     // Map: playerId -> { name, tribeId }
+  const MY_PLAYER_ID = (window.game_data && window.game_data.player && String(window.game_data.player.id)) || '';
+  const MY_TRIBE_ID = (window.game_data && window.game_data.player && String(window.game_data.player.ally)) || '0';
+
+  // Falha do player.txt some da tela se ninguém contar: sem ele não dá pra distinguir tribo de
+  // inimigo e mapCategoryOf devolve 'enemy' pra todo mundo — com o filtro de inimigo desligado, a
+  // tribo inteira desaparece do mapa sem explicação. Fica registrado pra o painel avisar.
+  let _mapPlayerFalhou = false;
+  let _mapProxTentativa = 0;   // recuo apos 429 nos arquivos de mapa
+
+  async function loadMapData(force) {
+    // O guard antigo era `_mapVilCache && age < 6h`, e _mapVilCache é variável de módulo: sempre
+    // null depois de um F5. Ou seja, o TTL de 6h persistido em dataCachedAt nunca teve efeito e
+    // TODA visita ao mapa rebaixava village.txt + player.txt inteiros — com cache:'no-store', que
+    // proíbe até revalidação. Guardar megabytes no localStorage não cabe (limite de ~5MB), então
+    // quem faz o cache é o navegador: sem no-store ele revalida e responde 304 na maioria das vezes.
+    if (!force && _mapVilCache) return;
+    // Cada fetch independente — village.txt é essencial, player.txt é opcional (só distingue tribo/inimigo).
+    // TW às vezes rate-limita player.txt (429) — não pode bloquear a feature.
+    // RECUO APOS 429. village.txt e player.txt sao os maiores downloads do script — podem
+    // ter megabytes. Sem recuo, TODA pagina aberta tentava de novo os dois e falhava de
+    // novo, alimentando o proprio rate limit que causava a falha.
+    if (!force && Date.now() < _mapProxTentativa) return;
+    let bateu429 = false;
+    const fetchTxt = async (url) => {
+      try {
+        const r = await fetch(url, { credentials: 'include', cache: force ? 'reload' : 'default' });
+        if (r.status === 429) { bateu429 = true; return null; }
+        if (!r.ok) return null;
+        return await r.text();
+      } catch (e) { return null; }
+    };
+    const [rV, rP] = await Promise.all([fetchTxt('/map/village.txt'), fetchTxt('/map/player.txt')]);
+    if (rV) {
+      const vils = new Map();
+      rV.split('\n').forEach((line) => {
+        if (!line.trim()) return;
+        // Formato: id,name,x,y,player_id,points,rank
+        const p = line.split(',');
+        if (p.length < 6) return;
+        vils.set(p[0], { x: +p[2], y: +p[3], playerId: p[4], points: parseInt(p[5], 10) || 0 });
+      });
+      _mapVilCache = vils;
+      config.mapUi.dataCachedAt = Date.now();
+      save();
+    }
+    if (rP) {
+      const players = new Map();
+      rP.split('\n').forEach((line) => {
+        if (!line.trim()) return;
+        // Formato: id,name,tribe_id,villages,points,rank
+        const p = line.split(',');
+        if (p.length < 4) return;
+        players.set(p[0], { name: decodeURIComponent(p[1] || '').replace(/\+/g, ' '), tribeId: p[2] });
+      });
+      _mapPlayerCache = players;
+    }
+    // Avisar no console não serve: ninguém abre o console. Isto tem consequência VISÍVEL no mapa,
+    // então vai pro log do módulo, que é onde o usuário olha.
+    if (bateu429) {
+      _mapProxTentativa = Date.now() + 30 * 60000;
+      pushLog('🗺️ Mapa: o servidor recusou os arquivos de mapa (429, requisições demais). Tento de novo em 30 min — os filtros e a cobertura ficam sem dado até lá.', 'err', 'map');
+      return;
+    }
+    if (!rV) {
+      console.warn('[TWMgr Mapa] village.txt falhou');
+      pushLog('🗺️ Mapa: não consegui baixar village.txt — os filtros não vão funcionar até recarregar a página.', 'err', 'map');
+    }
+    _mapPlayerFalhou = !rP;
+    if (!rP) {
+      console.warn('[TWMgr Mapa] player.txt falhou (rate limit?)');
+      pushLog('🗺️ Mapa: player.txt não veio (o TW costuma limitar) — sem ele não dá pra separar tribo de inimigo, e TODA aldeia de jogador aparece como 🔴 Inimigo, inclusive a da sua tribo. Se o filtro de inimigo estiver desligado, sua tribo some do mapa. Use 🔄 recarregar pra tentar de novo.', 'err', 'map');
+    }
+  }
+
+  // Sync manual do planner interno da tribo (screen=ally&mode=reservations).
+  // Retorna { count, ok } — count = quantas reservas parseadas, ok = fetch teve sucesso.
+  // Parse é defensivo: procura por (X|Y) em cada linha da tabela + timer HH:MM:SS ou data DD/MM/YYYY.
+  async function loadReservations() {
+    try {
+      const url = '/game.php?village=' + CUR_VID + '&screen=ally&mode=reservations&page=-1&_=' + Date.now();
+      const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      const reservations = {};
+      const now = Date.now();
+      doc.querySelectorAll('table tr').forEach((tr) => {
+        const text = (tr.textContent || '').replace(/\s+/g, ' ');
+        const coordM = text.match(/(\d{1,3})\|(\d{1,3})/);
+        if (!coordM) return;
+        const coord = coordM[1] + '|' + coordM[2];
+        let expiresAt = 0;
+        // Timer relativo tipo "1d 3:45:12" ou "3:45:12"
+        const dTimer = text.match(/(\d+)\s*d\s*(\d{1,2}):(\d{1,2}):(\d{2})/i);
+        if (dTimer) {
+          expiresAt = now + ((+dTimer[1] * 86400) + (+dTimer[2] * 3600) + (+dTimer[3] * 60) + (+dTimer[4])) * 1000;
+        } else {
+          const hTimer = text.match(/(\d{1,3}):(\d{1,2}):(\d{2})(?!\d)/);
+          if (hTimer) expiresAt = now + ((+hTimer[1] * 3600) + (+hTimer[2] * 60) + (+hTimer[3])) * 1000;
+        }
+        // Data absoluta tipo "20/07/2026 15:30"
+        if (!expiresAt) {
+          const dateM = text.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})[^\d]+(\d{1,2}):(\d{2})/);
+          if (dateM) {
+            const d = new Date(+dateM[3], +dateM[2] - 1, +dateM[1], +dateM[4], +dateM[5]);
+            expiresAt = d.getTime();
+          }
+        }
+        const playerLink = tr.querySelector('a[href*="screen=info_player"]');
+        const playerName = playerLink ? (playerLink.textContent || '').trim().slice(0, 30) : '';
+        reservations[coord] = { at: now, expiresAt: expiresAt, playerName: playerName };
+      });
+      config.mapUi.reservations = reservations;
+      config.mapUi.reservationsAt = now;
+      save();
+      return { count: Object.keys(reservations).length, ok: true };
+    } catch (e) {
+      console.warn('[TWMgr Mapa] loadReservations falhou:', e && e.message);
+      return { count: 0, ok: false, error: e && e.message };
+    }
+  }
+
+  // Categoria da aldeia baseado no dono
+  function mapCategoryOf(vil) {
+    if (!vil) return 'unknown';
+    if (vil.playerId === '0' || !vil.playerId) return 'barb';
+    if (vil.playerId === MY_PLAYER_ID) return 'mine';
+    const player = _mapPlayerCache && _mapPlayerCache.get(vil.playerId);
+    if (player && player.tribeId && player.tribeId !== '0' && player.tribeId === MY_TRIBE_ID) return 'tribe';
+    return 'enemy';
+  }
+
+  const MAP_CAT_LABELS = { mine: '🟢 Minha', tribe: '🔵 Tribo', enemy: '🔴 Inimigo', barb: '⚪ Bárbaro' };
+
+  // ---- Overlay canvas sobre o mapa do TW (mundo br143 usa canvas puro) ----
+  // Cria um <canvas> transparente por cima do mapa e desenha:
+  // - Retângulo escuro sobre aldeias filtradas (efeito atenuar)
+  // - Badge de pontos sobre aldeias visíveis
+  // Usa TWMap.map.pixelByCoord(x,y) pra converter coord de aldeia em pixel na tela.
+  let _mapOverlay = null;
+  let _mapRedrawTimer = null;
+  let _mapLoggedOnce = false;
+
+  function mapEnsureOverlay() {
+    try {
+      if (_mapOverlay && document.body.contains(_mapOverlay)) return _mapOverlay;
+      const T = window.TWMap;
+      // Prefere #map (wrapper visível, ancora estável) — #map_container é o "mundo" gigante que translada.
+      // Fallback pra TWMap.map.el se #map não existir por algum motivo.
+      let parent = document.getElementById('map');
+      if (!(parent instanceof Element)) parent = document.getElementById('map_container');
+      if (!(parent instanceof Element)) parent = T && T.map && T.map.el instanceof Element ? T.map.el : null;
+      if (!(parent instanceof Element)) { console.warn('[TWMgr Mapa] nenhum container Element encontrado pro overlay'); return null; }
+      const c = document.createElement('canvas');
+      c.id = 'twmgr-map-overlay';
+      // Fica ancorado no canto do #map (posição visível do mapa). Sem left/top variável no redraw.
+      c.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:9998';
+      try { if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative'; } catch (e) {}
+      const size = (T && T.map && T.map.size) || [parent.clientWidth || 800, parent.clientHeight || 600];
+      c.width = size[0]; c.height = size[1];
+      c.style.width = size[0] + 'px'; c.style.height = size[1] + 'px';
+      parent.appendChild(c);
+      _mapOverlay = c;
+      console.log('[TWMgr Mapa] overlay criado dentro de #' + parent.id + ' (' + parent.tagName + '), rect:', c.getBoundingClientRect());
+      return c;
+    } catch (e) { console.warn('[TWMgr Mapa] mapEnsureOverlay falhou:', e && e.message); return null; }
+  }
+
+  // Descobre tileSize (tamanho de cada aldeia em pixels). TW usa 53x47 tradicionalmente.
+  function mapTileSize() {
+    const T = window.TWMap;
+    if (T && T.tileSize && T.tileSize.length >= 2) return T.tileSize;
+    if (T && T.tileDimensions && T.tileDimensions.length >= 2) return T.tileDimensions;
+    return [53, 47];   // default histórico
+  }
+
+  // Legenda da cobertura, com a contagem de cada estado e o percentual explorado.
+  // O percentual é o que responde a pergunta direta: "quanto do meu raio eu já enxerguei?"
+  function mapRenderLegendaCobertura() {
+    const el = document.getElementById('twmgr-map-cob-leg'); if (!el) return;
+    if (!config.mapUi.showCobertura) { el.innerHTML = ''; return; }
+    const intel = (config.map && config.map.intel) || {};
+    const chaves = Object.keys(intel);
+    if (!chaves.length) {
+      el.innerHTML = '<span style="color:#8f7d57">Sem dados ainda — rode um ciclo do módulo Mapa (ou a Prévia) pra preencher.</span>';
+      return;
+    }
+    const cont = {};
+    chaves.forEach((k) => { cont[intel[k]] = (cont[intel[k]] || 0) + 1; });
+    const conhecidas = (cont[MAP_INTEL.OK] || 0) + (cont[MAP_INTEL.BL_DEFESA] || 0);
+    const pct = Math.round(conhecidas * 100 / chaves.length);
+    el.innerHTML =
+      '<div style="color:#ffd76a;font-weight:700;margin-bottom:2px">' + pct + '% do seu raio explorado <span style="color:#8f7d57;font-weight:400">(' + conhecidas + ' de ' + chaves.length + ')</span></div>' +
+      [1, 2, 3, 4, 5, 6].filter((c) => cont[c]).map((c) =>
+        '<div><span style="display:inline-block;width:9px;height:9px;border:2px solid ' + MAP_INTEL_COR[c] + ';margin-right:5px;vertical-align:middle"></span>' +
+        '<span style="color:#cdbb92">' + MAP_INTEL_NOME[c] + '</span> <b style="color:#e8d29a">' + cont[c] + '</b></div>').join('');
+  }
+
+  function mapCanvasRedraw() {
+    if (!_mapVilCache) return;
+    const T = window.TWMap;
+    if (!T || !T.map || typeof T.map.pixelByCoord !== 'function') return;
+    const overlay = mapEnsureOverlay();
+    if (!overlay) return;
+
+    // Sincroniza tamanho se o mapa foi redimensionado
+    const size = T.map.size || [overlay.width, overlay.height];
+    if (overlay.width !== size[0] || overlay.height !== size[1]) {
+      overlay.width = size[0]; overlay.height = size[1];
+      overlay.style.width = size[0] + 'px'; overlay.style.height = size[1] + 'px';
+    }
+    // Overlay é filho de #map (wrapper visível), então left/top: 0 já ancora corretamente.
+
+    const ctx = overlay.getContext('2d');
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+    const cfg = config.mapUi;
+    const dim = cfg.dimOpacity != null ? cfg.dimOpacity : 0.15;
+    const pMin = cfg.pointsMin || 0;
+    const pMax = cfg.pointsMax || 0;
+    const [tw, th] = mapTileSize();
+
+    // pixelByCoord retorna pixels no espaço MUNDO. TWMap.map.pos é o offset do canvas nesse espaço.
+    // pixel_canvas = pixelByCoord(x,y) - TWMap.map.pos
+    const mapOffset = T.map.pos || [0, 0];
+
+    // Usa getViewport pra saber quais tiles estão visíveis (mais confiável que range manual)
+    let xMin, xMax, yMin, yMax;
+    try {
+      const vp = T.map.getViewport();
+      xMin = vp.top_left_tile.coord_x - 2;
+      xMax = vp.bottom_right_tile.coord_x + 2;
+      yMin = vp.top_left_tile.coord_y - 2;
+      yMax = vp.bottom_right_tile.coord_y + 2;
+    } catch (e) {
+      // Fallback: usa TWMap.pos + range aproximado
+      const pos = T.pos || [500, 500];
+      const rangeX = Math.ceil((overlay.width / tw) / 2) + 3;
+      const rangeY = Math.ceil((overlay.height / th) / 2) + 3;
+      xMin = pos[0] - rangeX; xMax = pos[0] + rangeX;
+      yMin = pos[1] - rangeY; yMax = pos[1] + rangeY;
+    }
+
+    const counts = { mine: 0, tribe: 0, enemy: 0, barb: 0, visible: 0 };
+    let drawn = 0;
+
+    // Intel: coord "x|y" -> { defTotal, wall, at } vindo do config.farm.defended (v9.55.1).
+    // Só monta uma vez por redraw pra não iterar 30+ chaves 500x.
+    const intelByCoord = {};
+    if (cfg.showIntel && config.farm && config.farm.defended) {
+      Object.values(config.farm.defended).forEach((d) => {
+        if (d && typeof d === 'object' && d.coord) intelByCoord[d.coord] = d;
+      });
+    }
+    // Reservas da tribo (sync manual): coord -> { expiresAt, playerName }
+    const reservations = (cfg.showReservations && cfg.reservations) || {};
+    // Cobertura de exploração, gravada pelo módulo Mapa a cada ciclo.
+    const coberturaIntel = (cfg.showCobertura && config.map && config.map.intel) || null;
+    const dimEnabled = cfg.dimMode === 'dim';
+
+    // ALCANCE DO MÓDULO MAPA: a área que o raio configurado cobre, em volta de cada aldeia
+    // sua. Desenhado ANTES das aldeias pra ficar por baixo, e como UM caminho só com um
+    // fill: 43 elipses preenchidas separadamente empilhariam transparência e virariam uma
+    // mancha sólida; num caminho único o preenchimento sai uniforme e o que se vê é a
+    // UNIÃO — que é justamente a pergunta "até onde eu alcanço".
+    // Elipse e não círculo porque o tile do TW não é quadrado (53x47).
+    if (cfg.showRange) {
+      const raio = (config.map && config.map.maxDist) || 20;
+      const r2 = raio * raio;
+      const minhas = [];
+      _mapVilCache.forEach((v) => {
+        if (v.playerId !== MY_PLAYER_ID) return;
+        if (v.x < xMin - raio || v.x > xMax + raio || v.y < yMin - raio || v.y > yMax + raio) return;
+        minhas.push(v);
+      });
+      if (minhas.length) {
+        // PREENCHE TILE A TILE, não desenha círculos.
+        //
+        // A versão anterior desenhava uma elipse por aldeia. Mesmo unindo o preenchimento
+        // num caminho só, os CONTORNOS de cada círculo continuavam aparecendo e com 43
+        // aldeias viravam um emaranhado — o usuário descreveu como "muito poluído".
+        // Pintando os tiles que estão no alcance de ALGUMA aldeia, as bordas internas
+        // simplesmente não existem: o que sobra é uma mancha única, como a da relíquia.
+        //
+        // Uma chamada de pixelByCoord só, e o resto por aritmética: a grade é regular, e
+        // 600 chamadas por redraw a 4 quadros por segundo seriam desperdício.
+        let p0; try { p0 = T.map.pixelByCoord(xMin, yMin); } catch (e) { p0 = null; }
+        if (p0) {
+          const bx = (Array.isArray(p0) ? p0[0] : p0.x) - mapOffset[0];
+          const by = (Array.isArray(p0) ? p0[1] : p0.y) - mapOffset[1];
+          ctx.fillStyle = 'rgba(90,169,230,.20)';
+          for (let ty = yMin; ty <= yMax; ty++) {
+            // Pinta em FAIXAS horizontais contínuas em vez de um retângulo por tile:
+            // menos chamadas e, principalmente, sem costura visível entre tiles vizinhos.
+            let inicio = -1;
+            for (let tx = xMin; tx <= xMax + 1; tx++) {
+              let dentro = false;
+              if (tx <= xMax) {
+                for (let k = 0; k < minhas.length; k++) {
+                  const dx = minhas[k].x - tx, dy = minhas[k].y - ty;
+                  if (dx * dx + dy * dy <= r2) { dentro = true; break; }
+                }
+              }
+              if (dentro && inicio < 0) inicio = tx;
+              else if (!dentro && inicio >= 0) {
+                ctx.fillRect(bx + (inicio - xMin) * tw, by + (ty - yMin) * th, (tx - inicio) * tw, th);
+                inicio = -1;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    _mapVilCache.forEach((vil, vid) => {
+      if (vil.x < xMin || vil.x > xMax || vil.y < yMin || vil.y > yMax) return;
+      let wx, wy;
+      try {
+        const p = T.map.pixelByCoord(vil.x, vil.y);
+        if (Array.isArray(p)) { wx = p[0]; wy = p[1]; }
+        else if (p && typeof p === 'object') { wx = p.x; wy = p.y; }
+        else return;
+      } catch (e) { return; }
+      const px = wx - mapOffset[0];
+      const py = wy - mapOffset[1];
+      if (px < -tw || px > overlay.width + tw || py < -th || py > overlay.height + th) return;
+
+      const cat = mapCategoryOf(vil);
+      const showCat = cfg.show[cat] !== false;
+      const points = vil.points || 0;
+      const passesPoints = (!pMin || points >= pMin) && (!pMax || points <= pMax);
+      const visible = showCat && passesPoints;
+      drawn++;
+      if (visible) { counts.visible++; counts[cat] = (counts[cat] || 0) + 1; }
+
+      if (!visible) {
+        // Filtrada: só escurece se o usuário optou por 'dim'. Padrão 'off' não desenha nada.
+        if (dimEnabled) { ctx.fillStyle = 'rgba(0,0,0,' + (1 - dim) + ')'; ctx.fillRect(px, py, tw, th); }
+        return;
+      }
+
+      // COBERTURA DE EXPLORAÇÃO: moldura colorida pelo que eu sei daquela aldeia.
+      // Desenhada como borda em vez de preenchimento pra não esconder o gráfico do jogo —
+      // o padrão das cores no conjunto é que responde "até onde eu já enxerguei".
+      if (cfg.showCobertura && coberturaIntel) {
+        const cod = coberturaIntel[vil.x + '|' + vil.y];
+        if (cod) {
+          ctx.strokeStyle = MAP_INTEL_COR[cod] || '#888';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(px + 1, py + 1, tw - 2, th - 2);
+        }
+      }
+
+      // Badge de pontos (canto inferior direito)
+      if (cfg.showBadge) {
+        const label = points >= 1000 ? (Math.round(points / 100) / 10).toFixed(1) + 'k' : String(points);
+        ctx.font = 'bold 9px Verdana';
+        const lw = ctx.measureText(label).width;
+        const bx = px + tw - lw - 4, by = py + th - 12;
+        ctx.fillStyle = 'rgba(0,0,0,.75)';
+        ctx.fillRect(bx, by, lw + 4, 11);
+        ctx.fillStyle = '#ffd76a';
+        ctx.textBaseline = 'top';
+        ctx.fillText(label, bx + 2, by + 1);
+      }
+
+      // Intel (canto superior esquerdo): ⚠ tropa defensora + ⛰N muralha
+      const coordKey = vil.x + '|' + vil.y;
+      const intel = intelByCoord[coordKey];
+      if (intel) {
+        const parts = [];
+        if (intel.defTotal > 0) parts.push('⚠' + intel.defTotal);
+        if (intel.wall != null) parts.push('⛰' + intel.wall);
+        if (parts.length) {
+          const txt = parts.join(' ');
+          ctx.font = 'bold 9px Verdana';
+          const w2 = ctx.measureText(txt).width;
+          ctx.fillStyle = 'rgba(120,0,0,.85)';
+          ctx.fillRect(px, py, w2 + 4, 11);
+          ctx.fillStyle = '#fff';
+          ctx.textBaseline = 'top';
+          ctx.fillText(txt, px + 2, py + 1);
+        }
+      }
+
+      // Reserva da tribo (canto inferior esquerdo): ⌛Xh (horas até expirar)
+      const rsv = reservations[coordKey];
+      if (rsv) {
+        let label = '⌛?';
+        if (rsv.expiresAt) {
+          const restMs = rsv.expiresAt - Date.now();
+          if (restMs > 0) {
+            const h = Math.floor(restMs / 3600000);
+            const m = Math.floor((restMs % 3600000) / 60000);
+            label = '⌛' + (h > 0 ? h + 'h' : m + 'm');
+          } else {
+            label = '⌛venceu';
+          }
+        }
+        // Cor: azul se muito tempo (>24h), amarelo (<24h), vermelho (<6h)
+        const restH = rsv.expiresAt ? (rsv.expiresAt - Date.now()) / 3600000 : 999;
+        const bg = restH < 6 ? 'rgba(180,20,20,.85)' : restH < 24 ? 'rgba(180,140,20,.85)' : 'rgba(40,80,180,.85)';
+        ctx.font = 'bold 9px Verdana';
+        const lw2 = ctx.measureText(label).width;
+        ctx.fillStyle = bg;
+        ctx.fillRect(px, py + th - 22, lw2 + 4, 11);
+        ctx.fillStyle = '#fff';
+        ctx.textBaseline = 'top';
+        ctx.fillText(label, px + 2, py + th - 21);
+      }
+    });
+
+    if (!_mapLoggedOnce) {
+      _mapLoggedOnce = true;
+      // eslint-disable-next-line no-console
+      console.log('[TWMgr Mapa] overlay canvas ativo · mapOffset:', mapOffset, '· viewport:', [xMin, yMin, xMax, yMax], '· tileSize:', [tw, th], '· desenhadas:', drawn, '· cache:', _mapVilCache.size);
+    }
+
+    const cnt = document.getElementById('twmgr-map-counts');
+    if (cnt) {
+      if (drawn === 0) cnt.innerHTML = '<span style="color:#a52020">⚠ 0 aldeias no viewport (ver console)</span>';
+      else cnt.textContent = counts.visible + '/' + drawn + ' visíveis · 🟢' + (counts.mine||0) + ' 🔵' + (counts.tribe||0) + ' 🔴' + (counts.enemy||0) + ' ⚪' + (counts.barb||0);
+    }
+  }
+
+  function mapApplyFilters() { try { mapCanvasRedraw(); } catch (e) { console.warn('[TWMgr Mapa] redraw falhou:', e.message || e); } }
+
+  function mapBuildPanel() {
+    if (document.getElementById('twmgr-map-panel')) return;
+    const cfg = config.mapUi;
+    // Ancora inline abaixo da tabela "Alterar o tamanho do mapa" (contém #map_chooser_select).
+    // Se não achar (mundo diferente / layout mudou), cai pro fixed antigo no canto.
+    const sizeSel = document.getElementById('map_chooser_select');
+    const sizeTable = sizeSel ? sizeSel.closest('table') : null;
+    const inline = !!sizeTable;
+    const panel = document.createElement(inline ? 'table' : 'div');
+    panel.id = 'twmgr-map-panel';
+    if (inline) {
+      panel.className = 'vis';
+      panel.setAttribute('width', '100%');
+      panel.style.cssText = 'margin-top:6px;font-size:11px;color:#3b2914;font-family:Verdana,sans-serif';
+    } else {
+      panel.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:10000;background:linear-gradient(180deg,#f4e4bc,#e8d29a);border:1px solid #7d510a;border-radius:8px;padding:8px 10px;font-size:11px;color:#3b2914;box-shadow:0 2px 6px rgba(0,0,0,.35);min-width:220px;font-family:Verdana,sans-serif';
+    }
+    const check = (id, label, checked) => '<label style="display:flex;align-items:center;gap:6px;margin:2px 0;cursor:pointer"><input id="' + id + '" type="checkbox"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
+    const bodyHTML =
+      '<div id="twmgr-map-body" style="' + (cfg.collapsed ? 'display:none' : '') + '">' +
+        check('twmgr-map-show-mine', '🟢 Minhas aldeias', cfg.show.mine) +
+        check('twmgr-map-show-tribe', '🔵 Tribo', cfg.show.tribe) +
+        check('twmgr-map-show-enemy', '🔴 Inimigos', cfg.show.enemy) +
+        check('twmgr-map-show-barb', '⚪ Bárbaros', cfg.show.barb) +
+        '<div style="margin:6px 0;border-top:1px dashed #b89a5a;padding-top:6px">Pontos entre:</div>' +
+        '<div style="display:flex;gap:4px;align-items:center">' +
+          '<input id="twmgr-map-pmin" type="number" min="0" placeholder="mín" value="' + (cfg.pointsMin || '') + '" style="width:60px;padding:2px 4px;font-size:11px">' +
+          '<span>–</span>' +
+          '<input id="twmgr-map-pmax" type="number" min="0" placeholder="máx" value="' + (cfg.pointsMax || '') + '" style="width:60px;padding:2px 4px;font-size:11px">' +
+        '</div>' +
+        check('twmgr-map-badge', 'Mostrar pontos na aldeia', cfg.showBadge) +
+        check('twmgr-map-intel', 'Mostrar intel (⚠ tropas · ⛰ muralha)', cfg.showIntel) +
+        check('twmgr-map-rsv', 'Mostrar reservas da tribo (⌛)', cfg.showReservations) +
+        check('twmgr-map-cob', 'Mostrar cobertura de exploração', cfg.showCobertura) +
+        check('twmgr-map-range', 'Mostrar meu alcance (raio do módulo Mapa)', cfg.showRange) +
+        '<div id="twmgr-map-cob-leg" style="font-size:9px;line-height:1.7;margin:2px 0 6px 4px"></div>' +
+        check('twmgr-map-dim', 'Escurecer aldeias filtradas (bloco preto)', cfg.dimMode === 'dim') +
+        '<div style="margin-top:6px;border-top:1px dashed #b89a5a;padding-top:6px;font-size:10px;color:#5a3c0f">' +
+          '<div id="twmgr-map-counts">—</div>' +
+          '<div style="margin-top:4px;display:flex;justify-content:space-between;align-items:center;gap:4px;flex-wrap:wrap">' +
+            '<button id="twmgr-map-reset" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#e8d29a;cursor:pointer;color:#3b2914" title="Mostra tudo, sem overlay: liga todos os toggles, zera pontos, desliga escurecer">🚫 Desativar tudo</button>' +
+            '<button id="twmgr-map-reload" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#e8d29a;cursor:pointer;color:#3b2914">🔄 mapa</button>' +
+            '<button id="twmgr-map-rsv-sync" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#e8d29a;cursor:pointer;color:#3b2914" title="Baixa o planner interno da tribo (screen=ally&mode=reservations) e mostra ⌛Xh nas aldeias reservadas">⌛ sync reservas</button>' +
+          '</div>' +
+          '<div style="margin-top:2px;color:#8b6d3f;font-size:9px">cache mapa: ' + (cfg.dataCachedAt ? new Date(cfg.dataCachedAt).toLocaleTimeString() : '—') + ' · reservas: ' + (cfg.reservationsAt ? (new Date(cfg.reservationsAt).toLocaleTimeString() + ' (' + Object.keys(cfg.reservations || {}).length + ')') : '—') + '</div>' +
+        '</div>' +
+      '</div>';
+    if (inline) {
+      // Estrutura tipo tabela vis nativa: <th> header + <td> corpo (padrão do TW pra sidebar do mapa)
+      panel.innerHTML =
+        '<tr><th colspan="2" style="cursor:pointer" id="twmgr-map-header">🗺️ TW Manager · Mapa <span id="twmgr-map-collapse">' + (cfg.collapsed ? '▲' : '▼') + '</span></th></tr>' +
+        '<tr><td colspan="2" style="padding:6px 8px">' + bodyHTML + '</td></tr>';
+      sizeTable.parentNode.insertBefore(panel, sizeTable.nextSibling);
+    } else {
+      panel.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+          '<b style="color:#5a3c0f">🗺️ TW Manager · Mapa</b>' +
+          '<span id="twmgr-map-collapse" style="cursor:pointer;padding:0 6px;color:#5a3c0f">' + (cfg.collapsed ? '▲' : '▼') + '</span>' +
+        '</div>' + bodyHTML;
+      document.body.appendChild(panel);
+    }
+
+    // Wire eventos
+    const save_ = () => { save(); mapApplyFilters(); };
+    // Colapsar: no modo inline o click é no header todo; no modo fixed, só no span
+    const toggler = document.getElementById('twmgr-map-header') || document.getElementById('twmgr-map-collapse');
+    if (toggler) toggler.addEventListener('click', () => {
+      cfg.collapsed = !cfg.collapsed;
+      const body = document.getElementById('twmgr-map-body'); if (body) body.style.display = cfg.collapsed ? 'none' : '';
+      const chevron = document.getElementById('twmgr-map-collapse'); if (chevron) chevron.textContent = cfg.collapsed ? '▲' : '▼';
+      save();
+    });
+    ['mine','tribe','enemy','barb'].forEach((k) => {
+      document.getElementById('twmgr-map-show-' + k).addEventListener('change', (e) => {
+        cfg.show[k] = e.target.checked; save_();
+      });
+    });
+    document.getElementById('twmgr-map-pmin').addEventListener('change', (e) => { cfg.pointsMin = parseInt(e.target.value, 10) || 0; save_(); });
+    document.getElementById('twmgr-map-pmax').addEventListener('change', (e) => { cfg.pointsMax = parseInt(e.target.value, 10) || 0; save_(); });
+    document.getElementById('twmgr-map-badge').addEventListener('change', (e) => { cfg.showBadge = e.target.checked; save_(); });
+    document.getElementById('twmgr-map-intel').addEventListener('change', (e) => { cfg.showIntel = e.target.checked; save_(); });
+    document.getElementById('twmgr-map-rsv').addEventListener('change', (e) => { cfg.showReservations = e.target.checked; save_(); });
+    document.getElementById('twmgr-map-cob').addEventListener('change', (e) => { cfg.showCobertura = e.target.checked; save_(); mapRenderLegendaCobertura(); });
+    document.getElementById('twmgr-map-range').addEventListener('change', (e) => { cfg.showRange = e.target.checked; save_(); });
+    mapRenderLegendaCobertura();
+    document.getElementById('twmgr-map-dim').addEventListener('change', (e) => { cfg.dimMode = e.target.checked ? 'dim' : 'off'; save_(); });
+    document.getElementById('twmgr-map-rsv-sync').addEventListener('click', async () => {
+      const btn = document.getElementById('twmgr-map-rsv-sync');
+      btn.disabled = true; btn.textContent = '⏳ sincronizando…';
+      const r = await loadReservations();
+      btn.disabled = false; btn.textContent = '⌛ sync reservas';
+      if (r.ok) pushLog('Mapa: ' + r.count + ' reserva(s) sincronizada(s).', 'ok');
+      else pushLog('Mapa: falha ao sincronizar reservas — ' + (r.error || 'erro desconhecido'), 'err');
+      // Re-monta o painel pra atualizar o timestamp na barra de status
+      const p = document.getElementById('twmgr-map-panel'); if (p) p.remove();
+      mapBuildPanel();
+      mapApplyFilters();
+    });
+    document.getElementById('twmgr-map-reset').addEventListener('click', () => {
+      cfg.show = { mine: true, tribe: true, enemy: true, barb: true };
+      cfg.pointsMin = 0; cfg.pointsMax = 0;
+      cfg.dimMode = 'off';
+      save_();
+      // Re-render dos checkboxes/inputs pra refletir o reset visualmente
+      ['mine','tribe','enemy','barb'].forEach((k) => { const el = document.getElementById('twmgr-map-show-' + k); if (el) el.checked = true; });
+      const pmin = document.getElementById('twmgr-map-pmin'); if (pmin) pmin.value = '';
+      const pmax = document.getElementById('twmgr-map-pmax'); if (pmax) pmax.value = '';
+      const dim = document.getElementById('twmgr-map-dim'); if (dim) dim.checked = false;
+    });
+    document.getElementById('twmgr-map-reload').addEventListener('click', async () => {
+      const btn = document.getElementById('twmgr-map-reload');
+      btn.disabled = true; btn.textContent = '⏳ carregando…';
+      await loadMapData(true);
+      btn.disabled = false; btn.textContent = '🔄 recarregar';
+      mapApplyFilters();
+    });
+  }
+
+  async function enhanceMapPage() {
+    const gd = window.game_data;
+    if (!gd || gd.screen !== 'map') return;
+    await loadMapData(false);
+    mapBuildPanel();
+    // Espera o TWMap estar pronto (as vezes carrega assincrono)
+    const waitTWMap = () => new Promise((resolve) => {
+      const t0 = Date.now();
+      const check = () => {
+        if (window.TWMap && window.TWMap.map && typeof window.TWMap.map.pixelByCoord === 'function') return resolve(true);
+        if (Date.now() - t0 > 8000) return resolve(false);
+        setTimeout(check, 100);
+      };
+      check();
+    });
+    const ok = await waitTWMap();
+    if (!ok) { console.warn('[TWMgr Mapa] TWMap.map.pixelByCoord não disponível — filtros não funcionarão'); return; }
+    mapApplyFilters();
+    // Redraw periódico (250ms) — cobre scroll/zoom. O comentário aqui dizia "só itera aldeias no
+    // viewport", o que é falso: mapCanvasRedraw percorre o cache inteiro e descarta por dentro.
+    // Medido antes de "consertar": 0,62ms por passada com 60 mil aldeias, ou 2,5ms de CPU por
+    // segundo. Não é gargalo, e indexar por coluna seria complexidade sem ganho. Fica como está —
+    // o comentário é que estava mentindo.
+    clearInterval(_mapRedrawTimer);
+    _mapRedrawTimer = setInterval(mapApplyFilters, 250);
+    // Hook opcional: se o TWMap dispara evento de setPos, redesenha imediato
+    try {
+      const origSetPos = window.TWMap.map.setPos;
+      if (typeof origSetPos === 'function' && !window.TWMap.map.__twmgr_hooked) {
+        window.TWMap.map.__twmgr_hooked = true;
+        window.TWMap.map.setPos = function () { const r = origSetPos.apply(this, arguments); try { mapCanvasRedraw(); } catch (e) {} return r; };
+      }
+    } catch (e) {}
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════════
+  // CENTRAL DE COMANDO — núcleo de precisão (sem interface ainda)
+  //
+  // Substitui o miolo de tempo do Coordenado. Hoje schedulePlannerFire() prepara 12s
+  // antes e dispara com um setTimeout cru. Três limites conhecidos:
+  //   1. setTimeout longo escorrega — em aba de fundo o Chrome o estrangula pra 1/min;
+  //   2. o preparo mora numa CLOSURE: um F5 entre preparar e disparar perde o comando;
+  //   3. não compensa nada — nem a latência da rede, nem o próprio atraso do timer.
+  // O resultado prático é erro de centenas de ms a vários segundos. Serve pra apoio,
+  // não serve pra trem de nobre nem snipe.
+  //
+  // Aqui o compromisso vive no localStorage e o disparo desce uma escada de quatro
+  // fases, com a rede compensada e o erro do disparo anterior realimentado.
+  //
+  // O QUE ESTA CENTRAL NÃO CONSEGUE FAZER, e é honesto dizer: o relógio de referência
+  // é o Timing do próprio jogo, que o TW calibra na resposta do carregamento de página.
+  // O erro dele contra o relógio real do servidor é da ordem de meio RTT de page load
+  // (uns 20-60ms) e NÃO dá pra medir isso do cliente com confiança. ccSincronizar()
+  // estima esse desvio pelo cabeçalho Date, mas fica como DIAGNÓSTICO — não é aplicado
+  // sozinho, porque o Date pode vir de um proxy e piorar em vez de melhorar.
+  // O que a central corrige é o que ela consegue medir: o atraso do próprio agendador
+  // e o tempo de rede. Contra o relógio do jogo, o alvo de 10ms é real.
+  //
+  // MEDIDO ANTES DE ESCREVER (navegador, escada isolada, 12-20 rodadas por cenário):
+  //     thread livre ............ mediana 0ms   · pior  0ms
+  //     thread ocupada .......... mediana 9,4ms · pior 21ms · DISPERSÃO 20ms
+  // A dispersão é o número que manda. Viés de laço fechado corrige erro CONSTANTE; não
+  // corrige espalhamento. Ou seja: sob thread ocupada não existem 10ms, com escada
+  // nenhuma. Por isso devoParar() devolve 'Central disparando' na janela crítica e os
+  // laços longos saem da frente — silenciar os outros módulos não é conforto, é o que
+  // compra a precisão. O viés cuida só do resto, que é o atraso fixo.
+  // ════════════════════════════════════════════════════════════════════════════════
+
+  const CC = {
+    BLOCO_MS: 30000,        // espera longa fatiada; timer curto reagendado não acumula deriva
+    // Onde o setTimeout entrega pra fase de cessão. Medido com a thread ocupada, 20 e
+    // 250 empatam com 60 (mediana 9,4ms nos três) — a contenção domina e a folga não
+    // muda nada. 60ms fica por ser folga suficiente pra absorver um setTimeout que
+    // chegue atrasado, sem esticar a cessão a ponto de gerar lixo.
+    FOLGA_ACORDADO: 60,
+    FOLGA_ESTRANGULADO: 30000, // aba de fundo SEM keep-awake: acorda muito antes e paga cedendo
+    CEDER_ATE: 3,           // últimos 3ms: espera ocupada
+    TETO_OCUPADO: 5000,     // trava de segurança da espera ocupada
+    AQUECER_ANTES: 2000,    // abre/renova a conexão pra o POST não pagar handshake
+    PREPARAR_ANTES: 15000,  // refaz o try=confirm com payload fresco
+    ACORDAR_ANTES: 300000,  // liga o keep-awake 5 min antes do disparo
+    JANELA_CRITICA: 60000,  // nesta janela os outros módulos e o Auto-F5 recuam
+    SONDAS: 5,              // requisições HEAD por medição de rede
+    // O viés corrige atraso SISTEMÁTICO, da ordem de dezenas de ms. Os primeiros valores
+    // que escolhi — teto 400ms, ganho 0,4 — não vieram de lugar nenhum, e no primeiro
+    // teste real o viés saturou em exatamente +400ms. Teto largo demais deixou uma
+    // excursão de ruído virar correção permanente, e o ganho alto levava um erro de
+    // 600ms a virar +240 de viés num passo só. Ver a nota em ccRealimentar: a causa raiz
+    // era a realimentação estar no sinal errado, mas estes números pioraram o estrago.
+    // O viés carrega a correção INTEIRA (era dividida com o meioRtt, que saiu da conta).
+    // Latência de ida real medida: ~184ms, e pode ser bem pior numa hora ruim.
+    //
+    // Os números abaixo vieram de LER O NEXUS, não de chute meu — os anteriores eu tinha
+    // inventado e os dois primeiros testes reais mostraram no que dá. Lá:
+    //     _EWMA_ALPHA 0.3 · _EWMA_SPIKE_DAMPED_ALPHA 0.05 · _EWMA_DAMP_BAND_MS 2000
+    //     _DRIFT_GUARD_THRESHOLD_MS 50 · _OFFSET_COMPENSATION_CAP_MS 5000
+    //     _EWMA_TARGET_BIAS_MS 2
+    BIAS_TETO: 5000,         // limite duro do valor aprendido (o do usuário é menor)
+    EWMA_ALFA_RESPONSIVO: 0.3,   // reage rápido a mudança de latência
+    EWMA_ALFA_ESTAVEL: 0.1,      // ignora variação curta; melhor em conexão instável
+    EWMA_ALFA_PICO: 0.05,        // amostra fora da banda: entra, mas quase não move
+    EWMA_BANDA_MS: 2000,         // acima disto a amostra é considerada pico
+    GUARDA_DERIVA_MS: 50,        // escada atrasou mais que isto -> a amostra não ensina nada
+    BANDA_CONSISTENCIA_MS: 200,  // numa onda, atraso acima disto sobre o menor é engasgada do servidor
+    // Piso entre dois comandos de uma onda. O Nexus usa 50ms; MEDIDO no br143, 50 não se
+    // sustenta. Teste de 5 apoios: eu disparei em 0/50/100/150/200ms — exato, com erro de
+    // escada ZERO nos cinco — e o jogo registrou as chegadas com 100/100/137/100ms de
+    // intervalo. O servidor processa comandos da mesma conta em fila, ~100ms cada.
+    // Não é o cliente que limita: disparar mais rápido só acumula atraso na entrega.
+    ONDA_GAP_MIN_MS: 100,
+    ATRASO_TOLERADO: 1500,  // passou disso do horário, não dispara — marca como perdido
+  };
+
+  // defCC() fica lá em cima, junto dos outros def*: def() é chamado no carregamento e
+  // `const` não sofre hoisting — declarar aqui daria ReferenceError antes do painel abrir.
+
+  // ── Relógio ancorado ────────────────────────────────────────────────────────────
+  // serverNow() deriva de Date.now(), que dá saltos (NTP, suspensão da máquina).
+  // performance.now() é monotônico. Ancora um par das duas e conta a partir dele.
+  const _ccAnc = { perf: 0, srv: 0, ok: false };
+  function ccAncorar() {
+    _ccAnc.perf = performance.now();
+    _ccAnc.srv = serverNow();
+    _ccAnc.ok = true;
+    return _ccAnc;
+  }
+  function ccNow() {
+    if (!_ccAnc.ok) ccAncorar();
+    return _ccAnc.srv + (performance.now() - _ccAnc.perf);
+  }
+  // Quanto o modelo se afastou do relógio bruto do jogo. Grande = a âncora envelheceu
+  // ou o relógio da máquina pulou. NUNCA re-ancorar perto de um disparo: um salto de
+  // âncora no meio da escada de espera é exatamente o erro que queremos evitar.
+  function ccDeriva() { return _ccAnc.ok ? Math.round(serverNow() - ccNow()) : 0; }
+  function ccReancorarSeSeguro() {
+    if (ccJanelaCritica(CC.ACORDAR_ANTES)) return false;
+    ccAncorar();
+    return true;
+  }
+
+  const ccDormir = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+  // Cede o laço de eventos sem dormir. setTimeout(0) aninhado é preso em 4ms pelo
+  // navegador; MessageChannel não é — dá umas dezenas de microssegundos por volta.
+  //
+  // O canal é ÚNICO e reaproveitado, e isso não é elegância: a primeira versão criava
+  // um MessageChannel por volta. Medido no navegador, 20 rodadas de cada:
+  //     canal novo por volta ... mediana 0ms, p90 6,9ms, PIOR 20ms
+  //     canal reaproveitado .... mediana 0ms, p90   0ms, pior 8,4ms
+  // Eu estava fabricando milhares de objetos por disparo e colhendo a coleta de lixo
+  // exatamente no instante que precisava ser limpo. A fila de resolvedores existe
+  // porque dois comandos podem estar cedendo ao mesmo tempo.
+  const _ccMC = (function () { try { return new MessageChannel(); } catch (e) { return null; } })();
+  const _ccCederFila = [];
+  if (_ccMC) _ccMC.port1.onmessage = () => { const f = _ccCederFila.shift(); if (f) f(); };
+  function ccCeder() {
+    if (!_ccMC) return new Promise((r) => setTimeout(r, 0));
+    return new Promise((r) => { _ccCederFila.push(r); _ccMC.port2.postMessage(0); });
+  }
+
+  // ── Manter a aba acordada ───────────────────────────────────────────────────────
+  // Aba de fundo tem setTimeout estrangulado pra 1 disparo por minuto depois de 5 min.
+  // Um oscilador de áudio inaudível marca a aba como "tocando mídia" e ela deixa de ser
+  // estrangulada. Depende de gesto do usuário pra sair do estado suspenso — o clique em
+  // "armar" serve; por isso ccManterAcordado(true) deve ser chamado a partir de um clique.
+  let _ccAudio = null;
+  function ccManterAcordado(ligar) {
+    try {
+      if (ligar) {
+        if (_ccAudio) { try { _ccAudio.ctx.resume(); } catch (e) {} return _ccAudio.ctx.state === 'running'; }
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return false;
+        const ctx = new AC();
+        const osc = ctx.createOscillator(), g = ctx.createGain();
+        g.gain.value = 0.0001;   // inaudível, mas não zero: em zero o Chrome descarta o grafo
+        osc.frequency.value = 40;
+        osc.connect(g); g.connect(ctx.destination); osc.start();
+        try { ctx.resume(); } catch (e) {}
+        _ccAudio = { ctx: ctx, osc: osc, g: g };
+        return ctx.state === 'running';
+      }
+      if (_ccAudio) { try { _ccAudio.osc.stop(); _ccAudio.ctx.close(); } catch (e) {} _ccAudio = null; }
+      return true;
+    } catch (e) { return false; }
+  }
+  function ccAcordadoOk() { return !!(_ccAudio && _ccAudio.ctx && _ccAudio.ctx.state === 'running'); }
+
+  // ── Rede ────────────────────────────────────────────────────────────────────────
+  // Alvo estático e minúsculo no MESMO host do jogo: mede o ida-e-volta real da conexão
+  // que o POST vai usar (HTTP/2 multiplexa tudo numa conexão só) sem fazer o servidor
+  // renderizar nada. HEAD num game.php custaria uma página inteira de processamento.
+  const CC_PING = '/graphic/dots/green.png';
+  async function ccSondar(n) {
+    const rtts = [];
+    for (let i = 0; i < (n || CC.SONDAS); i++) {
+      const t0 = performance.now();
+      try { await fetch(CC_PING + '?_=' + i + '_' + Math.random(), { method: 'HEAD', cache: 'no-store', credentials: 'omit' }); }
+      catch (e) { break; }
+      rtts.push(performance.now() - t0);
+      await ccDormir(40);
+    }
+    if (!rtts.length) return null;
+    const ord = rtts.slice().sort((a, b) => a - b);
+    const med = ord[Math.floor(ord.length / 2)];
+    config.cc.rttMs = Math.round(med);
+    save();
+    return { min: Math.round(ord[0]), mediana: Math.round(med), max: Math.round(ord[ord.length - 1]), jitter: Math.round(ord[ord.length - 1] - ord[0]), n: rtts.length };
+  }
+  // Só reabre/renova a conexão. Descarta o resultado de propósito.
+  async function ccAquecer() {
+    try { await fetch(CC_PING + '?w=' + Math.random(), { method: 'HEAD', cache: 'no-store', credentials: 'omit' }); } catch (e) {}
+  }
+  // Metade do ida-e-volta da sonda. NÃO entra mais no cálculo do disparo — ficou provado
+  // que não tem relação com o custo real de um POST na praça (85ms estimados contra ~184ms
+  // reais), e somá-lo ao viés aprendido fazia as duas correções brigarem até saturarem
+  // juntas. Sobrevive só como número exibido no painel.
+  function ccMeioRtt() {
+    return Math.min(600, Math.max(0, Math.round((config.cc.rttMs || 0) / 2)));
+  }
+
+  // ── Escada de espera ────────────────────────────────────────────────────────────
+  // A espera longa em blocos de 30s vive agora dentro do ccMotor, que é quem decide
+  // qual comando é o próximo — não existe mais timer por comando. Era justamente esse
+  // timer por comando que o ccTick re-agendava, criando o disparo duplicado.
+  //
+  // Fases fina, cedendo e ocupada. Devolve o instante real em que soltou.
+  async function ccEsperarPreciso(alvoMs) {
+    for (;;) {
+      const falta = alvoMs - ccNow();
+      // Sem keep-awake numa aba de fundo o setTimeout é estrangulado: acorda muito
+      // antes e paga o resto cedendo, que o Chrome não estrangula do mesmo jeito.
+      const folga = (document.hidden && !ccAcordadoOk()) ? CC.FOLGA_ESTRANGULADO : CC.FOLGA_ACORDADO;
+      if (falta <= folga) break;
+      await ccDormir(Math.min(falta - folga, CC.BLOCO_MS));
+    }
+    while (alvoMs - ccNow() > CC.CEDER_ATE) await ccCeder();
+    // Espera ocupada nos últimos milissegundos: é o único jeito de acertar abaixo do
+    // grão do agendador do navegador. Custa CPU por ~3ms. O teto é trava de segurança.
+    const limite = performance.now() + CC.TETO_OCUPADO;
+    while (ccNow() < alvoMs && performance.now() < limite) { /* ocupado de propósito */ }
+    return ccNow();
+  }
+
+  // ── Janela crítica ──────────────────────────────────────────────────────────────
+  // Tem disparo chegando nos próximos N ms? O Auto-F5 e os laços longos consultam isto
+  // pra sair da frente. Um reload ou uma trava roubada no meio da escada custa o comando.
+  function ccJanelaCritica(janelaMs) {
+    const lim = ccNow() + (janelaMs || CC.JANELA_CRITICA);
+    return ((config.cc && config.cc.fila) || []).some((c) =>
+      (c.state === 'armado' || c.state === 'preparado') && c.sendAt && c.sendAt <= lim && c.sendAt > ccNow() - CC.ATRASO_TOLERADO);
+  }
+
+  // ── Preparo e disparo ───────────────────────────────────────────────────────────
+  // Duas etapas, como o resto do script — mas com o payload PERSISTIDO, não numa
+  // closure. O token CSRF muda a cada carregamento de página, então o payload é
+  // carimbado: na retomada, payload de outra sessão é descartado e refeito.
+  async function ccPreparar(cmd) {
+    const p = await fakePrepare(cmd.origin, cmd.x, cmd.y, cmd.amounts, cmd.kind);
+    cmd.payload = { action: p.action, params: p.params, h: CSRF };
+    if (p.dur) cmd.durSec = p.dur;
+    return p;
+  }
+  function ccPayloadValido(cmd) { return !!(cmd.payload && cmd.payload.h === CSRF && cmd.payload.action); }
+
+  // Escrita adiantada: grava a INTENÇÃO antes de agir. Se a aba morrer entre o POST e a
+  // resposta, a retomada encontra 'disparando' e trata como INCERTO — nunca reenvia.
+  // Mandar um nobre duas vezes é pior do que não mandar.
+  // DISPARA E SEGUE. Não espera a resposta — e isso é requisito, não otimização.
+  //
+  // A versão anterior fazia `await fetch(...); await r.text()` antes de devolver, e o
+  // round-trip real de um POST na praça foi medido entre 183 e 787ms. Numa onda de 8
+  // comandos espaçados de 100ms, esperar a resposta do primeiro já atropela os cinco
+  // seguintes. Agora emite o POST, carimba o instante e volta em ~1ms; a resposta é
+  // tratada quando chegar.
+  //
+  // A escrita adiantada continua valendo: 'disparando' vai pro disco ANTES do fetch, e
+  // uma aba que morra no meio deixa o comando INCERTO, nunca reenviado.
+  function ccDispararAgora(cmd) {
+    cmd.state = 'disparando';
+    cmd.fireAt = ccNow();
+    save();
+    const t0 = performance.now();
+    fetch(cmd.payload.action, {
+      method: 'POST', credentials: 'include', cache: 'no-store',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(cmd.payload.params).toString(),
+    }).then((r) => r.text()).then((t2) => {
+      cmd.rttEnvioMs = Math.round(performance.now() - t0);
+      if (/n[aã]o tem tropas suficientes|not enough|insuficient/i.test(t2)) {
+        cmd.state = 'falhou'; cmd.erro = 'tropas insuficientes';
+      } else if (/selecione uma aldeia alvo/i.test(t2)) {
+        // Ambíguo: é também o estado normal da praça DEPOIS de um envio que deu certo.
+        cmd.state = 'incerto'; cmd.erro = 'resposta ambígua — confira na tela de comandos';
+      } else {
+        cmd.state = 'enviado'; cmd.sentAt = ccNow(); cmd.erro = null;
+      }
+      // Diagnóstico: o quanto ANTES da hora pedida o POST saiu. Não é o erro — o erro
+      // depende da viagem até o servidor, que só a chegada publicada pelo jogo revela.
+      // (Era aqui que eu somava meioRtt e chamava de "erro líquido"; o número concordava
+      // comigo mesmo e escondia 100ms de atraso real.)
+      ccRealimentar(cmd, cmd.fireAt - cmd.sendAt, false);
+      // Confere daqui a pouco. Se este timer morrer (F5, aba estrangulada), o ccTick
+      // varre a fila e conclui — a conferência não depende mais de nada em memória.
+      if (cmd.state === 'enviado') {
+        clearTimeout(_ccConferirTimer);
+        _ccConferirTimer = setTimeout(() => { ccConferirPendentes().catch(() => {}); }, 8000);
+      }
+      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.state + ', estimei ' + cmd.erroMs + 'ms (ida-e-volta ' + cmd.rttEnvioMs + 'ms). Conferindo com o jogo…', cmd.state === 'enviado' ? 'ok' : 'err', 'planner');
+      save(); ccRenderPagina();
+    }).catch((e) => {
+      // Rede caiu: NÃO dá pra saber se o servidor recebeu. Incerto, nunca falha.
+      cmd.state = 'incerto'; cmd.erro = 'rede caiu durante o envio (' + (e.message || e) + ')';
+      save(); ccRenderPagina();
+      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — INCERTO (' + cmd.erro + ')', 'err', 'planner');
+    });
+  }
+
+  // ── Verdade de campo: a chegada que o JOGO publica ──────────────────────────────
+  //
+  // Eu tinha dito que o jogo só mostrava segundos e que por isso não dava pra verificar
+  // precisão de ms. Errado: a lista "Próprios comandos" da praça mostra
+  // `hoje às 18:49:00:300` — o `:300` num elemento separado e menor, mas textContent
+  // concatena os filhos, então uma regex na célula inteira pega tudo.
+  //
+  // Isso muda o laço fechado de lugar. No primeiro teste real de um comando só:
+  //     pedido ............ 18:40:00.200
+  //     jogo registrou .... 18:40:00.300   (chegada 18:49:00:300 menos 9min de viagem)
+  //     erro verdadeiro ... +100ms
+  //     meu painel disse .. +1ms
+  // A escada acertou o alvo (+1ms). O buraco inteiro estava na estimativa de rede: eu
+  // estimava meia-viagem com um HEAD num arquivo estático (~85ms), e a ida real de um
+  // POST na praça é ~184ms. Realimentar a minha própria estimativa nunca acharia isso —
+  // ela concorda consigo mesma. Contra a chegada publicada pelo jogo, acha.
+  let _ccConferirTimer = null;
+
+  function ccParseChegadaMs(txt) {
+    // "hoje às 18:49:00:300" — o quarto grupo é opcional porque nem toda linha traz ms.
+    const m = (txt || '').match(/(\d{1,2}):(\d{2}):(\d{2})(?:[:.](\d{1,3}))?/);
+    if (!m) return null;
+    const base = new Date(Date.now() + wallToServerOffset());
+    const d = new Date(base.getFullYear(), base.getMonth(), base.getDate(),
+      +m[1], +m[2], +m[3], m[4] ? +(m[4] + '00').slice(0, 3) : 0);
+    let ms = d.getTime() + wallToServerOffset();
+    // Passou da meia-noite entre a saída e a chegada: a linha diz "amanhã".
+    if (/amanh/i.test(txt)) ms += 86400000;
+    return ms;
+  }
+
+  // Uma requisição para a onda inteira, não uma por comando.
+  //
+  // Deriva da FILA, que é persistida — não de uma lista em memória com timer, que era a
+  // versão anterior e falhou em todos os cinco comandos do primeiro teste de onda. Um F5
+  // entre o envio e os 8 segundos do timer perdia a conferência pra sempre, e o painel
+  // ficava exibindo a estimativa provisória achando que era o número final.
+  // Assim, qualquer aba que abrir depois conclui o serviço.
+  function ccPendentesDeConferencia() {
+    const agora = ccNow();
+    return ((config.cc && config.cc.fila) || []).filter((c) =>
+      c.state === 'enviado' && c.erroRealMs == null && (c.tentativasConf || 0) < 5 &&
+      c.sentAt && (agora - c.sentAt) > 5000 && (agora - c.sentAt) < 2 * 3600 * 1000);
+  }
+
+  async function ccConferirPendentes() {
+    const lote = ccPendentesDeConferencia();
+    if (!lote.length) return;
+    lote.forEach((c) => { c.tentativasConf = (c.tentativasConf || 0) + 1; });
+    const origens = Array.from(new Set(lote.map((c) => c.origin)));
+    for (const vid of origens) {
+      let doc;
+      try {
+        const r = await fetch('/game.php?village=' + vid + '&screen=place', { credentials: 'include', cache: 'no-store' });
+        doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+      } catch (e) { continue; }
+      // Toda linha da tabela de comandos que tenha coordenada e horário.
+      const linhas = [];
+      doc.querySelectorAll('tr').forEach((tr) => {
+        const t = (tr.textContent || '').replace(/\s+/g, ' ');
+        const mc = t.match(/\((\d{1,3})\|(\d{1,3})\)/);
+        if (!mc) return;
+        const chegada = ccParseChegadaMs(t);
+        if (chegada) linhas.push({ coord: mc[1] + '|' + mc[2], chegada: chegada });
+      });
+      // CASAMENTO POR ORDEM, e recusa quando é ambíguo.
+      //
+      // Duas tentativas anteriores falharam, e as duas de um jeito instrutivo:
+      //
+      // 1. "a chegada mais próxima" — sem exclusividade, cinco comandos de uma onda
+      //    casaram com a MESMA linha e geraram erros de +161, +61, -39, -139 e -239ms.
+      //    Todos aritmética da mesma chegada. Números inventados, alimentando o estimador.
+      //
+      // 2. exclusividade + janela apertada em volta do desvio mediano — parecia resolver,
+      //    mas simulado com 500ms de desvio sistemático estimou 312 e casou tudo errado.
+      //    É aliasing: com comandos a 100ms de distância e erro de 500ms, o casamento por
+      //    TEMPO é matematicamente ambíguo. Não dá pra saber qual chegada é de qual.
+      //
+      // O que resolve é a ORDEM: o servidor processa os comandos da conta em fila, então
+      // o i-ésimo enviado é o i-ésimo a chegar. E quando nem a ordem basta — quantidade de
+      // chegadas diferente da de comandos — a medição é RECUSADA. Medida errada é pior
+      // que medida nenhuma, porque vira correção permanente no viés.
+      const JANELA_CONF_MS = 5000;
+      const porCoord = {};
+      lote.filter((c) => c.origin === vid).forEach((cmd) => {
+        const esperada = cmd.modo === 'chegada' ? cmd.alvoMs : (cmd.durSec ? cmd.sendAt + cmd.durSec * 1000 : null);
+        if (!esperada) return;
+        const k = cmd.x + '|' + cmd.y;
+        (porCoord[k] = porCoord[k] || []).push({ cmd: cmd, esperada: esperada });
+      });
+      Object.keys(porCoord).forEach((coord) => {
+        const grupo = porCoord[coord].sort((a, b) => a.esperada - b.esperada);
+        const cand = linhas.filter((l) => l.coord === coord &&
+          grupo.some((g) => Math.abs(l.chegada - g.esperada) <= JANELA_CONF_MS))
+          .map((l) => l.chegada).sort((a, b) => a - b);
+        let casados = null;
+        if (grupo.length === 1) {
+          casados = cand.length ? [cand.reduce((m, c) => (Math.abs(c - grupo[0].esperada) < Math.abs(m - grupo[0].esperada) ? c : m))] : null;
+        } else if (cand.length === grupo.length) {
+          casados = cand;   // i-ésimo comando -> i-ésima chegada
+        }
+        if (!casados) {
+          grupo.forEach((g) => { if ((g.cmd.tentativasConf || 0) >= 5) g.cmd.confAmbigua = true; });
+          if (grupo[0] && (grupo[0].cmd.tentativasConf || 0) === 5) {
+            pushLog('🎯 Central: não consegui medir o erro de ' + grupo.length + ' comando(s) → ' + coord +
+              ' — achei ' + cand.length + ' chegada(s) na lista, e com número diferente o casamento fica ambíguo. Prefiro não medir a medir errado.', '', 'planner');
+          }
+          return;
+        }
+        grupo.forEach((g, i) => {
+          g.cmd.chegadaReal = casados[i];
+          g.cmd.erroRealMs = Math.round(casados[i] - g.esperada);
+        });
+        // BANDA DE CONSISTÊNCIA. Dentro de uma mesma onda, os comandos deveriam errar
+        // parecido — é a mesma conexão, no mesmo segundo. Quem destoa muito da mediana
+        // não está medindo latência: está medindo uma engasgada do servidor.
+        //
+        // Medido numa onda de 4: erros +41, +59, +927, +927. Os dois primeiros são a
+        // latência real; os dois últimos vieram de uma pausa de ~900ms do servidor no
+        // meio da onda. E 927 passa por baixo do teto de 1000ms, então seria aprendido
+        // como latência permanente. A guarda de deriva não pega isso — ela só olha se a
+        // MINHA espera atrasou, e não atrasou.
+        // (No Nexus: _RECENT_CONSISTENCY_BAND_MS 200.)
+        // A referência é o MAIOR AGRUPAMENTO, com desempate pelo menor valor.
+        //
+        // Mediana não serve: com [41, 59, 927, 927] — a onda real medida — ela cai em 927
+        // e o filtro rejeita justamente os dois bons, porque metade das amostras eram o
+        // defeito e mediana não resiste a 50% de contaminação.
+        // Mínimo também não: com [40, 800, 810, 795] ele aceita só o 40 e rejeita três.
+        // Se 800 for a latência verdadeira e o 40 foi sorte, eu aprenderia o caso melhor
+        // e todo comando cairia atrasado.
+        // O maior agrupamento acerta os dois. O desempate pelo menor vem da física:
+        // latência e engasgada só ATRASAM, nunca adiantam — na dúvida, fique com o grupo
+        // mais rápido, que é o que mais se aproxima do custo real da conexão.
+        const vals = grupo.map((g) => g.cmd.erroRealMs).sort((a, b) => a - b);
+        let referencia = vals[0], melhorN = -1;
+        vals.forEach((v) => {
+          const n = vals.filter((x) => Math.abs(x - v) <= CC.BANDA_CONSISTENCIA_MS).length;
+          if (n > melhorN) { melhorN = n; referencia = v; }
+        });
+        grupo.forEach((g, i) => {
+          const fora = grupo.length > 2 && Math.abs(g.cmd.erroRealMs - referencia) > CC.BANDA_CONSISTENCIA_MS;
+          if (fora) {
+            g.cmd.foraDaBanda = true;
+            pushLog('🎯 Central: ' + ccRotulo(g.cmd) + ' — chegada ' + ccFmtHora(casados[i]) + ', erro REAL ' +
+              (g.cmd.erroRealMs > 0 ? '+' : '') + g.cmd.erroRealMs + 'ms. FORA da banda da onda (referência ' + referencia +
+              'ms) — engasgada do servidor, não latência. Não vai pro aprendizado.', '', 'planner');
+            return;
+          }
+          // ESTE é o sinal que alimenta o viés. O erro estimado vira só diagnóstico.
+          ccRealimentar(g.cmd, g.cmd.erroRealMs, true);
+          pushLog('🎯 Central: ' + ccRotulo(g.cmd) + ' — o jogo registrou chegada ' + ccFmtHora(casados[i]) +
+            ', erro REAL ' + (g.cmd.erroRealMs > 0 ? '+' : '') + g.cmd.erroRealMs + 'ms (eu estimei ' + g.cmd.erroMs + 'ms).', 'ok', 'planner');
+        });
+      });
+    }
+    save(); ccRenderPagina();
+  }
+
+  // ── Laço fechado ────────────────────────────────────────────────────────────────
+  // Recebe o ERRO LÍQUIDO: quando estimamos que o servidor recebeu, contra a hora pedida.
+  //
+  // A primeira versão realimentava outra coisa — o atraso da escada, `real - alvoChamada`.
+  // Parece razoável e é um erro de controle: como `alvoChamada = sendAt - meioRtt - viés`,
+  // esse valor é o atraso da escada PURO, que não diminui quando o viés cresce. Ou seja,
+  // um integrador sobre uma entrada que ele não afeta: sem ponto de equilíbrio, cresce até
+  // bater na trava. No primeiro teste real o viés saturou em exatamente +400ms, o teto que
+  // eu tinha posto — e aí os comandos passaram a sair 485ms ADIANTADOS enquanto o painel
+  // exibia "0ms de erro", porque o erro exibido também era o da escada.
+  //
+  // Com o líquido: liquido = atrasoDaEscada - viés, então `viés += g*liquido` converge pra
+  // viés = atrasoDaEscada, que é exatamente a correção desejada. Ganho < 1 pra não oscilar.
+  //
+  // O que isto continua NÃO medindo: o relógio do servidor. Ver o cabeçalho do bloco.
+  // `verdadeiro` = veio da chegada publicada pelo jogo. Só esse move o viés.
+  // A estimativa própria fica registrada pra comparação, mas não realimenta: ela concorda
+  // consigo mesma por construção, e foi assim que o viés ficou 100ms fora sem perceber.
+  function ccRealimentar(cmd, erroMs, verdadeiro) {
+    if (verdadeiro) cmd.erroRealMs = Math.round(erroMs); else cmd.erroMs = Math.round(erroMs);
+    if (!verdadeiro) { save(); return; }
+    const cc = config.cc;
+
+    // GUARDA DE DERIVA. Se a MINHA escada atrasou mais que o limite, o erro medido não
+    // fala da rede — fala de mim. Aprender com ele envenena o estimador. A amostra é
+    // registrada e descartada. (No Nexus: _DRIFT_GUARD_THRESHOLD_MS 50.)
+    const deriva = Math.abs(cmd.atrasoEscadaMs || 0);
+    if (deriva > CC.GUARDA_DERIVA_MS) {
+      cc.afericoes = (cc.afericoes || []).concat([{ t: ccNow(), erro: cmd.erroRealMs, descartada: true, deriva: deriva, bias: cc.biasMs }]).slice(-50);
+      pushLog('🎯 Central: amostra descartada do aprendizado — minha escada atrasou ' + deriva + 'ms, o erro não mede a rede.', '', 'planner');
+      save(); return;
+    }
+
+    // TETO DE PLAUSIBILIDADE. Acima disto não é latência, é defeito — e aprender com
+    // defeito estraga o estimador por muitas amostras. O Nexus chama de "Máximo de
+    // correção" e diz na própria tela: "atrasos acima do selecionado são considerados
+    // bugs e ignorados". O padrão deles é 1000ms; o meu era 5000, permissivo demais.
+    const teto = Math.max(100, Math.min(CC.BIAS_TETO, cc.maxCorrecaoMs || 1000));
+    if (Math.abs(erroMs) > teto) {
+      cc.afericoes = (cc.afericoes || []).concat([{ t: ccNow(), erro: cmd.erroRealMs, descartada: true, motivo: 'acima do máximo de correção', bias: cc.biasMs }]).slice(-50);
+      pushLog('🎯 Central: erro de ' + Math.round(erroMs) + 'ms ignorado — acima do máximo de correção (' + teto + 'ms). Isso é defeito, não latência.', '', 'planner');
+      save(); return;
+    }
+
+    // No modo fixo o usuário manda; o estimador nem roda.
+    if (cc.modo === 'fixo') {
+      cc.afericoes = (cc.afericoes || []).concat([{ t: ccNow(), erro: cmd.erroRealMs, modo: 'fixo', bias: cc.offsetFixoMs }]).slice(-50);
+      save(); return;
+    }
+
+    // EWMA com amortecimento de pico, no lugar da média corrida 1/n que eu tinha.
+    // Dois defeitos do 1/n que só vi lendo o Nexus: o ganho tende a ZERO, então depois
+    // de umas 20 amostras ele para de aprender e não acompanha mudança de rede; e na
+    // PRIMEIRA amostra o ganho é 1, então um único envio ruim define o viés inteiro.
+    // Com α fixo aprende pra sempre; com α reduzido fora da banda, um outlier contribui
+    // pouco em vez de dominar — amortecer é mais robusto que rejeitar.
+    //
+    // O α não é um número só: o Nexus deixa o usuário escolher entre reagir rápido e
+    // ignorar variação curta, porque a resposta certa depende de quão instável é a
+    // conexão dele. Não existe valor universal, e fingir que existe foi meu erro.
+    const anterior = (typeof cc.biasMs === 'number') ? cc.biasMs : 0;
+    const pico = Math.abs(erroMs - anterior) > CC.EWMA_BANDA_MS;
+    const alfa = pico ? CC.EWMA_ALFA_PICO
+      : (cc.estilo === 'responsivo' ? CC.EWMA_ALFA_RESPONSIVO : CC.EWMA_ALFA_ESTAVEL);
+    cc.biasMs = Math.max(-teto, Math.min(teto, Math.round(anterior + erroMs * alfa)));
+    cc.nReal = (cc.nReal || 0) + 1;
+    cc.afericoes = (cc.afericoes || []).concat([{ t: cmd.sentAt || ccNow(), erro: cmd.erroRealMs, estimado: cmd.erroMs, bias: cc.biasMs, oculta: document.hidden, acordado: ccAcordadoOk() }]).slice(-50);
+    save();
+  }
+
+  // ── Ciclo de vida de um comando ─────────────────────────────────────────────────
+  // rascunho → armado → preparado → disparando → enviado
+  //                              ↘ falhou / incerto / perdido
+  function ccCalcularSaida(cmd) {
+    if (cmd.modo === 'saida') { cmd.sendAt = cmd.alvoMs; return true; }
+    if (!cmd.durSec) return false;               // chegada precisa da duração exata
+    cmd.sendAt = cmd.alvoMs - cmd.durSec * 1000;
+    return true;
+  }
+
+  // ── MOTOR: um disparo de cada vez ───────────────────────────────────────────────
+  //
+  // A versão anterior dava a cada comando o seu próprio timer e a sua própria escada de
+  // espera, todas correndo juntas. Não funciona, e o teste real mostrou por quê: oito
+  // comandos planejados até 604ms separados dispararam dentro de 38ms uns dos outros —
+  // colapso total do espaçamento. Duas razões:
+  //   - cada escada termina numa espera OCUPADA, e espera ocupada não divide thread:
+  //     enquanto uma gira, as outras não conseguem nem checar o próprio relógio;
+  //   - o disparo aguardava a resposta do POST (183 a 787ms medidos), segurando tudo.
+  //
+  // Agora existe UM motor. Ele pega sempre o comando de menor sendAt, espera a hora
+  // dele, emite o POST sem aguardar resposta, e vai pro próximo. Uma onda sai em
+  // sequência, na ordem, com o espaçamento que foi pedido.
+  //
+  // Consequência que o usuário precisa saber: dois comandos no MESMO milissegundo são
+  // fisicamente impossíveis — o segundo sai alguns ms depois. ccEspacamentoMinimoMs()
+  // é o piso medido.
+  let _ccMotorAtivo = false;
+
+  function ccProximo() {
+    const fila = (config.cc && config.cc.fila) || [];
+    let melhor = null;
+    fila.forEach((c) => {
+      if (c.state !== 'armado' && c.state !== 'preparado') return;
+      if (!c.sendAt) return;
+      if (!melhor || c.sendAt < melhor.sendAt) melhor = c;
+    });
+    return melhor;
+  }
+
+  async function ccMotor() {
+    if (_ccMotorAtivo) return;
+    _ccMotorAtivo = true;
+    try {
+      for (;;) {
+        const cmd = ccProximo();
+        if (!cmd) break;
+        if (captchaBlocked()) { await ccDormir(30000); continue; }
+        const falta = cmd.sendAt - ccNow();
+
+        // Longe: dorme em bloco e reavalia. Reavaliar importa — um comando novo pode ter
+        // entrado na frente enquanto este dormia.
+        if (falta > CC.PREPARAR_ANTES) { await ccDormir(Math.min(falta - CC.PREPARAR_ANTES, CC.BLOCO_MS)); continue; }
+
+        // Passou da hora: não dispara atrasado. Explorador atrasado é tropa fora de casa
+        // sem motivo; nobre atrasado é pior.
+        if (ccNow() > cmd.sendAt + CC.ATRASO_TOLERADO) {
+          cmd.state = 'perdido';
+          cmd.erro = 'a hora de sair passou (aba fechada, ou a fila estava ocupada com outro comando)';
+          save(); ccRenderPagina();
+          pushLog('⏱️ Central: ' + ccRotulo(cmd) + ' PERDIDO — ' + cmd.erro, 'err', 'planner');
+          continue;
+        }
+
+        // Payload pronto ANTES da janela de disparo. Preparar custa um round-trip e não
+        // pode acontecer entre dois disparos de uma onda.
+        if (!ccPayloadValido(cmd)) {
+          try {
+            await ocupado(() => ccPreparar(cmd));
+            if (cmd.modo === 'chegada') ccCalcularSaida(cmd);
+            cmd.state = 'preparado'; save(); ccRenderPagina();
+          } catch (e) {
+            cmd.state = 'falhou'; cmd.erro = 'preparo falhou: ' + (e.message || e);
+            save(); ccRenderPagina();
+            pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.erro, 'err', 'planner');
+            continue;
+          }
+          continue;   // reavalia: o preparo pode ter mudado sendAt (duração exata do servidor)
+        }
+
+        if (config.cc.manterAcordado) ccManterAcordado(true);
+        if (cmd.sendAt - ccNow() > CC.AQUECER_ANTES) await ccAquecer();
+
+        // UM termo só, e isso é a lição mais cara desta noite.
+        //
+        // Antes era `sendAt - meioRtt - viés`: duas correções somadas, uma CHUTADA (meia
+        // sonda HEAD num arquivo estático) e outra APRENDIDA. O aprendido tinha que brigar
+        // contra o chute, e os dois saturaram juntos — meioRtt travado em 600, viés em 150.
+        // Resultado medido contra o jogo: comando 748ms ADIANTADO. 600+150=750.
+        //
+        // A sonda HEAD já tinha se mostrado sem relação com o custo real de um POST na
+        // praça (85ms estimados contra ~184ms reais). Ela não pertence a esta conta. O viés
+        // aprende a latência inteira a partir da chegada que o jogo publica, que é a única
+        // medida honesta disponível. ccSondar continua existindo, mas só pra exibição.
+        const correcao = (config.cc.modo === 'fixo') ? (config.cc.offsetFixoMs || 0) : (config.cc.biasMs || 0);
+        const alvoChamada = cmd.sendAt - correcao;
+        const real = await ccEsperarPreciso(alvoChamada);
+        cmd.atrasoEscadaMs = Math.round(real - alvoChamada);
+        ccDispararAgora(cmd);       // sem await: o próximo da onda não pode esperar a resposta
+        ccRenderPagina();
+      }
+    } finally {
+      _ccMotorAtivo = false;
+      if (!ccJanelaCritica(CC.ACORDAR_ANTES)) ccManterAcordado(false);
+    }
+  }
+
+  function ccRotulo(cmd) { return (cmd.kind || 'attack') + ' ' + cmd.origin + ' → ' + cmd.x + '|' + cmd.y; }
+
+  // Tick de manutenção: resolve durações pendentes, descarta o que passou, reagenda.
+  let ccTimer = null;
+  async function ccTick() {
+    clearTimeout(ccTimer);
+    const fila = (config.cc && config.cc.fila) || [];
+    const vivos = fila.filter((c) => c.state === 'armado' || c.state === 'preparado');
+    // A varredura de conferência vem ANTES da saída antecipada: com a fila vazia de
+    // comandos vivos, ainda pode haver envio recente esperando ser conferido contra o
+    // jogo. Era esse o buraco — o tick desligava e o erro real nunca era medido.
+    const porConferir = ccPendentesDeConferencia().length;
+    if (porConferir) ccConferirPendentes().catch(() => {});
+    if (!vivos.length) {
+      ccManterAcordado(false);
+      if (porConferir) ccTimer = setTimeout(ccTick, 30000);
+      return;
+    }
+    if (captchaBlocked()) { ccTimer = setTimeout(ccTick, 30000); return; }
+    for (const cmd of vivos) {
+      if (!ccCalcularSaida(cmd)) {
+        // Modo chegada sem duração: uma confirmação só pra descobrir o tempo de viagem.
+        // O servidor devolve a duração EXATA — melhor que qualquer tabela de velocidade.
+        try { await ccPreparar(cmd); ccCalcularSaida(cmd); }
+        catch (e) { cmd.state = 'falhou'; cmd.erro = 'não consegui a duração: ' + (e.message || e); save(); continue; }
+      }
+    }
+    if (config.cc.manterAcordado && ccJanelaCritica(CC.ACORDAR_ANTES)) ccManterAcordado(true);
+    if (!ccJanelaCritica(CC.ACORDAR_ANTES)) ccReancorarSeSeguro();
+    save();
+    // O tick só faz manutenção. Quem espera e dispara é o motor, e ele é um só —
+    // chamá-lo de novo enquanto roda é no-op, por isso não há mais corrida de re-agendar.
+    ccMotor();
+    ccTimer = setTimeout(ccTick, 30000);
+  }
+
+  // Retomada depois de F5. Payload de outra sessão é descartado (token velho).
+  // Comando que ficou em 'disparando' vira INCERTO e nunca é reenviado sozinho.
+  function ccRetomar() {
+    if (!config.cc) config.cc = defCC();
+    const fila = config.cc.fila || [];
+    let incertos = 0;
+    fila.forEach((c) => {
+      if (c.state === 'disparando') { c.state = 'incerto'; c.erro = 'a aba caiu durante o envio — confira na tela de comandos'; incertos++; }
+      if (c.payload && c.payload.h !== CSRF) { c.payload = null; if (c.state === 'preparado') c.state = 'armado'; }
+    });
+    // Faxina: enviados/falhados com mais de 12h saem da fila (ela crescia sem limite).
+    const corte = ccNow() - 12 * 3600 * 1000;
+    config.cc.fila = fila.filter((c) => (c.state === 'armado' || c.state === 'preparado') || (c.sentAt || c.alvoMs || 0) > corte);
+    save();
+    if (incertos) pushLog('🎯 Central: ' + incertos + ' comando(s) ficaram INCERTOS (a aba caiu no envio). Não vou reenviar — confira na tela de comandos.', 'err', 'planner');
+    ccTick();
+  }
+
+  // ── API da fila (a interface vem depois; por ora dá pra usar pelo console) ───────
+  // ccAdicionar({ origin, x, y, kind, amounts, modo:'chegada'|'saida', quandoLocal:'2026-07-28T21:00:00' })
+  function ccAdicionar(o) {
+    if (!config.cc) config.cc = defCC();
+    const alvoMs = o.alvoMs || arrivalToServerMs(o.quandoLocal);
+    if (!alvoMs) throw new Error('horário inválido');
+    if (!o.origin || !o.x || !o.y) throw new Error('informe origem e alvo');
+    if (!o.amounts || !Object.keys(o.amounts).length) throw new Error('informe as tropas');
+    const cmd = {
+      id: genId(), origin: String(o.origin), x: String(o.x), y: String(o.y),
+      kind: o.kind || 'attack', amounts: o.amounts,
+      modo: o.modo === 'saida' ? 'saida' : 'chegada',
+      alvoMs: alvoMs, durSec: null, sendAt: 0, payload: null,
+      state: 'armado', erro: null, sentAt: null, erroMs: null, rttEnvioMs: null,
+    };
+    config.cc.fila.push(cmd); save();
+    ccManterAcordado(true);   // chamado a partir de um clique: aproveita o gesto do usuário
+    ccTick();
+    return cmd;
+  }
+  function ccRemover(id) {
+    if (!config.cc) return false;
+    const c = config.cc.fila.find((x) => x.id === id);
+    if (!c) return false;
+    config.cc.fila = config.cc.fila.filter((x) => x.id !== id);
+    save();
+    return true;
+  }
+
+  // ── Aferição ────────────────────────────────────────────────────────────────────
+  // Mede a precisão da escada de espera SEM ENVIAR NADA. É o jeito de saber se os 10ms
+  // são reais nesta máquina/rede antes de confiar um trem de nobre à central.
+  // Rode no console: await ccAferir(8)
+  async function ccAferir(n) {
+    const rodadas = n || 8;
+    ccAncorar();
+    const rede = await ccSondar(8);
+    const erros = [];
+    for (let i = 0; i < rodadas; i++) {
+      const alvo = ccNow() + 3000 + (i % 3) * 250;   // varia a fase pra não cair sempre no mesmo grão
+      await ccAquecer();
+      const real = await ccEsperarPreciso(alvo);
+      erros.push(Math.round((real - alvo) * 1000) / 1000);
+    }
+    const ord = erros.slice().sort((a, b) => a - b);
+    const r = {
+      erroMs: erros,
+      mediana: ord[Math.floor(ord.length / 2)],
+      pior: ord[ord.length - 1],
+      rede: rede,
+      meioRtt: ccMeioRtt(),
+      biasAtual: config.cc.biasMs,
+      derivaDaAncora: ccDeriva(),
+      abaOculta: document.hidden,
+      keepAwake: ccAcordadoOk(),
+    };
+    pushLog('🎯 Aferição: erro mediano ' + r.mediana + 'ms (pior ' + r.pior + 'ms) · rede ' + (rede ? rede.mediana + 'ms ±' + rede.jitter : 'n/d') + ' · keep-awake ' + (r.keepAwake ? 'on' : 'off'), 'ok', 'planner');
+    return r;
+  }
+
+  // Diagnóstico do relógio: compara o Timing do jogo com o cabeçalho Date do servidor.
+  // NÃO aplica correção — o Date pode vir de proxy/CDN e tem grão de 1 segundo. Serve
+  // pra saber se vale a pena buscar precisão abaixo disso. Rode: await ccSincronizar()
+  async function ccSincronizar(maxSondas) {
+    const N = maxSondas || 25;
+    let anterior = null;
+    for (let i = 0; i < N; i++) {
+      const t0 = performance.now();
+      let hdr = null;
+      try {
+        const r = await fetch(CC_PING + '?s=' + i + '_' + Math.random(), { method: 'HEAD', cache: 'no-store', credentials: 'omit' });
+        hdr = r.headers.get('date');
+      } catch (e) { break; }
+      const t1 = performance.now();
+      if (!hdr) return { ok: false, motivo: 'servidor não devolve cabeçalho Date' };
+      const seg = Date.parse(hdr);
+      if (isNaN(seg)) return { ok: false, motivo: 'cabeçalho Date ilegível: ' + hdr };
+      if (anterior != null && seg > anterior) {
+        // A virada de segundo caiu entre o fim da resposta anterior e esta. O melhor
+        // palpite do instante da virada é o meio da ida desta requisição.
+        const instante = _ccAnc.srv + ((t0 + (t1 - t0) / 2) - _ccAnc.perf);
+        return {
+          ok: true,
+          desvioMs: Math.round(seg - instante),
+          incertezaMs: Math.round((t1 - t0) / 2),
+          sondas: i + 1,
+          nota: 'positivo = o relógio do jogo está ATRASADO em relação ao Date do servidor. Diagnóstico apenas; não foi aplicado.',
+        };
+      }
+      anterior = seg;
+      await ccDormir(45);
+    }
+    return { ok: false, motivo: 'não peguei a virada de segundo em ' + N + ' sondas' };
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════════
+  // CENTRAL — INTERFACE
+  //
+  // Dividida como o Nexus divide, que é como o usuário descreveu antes de ver a tela
+  // deles: o AGENDADOR RÁPIDO mora na tela da aldeia (screen=place), na linguagem
+  // visual do próprio TW; a PÁGINA PRÓPRIA é a fila com contagem regressiva e a
+  // aferição de precisão.
+  //
+  // A tela do Nexus só CRIA comando — não mostra a fila. Aqui é o contrário do que
+  // importa: a fila com contagem regressiva é onde se percebe que algo está errado
+  // ANTES de custar exército. E depois de medir 20ms de dispersão só de thread
+  // ocupada, mostrar o erro real não é vaidade: é como saber se dá pra confiar um
+  // trem de nobres à central.
+  // ════════════════════════════════════════════════════════════════════════════════
+
+  let _ccEstiloOk = false;
+  function ccInjetarEstilo() {
+    if (_ccEstiloOk) return; _ccEstiloOk = true;
+    const s = document.createElement('style');
+    s.textContent = [
+      "#twmgr-ccpg{position:fixed;inset:0;z-index:100001;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.62)}",
+      "#twmgr-ccpg.on{display:flex}",
+      "#twmgr-ccbox{width:min(1080px,94vw);max-height:88vh;display:flex;flex-direction:column;font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#e9dcc2;background:linear-gradient(160deg,#2a2016,#201810);border:1px solid #b8912e;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.7);overflow:hidden}",
+      "#twmgr-ccbox *{box-sizing:border-box}",
+      "#twmgr-cchead{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:linear-gradient(90deg,#6e5015,#9a721c 55%,#caa031);color:#fff;border-bottom:1px solid #8a6a20}",
+      "#twmgr-cchead .t{font-weight:700;font-size:13px;letter-spacing:.3px}",
+      "#twmgr-ccx{cursor:pointer;font-size:19px;line-height:1;padding:0 4px;opacity:.85}#twmgr-ccx:hover{opacity:1}",
+      "#twmgr-ccbody{flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px 14px 14px}",
+      "#twmgr-ccbody::-webkit-scrollbar{width:9px}#twmgr-ccbody::-webkit-scrollbar-thumb{background:#4a3a22;border-radius:4px}",
+      ".twmgr-cct{width:100%;border-collapse:collapse;font-size:11px}",
+      ".twmgr-cct th{font-size:9px;color:#ffd76a;font-weight:700;padding:5px 6px;border-bottom:1px solid #6a5320;text-transform:uppercase;text-align:left;letter-spacing:.4px}",
+      ".twmgr-cct td{padding:5px 6px;border-bottom:1px solid rgba(255,255,255,.05);vertical-align:middle}",
+      ".twmgr-cct tr:hover td{background:rgba(212,175,55,.05)}",
+      ".twmgr-ccst{font-size:9px;font-weight:700;padding:2px 7px;border-radius:99px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}",
+      ".twmgr-ccst.armado{background:rgba(90,140,220,.18);color:#8fb7f0;border:1px solid #3f6091}",
+      // As cores seguem duas familias, e isso nao e enfeite: azul/verde = no rumo,
+      // ambar/vermelho = precisa de voce. 'preparado' e 'incerto' sairam quase iguais
+      // na primeira versao (mesma borda, texto a 23 pontos de distancia) e significam
+      // coisas opostas — um esta saudavel, o outro quer dizer "pode ter enviado, va
+      // conferir". Confundir os dois custa exercito. 'incerto' tambem e tracejado.
+      ".twmgr-ccst.preparado{background:rgba(70,190,190,.15);color:#6fd8d8;border:1px solid #2f7d7d}",
+      // Bem mais claro que 'incerto', que e ambar: 'disparando' e o instante em que o
+      // POST esta no ar, e brilho maior le como "acontecendo agora".
+      ".twmgr-ccst.disparando{background:rgba(255,170,70,.26);color:#fff0d8;border:1px solid #d68a2a}",
+      ".twmgr-ccst.enviado{background:rgba(63,206,84,.15);color:#7ee38c;border:1px solid #2f7d3a}",
+      ".twmgr-ccst.incerto{background:rgba(230,150,40,.16);color:#ffc266;border:1px dashed #c98a22}",
+      ".twmgr-ccst.falhou,.twmgr-ccst.perdido{background:rgba(231,76,60,.16);color:#ff8b7c;border:1px solid #9c3a2c}",
+      ".twmgr-cccd{font-variant-numeric:tabular-nums;font-weight:700;color:#ffd76a;font-family:Consolas,'Courier New',monospace}",
+      ".twmgr-cccd.perto{color:#ff9a5a}",
+      ".twmgr-ccmet{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:11px}",
+      ".twmgr-ccm{flex:1 1 0;min-width:96px;background:linear-gradient(165deg,#241a0e,#181008);border:1px solid #45351d;border-radius:9px;padding:8px 7px;text-align:center}",
+      ".twmgr-ccm .v{font-size:18px;font-weight:800;color:#ffd76a;line-height:1;font-variant-numeric:tabular-nums}",
+      ".twmgr-ccm .l{font-size:8px;color:#9a8a63;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}",
+      ".twmgr-ccm.ruim .v{color:#ff8b7c}", ".twmgr-ccm.bom .v{color:#7ee38c}",
+      ".twmgr-ccvazio{text-align:center;color:#8f7d57;font-size:11px;padding:22px 0}",
+      "#twmgr-ccpg-btn{cursor:pointer;font-size:13px;line-height:1;padding:2px 3px;border-radius:5px;opacity:.85;transition:.15s}",
+      "#twmgr-ccpg-btn:hover{opacity:1;background:rgba(255,255,255,.14)}",
+    ].join('');
+    document.head.appendChild(s);
+  }
+
+  // COM os milissegundos. A tabela mostrava só até o segundo, e numa ferramenta que existe
+  // pra acertar milissegundo isso é cegueira: num teste de 8 comandos espaçados de 100ms,
+  // as oito linhas apareciam idênticas e não dava pra ver que o espaçamento tinha colapsado.
+  function ccFmtHora(ms) {
+    if (!ms) return '—';
+    const d = new Date(ms - wallToServerOffset());
+    // Texto puro de propósito: esta função também vai pro log e pra mensagens do agendador
+    // da praça, que são inseridos como TEXTO — devolver HTML aqui apareceria como tag crua.
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2) +
+      '.' + ('00' + d.getMilliseconds()).slice(-3);
+  }
+  function ccFmtFalta(ms) {
+    if (ms == null) return '—';
+    const neg = ms < 0; let s = Math.floor(Math.abs(ms) / 1000);
+    const h = Math.floor(s / 3600); s -= h * 3600;
+    const m = Math.floor(s / 60); s -= m * 60;
+    return (neg ? '-' : '') + (h ? h + ':' : '') + ('0' + m).slice(-2) + ':' + ('0' + s).slice(-2);
+  }
+  function ccResumoTropa(a) {
+    return UNITS.filter(([u]) => a[u]).map(([u, n]) => n + ' ' + a[u]).join(' · ') || '—';
+  }
+
+  let _ccPgTimer = null;
+  function ccAbrirPagina() {
+    ccInjetarEstilo();
+    let pg = document.getElementById('twmgr-ccpg');
+    if (!pg) {
+      pg = document.createElement('div'); pg.id = 'twmgr-ccpg';
+      pg.innerHTML =
+        '<div id="twmgr-ccbox">' +
+          '<div id="twmgr-cchead"><span class="t">🎯 Central de Comando</span>' +
+            '<span><button id="twmgr-cc-aferir" class="twmgr-btn twmgr-ghost" style="margin-right:8px" title="Mede a precisão real desta máquina. NÃO envia nada.">📏 Aferir</button>' +
+            '<span id="twmgr-ccx" title="fechar (Esc)">×</span></span></div>' +
+          '<div id="twmgr-ccbody">' +
+            '<div id="twmgr-ccmet" class="twmgr-ccmet"></div>' +
+            // Painel de ajuste. Existe porque NÃO HÁ resposta universal: a latência é da
+            // sua conexão, não do código. Eu tinha tudo isto como constante fixa, sem
+            // escape nenhum se o estimador errasse — e ele errou duas vezes nos testes.
+            '<details id="twmgr-ccconf" class="twmgr-section" style="margin-bottom:11px">' +
+              '<summary style="cursor:pointer;font-size:10px;color:#c9a24a;font-weight:700;letter-spacing:.5px;text-transform:uppercase">⚙ Ajuste de precisão</summary>' +
+              '<div style="margin-top:9px">' +
+                '<div class="twmgr-row"><span class="twmgr-lbl" title="Adaptativo mede o atraso dos últimos comandos e ajusta sozinho. Fixo usa o valor que você digitar — use se o adaptativo não convergir.">Modo</span>' +
+                  '<select id="twmgr-cc-modo" class="twmgr-inp" style="width:190px"><option value="adaptativo">Adaptativo (ele mede)</option><option value="fixo">Fixo (você define)</option></select></div>' +
+                '<div class="twmgr-row" id="twmgr-cc-row-fixo"><span class="twmgr-lbl" title="Quantos ms antes da hora o comando deve sair, pra compensar a viagem até o servidor.">Offset fixo (ms)</span>' +
+                  '<input id="twmgr-cc-offset" class="twmgr-inp" type="number" step="10" style="width:90px"></div>' +
+                '<div class="twmgr-row" id="twmgr-cc-row-estilo"><span class="twmgr-lbl" title="Responsivo acompanha mudança de latência rápido. Estável ignora variação curta — melhor em conexão instável.">Estilo do ajuste</span>' +
+                  '<select id="twmgr-cc-estilo" class="twmgr-inp" style="width:190px"><option value="estavel">Estável (ignora variação curta)</option><option value="responsivo">Responsivo (reage rápido)</option></select></div>' +
+                '<div class="twmgr-row"><span class="twmgr-lbl" title="Erro acima disto é tratado como defeito e ignorado no aprendizado, em vez de virar correção permanente.">Máximo de correção (ms)</span>' +
+                  '<input id="twmgr-cc-maxcorr" class="twmgr-inp" type="number" min="100" step="100" style="width:90px"></div>' +
+                '<div class="twmgr-hint" style="margin:6px 0 0">O modo adaptativo só aprende com envios em que a <b>própria espera</b> acertou (erro de escada abaixo de ' + CC.GUARDA_DERIVA_MS + 'ms). Amostra ruim é descartada em vez de envenenar a média — o log avisa quando isso acontece.</div>' +
+              '</div>' +
+            '</details>' +
+            '<div id="twmgr-ccfila"></div>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(pg);
+      pg.addEventListener('click', (e) => { if (e.target === pg) ccFecharPagina(); });
+      document.getElementById('twmgr-ccx').addEventListener('click', ccFecharPagina);
+      document.getElementById('twmgr-cc-aferir').addEventListener('click', async (ev) => {
+        const b = ev.currentTarget; b.disabled = true; b.textContent = '📏 medindo…';
+        try { const r = await ccAferir(8); b.textContent = '📏 ' + r.mediana + 'ms'; }
+        catch (e) { b.textContent = '📏 erro'; }
+        setTimeout(() => { b.disabled = false; b.textContent = '📏 Aferir'; }, 4000);
+        ccRenderPagina();
+      });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') ccFecharPagina(); });
+      // Ajuste de precisão: lê do config, salva na hora, e mostra só os campos do modo ativo.
+      const cf = () => (config.cc = config.cc || defCC());
+      const liga = (id, prop, num) => {
+        const el = document.getElementById(id); if (!el) return;
+        el.value = cf()[prop];
+        el.addEventListener('change', () => {
+          const v = num ? (parseInt(el.value, 10) || 0) : el.value;
+          cf()[prop] = num ? Math.max(num === 'pos' ? 100 : -99999, v) : v;
+          el.value = cf()[prop];
+          save(); ccConfVisibilidade(); ccRenderPagina();
+        });
+      };
+      liga('twmgr-cc-modo', 'modo'); liga('twmgr-cc-estilo', 'estilo');
+      liga('twmgr-cc-offset', 'offsetFixoMs', true); liga('twmgr-cc-maxcorr', 'maxCorrecaoMs', 'pos');
+      ccConfVisibilidade();
+    }
+    pg.classList.add('on');
+    ccManterAcordado(true);   // aproveita o gesto do clique pra destravar o áudio
+    ccRenderPagina();
+    clearInterval(_ccPgTimer);
+    _ccPgTimer = setInterval(ccRenderPagina, 500);
+  }
+  // Offset fixo só faz sentido no modo fixo; estilo do ajuste só no adaptativo.
+  function ccConfVisibilidade() {
+    const cc = config.cc || defCC();
+    const rf = document.getElementById('twmgr-cc-row-fixo');
+    const re = document.getElementById('twmgr-cc-row-estilo');
+    if (rf) rf.style.display = cc.modo === 'fixo' ? '' : 'none';
+    if (re) re.style.display = cc.modo === 'fixo' ? 'none' : '';
+  }
+
+  function ccFecharPagina() {
+    const pg = document.getElementById('twmgr-ccpg'); if (pg) pg.classList.remove('on');
+    clearInterval(_ccPgTimer); _ccPgTimer = null;
+  }
+
+  function ccRenderPagina() {
+    const pg = document.getElementById('twmgr-ccpg');
+    if (!pg || !pg.classList.contains('on')) { clearInterval(_ccPgTimer); _ccPgTimer = null; return; }
+    const cc = config.cc || defCC();
+    const fila = cc.fila || [];
+    const vivos = fila.filter((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando');
+    const ult = (cc.afericoes || []).slice(-1)[0];
+
+    // Painel de precisão. O erro medido é o que diz se dá pra confiar um nobre a ela.
+    const erroClasse = !ult ? '' : (Math.abs(ult.erro) <= 10 ? 'bom' : (Math.abs(ult.erro) > 30 ? 'ruim' : ''));
+    const met = document.getElementById('twmgr-ccmet');
+    met.innerHTML =
+      '<div class="twmgr-ccm"><div class="v">' + vivos.length + '</div><div class="l">na fila</div></div>' +
+      '<div class="twmgr-ccm ' + erroClasse + '"><div class="v">' + (ult ? (ult.erro > 0 ? '+' : '') + ult.erro + 'ms' : '—') + '</div><div class="l">último erro</div></div>' +
+      (cc.modo === 'fixo'
+        ? '<div class="twmgr-ccm"><div class="v">' + (cc.offsetFixoMs > 0 ? '+' : '') + cc.offsetFixoMs + 'ms</div><div class="l">offset fixo</div></div>'
+        : '<div class="twmgr-ccm"><div class="v">' + (cc.biasMs > 0 ? '+' : '') + cc.biasMs + 'ms</div><div class="l">viés aprendido (' + (cc.nReal || 0) + ')</div></div>') +
+      '<div class="twmgr-ccm"><div class="v">' + (cc.rttMs || '—') + 'ms</div><div class="l">ida-e-volta</div></div>' +
+      '<div class="twmgr-ccm ' + (ccAcordadoOk() ? 'bom' : '') + '"><div class="v">' + (ccAcordadoOk() ? 'on' : 'off') + '</div><div class="l">anti-estrangul.</div></div>';
+
+    const alvo = document.getElementById('twmgr-ccfila');
+    if (!fila.length) {
+      alvo.innerHTML = '<div class="twmgr-ccvazio">Nada agendado.<br><br>Abra a praça de reunião de uma aldeia e use o <b>Agendador rápido</b> pra marcar um comando.</div>';
+      return;
+    }
+    const ordem = fila.slice().sort((a, b) => (a.sendAt || a.alvoMs || 0) - (b.sendAt || b.alvoMs || 0));
+    const agora = ccNow();
+    alvo.innerHTML =
+      '<table class="twmgr-cct"><thead><tr>' +
+        '<th style="width:88px">Estado</th><th style="width:74px">Sai em</th><th>Comando</th>' +
+        '<th style="width:96px">Sai</th><th style="width:96px">Chega</th><th style="width:64px">Erro</th><th style="width:26px"></th>' +
+      '</tr></thead><tbody>' +
+      ordem.map((c) => {
+        const falta = c.sendAt ? c.sendAt - agora : null;
+        const vivo = (c.state === 'armado' || c.state === 'preparado');
+        const chega = c.modo === 'chegada' ? c.alvoMs : (c.durSec ? c.sendAt + c.durSec * 1000 : null);
+        return '<tr>' +
+          '<td><span class="twmgr-ccst ' + c.state + '">' + c.state + '</span></td>' +
+          '<td class="twmgr-cccd' + (vivo && falta != null && falta < 60000 ? ' perto' : '') + '">' + (vivo ? ccFmtFalta(falta) : '—') + '</td>' +
+          '<td>' + (c.kind === 'support' ? '🛡️' : '⚔️') + ' <b>' + c.origin + '</b> → ' + c.x + '|' + c.y +
+            '<div style="font-size:9px;color:#8f7d57">' + ccResumoTropa(c.amounts) + (c.erro ? ' · <span style="color:#e6a89d">' + c.erro + '</span>' : '') + '</div></td>' +
+          '<td>' + ccFmtHora(c.sendAt) + '</td>' +
+          '<td>' + ccFmtHora(chega) + '</td>' +
+          // Mostra o erro REAL (chegada publicada pelo jogo) quando já conferido; enquanto
+          // não conferiu, a estimativa entre parênteses, pra ficar claro que é provisória.
+          '<td class="twmgr-cccd">' + (c.erroRealMs != null
+            ? (c.erroRealMs > 0 ? '+' : '') + c.erroRealMs + 'ms'
+            : (c.erroMs == null ? '—' : '<span style="opacity:.55">(' + (c.erroMs > 0 ? '+' : '') + c.erroMs + ')</span>')) + '</td>' +
+          '<td>' + (vivo ? '<span class="twmgr-del twmgr-cc-rm" data-id="' + c.id + '" title="cancelar">✕</span>' : '') + '</td>' +
+        '</tr>';
+      }).join('') + '</tbody></table>';
+    alvo.querySelectorAll('.twmgr-cc-rm').forEach((el) => el.addEventListener('click', () => {
+      const c = (config.cc.fila || []).find((x) => x.id === el.getAttribute('data-id'));
+      ccRemover(el.getAttribute('data-id'));
+      if (c) pushLog('🎯 Central: ' + ccRotulo(c) + ' cancelado antes de sair.', '', 'planner');
+      ccRenderPagina();
+    }));
+  }
+
+  // ── Agendador rápido, injetado na praça de reunião ──────────────────────────────
+  // Matriz Mínimo / Enviar / Tudo / Disponível, copiada do Nexus porque resolve num
+  // controle só o que o Coordenado não expressa: "manda tudo MENOS X". Sem mínimo por
+  // unidade, "tudo" esvazia a aldeia e sobra preencher número na mão.
+  //
+  // Diferença: o Nexus tem um botão "buscar tropas". Aqui não precisa — na tela da
+  // praça os disponíveis já estão no DOM. Zero requisição pra montar a tela.
+  // As unidades QUE ESTE MUNDO TEM, não a lista fixa de 12. O br143 roda com 10 — sem
+  // arqueiro nem arqueiro a cavalo — e a matriz desenhava duas colunas sempre zeradas,
+  // que eram justamente as que empurravam a tabela pros 978px que precisaram rolar.
+  function ccUnidades() {
+    try {
+      const w = window.game_data && window.game_data.units;
+      if (Array.isArray(w) && w.length) {
+        const tem = UNITS.filter(([u]) => w.indexOf(u) >= 0);
+        if (tem.length) return tem;
+      }
+    } catch (e) {}
+    return UNITS;
+  }
+
+  function ccLerDisponivelDaTela() {
+    const av = {};
+    UNITS.forEach(([u]) => {
+      let n = 0;
+      const el = document.querySelector('a.units-entry-all[data-unit="' + u + '"]');
+      if (el) { const dc = el.getAttribute('data-all-count'); n = parseInt(dc != null ? dc : (el.textContent || '').replace(/\D/g, ''), 10); }
+      av[u] = isNaN(n) ? 0 : n;
+    });
+    return av;
+  }
+
+  function ccInjetarPraca() {
+    if (document.getElementById('twmgr-ccq')) return;
+    const url = new URLSearchParams(location.search);
+    const tela = url.get('screen'), modo = url.get('mode');
+    // A praça tem oito abas (Comandos, Tropas, Coletando, Coleta em Massa, Simulador,
+    // Aldeias próximas, Apoio em massa, Modelos) e todas são screen=place. Sem olhar o
+    // mode, o agendador aparecia em todas — inclusive na de coleta, onde não faz sentido.
+    // Só a de Comandos (sem mode, ou mode=command) e a tela de informações da aldeia.
+    if (!(tela === 'place' && (!modo || modo === 'command'))) return;
+    const form = document.querySelector('#command-data-form') || document.querySelector('form[action*="try=confirm"]') || document.querySelector('#content_value');
+    if (!form) return;
+    ccInjetarEstilo();
+    const disp = ccLerDisponivelDaTela();
+    const cel = (u) => '<td style="text-align:center;padding:2px 3px">';
+    const box = document.createElement('div');
+    box.id = 'twmgr-ccq';
+    box.style.cssText = 'margin:10px 0;border:1px solid #7d510a;border-radius:6px;background:#f4e4bc;color:#3b2914;font-size:11px;overflow:hidden';
+    box.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;background:linear-gradient(180deg,#e3c88b,#d3b26a);border-bottom:1px solid #7d510a;font-weight:700">' +
+        '<span>🎯 Agendador rápido — Central de Comando</span>' +
+        '<span><a href="javascript:void(0)" id="twmgr-ccq-fila" style="font-weight:400;margin-right:10px">ver fila</a><span id="twmgr-ccq-tog" style="cursor:pointer">▾</span></span></div>' +
+      '<div id="twmgr-ccq-body" style="padding:8px 10px">' +
+        // 12 colunas de unidade x 4 linhas pedem 978px (medido). A coluna de conteudo do
+        // jogo nem sempre e tao larga, e apertar as colunas deixaria os campos ilegiveis.
+        // Rola dentro do proprio contentor em vez de arrebentar o layout do jogo.
+        '<div style="overflow-x:auto;margin-bottom:8px">' +
+        '<table style="border-collapse:collapse;min-width:900px;width:100%"><tbody>' +
+          '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px"></td>' + ccUnidades().map(([u, n]) => '<td style="text-align:center;padding:2px 3px">' + unitIcon(u, n) + '</td>').join('') + '</tr>' +
+          '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px" title="quantas ficam em casa">Mínimo</td>' +
+            ccUnidades().map(([u]) => cel(u) + '<input class="twmgr-ccq-min" data-u="' + u + '" type="number" min="0" value="0" style="width:42px;text-align:center;font-size:11px"></td>').join('') + '</tr>' +
+          '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px">Enviar</td>' +
+            ccUnidades().map(([u]) => cel(u) + '<input class="twmgr-ccq-qtd" data-u="' + u + '" type="number" min="0" value="0" style="width:42px;text-align:center;font-size:11px"></td>').join('') + '</tr>' +
+          '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px" title="manda tudo que houver, menos o mínimo">Tudo</td>' +
+            ccUnidades().map(([u]) => cel(u) + '<input class="twmgr-ccq-all" data-u="' + u + '" type="checkbox"></td>').join('') + '</tr>' +
+          '<tr style="border-top:1px solid #c8ab74"><td style="font-size:10px;color:#5c4321;padding:2px 4px">Disponível</td>' +
+            ccUnidades().map(([u]) => cel(u) + '<span class="twmgr-ccq-av" data-u="' + u + '" style="font-size:10px;color:#6b5330">' + (disp[u] || 0) + '</span></td>').join('') + '</tr>' +
+        '</tbody></table></div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">' +
+          '<label>Alvo<br><input id="twmgr-ccq-alvo" type="text" placeholder="500|600" style="width:88px"></label>' +
+          '<label>Tipo<br><select id="twmgr-ccq-tipo" style="width:80px"><option value="attack">⚔️ Ataque</option><option value="support">🛡️ Apoio</option></select></label>' +
+          '<label>Marcar por<br><select id="twmgr-ccq-modo" style="width:96px"><option value="chegada">Chegada</option><option value="saida">Saída</option></select></label>' +
+          // step=0.001 faz o próprio campo aceitar milissegundos (30/07/2026 12:50:35,478).
+          // Antes era step=1 mais uma caixinha "± ms" separada — gambiarra minha, e o Nexus
+          // mostra que não precisa: um campo só, e o valor que o usuário digita é o valor.
+          '<label id="twmgr-ccq-lblh">Horário (com ms)<br><input id="twmgr-ccq-hora" type="datetime-local" step="0.001" style="width:210px"></label>' +
+          '<label title="deslocamento adicional, somado ao horário acima. Deixe 0 se já digitou os ms no campo ao lado.">± ms extra<br><input id="twmgr-ccq-ms" type="number" value="0" step="1" style="width:80px"></label>' +
+          // Onda montada aqui, em vez de o usuário agendar N vezes na mão — que foi o que
+          // ele fez no primeiro teste, e o resultado ficou impossível de ler porque os N
+          // comandos apareciam idênticos. O piso de 50ms é o padrão do Nexus ("Gap de
+          // Reordenação"); abaixo disso dois disparos se atropelam no motor.
+          '<label title="quantos comandos nesta onda. Cada um sai depois do anterior, espaçado pelo gap.">Qtd<br><input id="twmgr-ccq-qtd-onda" type="number" min="1" max="20" value="1" style="width:56px"></label>' +
+          '<label title="espaçamento entre comandos consecutivos da onda. Mínimo 100ms: medido no br143, o servidor processa comandos da mesma conta em fila e não entrega mais rápido que isso, por mais cedo que eu dispare.">Gap (ms)<br><input id="twmgr-ccq-gap" type="number" min="100" step="10" value="100" style="width:70px"></label>' +
+          '<button id="twmgr-ccq-add" class="btn" style="padding:4px 12px">🎯 Agendar</button>' +
+        '</div>' +
+        '<div id="twmgr-ccq-msg" style="margin-top:7px;font-size:10px;min-height:13px;color:#6b5330"></div>' +
+      '</div>';
+    (form.parentNode === document.body ? form : form).insertAdjacentElement('beforebegin', box);
+
+    const q = (s) => box.querySelector(s);
+    const todos = (s) => Array.prototype.slice.call(box.querySelectorAll(s));
+    // "Tudo" marcado cinza o campo Enviar — o número passa a ser calculado.
+    function sincronizarLinha() {
+      todos('.twmgr-ccq-all').forEach((ck) => {
+        const u = ck.getAttribute('data-u');
+        const inp = box.querySelector('.twmgr-ccq-qtd[data-u="' + u + '"]');
+        inp.disabled = ck.checked;
+        inp.style.background = ck.checked ? '#ddd0b0' : '';
+        if (ck.checked) {
+          const min = parseInt(box.querySelector('.twmgr-ccq-min[data-u="' + u + '"]').value, 10) || 0;
+          inp.value = Math.max(0, (disp[u] || 0) - min);
+        }
+      });
+    }
+    todos('.twmgr-ccq-all').forEach((el) => el.addEventListener('change', sincronizarLinha));
+    todos('.twmgr-ccq-min').forEach((el) => el.addEventListener('input', sincronizarLinha));
+    q('#twmgr-ccq-tog').addEventListener('click', () => {
+      const b = q('#twmgr-ccq-body');
+      const fechado = b.style.display === 'none';
+      b.style.display = fechado ? 'block' : 'none';
+      q('#twmgr-ccq-tog').textContent = fechado ? '▾' : '▸';
+    });
+    q('#twmgr-ccq-fila').addEventListener('click', ccAbrirPagina);
+    // Puxa o alvo que já estiver digitado no formulário do jogo.
+    try {
+      const ai = document.querySelector('input[name="input"]');
+      if (ai && ai.value) q('#twmgr-ccq-alvo').value = ai.value.trim();
+      else {
+        const xi = document.querySelector('input[name="x"]'), yi = document.querySelector('input[name="y"]');
+        if (xi && yi && xi.value && yi.value) q('#twmgr-ccq-alvo').value = xi.value + '|' + yi.value;
+      }
+    } catch (e) {}
+
+    q('#twmgr-ccq-add').addEventListener('click', () => {
+      const msg = q('#twmgr-ccq-msg');
+      const dizer = (t, erro) => { msg.textContent = t; msg.style.color = erro ? '#a52a1a' : '#2d6a2f'; };
+      try {
+        const mc = (q('#twmgr-ccq-alvo').value || '').match(/(\d{1,3})\s*\|\s*(\d{1,3})/);
+        if (!mc) return dizer('Informe o alvo no formato 500|600.', true);
+        const hora = q('#twmgr-ccq-hora').value;
+        if (!hora) return dizer('Informe o horário.', true);
+        const amounts = {};
+        let total = 0, estouro = [];
+        // ccUnidades(), não UNITS: com 10 colunas desenhadas, procurar o campo do arqueiro
+        // devolveria null e o clique em Agendar estouraria.
+        ccUnidades().forEach(([u, nome]) => {
+          const min = parseInt(box.querySelector('.twmgr-ccq-min[data-u="' + u + '"]').value, 10) || 0;
+          const ck = box.querySelector('.twmgr-ccq-all[data-u="' + u + '"]').checked;
+          const teto = Math.max(0, (disp[u] || 0) - min);
+          let n = ck ? teto : (parseInt(box.querySelector('.twmgr-ccq-qtd[data-u="' + u + '"]').value, 10) || 0);
+          if (n > teto) { estouro.push(nome); n = teto; }
+          if (n > 0) { amounts[u] = n; total += n; }
+        });
+        if (!total) return dizer('Nenhuma tropa selecionada.', true);
+        const base = arrivalToServerMs(hora) + (parseInt(q('#twmgr-ccq-ms').value, 10) || 0);
+        const qtdOnda = Math.max(1, Math.min(20, parseInt(q('#twmgr-ccq-qtd-onda').value, 10) || 1));
+        const gap = Math.max(CC.ONDA_GAP_MIN_MS, parseInt(q('#twmgr-ccq-gap').value, 10) || CC.ONDA_GAP_MIN_MS);
+        const modo = q('#twmgr-ccq-modo').value;
+        // A tropa de cada comando é a MESMA quantidade: uma onda de 4 leva 4x o total.
+        // Confere antes de agendar, senão o 2º ao 4º falham na hora do disparo por falta
+        // de tropa — e falhar no disparo é bem pior que recusar agora.
+        const faltando = [];
+        Object.keys(amounts).forEach((u) => { if (amounts[u] * qtdOnda > (disp[u] || 0)) faltando.push(u); });
+        if (faltando.length) return dizer('Tropa insuficiente pra ' + qtdOnda + ' comandos: ' + faltando.join(', ') + '. Cada comando da onda leva a quantidade cheia.', true);
+        const criados = [];
+        for (let i = 0; i < qtdOnda; i++) {
+          criados.push(ccAdicionar({
+            origin: CUR_VID, x: mc[1], y: mc[2],
+            kind: q('#twmgr-ccq-tipo').value,
+            amounts: amounts, modo: modo,
+            alvoMs: base + i * gap,
+          }));
+        }
+        const aviso = estouro.length ? ' (limitei ' + estouro.join(', ') + ' ao disponível)' : '';
+        dizer(qtdOnda === 1
+          ? 'Agendado: ' + ccResumoTropa(amounts) + ' → ' + mc[1] + '|' + mc[2] + aviso + '. Veja a fila pra acompanhar.'
+          : 'Onda de ' + qtdOnda + ' agendada → ' + mc[1] + '|' + mc[2] + ', espaçada de ' + gap + 'ms' + aviso + '. Veja a fila pra acompanhar.');
+        pushLog('🎯 Central: ' + (qtdOnda === 1 ? '' : 'onda de ' + qtdOnda + ' × ') + ccRotulo(criados[0]) +
+          ' agendado (' + modo + ' ' + ccFmtHora(base) + (qtdOnda > 1 ? ', gap ' + gap + 'ms' : '') + ').', 'ok', 'planner');
+      } catch (e) { dizer(String(e.message || e), true); }
+    });
+    sincronizarLinha();
+  }
+
+  // Botão no cabeçalho do painel. Injetado depois do buildUI em vez de editado dentro
+  // da string do cabeçalho: mantém a Central inteira num bloco só, no fim do arquivo.
+  function ccBotaoPainel() {
+    const acoes = document.getElementById('twmgr-head-actions');
+    if (!acoes || document.getElementById('twmgr-ccpg-btn')) return;
+    const b = document.createElement('span');
+    b.id = 'twmgr-ccpg-btn';
+    b.title = 'Central de Comando — fila e precisão';
+    b.textContent = '🗓️';
+    b.addEventListener('click', ccAbrirPagina);
+    acoes.insertBefore(b, acoes.firstChild);
+  }
+
+  // Enquanto não há interface, a central se opera pelo console. Este é o único ponto
+  // em que o script escreve em window — de propósito, pra poder aferir sem armar nada.
+  //   await TWMgrCC.aferir(8)        → mede a precisão real desta máquina, sem enviar
+  //   await TWMgrCC.sincronizar()    → diagnóstico do relógio contra o Date do servidor
+  //   TWMgrCC.fila()                 → estado dos comandos
+  try {
+    window.TWMgrCC = {
+      aferir: ccAferir, sincronizar: ccSincronizar, sondar: ccSondar,
+      adicionar: ccAdicionar, remover: ccRemover, abrir: ccAbrirPagina,
+      fila: () => (config.cc && config.cc.fila) || [],
+      agora: ccNow, deriva: ccDeriva, acordar: ccManterAcordado, acordadoOk: ccAcordadoOk,
+    };
+  } catch (e) {}
+
+  buildUI();
+  try { enhanceUnitsPage(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
+  try { unitsScheduleAuto(); } catch (e) { /* silencioso: scheduler é opcional */ }
+  try { enhanceIncomingsPage(); } catch (e) { /* silencioso */ }
+  try { desviarResumeAll(); } catch (e) { /* silencioso */ }
+  try { ccRetomar(); } catch (e) { console.warn('[TWMgr Central] retomada falhou:', e); }
+  try { ccBotaoPainel(); } catch (e) { /* silencioso */ }
+  try { ccInjetarPraca(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
+  // Fora do t=0: loadMapData puxa village.txt e player.txt, os dois maiores downloads do
+  // script, e disparar isso junto com as ~128 requisicoes do carregamento da pagina era
+  // pedir 429. Entra depois da fila de retomada dos modulos.
+  setTimeout(() => { try { enhanceMapPage(); } catch (e) { /* silencioso */ } }, 70000);
+})();

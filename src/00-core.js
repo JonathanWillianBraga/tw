@@ -1,0 +1,702 @@
+// ==UserScript==
+// @name         Tribal Wars Manager
+// @namespace    tw-manager
+
+// @version      11.3.0
+// @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
+// @match        https://*.tribalwars.com.br/game.php*
+// @match        https://*.tribalwars.net/game.php*
+// @grant        none
+// @updateURL    https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js
+// @downloadURL  https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js
+// @run-at       document-idle
+// ==/UserScript==
+
+/*
+  NAO EDITE tw-manager.user.js DIRETO — ele e GERADO.
+  Fonte da verdade: os modulos em src/*.js. Edite o modulo certo e rode:
+      python tools/build.py     # concatena src/*.js -> tw-manager.user.js
+      python tools/check.py     # valida antes de publicar (o pre-commit ja roda)
+  O Tampermonkey continua baixando o tw-manager.user.js gerado pelo mesmo RAW/@updateURL.
+*/
+
+(function () {
+  'use strict';
+  if (typeof window.game_data === 'undefined' || !window.game_data.village) return;
+
+  // TRAVA DE INICIALIZACAO DUPLA — nao existia, e a ausencia e invisivel ate doer.
+  //
+  // Se o script roda duas vezes na mesma pagina (script instalado duas vezes no gestor,
+  // iframe de mesma origem que tambem casa com game.php, ou reinjecao), voce fica com
+  // DOIS paineis sobrepostos parecendo um, DOIS ouvintes em cada botao — um clique dispara
+  // duas vezes — e DOIS conjuntos de temporizadores. Todas as requisicoes dobram, em
+  // silencio. Foi assim que apareceu "ciclo iniciado" duas vezes com 1s de diferenca no log
+  // do usuario, e 86 leituras de screen=place pra 43 aldeias.
+  //
+  // Roda so no documento de topo: dentro de iframe nao ha nada util a fazer.
+  if (window.top !== window.self) return;
+  if (window.__twMgrAtivo) { console.warn('[TWMgr] ja havia uma instancia nesta pagina — esta foi ignorada.'); return; }
+  window.__twMgrAtivo = true;
+
+  const UNITS = [
+    ['spear', 'Lanc.'], ['sword', 'Espad.'], ['axe', 'Bárb.'], ['archer', 'Arq.'],
+    ['spy', 'Expl.'], ['light', 'C.leve'], ['marcher', 'A.cav.'], ['heavy', 'C.pes.'],
+    ['ram', 'Aríete'], ['catapult', 'Catap.'], ['knight', 'Palad.'], ['snob', 'Nobre'],
+  ];
+
+  // Stats canônicos do Tribal Wars — usado pra calcular força off/def e pop ocupada por tropa.
+  const UNIT_STATS = {
+    spear:    { att: 10,  def: 15,  defCav: 45,  defArch: 20,  pop: 1 },
+    sword:    { att: 25,  def: 50,  defCav: 15,  defArch: 40,  pop: 1 },
+    axe:      { att: 40,  def: 10,  defCav: 5,   defArch: 10,  pop: 1 },
+    archer:   { att: 15,  def: 50,  defCav: 40,  defArch: 5,   pop: 1 },
+    spy:      { att: 0,   def: 2,   defCav: 1,   defArch: 2,   pop: 2 },
+    light:    { att: 130, def: 30,  defCav: 40,  defArch: 30,  pop: 4 },
+    marcher:  { att: 120, def: 40,  defCav: 30,  defArch: 50,  pop: 5 },
+    heavy:    { att: 150, def: 200, defCav: 80,  defArch: 180, pop: 6 },
+    ram:      { att: 2,   def: 20,  defCav: 50,  defArch: 20,  pop: 5 },
+    catapult: { att: 30,  def: 100, defCav: 50,  defArch: 100, pop: 8 },
+    knight:   { att: 150, def: 250, defCav: 400, defArch: 150, pop: 10 },
+    snob:     { att: 30,  def: 100, defCav: 50,  defArch: 100, pop: 100 },
+  };
+
+  const SCAV_UNITS = [['spear', 'Lanc.'], ['sword', 'Espad.'], ['axe', 'Bárb.'], ['light', 'C.leve'], ['heavy', 'C.pes.'], ['knight', 'Palad.']];
+  const FARM_DEF_ZERO_TTL_MS = 6 * 3600 * 1000;   // 'sem defesa' vale por 6h; 'tem defesa' nao expira
+  const CARRY = { spear: 25, sword: 15, axe: 10, archer: 10, spy: 0, light: 80, marcher: 50, heavy: 50, ram: 0, catapult: 0, knight: 100, snob: 0 };
+  const POP = { spear: 1, sword: 1, axe: 1, light: 4, heavy: 6, knight: 10 };
+  const LOOT_FACTOR = { 1: 0.1, 2: 0.25, 3: 0.5, 4: 0.75 };
+  const MIN_POP = 10;
+
+  const RUNITS = [['spear', 'Lanc.'], ['sword', 'Espad.'], ['axe', 'Bárb.'], ['spy', 'Expl.'],
+                  ['light', 'C.leve'], ['heavy', 'C.pes.'], ['ram', 'Aríete'], ['catapult', 'Catap.']];
+  const BUILDING_OF = { spear: 'barracks', sword: 'barracks', axe: 'barracks',
+                        spy: 'stable', light: 'stable', heavy: 'stable', ram: 'garage', catapult: 'garage' };
+  const BUILD_KEYS = ['main', 'barracks', 'stable', 'garage', 'watchtower', 'snob', 'smith', 'place', 'statue', 'market', 'wood', 'stone', 'iron', 'farm', 'storage', 'hide', 'wall'];
+  const BUILD_META = {
+    main:       { name: 'Ed. principal', ico: '🏛️', max: 30 },
+    barracks:   { name: 'Quartel',       ico: '⚔️', max: 25 },
+    stable:     { name: 'Estábulo',      ico: '🐴', max: 20 },
+    garage:     { name: 'Oficina',       ico: '⚙️', max: 15 },
+    watchtower: { name: 'Torre de vigia',ico: '🔭', max: 20 },
+    snob:       { name: 'Academia',      ico: '👑', max: 3  },
+    smith:      { name: 'Ferreiro',      ico: '⚒️', max: 20 },
+    place:      { name: 'Praça reunião', ico: '🚩', max: 1  },
+    statue:     { name: 'Estátua',       ico: '🗿', max: 1  },
+    market:     { name: 'Mercado',       ico: '🏪', max: 25 },
+    wood:       { name: 'Bosque',        ico: '🌲', max: 30 },
+    stone:      { name: 'Poço argila',   ico: '🪨', max: 30 },
+    iron:       { name: 'Mina ferro',    ico: '⛏️', max: 30 },
+    farm:       { name: 'Fazenda',       ico: '🌾', max: 30 },
+    storage:    { name: 'Armazém',       ico: '📦', max: 30 },
+    hide:       { name: 'Esconderijo',   ico: '🕳️', max: 10 },
+    wall:       { name: 'Muralha',       ico: '🧱', max: 20 },
+  };
+  const tplToPlan = (text) => (text || '').split('\n').map((l) => l.trim().match(/^([a-z_]+)\s+(\d+)$/i)).filter(Boolean).filter((m) => BUILD_META[m[1].toLowerCase()]).map((m) => ({ b: m[1].toLowerCase(), lvl: Math.max(1, Math.min(BUILD_META[m[1].toLowerCase()].max, +m[2])), en: true }));
+  // Nomes completos (não abreviados) como aparecem na tabela "Ainda não disponível" de screen=main —
+  // diferente de BUILD_META.name, que é abreviado pra UI (ex.: "Ed. principal" vs "Edifício principal").
+  const LOCKED_REQ_NAME_TO_KEY = {
+    'Edifício principal': 'main', 'Quartel': 'barracks', 'Estábulo': 'stable', 'Oficina': 'garage',
+    'Torre de vigia': 'watchtower', 'Academia': 'snob', 'Ferreiro': 'smith', 'Praça de reunião': 'place',
+    'Estátua': 'statue', 'Mercado': 'market', 'Bosque': 'wood', 'Poço de argila': 'stone', 'Mina de ferro': 'iron',
+    'Fazenda': 'farm', 'Armazém': 'storage', 'Esconderijo': 'hide', 'Muralha': 'wall',
+  };
+  const planToTpl = (plan) => (plan || []).map((it) => it.b + ' ' + it.lvl).join('\n');
+  const ATK_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 10\nbarracks 10\nmarket 5\ngarage 5\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nstable 15\nbarracks 15\nmarket 10\ngarage 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nstable 20\nbarracks 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
+  const DEF_TPL = 'main 15\nfarm 20\nstorage 20\nwood 15\nstone 15\niron 15\nsmith 5\nbarracks 10\nmarket 5\nstable 10\nwall 10\nwood 20\nstone 20\niron 20\nfarm 24\nstorage 24\nmain 20\nbarracks 15\nwall 15\nmarket 10\nwood 25\nstone 25\niron 25\nfarm 27\nstorage 27\nbarracks 20\nwall 20\nmarket 15\nwood 30\nstone 30\niron 30\nfarm 30\nstorage 30\nbarracks 25\nmarket 20';
+
+  // ==================== OBRA — templates dos 5 perfis (Fazenda e Armazém NÃO entram aqui na
+  // maioria dos perfis: são condicionais, decididos em tempo real por obraSpecialPriority(). O
+  // Fast Nobre é exceção — quebra essa regra e sobe Armazém de forma proativa, por isso tem
+  // "storage" embutido no template mesmo. Níveis finais e prioridades vieram direto da dicção do
+  // usuário, guardada em memória (tw_village_building_plans.md). ====================
+  // Regra do usuário (calibrada 2x): gap mais suave que a versão anterior. Perfis com Quartel como
+  // prioridade: quando minas batem 15, Quartel já está em 18. Perfis com Estábulo como prioridade
+  // (Farm ATK, Fast Nobre): quando minas batem 15, Estábulo está em 12 (bem mais discreto). Minas
+  // sempre em trio sincronizado wood/stone/iron.
+  const OBRA_TPL_FULL_ATK = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nmain 6\nwood 8\nstone 8\niron 8\nstable 1\ngarage 1\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nbarracks 18\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 20\nmain 12\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\ngarage 2\nmarket 15\nbarracks 23\nmain 17\nwood 25\nstone 25\niron 25\nmain 20\nstable 15\nbarracks 25\nmarket 20\nwood 30\nstone 30\niron 30\nstable 20';
+  const OBRA_TPL_FULL_DEF = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nstable 1\nmain 6\nwood 8\nstone 8\niron 8\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nbarracks 18\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 20\nwall 10\nmain 12\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\nmarket 15\nbarracks 23\nmain 17\nwood 25\nstone 25\niron 25\nmain 20\nbarracks 25\nmarket 20\nwood 30\nstone 30\niron 30\nwall 15\nwall 20';
+  const OBRA_TPL_FARM_ATK = 'main 3\nstable 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nstable 5\nwood 5\nstone 5\niron 5\nbarracks 1\nmain 6\nwood 8\nstone 8\niron 8\ngarage 1\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nstable 12\nbarracks 10\nwood 15\nstone 15\niron 15\nmarket 10\nstable 15\nbarracks 15\nmain 12\nwood 20\nstone 20\niron 20\nmain 15\ngarage 2\nmarket 15\nstable 18\nbarracks 20\nmain 17\nwood 25\nstone 25\niron 25\nmain 20\nstable 20\nbarracks 23\nmarket 20\nwood 30\nstone 30\niron 30\nbarracks 25';
+  const OBRA_TPL_FAST_DEF = 'main 3\nbarracks 1\nstatue 1\nsmith 5\nwood 3\nstone 3\niron 3\nbarracks 5\nwood 5\nstone 5\niron 5\nbarracks 10\nstable 1\nsmith 10\nmain 6\nwood 8\nstone 8\niron 8\nmarket 5\nwood 12\nstone 12\niron 12\nmain 10\nbarracks 18\nwood 15\nstone 15\niron 15\nstable 5\nmarket 10\nbarracks 20\nsmith 15\nwall 10\nmain 12\nwood 20\nstone 20\niron 20\nmain 15\nstable 10\nmarket 15\nbarracks 23\nmain 17\nwood 25\nstone 25\niron 25\nmain 20\nstable 15\nbarracks 25\nmarket 20\nwood 30\nstone 30\niron 30\nwall 15\nwall 20';
+  const OBRA_TPL_FAST_NOBRE = 'main 3\nstable 1\nstatue 1\nsmith 5\nstorage 5\nwood 3\nstone 3\niron 3\nstable 5\nsmith 10\nwood 5\nstone 5\niron 5\nbarracks 1\nmain 6\nstorage 10\nsmith 15\nwood 8\nstone 8\niron 8\nmarket 5\nstorage 15\ngarage 1\nwood 12\nstone 12\niron 12\nstable 12\nbarracks 10\nsmith 20\nmain 10\nstorage 20\nwood 15\nstone 15\niron 15\nmarket 10\nstable 15\nbarracks 15\nmain 12\nwood 20\nstone 20\niron 20\nmain 15\nstorage 24\ngarage 2\nstable 18\nmain 17\nwood 25\nstone 25\niron 25\nmain 20\nsnob 1\nbarracks 20\nstorage 27\nstable 20\nwood 30\nstone 30\niron 30\nbarracks 25\nstorage 30';
+  const OBRA_PROFILES = ['fullAtk', 'fullDef', 'farmAtk', 'fastDef', 'fastNobre'];
+  const OBRA_PROFILE_META = {
+    fullAtk:   { name: 'Full ATK',   tpl: OBRA_TPL_FULL_ATK,   storageProativo: false, priorityBuilding: 'barracks' },
+    fullDef:   { name: 'Full DEF',   tpl: OBRA_TPL_FULL_DEF,   storageProativo: false, priorityBuilding: 'barracks' },
+    farmAtk:   { name: 'Farm ATK',   tpl: OBRA_TPL_FARM_ATK,   storageProativo: false, priorityBuilding: 'stable' },
+    fastDef:   { name: 'Fast DEF',   tpl: OBRA_TPL_FAST_DEF,   storageProativo: false, priorityBuilding: 'barracks' },
+    fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
+  };
+
+  const VERSION = '11.3.0';
+  const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
+  let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
+  const WORLD = window.game_data.world || 'w';
+  const KEY = 'twMgr_' + WORLD;
+  const LOGKEY = KEY + '_log';
+  const LOCKKEY = KEY + '_lock';
+  const CSRF = window.game_data.csrf;
+  const CUR_VID = String(window.game_data.village.id);
+  const CUR_NAME = window.game_data.village.name || ('ID ' + CUR_VID);
+
+  let IMG_BASE = '';
+  try { const im = document.querySelector('img[src*="/asset/"]'); if (im) { const mm = im.src.match(/^(https?:\/\/[^/]+\/asset\/[^/]+\/)/); if (mm) IMG_BASE = mm[1]; } } catch (e) {}
+  function unitIcon(u, label) { return IMG_BASE ? '<img class="twmgr-ui" src="' + IMG_BASE + 'graphic/unit/unit_' + u + '.png" title="' + label + '" alt="' + label + '">' : label; }
+  function buildingIcon(key, fallback) { return IMG_BASE ? '<img class="twmgr-ui" src="' + IMG_BASE + 'graphic/buildings/' + key + '.png" title="' + (fallback || key) + '" alt="' + (fallback || key) + '">' : (fallback || ''); }
+
+  let TAB_ID = sessionStorage.getItem('twmgr_tabid');
+  if (!TAB_ID) { TAB_ID = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); sessionStorage.setItem('twmgr_tabid', TAB_ID); }
+
+  let _idc = 0;
+  function genId() { return 'g' + Date.now().toString(36) + (_idc++).toString(36) + Math.random().toString(36).slice(2, 5); }
+
+  const defScav = () => ({
+    running: false, nextAt: 0,
+    units: { spear: true, sword: true, axe: true, light: true, heavy: true, knight: false },
+    maxHours: 0,           // (johan) nenhum nivel de coleta com duracao acima disto e enviado. 0 = sem limite
+    // Desbloqueio automático das coletas. Roda junto do ciclo de coleta, que já lê o
+    // estado de todas as aldeias numa requisição só — então descobrir o que dá pra
+    // desbloquear não custa requisição nenhuma a mais.
+    autoUnlock: false,
+    unlockAte: 4,          // desbloqueia até esta opção (1 Pequena … 4 Extrema)
+    unlockPuxar: true,     // faltando recurso, puxa de outras aldeias imediatamente
+    unlockReserva: 5000,   // a doadora nunca fica abaixo disto em cada recurso
+    unlockMaxOrigens: 5,   // quantas aldeias no máximo contribuem por desbloqueio
+    faltouRecurso: {},     // vid -> { nome, opcao, falta:{wood,stone,iron}, at } — o que travou
+  });
+  // Por cor: um modo único ('none'|'a'|'b'|'c') + qtd (só p/ a/b; C manda 1x).
+  const defFarmMatrix = () => ({ greenEmpty: { mode: 'a', qty: 1 }, greenFull: { mode: 'b', qty: 1 }, yellowEmpty: { mode: 'none', qty: 1 }, yellowFull: { mode: 'none', qty: 1 }, blue: { mode: 'b', qty: 1 } });
+  const FARM_COLORS = ['greenEmpty', 'greenFull', 'yellowEmpty', 'yellowFull', 'blue'];
+  const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, blueMaxWall: 0, delay: 500, mode: 'suave', group: null, repeat: false, repeatMin: 10, minCL: 0, order: 'dist', dynTemplate: false, matrix: defFarmMatrix(), sentReports: {}, defended: {} });
+  const defWall = () => ({ running: false, nextAt: 0, interval: 600, wallMin: 1, wallMax: 6, ramMode: 'auto', ramFixed: 20, ramWall6: 24, axeCount: 80, spyCount: 1, sentDemo: {} });
+  const defRecruit = () => ({
+    running: false, nextAt: 0, interval: 600, targetHours: 2, refillBelowMin: 30,
+    groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
+    groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo (mantido p/ Edifícios/Cultivo)
+  });
+  const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
+  const defMarket = () => ({ running: false, mode: 'cunhagem', nextAt: 0, interval: 600, destCoord: '', reserve: 0, sources: {}, mintSources: {}, thresholdPct: 50, maxDist: 15, groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {} });
+  const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
+  // Cultivo — 3 fases (batem com os cards: f1 = main<20 · f2 = main 20 e stable<15 · f3 = graduada/recrutando).
+  // FASE 1: leva o Ed. principal até 20 + o que ele depende (armazém "lidera" p/ bancar os níveis; fazenda leve p/ pop). Sem estábulo.
+  const BB_TPL_F1 = 'main 5\nstorage 5\nfarm 5\nmain 10\nstorage 8\nfarm 8\nmain 14\nstorage 12\nfarm 10\nmain 17\nstorage 18\nmain 20\nstorage 20';
+  // FASE 2: destrava e fecha o Estábulo 15 (quartel 5 + ferreiro 5 = pré-req; depois estábulo até 15). Ao fechar = graduada.
+  const BB_TPL_F2 = 'barracks 5\nsmith 5\nstable 5\nfarm 13\nstable 9\nfarm 15\nstable 12\nstable 15';
+  // FASE 3 (graduada, já recrutando): autossuficiência. Recurso + armazém lideram (reduz feed, sem travar), fazenda
+  // acompanha a pop das tropas, quartel/estábulo -> 20 p/ velocidade de recrutamento. Baixa prioridade no fim: oficina (cerco ATK), mercado, muralha.
+  const BB_TPL_F3 = 'wood 12\nstone 12\niron 12\nstorage 22\nfarm 20\nbarracks 10\nstable 18\nsmith 10\nwood 18\nstone 18\niron 18\nstorage 25\nfarm 25\nbarracks 15\nsmith 15\nwood 22\nstone 22\niron 22\nstorage 27\nfarm 27\nstable 20\nbarracks 20\nwood 25\nstone 25\niron 25\nstorage 30\nfarm 30\ngarage 10\nmarket 15\nwall 15';
+  const BB_TPL = BB_TPL_F1 + '\n' + BB_TPL_F2 + '\n' + BB_TPL_F3;
+  const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, feedFillPct: 90, feedAllowOverfill: false, gradMain: 20, gradStable: 15, inflight: {} });
+  const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
+  const defMap = () => ({
+    running: false, nextAt: 0,
+    cicloMin: 30,                         // intervalo entre ciclos (deixa de ser one-shot)
+    maxDist: 20, minDaysSinceScout: 0,    // 0 = nunca reexplora quem já tem relatório com dados
+    group: null,                          // grupo com aldeias de origem (vazio = todas)
+    spyReserve: 30, spyCount: 5,          // guardar N spy por aldeia; enviar N spy por bárbaro
+    minPoints: 26, maxPoints: 5000,
+    maxPerVillage: 20, delay: 500,
+    onlyBarbarians: true,
+    sentAt: {},                           // vid do bárbaro -> timestamp do último scout nosso
+    lastPreview: [],                      // lista mostrada na tabela
+    // ── Conhecimento acumulado ──────────────────────────────────────────────────
+    barbConhecidos: {},                   // vid -> quando vi pela primeira vez (detecta bárbaro NOVO)
+    ultimoMapaAt: 0,                      // quando recarreguei village.txt pela última vez
+    // ── Blacklists ──────────────────────────────────────────────────────────────
+    // Perda: o assistente pinta de VERMELHO o último saque em que se perdeu tropa. Sai
+    // sozinha quando aparecer relatório verde, amarelo ou azul.
+    blacklistPerda: {},                   // coord -> { at, vid, pts }
+    // Defesa: o relatório de exploração mostrou tropa defensiva. Não sai sozinha.
+    blacklistDefesa: {},                  // coord -> { at, vid, pts, defTotal, removido }
+    relatoriosLidos: {},                  // reportId -> 1 (pra não reler o mesmo relatório)
+    // COBERTURA DE EXPLORAÇÃO, guardada de forma compacta pra caber no localStorage:
+    // coord -> código. É o que responde "até onde eu já enxerguei" quando desenhado no mapa.
+    // Sem isto o conhecimento morria no fim de cada ciclo e a tela nunca via.
+    intel: {},                            // "500|600" -> 1..6 (ver MAP_INTEL)
+    intelAt: 0,                           // quando foi atualizado pela última vez
+    defesaMin: 1,                         // a partir de quantas unidades de defesa entra na lista
+    removerDoAssistente: false,           // apagar os relatórios no jogo (irreversível) — ver nota
+  });
+  const defLock = () => ({
+    running: false, nextAt: 0,
+    maxDist: 10, minPoints: 500, interval: 1800,   // raio em campos (X), pontos mín. (Y), reciclo em segundos (30min padrão)
+    reserved: {},                          // vid do bárbaro -> timestamp de quando O SCRIPT travou (nunca destrava sozinho)
+    stats: {},
+  });
+  const defPlannerAttack = (name) => ({
+    id: genId(), name: name || 'Ataque',
+    running: false, offsetMs: 150,
+    targetX: '', targetY: '',
+    arriveLocal: '',                       // datetime-local base (usuário digita)
+    selected: {},                          // { [vid]: true } — aldeias participantes
+    perVillage: {},                        // { [vid]: { kind, offsetMs, amounts:{unit:qty} } }
+    homeAvail: {},                         // { [vid]: { unit:N, loadedAt: ms } } — cache do "Carregar tropas"
+    rows: [],                              // gerado no plannerStart a partir de perVillage
+  });
+  const defBlindagem = () => ({
+    threadUrl: '',        // URL do tópico do fórum da tribo com a tabela de pedidos
+    rows: [],             // [{ id, num, name, coord, x, y, ped:{LANC,ESP,SPY,CP}, originVid, send:{LANC,ESP,SPY,CP}, checked }]
+    lastFetch: 0,         // ms do último fetch bem-sucedido
+  });
+  const defPlanner = () => ({
+    attacks: [defPlannerAttack('Ataque 1')], // vários ataques independentes, cada um pode ser armado por conta própria
+    activeId: null,                        // id do ataque mostrado na UI (setado no load())
+    templates: [],                         // templates salvos { id, name, targetX, targetY, arriveLocal, selected, perVillage }
+    blindagem: defBlindagem(),             // sub-módulo: pedidos de blindagem da tribo
+  });
+  const defUnits = () => ({
+    // history[YYYY-MM-DD] = {
+    //   at: msEpoch,
+    //   totals: { [unit]: N },
+    //   byVillage: { [vid]: { name, coord, totals: {u:N}, force: {...} } },
+    //   force: { total, att, def, defCav, defArch, pop, nobles },
+    // }
+    history: {},
+    historyDays: 90,
+  });
+  const defDesviar = () => ({
+    keepSpy: true,        // deixar exploradores em casa (pra farmar/monitorar)
+    keepKnight: false,    // deixar paladino
+    sendBeforeMs: 30000,  // sair de casa N ms ANTES do primeiro ataque marcado
+    cancelOffsetMs: 5000, // cancelar N ms APÓS o ÚLTIMO ataque marcado
+    // Ataques marcados pra desviar. Marcar NÃO envia: o envio é agendado.
+    // [{ id, coord, vid, arriveAt }]
+    marks: [],
+    pending: [],          // [{ id, vid, coordOrigem, supportVid, supportCoord, cmdId, sendAt, cancelAt, ultimoAtaque, state, err }]
+  });
+  const defMapUi = () => ({
+    // Filtros visuais persistidos entre visitas ao screen=map
+    collapsed: false,          // painel colapsado?
+    show: {
+      mine: true,              // aldeias próprias
+      tribe: true,             // aliadas da minha tribo
+      enemy: true,             // outros jogadores (fora da tribo)
+      barb: true,              // bárbaros
+    },
+    pointsMin: 0,              // filtro min de pontos (0 = sem mínimo)
+    pointsMax: 0,              // filtro max (0 = sem máximo)
+    showBadge: true,           // exibir badge de pontos em cada aldeia
+    showIntel: true,           // exibir ⚠ (defesa conhecida) e ⛰N (muralha) baseado em farm.defended
+    showReservations: true,    // exibir ⌛Xh nas aldeias reservadas pela tribo
+    showCobertura: true,       // moldura colorida por estado de exploração (base do módulo Mapa)
+    showRange: false,          // área alcançada pelo raio do módulo Mapa, em volta das suas aldeias
+    dimMode: 'off',            // 'off' (sem escurecer) | 'dim' (bloco preto sobre filtradas)
+    dimOpacity: 0.15,          // opacidade das aldeias filtradas (só usado quando dimMode = 'dim')
+    reservations: {},          // { [coord]: { at, expiresAt, playerName } } — sync manual
+    reservationsAt: 0,         // ms do último sync manual
+    dataCachedAt: 0,           // ms do último load do village.txt
+  });
+  const defPaladin = () => ({
+    running: false,
+    villages: {},          // { [vid]: true } — 1ª entrada: quais aldeias ficam no ciclo de treino
+    checkIntervalMin: 240, // 2ª entrada: intervalo do check periódico (padrão 4h em minutos)
+    sendDelayMs: 500,      // 3ª entrada: delay entre envios sucessivos (não manda todos de uma vez)
+    state: {},             // { [vid]: { knightId, name, level, status, finishAt } } — cache p/ UI
+  });
+  // Central de Comando — núcleo de precisão. O bloco de código dela fica no FIM do
+  // arquivo; só o default mora aqui, porque def() roda no carregamento.
+  const defCC = () => ({
+    fila: [],               // comandos agendados (sobrevivem a F5)
+    biasMs: 0,              // latência aprendida (modo adaptativo)
+    rttMs: 0,               // última mediana de ida-e-volta medida (só exibição)
+    manterAcordado: true,   // oscilador silencioso: impede o Chrome de estrangular a aba
+    afericoes: [],          // histórico de erro medido (últimas 50)
+    // Os quatro abaixo são o painel de precisão do Nexus, e existem porque não há
+    // resposta universal: cada conexão pede um ajuste. Antes eu tinha isto tudo como
+    // constante fixa no código, sem escape nenhum se o estimador errasse.
+    modo: 'adaptativo',     // 'fixo' (você digita a latência) | 'adaptativo' (ele mede)
+    offsetFixoMs: 0,        // usado no modo fixo
+    estilo: 'estavel',      // 'responsivo' (reage rápido) | 'estavel' (ignora variação curta)
+    maxCorrecaoMs: 1000,    // acima disto o erro é tratado como defeito e ignorado
+    ondaGapMs: 50,          // espaçamento padrão entre comandos de uma onda
+  });
+  // Etiqueta (johan) — usa o botao nativo "Etiqueta" da tela de ataques recebidos, que
+  // faz o SERVIDOR adivinhar a unidade mais lenta pelo tempo de viagem restante. Quanto
+  // mais cedo depois do envio, mais precisa a adivinhacao — dai o ciclo curto.
+  const defEtiqueta = () => ({
+    running: false,
+    intervalMin: 2,
+    lastCount: 0,
+    jaEnviados: {},   // id do comando -> 1. Sem isto ele reenviava TODOS a cada ciclo.
+    recuoAte: 0,      // 429: nao tenta antes disto
+    recuoMs: 0,       // recuo atual, dobra a cada 429
+  });
+  const defObra = () => ({
+    running: false,
+    groups: { fullAtk: null, fullDef: null, farmAtk: null, fastDef: null, fastNobre: null },   // grupo nativo do TW -> perfil
+    interval: 600,          // seg. entre ciclos (padrão 10 min)
+    maxQueue: 5,            // fila de construção máx. por aldeia
+    reserveMin: 0,          // reserva mín. de cada recurso antes de construir — 0 = desliga; usar pra sobrar recurso pro Recrutar
+    farmFreePopMin: 800,    // gatilho Fazenda: só upa quando população livre (max-atual) cai abaixo disso
+    storageFillPct: 60,     // gatilho Armazém: só upa quando algum recurso atinge X% da capacidade (Fast Nobre ignora, é proativo)
+    autoResearch: true,     // pesquisa automática no Ferreiro, seguindo a ordem de OBRA_RESEARCH_ORDER por perfil
+    plans: {
+      fullAtk: tplToPlan(OBRA_TPL_FULL_ATK), fullDef: tplToPlan(OBRA_TPL_FULL_DEF), farmAtk: tplToPlan(OBRA_TPL_FARM_ATK),
+      fastDef: tplToPlan(OBRA_TPL_FAST_DEF), fastNobre: tplToPlan(OBRA_TPL_FAST_NOBRE),
+    },
+    nextAt: 0,
+    demand: {},              // { [vid]: { b, cost, coord, profile } }
+  });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
+  function load() {
+    let c = def();
+    try {
+      const r = JSON.parse(localStorage.getItem(KEY) || 'null');
+      if (r) {
+        if (r.targets) c = Object.assign(c, r);
+        else if (r.x || r.units) { c.targets = [{ id: genId(), x: r.x || '', y: r.y || '', enabled: true, units: r.units || {}, nextSendAt: 0 }]; c.running = false; }
+      }
+    } catch (e) {}
+    c.running = false; // Auto-ATK (Alvos) descontinuado na v9.21 — backend dormente
+    if (!c.scav) c.scav = defScav();
+    if (typeof c.scav.autoUnlock !== 'boolean') c.scav.autoUnlock = false;
+    if (typeof c.scav.unlockAte !== 'number' || c.scav.unlockAte < 1 || c.scav.unlockAte > 4) c.scav.unlockAte = 4;
+    if (typeof c.scav.unlockPuxar !== 'boolean') c.scav.unlockPuxar = true;
+    if (typeof c.scav.unlockReserva !== 'number' || c.scav.unlockReserva < 0) c.scav.unlockReserva = 5000;
+    if (typeof c.scav.unlockMaxOrigens !== 'number' || c.scav.unlockMaxOrigens < 1) c.scav.unlockMaxOrigens = 5;
+    if (!c.scav.faltouRecurso) c.scav.faltouRecurso = {};
+    if (!c.scav.units) c.scav.units = defScav().units;
+    if (c.scav.maxHours == null) c.scav.maxHours = 0;
+    if (!c.farm) c.farm = defFarm();
+    if (!c.farm.sentReports) c.farm.sentReports = {};
+    if (c.farm.maxDist == null) c.farm.maxDist = 13;
+    if (c.farm.maxWall == null) c.farm.maxWall = 20;
+    if (c.farm.blueMaxWall == null) c.farm.blueMaxWall = 0;
+    if (c.farm.delay == null) c.farm.delay = 500;
+    // limpa campos de aríete que ficaram no farm em versões antigas (migraram pro Quebra-muralha)
+    delete c.farm.ramMode; delete c.farm.ramFixed; delete c.farm.ramWall6; delete c.farm.axeCount;
+    // v9.55.0: removido - script nunca mais apaga relatorio automaticamente
+    delete c.farm.blueDeleteMinDef;
+    const oldMin = c.farm.min != null ? c.farm.min : 1000;
+    if (c.farm.minWood == null) c.farm.minWood = oldMin;
+    if (c.farm.minStone == null) c.farm.minStone = oldMin;
+    if (c.farm.minIron == null) c.farm.minIron = oldMin;
+    if (!c.farm.mode) c.farm.mode = 'suave';
+    if (c.farm.group === undefined) c.farm.group = null;
+    // "Repetir farm": migra do antigo cooldownMin se existir
+    if (c.farm.repeat == null) c.farm.repeat = false;
+    if (c.farm.repeatMin == null) c.farm.repeatMin = (c.farm.cooldownMin != null ? c.farm.cooldownMin : 10);
+    delete c.farm.cooldownMin;
+    if (c.farm.minCL == null) c.farm.minCL = 0;
+    if (!c.farm.order) c.farm.order = 'dist';
+    if (c.farm.dynTemplate == null) c.farm.dynTemplate = false;
+    if (!c.farm.matrix) c.farm.matrix = defFarmMatrix();
+    // Migração matriz {a,b,c} antiga -> {mode,qty} (escolha única por cor)
+    FARM_COLORS.forEach((k) => {
+      const cell = c.farm.matrix[k] || {};
+      if (cell.mode === undefined) {
+        let mode = 'none', qty = 1;
+        if (cell.c === true) mode = 'c';
+        else if ((cell.b || 0) > 0) { mode = 'b'; qty = cell.b; }
+        else if ((cell.a || 0) > 0) { mode = 'a'; qty = cell.a; }
+        c.farm.matrix[k] = { mode: mode, qty: Math.max(1, qty) };
+      }
+    });
+    if (!c.farm.defended) c.farm.defended = {};
+    if (!c.wall) c.wall = defWall();
+    if (!c.wall.sentDemo) c.wall.sentDemo = {};
+    if (c.wall.wallMin == null) c.wall.wallMin = 1;
+    if (c.wall.wallMax == null) c.wall.wallMax = 6;
+    if (!c.wall.ramMode) c.wall.ramMode = 'auto';
+    if (c.wall.ramFixed == null) c.wall.ramFixed = 20;
+    if (c.wall.ramWall6 == null) c.wall.ramWall6 = 24;
+    if (c.wall.axeCount == null) c.wall.axeCount = 80;
+    if (c.wall.interval == null) c.wall.interval = 600;
+    if (!c.recruit) c.recruit = defRecruit();
+    if (!c.recruit.profiles) c.recruit.profiles = { atk: { targets: {} }, def: { targets: {} } };
+    if (!c.recruit.profiles.atk) c.recruit.profiles.atk = { targets: {} };
+    if (!c.recruit.profiles.def) c.recruit.profiles.def = { targets: {} };
+    if (!c.recruit.overrides) c.recruit.overrides = {};
+    if (!c.recruit.queueEst) c.recruit.queueEst = {};
+    if (!Array.isArray(c.recruit.groups)) c.recruit.groups = [];
+    if (c.recruit.targetHours == null) c.recruit.targetHours = 2;
+    if (c.recruit.refillBelowMin == null) c.recruit.refillBelowMin = 30;
+    if (c.recruit.interval == null) c.recruit.interval = 600;
+    if (!c.fakes) c.fakes = defFakes();
+    if (c.fakes.offsetMs == null) c.fakes.offsetMs = 150;
+    if (c.fakes.pct == null) c.fakes.pct = 1;
+    if (c.fakes.minPop == null) c.fakes.minPop = 0;
+    if (!c.fakes.mode) c.fakes.mode = 'split';
+    if (!c.fakes.siege) c.fakes.siege = 'ram';
+    if (!c.fakes.filler) c.fakes.filler = 'spy';
+    if (!c.fakes.origins) c.fakes.origins = {};
+    if (!c.fakes.gen) c.fakes.gen = [];
+    if (c.fakes.targetsRaw == null) c.fakes.targetsRaw = '';
+    if (c.fakes.arrLocal == null) c.fakes.arrLocal = '';
+    if (!c.market) c.market = defMarket();
+    if (!c.market.mode) c.market.mode = 'cunhagem';
+    if (c.market.interval == null) c.market.interval = 600;
+    if (c.market.reserve == null) c.market.reserve = 0;
+    if (!c.market.sources) c.market.sources = {};
+    if (!c.market.mintSources) c.market.mintSources = {};
+    if (c.market.destCoord == null) c.market.destCoord = '';
+    if (c.market.thresholdPct == null) c.market.thresholdPct = 50;
+    if (c.market.maxDist == null) c.market.maxDist = 15;
+    if (c.market.groupSolidario == null) c.market.groupSolidario = '';
+    if (c.market.solidarioThresholdPct == null) c.market.solidarioThresholdPct = 50;
+    if (c.market.solidarioMaxDist == null) c.market.solidarioMaxDist = 20;
+    if (c.market.solidarioDonorPct == null) c.market.solidarioDonorPct = 50;
+    if (c.market.solidarioDonorMinPct == null) c.market.solidarioDonorMinPct = 50;
+    if (c.market.solidarioGargaloKeepPct == null) c.market.solidarioGargaloKeepPct = 90;
+    if (!c.market.inflight) c.market.inflight = {};
+    if (!c.recruit.demand) c.recruit.demand = {};
+    if (!c.build) c.build = defBuild();
+    if (c.build.maxQueue == null) c.build.maxQueue = 5;
+    if (c.build.interval == null) c.build.interval = 600;
+    if (!c.build.demand) c.build.demand = {};
+    // Migração de textareas (atkTpl/defTpl) pra estrutura plans
+    if (!c.build.plans) c.build.plans = { atk: null, def: null };
+    if (!Array.isArray(c.build.plans.atk) || !c.build.plans.atk.length) c.build.plans.atk = tplToPlan(c.build.atkTpl || ATK_TPL);
+    if (!Array.isArray(c.build.plans.def) || !c.build.plans.def.length) c.build.plans.def = tplToPlan(c.build.defTpl || DEF_TPL);
+    // Sanitiza: mantém só chaves válidas, clampa nível, preserva 'en'
+    ['atk', 'def'].forEach((k) => {
+      c.build.plans[k] = (c.build.plans[k] || []).filter((it) => it && BUILD_META[it.b]).map((it) => ({ b: it.b, lvl: Math.max(1, Math.min(BUILD_META[it.b].max, parseInt(it.lvl, 10) || 1)), en: it.en !== false }));
+    });
+    delete c.build.atkTpl; delete c.build.defTpl;
+    if (!c.bb) c.bb = defBB();
+    if (!c.bb.tpl) c.bb.tpl = BB_TPL;
+    if (c.bb.defCoords == null) c.bb.defCoords = '';
+    if (c.bb.feedReserve == null) c.bb.feedReserve = 40;
+    if (c.bb.feedMaxDist == null) c.bb.feedMaxDist = 15;
+    if (c.bb.feedFillPct == null) c.bb.feedFillPct = 90;
+    if (c.bb.feedAllowOverfill == null) c.bb.feedAllowOverfill = false;
+    if (c.bb.maxQueue == null) c.bb.maxQueue = 5;
+    if (c.bb.interval == null) c.bb.interval = 600;
+    if (c.bb.gradMain == null) c.bb.gradMain = 20;
+    if (c.bb.gradStable == null) c.bb.gradStable = 15;
+    if (!c.bb.inflight) c.bb.inflight = {};
+    if (!c.map) c.map = defMap();
+    // Reformulação do Mapa: de one-shot pra ciclo contínuo, com base de conhecimento e
+    // blacklists. Campos novos entram sem apagar o que já existe.
+    if (typeof c.map.cicloMin !== 'number' || c.map.cicloMin < 5) c.map.cicloMin = 30;
+    if (!c.map.barbConhecidos) c.map.barbConhecidos = {};
+    if (!c.map.blacklistPerda) c.map.blacklistPerda = {};
+    if (!c.map.blacklistDefesa) c.map.blacklistDefesa = {};
+    if (!c.map.relatoriosLidos) c.map.relatoriosLidos = {};
+    if (typeof c.map.defesaMin !== 'number' || c.map.defesaMin < 1) c.map.defesaMin = 1;
+    if (typeof c.map.removerDoAssistente !== 'boolean') c.map.removerDoAssistente = false;
+    if (typeof c.map.ultimoMapaAt !== 'number') c.map.ultimoMapaAt = 0;
+    // A regra passou a ser "tenho ou não tenho informação". A idade do relatório vira
+    // reexploração OPCIONAL, desligada por padrão — quem tinha 2 dias configurado mantém.
+    if (typeof c.map.minDaysSinceScout !== 'number') c.map.minDaysSinceScout = 0;
+    if (!c.map.sentAt) c.map.sentAt = {};
+    if (!c.map.lastPreview) c.map.lastPreview = [];
+    if (c.map.maxDist == null) c.map.maxDist = 20;
+    if (c.map.minDaysSinceScout == null) c.map.minDaysSinceScout = (c.map.minDaysSinceAttack != null ? c.map.minDaysSinceAttack : 2);
+    if (c.map.spyReserve == null) c.map.spyReserve = 30;
+    if (c.map.spyCount == null) c.map.spyCount = 1;
+    delete c.map.units; delete c.map.tplBId; delete c.map.interval; delete c.map.minDaysSinceAttack;
+    if (c.map.minPoints == null) c.map.minPoints = 26;
+    if (c.map.maxPoints == null) c.map.maxPoints = 5000;
+    if (c.map.maxPerVillage == null) c.map.maxPerVillage = 20;
+    if (c.map.delay == null) c.map.delay = 500;
+    if (c.map.onlyBarbarians == null) c.map.onlyBarbarians = true;
+    if (!c.etiqueta) c.etiqueta = defEtiqueta();
+    if (c.etiqueta.intervalMin == null) c.etiqueta.intervalMin = 2;
+    if (c.etiqueta.lastCount == null) c.etiqueta.lastCount = 0;
+    if (!c.etiqueta.jaEnviados) c.etiqueta.jaEnviados = {};
+    // O registro de "ja enviados" foi envenenado ate a v11.2.6: a validacao aprovava
+    // qualquer resposta, entao comandos NAO etiquetados eram marcados como feitos e nunca
+    // mais seriam tentados. Zera uma vez.
+    if (c.etiqueta.limpezaVer !== 2) { c.etiqueta.limpezaVer = 2; c.etiqueta.jaEnviados = {}; }
+    if (c.etiqueta.recuoAte == null) c.etiqueta.recuoAte = 0;
+    if (c.etiqueta.recuoMs == null) c.etiqueta.recuoMs = 0;
+    if (c.etiqueta.intervalMin < 2) c.etiqueta.intervalMin = 2;
+    if (!c.lock) c.lock = defLock();
+    if (c.lock.maxDist == null) c.lock.maxDist = 10;
+    if (c.lock.minPoints == null) c.lock.minPoints = 500;
+    if (c.lock.interval == null) c.lock.interval = 1800;
+    if (!c.lock.reserved) c.lock.reserved = {};
+    if (!c.captcha) c.captcha = defCaptcha();
+    if (c.captcha.enabled == null) c.captcha.enabled = true;
+    if (c.captcha.browserNotif == null) c.captcha.browserNotif = true;
+    if (c.captcha.ntfyTopic == null) c.captcha.ntfyTopic = '';
+    if (c.captcha.cooldownSec == null) c.captcha.cooldownSec = 300;
+    if (c.captcha.reloadMin == null) c.captcha.reloadMin = 0;
+    if (c.captcha.lastNotifiedAt == null) c.captcha.lastNotifiedAt = 0;
+    if (!c.planner) c.planner = defPlanner();
+    if (!Array.isArray(c.planner.attacks) || !c.planner.attacks.length) {
+      // Migração do formato antigo (1 único ataque direto em config.planner) pro novo (lista de ataques independentes).
+      const legacy = c.planner;
+      const atk = defPlannerAttack('Ataque 1');
+      atk.running = !!legacy.running;
+      atk.offsetMs = legacy.offsetMs != null ? legacy.offsetMs : 150;
+      atk.targetX = legacy.targetX || ''; atk.targetY = legacy.targetY || '';
+      atk.arriveLocal = legacy.arriveLocal || '';
+      atk.selected = (legacy.selected && typeof legacy.selected === 'object') ? legacy.selected : {};
+      atk.perVillage = (legacy.perVillage && typeof legacy.perVillage === 'object') ? legacy.perVillage : {};
+      atk.homeAvail = (legacy.homeAvail && typeof legacy.homeAvail === 'object') ? legacy.homeAvail : {};
+      atk.rows = Array.isArray(legacy.rows) ? legacy.rows : [];
+      c.planner = { attacks: [atk], activeId: atk.id, templates: Array.isArray(legacy.plans) ? legacy.plans : [] };
+    }
+    if (!Array.isArray(c.planner.templates)) c.planner.templates = [];
+    c.planner.attacks.forEach((atk) => {
+      if (!atk.id) atk.id = genId();
+      if (!atk.name) atk.name = 'Ataque';
+      if (atk.offsetMs == null) atk.offsetMs = 150;
+      if (!atk.selected || typeof atk.selected !== 'object') atk.selected = {};
+      if (!atk.perVillage || typeof atk.perVillage !== 'object') atk.perVillage = {};
+      if (!atk.homeAvail || typeof atk.homeAvail !== 'object') atk.homeAvail = {};
+      if (!Array.isArray(atk.rows)) atk.rows = [];
+      if (atk.targetX == null) atk.targetX = '';
+      if (atk.targetY == null) atk.targetY = '';
+      if (atk.arriveLocal == null) atk.arriveLocal = '';
+      // Migração: perVillage[vid] era 1 onda só (objeto); agora é uma lista de ondas (array).
+      Object.keys(atk.perVillage).forEach((vid) => {
+        if (!Array.isArray(atk.perVillage[vid])) atk.perVillage[vid] = atk.perVillage[vid] ? [atk.perVillage[vid]] : [];
+        atk.perVillage[vid].forEach((w) => { if (!w.amounts || typeof w.amounts !== 'object') w.amounts = {}; if (!w.kind) w.kind = 'attack'; if (w.offsetMs == null) w.offsetMs = 0; });
+      });
+    });
+    if (!c.planner.activeId || !c.planner.attacks.some((a) => a.id === c.planner.activeId)) c.planner.activeId = c.planner.attacks[0].id;
+    if (!c.cc) c.cc = defCC();
+    if (!Array.isArray(c.cc.fila)) c.cc.fila = [];
+    if (!Array.isArray(c.cc.afericoes)) c.cc.afericoes = [];
+    if (typeof c.cc.biasMs !== 'number' || !isFinite(c.cc.biasMs)) c.cc.biasMs = 0;
+    if (typeof c.cc.rttMs !== 'number' || !isFinite(c.cc.rttMs)) c.cc.rttMs = 0;
+    if (typeof c.cc.manterAcordado !== 'boolean') c.cc.manterAcordado = true;
+    if (c.cc.modo !== 'fixo' && c.cc.modo !== 'adaptativo') c.cc.modo = 'adaptativo';
+    if (c.cc.estilo !== 'responsivo' && c.cc.estilo !== 'estavel') c.cc.estilo = 'estavel';
+    if (typeof c.cc.offsetFixoMs !== 'number' || !isFinite(c.cc.offsetFixoMs)) c.cc.offsetFixoMs = 0;
+    if (typeof c.cc.maxCorrecaoMs !== 'number' || c.cc.maxCorrecaoMs < 100) c.cc.maxCorrecaoMs = 1000;
+    if (typeof c.cc.ondaGapMs !== 'number' || c.cc.ondaGapMs < 100) c.cc.ondaGapMs = 100;
+    // Até a 10.22.0 a conferência casava vários comandos com a MESMA linha de chegada e
+    // produzia erros inventados — que foram direto pro estimador. O viés aprendido antes
+    // desta versão não vale nada; zera uma vez e recomeça com dado limpo.
+    if (c.cc.calibVer !== 2) {
+      c.cc.calibVer = 2; c.cc.biasMs = 0; c.cc.nReal = 0; c.cc.afericoes = [];
+      (c.cc.fila || []).forEach((x) => { x.erroRealMs = null; x.chegadaReal = null; x.tentativasConf = 0; });
+    }
+    if (!c.planner.blindagem) c.planner.blindagem = defBlindagem();
+    if (typeof c.planner.blindagem.threadUrl !== 'string') c.planner.blindagem.threadUrl = '';
+    if (!Array.isArray(c.planner.blindagem.rows)) c.planner.blindagem.rows = [];
+    if (c.planner.blindagem.lastFetch == null) c.planner.blindagem.lastFetch = 0;
+    if (!c.reservations || typeof c.reservations !== 'object') c.reservations = {};
+    if (!c.units) c.units = defUnits();
+    if (!c.units.history || typeof c.units.history !== 'object') c.units.history = {};
+    if (c.units.historyDays == null) c.units.historyDays = 90;
+    if (!c.desviar) c.desviar = defDesviar();
+    if (c.desviar.keepSpy == null) c.desviar.keepSpy = true;
+    if (c.desviar.keepKnight == null) c.desviar.keepKnight = false;
+    if (c.desviar.cancelOffsetMs == null) c.desviar.cancelOffsetMs = 5000;
+    if (!Array.isArray(c.desviar.pending)) c.desviar.pending = [];
+    if (!c.mapUi) c.mapUi = defMapUi();
+    if (typeof c.mapUi.collapsed !== 'boolean') c.mapUi.collapsed = false;
+    if (!c.mapUi.show || typeof c.mapUi.show !== 'object') c.mapUi.show = defMapUi().show;
+    ['mine','tribe','enemy','barb'].forEach((k) => { if (typeof c.mapUi.show[k] !== 'boolean') c.mapUi.show[k] = true; });
+    if (c.mapUi.pointsMin == null) c.mapUi.pointsMin = 0;
+    if (c.mapUi.pointsMax == null) c.mapUi.pointsMax = 0;
+    if (typeof c.mapUi.showBadge !== 'boolean') c.mapUi.showBadge = true;
+    if (typeof c.mapUi.showIntel !== 'boolean') c.mapUi.showIntel = true;
+    if (typeof c.mapUi.showReservations !== 'boolean') c.mapUi.showReservations = true;
+    if (typeof c.mapUi.showCobertura !== 'boolean') c.mapUi.showCobertura = true;
+    if (typeof c.mapUi.showRange !== 'boolean') c.mapUi.showRange = false;
+    if (c.mapUi.dimMode !== 'off' && c.mapUi.dimMode !== 'dim') c.mapUi.dimMode = 'off';
+    if (c.mapUi.dimOpacity == null) c.mapUi.dimOpacity = 0.15;
+    if (!c.mapUi.reservations || typeof c.mapUi.reservations !== 'object') c.mapUi.reservations = {};
+    if (c.mapUi.reservationsAt == null) c.mapUi.reservationsAt = 0;
+    if (c.mapUi.dataCachedAt == null) c.mapUi.dataCachedAt = 0;
+    if (!c.paladin) c.paladin = defPaladin();
+    if (!c.paladin.villages || typeof c.paladin.villages !== 'object') c.paladin.villages = {};
+    if (c.paladin.checkIntervalMin == null) c.paladin.checkIntervalMin = 240;
+    if (c.paladin.sendDelayMs == null) c.paladin.sendDelayMs = 500;
+    if (!c.paladin.state || typeof c.paladin.state !== 'object') c.paladin.state = {};
+    if (!c.obra) c.obra = defObra();
+    if (!c.obra.groups || typeof c.obra.groups !== 'object') c.obra.groups = defObra().groups;
+    OBRA_PROFILES.forEach((p) => { if (c.obra.groups[p] === undefined) c.obra.groups[p] = null; });
+    if (c.obra.interval == null) c.obra.interval = 600;
+    if (c.obra.maxQueue == null) c.obra.maxQueue = 5;
+    if (c.obra.reserveMin == null) c.obra.reserveMin = 0;
+    if (c.obra.farmFreePopMin == null) c.obra.farmFreePopMin = 800;
+    if (c.obra.storageFillPct == null) c.obra.storageFillPct = 60;
+    if (c.obra.autoResearch == null) c.obra.autoResearch = true;
+    if (!c.obra.plans) c.obra.plans = {};
+    OBRA_PROFILES.forEach((p) => { if (!Array.isArray(c.obra.plans[p]) || !c.obra.plans[p].length) c.obra.plans[p] = tplToPlan(OBRA_PROFILE_META[p].tpl); });
+    if (!c.obra.demand || typeof c.obra.demand !== 'object') c.obra.demand = {};
+    (c.targets || []).forEach((t) => { if (!t.origin) { t.origin = CUR_VID; t.originName = CUR_NAME; } });
+    return c;
+  }
+  function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
+
+  let config = load();
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, marketTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
+  let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
+  const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || (config.market && config.market.running) || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
+  // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
+  // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
+  // sendo montado. Quem faz trabalho avulso marca aqui.
+  let _ocupadoAvulso = 0;
+  async function ocupado(fn) { _ocupadoAvulso++; try { return await fn(); } finally { _ocupadoAvulso--; } }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
+  function lockOther() { const l = readLock(); return !!(l && l.id !== TAB_ID && (Date.now() - l.ts) < 12000); }
+  function claimLock() { localStorage.setItem(LOCKKEY, JSON.stringify({ id: TAB_ID, ts: Date.now() })); }
+  // Guarda para DENTRO dos laços longos. Os ciclos duram de 1 a 10 minutos e até aqui nada era
+  // reconferido depois da entrada do tick — com três consequências:
+  //   1. o botão Parar não parava: apagava a flag, mas o laço não a lia e seguia enviando;
+  //   2. a trava de aba (12s) expirava no meio e a outra aba passava a enviar junto, porque a
+  //      renovação depende do tickUI de 1s, que o Chrome estrangula em aba de fundo;
+  //   3. o bot-check só era visto na entrada; aparecendo no minuto 2 de um ciclo de 8, o laço
+  //      continuava martelando o servidor.
+  // Chamar no topo de cada iteração: `if (devoParar('farm')) break;`
+  // Renova a trava de brinde — quem está trabalhando é quem deve segurá-la.
+  function devoParar(mod) {
+    if (mod) {
+      const c = config[mod];
+      if (mod === 'planner') { if (!(config.planner.attacks || []).some((a) => a.running)) return 'parado pelo usuário'; }
+      else if (c && c.running === false) return 'parado pelo usuário';
+    }
+    if (lockOther()) return 'outra aba assumiu';
+    if (captchaBlocked()) return 'bot-check na tela';
+    // A Central tem prioridade: um disparo de precisão não pode disputar a rede nem a
+    // trava com um ciclo de saque. Os laços longos param e retomam no tick seguinte.
+    if (mod !== 'cc' && ccJanelaCritica()) return 'Central disparando';
+    claimLock();
+    return null;
+  }
+
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function pushLog(msg, kind, mod) {
+    let arr = []; try { arr = JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) {}
+    arr.unshift({ t: new Date().toLocaleTimeString(), m: msg, k: kind || '', mod: mod || '' });
+    localStorage.setItem(LOGKEY, JSON.stringify(arr.slice(0, 200)));
+    renderLog();
+    if (mod) renderModLog(mod);
+  }
+  // Limpa "linhas vivas" gravadas por versões anteriores: até a 9.99.0 a barra de progresso morava no
+  // log e podia ficar congelada se a página recarregasse no meio do ciclo. Agora a barra vive na aba
+  // do módulo; isto fica só pra faxina de quem está atualizando.
+  function closeStaleLiveLogs() {
+    let arr = []; try { arr = JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) { return; }
+    const mods = {};
+    let n = 0;
+    arr.forEach((l) => {
+      if (!l.live) return;
+      l.live = false; l.k = 'err'; n++;
+      l.m = 'Ciclo interrompido antes de terminar (página recarregada?).';
+      if (l.mod) mods[l.mod] = 1;
+    });
+    if (!n) return;
+    localStorage.setItem(LOGKEY, JSON.stringify(arr));
+    renderLog();
+    Object.keys(mods).forEach(renderModLog);
+  }
+  function logLineHTML(l) {
+    const c = l.k === 'err' ? '#ff7568' : l.k === 'ok' ? '#8fe39a' : '#cbb98f';
+    return '<div style="color:' + c + ';border-bottom:1px solid rgba(255,255,255,.05);padding:2px 0">[' + esc(l.t) + '] ' + esc(l.m) + '</div>';
+  }
+  function readLogArr() { try { return JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) { return []; } }
+  // Aba Log = só mensagens gerais (sem módulo)
+  function renderLog() {
+    const box = document.getElementById('twmgr-log'); if (!box) return;
+    box.innerHTML = readLogArr().filter((l) => !l.mod).map(logLineHTML).join('');
+  }
+  // Log recolhível no fim de cada aba de módulo (só as mensagens daquele módulo)
+  function renderModLog(mod) {
+    const body = document.getElementById('twmgr-modlog-body-' + mod);
+    const cnt = document.getElementById('twmgr-modlog-count-' + mod);
+    const rows = readLogArr().filter((l) => l.mod === mod);
+    if (cnt) cnt.textContent = rows.length;
+    if (body) body.innerHTML = rows.length ? rows.map(logLineHTML).join('') : '<div style="color:#8f7d57;padding:6px;font-size:10px">— sem mensagens ainda —</div>';
+  }
+

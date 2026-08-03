@@ -13,8 +13,11 @@
 // ==/UserScript==
 
 /*
-  FONTE DA VERDADE deste script: C:\Users\jonat\OneDrive\Documentos\Dev\Claude\tw-manager.user.js
-  O Claude edita este arquivo diretamente. Sincronize com o Tampermonkey (ver instruções na conversa).
+  NAO EDITE tw-manager.user.js DIRETO — ele e GERADO.
+  Fonte da verdade: os modulos em src/*.js. Edite o modulo certo e rode:
+      python tools/build.py     # concatena src/*.js -> tw-manager.user.js
+      python tools/check.py     # valida antes de publicar (o pre-commit ja roda)
+  O Tampermonkey continua baixando o tw-manager.user.js gerado pelo mesmo RAW/@updateURL.
 */
 
 (function () {

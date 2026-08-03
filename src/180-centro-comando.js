@@ -243,6 +243,16 @@
     cmd.state = 'disparando';
     cmd.fireAt = ccNow();
     save();
+    // Modo de teste: NÃO emite o POST final. Registra o instante do disparo e conclui.
+    // O motor, a escada de espera e o preparo (ccPreparar) rodaram normalmente — só a
+    // saída da tropa é suprimida. É o que separa "o motor não dispara" de "o envio falha".
+    // Não realimenta o viés: amostra simulada envenenaria o aprendizado adaptativo.
+    if (_ccSim) {
+      cmd.state = 'enviado'; cmd.sentAt = cmd.fireAt; cmd.erro = null; cmd.rttEnvioMs = 0; cmd.simulado = true;
+      save(); ccRenderPagina();
+      pushLog('🧪 SIMULADO: ' + ccRotulo(cmd) + ' — disparo em ' + ccFmtHora(cmd.fireAt), 'ok', 'planner');
+      return;
+    }
     const t0 = performance.now();
     fetch(cmd.payload.action, {
       method: 'POST', credentials: 'include', cache: 'no-store',
@@ -856,7 +866,8 @@
       pg.innerHTML =
         '<div id="twmgr-ccbox">' +
           '<div id="twmgr-cchead"><span class="t">🎯 Central de Comando</span>' +
-            '<span><button id="twmgr-cc-aferir" class="twmgr-btn twmgr-ghost" style="margin-right:8px" title="Mede a precisão real desta máquina. NÃO envia nada.">📏 Aferir</button>' +
+            '<span><button id="twmgr-cc-teste" class="twmgr-btn twmgr-ghost" style="margin-right:8px" title="Monta e roda uma onda de teste. Auto-acha origens (aldeias suas com exploradores) e alvo (bárbara mais próxima). Simula por padrão.">🧪 Testar</button>' +
+            '<button id="twmgr-cc-aferir" class="twmgr-btn twmgr-ghost" style="margin-right:8px" title="Mede a precisão real desta máquina. NÃO envia nada.">📏 Aferir</button>' +
             '<span id="twmgr-ccx" title="fechar (Esc)">×</span></span></div>' +
           '<div id="twmgr-ccbody">' +
             '<div id="twmgr-ccmet" class="twmgr-ccmet"></div>' +
@@ -877,6 +888,16 @@
                 '<div class="twmgr-hint" style="margin:6px 0 0">O modo adaptativo só aprende com envios em que a <b>própria espera</b> acertou (erro de escada abaixo de ' + CC.GUARDA_DERIVA_MS + 'ms). Amostra ruim é descartada em vez de envenenar a média — o log avisa quando isso acontece.</div>' +
               '</div>' +
             '</details>' +
+            '<div id="twmgr-cctest" class="twmgr-section" style="display:none;margin-bottom:11px;border:1px solid #7d510a;border-radius:6px;padding:9px 11px;background:#241a0e">' +
+              '<div style="font-size:10px;color:#c9a24a;font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">🧪 Teste de disparo</div>' +
+              '<div class="twmgr-row"><span class="twmgr-lbl" title="quantas aldeias suas disparam nesta onda, cada uma mira a mesma bárbara">Nº de aldeias</span><input id="twmgr-ct-n" class="twmgr-inp" type="number" min="1" max="8" value="3" style="width:80px"></div>' +
+              '<div class="twmgr-row"><span class="twmgr-lbl" title="espaçamento pedido entre disparos consecutivos">Gap (ms)</span><input id="twmgr-ct-gap" class="twmgr-inp" type="number" min="100" step="10" value="150" style="width:80px"></div>' +
+              '<div class="twmgr-row"><span class="twmgr-lbl" title="daqui a quantos segundos a onda começa a sair">Sair daqui a (s)</span><input id="twmgr-ct-s" class="twmgr-inp" type="number" min="8" value="20" style="width:80px"></div>' +
+              '<div class="twmgr-row"><span class="twmgr-lbl" title="MARCADO: envia 5 exploradores de verdade a uma bárbara (eles espionam e voltam sozinhos). DESMARCADO: só simula — o motor roda mas nada sai.">Envio real (5 explor.)</span><input id="twmgr-ct-real" type="checkbox"></div>' +
+              '<div style="display:flex;gap:9px;align-items:center;margin-top:9px">' +
+                '<button id="twmgr-ct-run" class="twmgr-btn" style="padding:4px 14px">Rodar teste</button>' +
+                '<span id="twmgr-ct-msg" style="font-size:10px;color:#8f7d57"></span></div>' +
+            '</div>' +
             '<div id="twmgr-ccfila"></div>' +
           '</div>' +
         '</div>';
@@ -889,6 +910,27 @@
         catch (e) { b.textContent = '📏 erro'; }
         setTimeout(() => { b.disabled = false; b.textContent = '📏 Aferir'; }, 4000);
         ccRenderPagina();
+      });
+      document.getElementById('twmgr-cc-teste').addEventListener('click', () => {
+        const p = document.getElementById('twmgr-cctest');
+        p.style.display = p.style.display === 'none' ? 'block' : 'none';
+      });
+      document.getElementById('twmgr-ct-run').addEventListener('click', async (ev) => {
+        const b = ev.currentTarget, msg = document.getElementById('twmgr-ct-msg');
+        const real = document.getElementById('twmgr-ct-real').checked;
+        b.disabled = true; b.textContent = 'montando…'; msg.style.color = '#8f7d57'; msg.textContent = 'lendo aldeias e mapa…';
+        try {
+          const plano = await ccTeste({
+            nOrigens: parseInt(document.getElementById('twmgr-ct-n').value, 10) || 3,
+            gap: parseInt(document.getElementById('twmgr-ct-gap').value, 10) || 150,
+            emSegundos: parseInt(document.getElementById('twmgr-ct-s').value, 10) || 20,
+            real: real,
+          });
+          msg.style.color = '#2d6a2f';
+          msg.textContent = (real ? 'REAL' : 'simulação') + ': ' + plano.origens.length + ' aldeia(s) → bárbara ' +
+            plano.alvo.x + '|' + plano.alvo.y + ' (dist ' + plano.dist + '). Acompanhe na fila; o resumo cai no log.';
+        } catch (e) { msg.style.color = '#e6a89d'; msg.textContent = String(e.message || e); }
+        b.disabled = false; b.textContent = 'Rodar teste';
       });
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') ccFecharPagina(); });
       // Ajuste de precisão: lê do config, salva na hora, e mostra só os campos do modo ativo.
@@ -1161,6 +1203,94 @@
     sincronizarLinha();
   }
 
+  // ── Modo de teste ───────────────────────────────────────────────────────────────
+  // Monta e roda uma onda de VERDADE pelo pipeline real (ccAdicionar → motor →
+  // ccDispararAgora), auto-selecionando origem e alvo pra acabar com o "paranauê" de
+  // achar aldeia na mão. Dois modos: simular (nada sai, _ccSim liga o curto no disparo)
+  // e real (envia 5 exploradores a uma bárbara — eles espionam e voltam sozinhos).
+  let _ccSim = false;
+  let _ccTesteTimer = null;
+
+  async function ccTesteMontar(opts) {
+    opts = opts || {};
+    const nOrig = Math.max(1, Math.min(8, opts.nOrigens || 3));
+    const gap = Math.max(CC.ONDA_GAP_MIN_MS, opts.gap || 150);
+    const nUnid = Math.max(5, opts.nUnid || 5);   // 5 exploradores é o piso pedido
+    // 1. minhas aldeias com coordenada
+    const minhas = (await getAllVillagesCached()).filter((v) => v.coord);
+    if (!minhas.length) throw new Error('não consegui ler suas aldeias (overview)');
+    // 2. origens que TENHAM >= nUnid exploradores livres — lê sob demanda até juntar nOrig
+    const origens = [];
+    for (const v of minhas) {
+      if (origens.length >= nOrig) break;
+      let st; try { st = await getFakeVillage(v.vid); } catch (e) { continue; }
+      const cm = (v.coord || '').match(/(\d+)\|(\d+)/);
+      if (cm && (st.avail.spy || 0) >= nUnid) origens.push({ vid: v.vid, name: v.name, x: +cm[1], y: +cm[2], spy: st.avail.spy });
+    }
+    if (!origens.length) throw new Error('nenhuma aldeia sua tem ' + nUnid + ' exploradores livres pra testar');
+    // 3. alvo: bárbara mais próxima da 1ª origem. Todas miram a MESMA — é o que testa a
+    //    ordem de uma onda chegando junto num alvo só (o caso do snipe/trem).
+    const barbs = (await getMapVillages()).filter((v) => v.player === '0');
+    if (!barbs.length) throw new Error('nenhuma bárbara no village.txt pra mirar');
+    const o0 = origens[0];
+    let alvo = null, melhor = Infinity;
+    barbs.forEach((b) => { const d = fieldDist(o0.x, o0.y, +b.x, +b.y); if (d < melhor) { melhor = d; alvo = b; } });
+    return { origens: origens, alvo: { x: +alvo.x, y: +alvo.y }, dist: Math.round(melhor * 10) / 10, gap: gap, nUnid: nUnid, emS: Math.max(8, opts.emSegundos || 20) };
+  }
+
+  async function ccTeste(opts) {
+    opts = opts || {};
+    const plano = await ccTesteMontar(opts);
+    _ccSim = !opts.real;
+    const t0 = ccNow() + plano.emS * 1000;
+    plano.origens.forEach((o, i) => {
+      const cmd = ccAdicionar({
+        origin: o.vid, x: String(plano.alvo.x), y: String(plano.alvo.y),
+        kind: 'attack', amounts: { spy: plano.nUnid }, modo: 'saida',
+        alvoMs: t0 + i * plano.gap,
+      });
+      cmd._teste = true;
+    });
+    save();
+    pushLog('🧪 Teste ' + (opts.real ? 'REAL' : 'SIMULADO') + ': onda de ' + plano.origens.length +
+      ' aldeia(s) → bárbara ' + plano.alvo.x + '|' + plano.alvo.y + ' (dist ' + plano.dist + '), ' +
+      plano.nUnid + ' explorador(es) cada, gap ' + plano.gap + 'ms, saindo em ' + plano.emS + 's. Acompanhe na fila.',
+      'ok', 'planner');
+    ccTesteAcompanhar();
+    return plano;
+  }
+
+  function ccTesteAcompanhar() {
+    clearInterval(_ccTesteTimer);
+    const terminais = { enviado: 1, falhou: 1, incerto: 1, perdido: 1 };
+    _ccTesteTimer = setInterval(() => {
+      const meus = ((config.cc && config.cc.fila) || []).filter((c) => c._teste);
+      if (!meus.length) { clearInterval(_ccTesteTimer); return; }
+      if (meus.every((c) => terminais[c.state])) { clearInterval(_ccTesteTimer); ccTesteResumo(meus); }
+    }, 400);
+  }
+
+  function ccTesteResumo(meus) {
+    const disp = meus.filter((c) => c.fireAt).sort((a, b) => a.fireAt - b.fireAt);
+    const pedido = meus.slice().sort((a, b) => (a.sendAt || 0) - (b.sendAt || 0));
+    const ordemOk = disp.length === pedido.length && disp.every((c, i) => c.id === pedido[i].id);
+    const enviados = meus.filter((c) => c.state === 'enviado').length;
+    const gaps = [];
+    for (let i = 1; i < disp.length; i++) gaps.push(Math.round(disp[i].fireAt - disp[i - 1].fireAt));
+    const erros = meus.filter((c) => c.fireAt && c.sendAt).map((c) => c.fireAt - c.sendAt);
+    const media = erros.length ? Math.round(erros.reduce((s, x) => s + x, 0) / erros.length) : null;
+    const falhas = meus.filter((c) => c.state !== 'enviado').map((c) => c.origin + ':' + c.state).join(', ');
+    pushLog('🧪 Teste concluído: ' + enviados + '/' + meus.length + ' dispararam · ordem ' +
+      (ordemOk ? 'CORRETA ✅' : 'ERRADA ❌') + ' · espaçamento ' + (gaps.length ? gaps.join('/') + 'ms' : '—') +
+      ' · erro médio de escada ' + (media == null ? '—' : (media > 0 ? '+' : '') + media + 'ms') +
+      (falhas ? ' · NÃO enviados: ' + falhas : ''),
+      ordemOk && enviados === meus.length ? 'ok' : 'err', 'planner');
+    // Os simulados são fantasmas — limpa da fila depois de alguns segundos pra não poluir.
+    if (meus.some((c) => c.simulado)) {
+      setTimeout(() => { meus.forEach((c) => { if (c.simulado) ccRemover(c.id); }); ccRenderPagina(); }, 8000);
+    }
+  }
+
   // Botão no cabeçalho do painel. Injetado depois do buildUI em vez de editado dentro
   // da string do cabeçalho: mantém a Central inteira num bloco só, no fim do arquivo.
   function ccBotaoPainel() {
@@ -1182,7 +1312,7 @@
   try {
     window.TWMgrCC = {
       aferir: ccAferir, sincronizar: ccSincronizar, sondar: ccSondar,
-      adicionar: ccAdicionar, remover: ccRemover, abrir: ccAbrirPagina,
+      adicionar: ccAdicionar, remover: ccRemover, abrir: ccAbrirPagina, testar: ccTeste,
       fila: () => (config.cc && config.cc.fila) || [],
       agora: ccNow, deriva: ccDeriva, acordar: ccManterAcordado, acordadoOk: ccAcordadoOk,
     };

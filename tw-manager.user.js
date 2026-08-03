@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.8.1
+// @version      11.9.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.8.1';
+  const VERSION = '11.9.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -9485,6 +9485,7 @@
       const arriveAt = arriveAt0;
       if (!arriveAt) return dizer('Defina o horário de chegada.');
       if (arriveAt <= srvNowP()) return dizer('Esse horário já passou.');
+      ccHistAdd(alvo.coord); ccHistRender();
       if (tipo === 'support' && !config.cmd.suporteOkAt) {
         return dizer('Rode o teste de apoio antes — o parâmetro ainda não foi confirmado neste mundo.');
       }
@@ -9603,6 +9604,7 @@
         .map((s) => { const m = s.match(/(\d{1,3})\s*\|\s*(\d{1,3})/); return m ? { x: m[1], y: m[2] } : null; })
         .filter(Boolean);
       if (!alvos.length) return diz('Informe ao menos um alvo (ex: 500|600).');
+      alvos.forEach((a) => ccHistAdd(a.x + '|' + a.y)); ccHistRender();
       const spec = ccMassaSpec();
       if (!Object.keys(spec).length) return diz('Escolha as tropas (número, "50%" ou "tudo").');
       const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid]);
@@ -9656,14 +9658,58 @@
         if (!_mapaNomesCarregando) {
           _mapaNomesCarregando = true;
           getMapVillages(false).then((arr) => {
-            const m = {};
-            arr.forEach((v) => { m[v.x + '|' + v.y] = v.name; });
-            _mapaNomes = m; ccRender();
+            const m = {}, p = {};
+            arr.forEach((v) => { const k = v.x + '|' + v.y; m[k] = v.name; p[k] = v.player; });
+            _mapaNomes = m; _mapaPlayers = p; ccRender(); ccHistRender();
           }).catch(() => { _mapaNomes = {}; });
         }
         return '';
       }
       return _mapaNomes[coord] || '';
+    }
+    // Dono da aldeia alvo: village.txt dá o id do jogador; player.txt (lazy) dá o nome.
+    let _mapaPlayers = null, _mapaDonos = null, _donosCarregando = false;
+    function ccDonoAlvo(coord) {
+      const pid = _mapaPlayers && _mapaPlayers[coord];
+      if (pid == null) return '';
+      if (pid === '0' || pid === 0) return 'bárbaro';
+      if (!_mapaDonos) {
+        if (!_donosCarregando) {
+          _donosCarregando = true;
+          fetch('/map/player.txt', { credentials: 'include' }).then((r) => r.text()).then((txt) => {
+            const d = {};
+            txt.split('\n').forEach((ln) => {
+              const f = ln.split(','); if (f.length >= 2) { try { d[f[0]] = decodeURIComponent(f[1].replace(/\+/g, ' ')); } catch (e) { d[f[0]] = f[1]; } }
+            });
+            _mapaDonos = d; ccHistRender(); ccRender();
+          }).catch(() => { _mapaDonos = {}; });
+        }
+        return '';
+      }
+      return _mapaDonos[pid] || '';
+    }
+    // ---- Histórico de alvos ----
+    function ccHistAdd(coord) {
+      if (!coord) return;
+      const h = (config.cmd.histAlvos = config.cmd.histAlvos || []);
+      const i = h.findIndex((x) => x.coord === coord);
+      if (i >= 0) h.splice(i, 1);
+      h.unshift({ coord: coord, at: Date.now() });
+      config.cmd.histAlvos = h.slice(0, 12);
+      save();
+    }
+    function ccHistRender() {
+      const cont = document.getElementById('cc-alvo-hist'); if (!cont) return;
+      const h = config.cmd.histAlvos || [];
+      if (!h.length) { cont.innerHTML = ''; return; }
+      cont.innerHTML = '<span style="color:#6b5c3f">recentes:</span> ' + h.map((x) => {
+        const nome = ccNomeAlvo(x.coord), dono = ccDonoAlvo(x.coord);
+        const rot = x.coord + (nome ? ' ' + nome : '') + (dono ? ' (' + dono + ')' : '');
+        return '<a class="cc-hist-a" data-coord="' + x.coord + '" style="cursor:pointer;color:#e6cf7d;margin-right:2px" title="' + esc(rot) + '">' + esc(x.coord) + '</a>';
+      }).join(' · ');
+      cont.querySelectorAll('.cc-hist-a').forEach((el) => el.onclick = () => {
+        const al = document.getElementById('cc-alvo'); if (al) { al.value = el.getAttribute('data-coord'); al.dispatchEvent(new Event('input')); }
+      });
     }
 
     // Uma origem "tem tropa" se atende TODAS as quantidades pedidas e, para as unidades
@@ -9837,6 +9883,22 @@
       });
     }
 
+    // Abas da fila: "a enviar" x "enviados". Controla só a visibilidade; ccRender preenche as duas.
+    function ccFilaTab(qual) {
+      if (qual) { config.cmd.filaTab = qual; save(); }
+      const q = config.cmd.filaTab || 'envio';
+      const be = document.getElementById('cc-fila-envio');
+      const bd = document.getElementById('cc-fila-enviados');
+      if (be) be.style.display = (q === 'envio') ? 'block' : 'none';
+      if (bd) bd.style.display = (q === 'enviados') ? 'block' : 'none';
+      document.querySelectorAll('.cc-ftab').forEach((el) => {
+        const on = el.getAttribute('data-ftab') === q;
+        el.style.background = on ? '#120d07' : '#1a130c';
+        el.style.color = on ? '#ffd76a' : '#8f7d57';
+        el.style.fontWeight = on ? '600' : '400';
+        el.style.borderBottom = on ? '1px solid #120d07' : '1px solid #3a2e1b';
+      });
+    }
     // Resumo visual das tropas de um comando: ícone + número, só as unidades > 0.
     function ccTropaResumo(amounts) {
       if (!amounts) return '';
@@ -9920,6 +9982,8 @@
       const vazio = (t) => '<div style="color:#8f7d57;padding:6px;font-size:10px">' + t + '</div>';
       bEnvio.innerHTML = envio.length ? envio.map(linha).join('') : vazio('— nada a enviar —');
       bEnv.innerHTML = feitos.length ? feitos.map(linha).join('') : vazio('— nada enviado ainda —');
+      const ne = document.getElementById('cc-ftab-n-envio'); if (ne) ne.textContent = '(' + envio.length + ')';
+      const nd = document.getElementById('cc-ftab-n-enviados'); if (nd) nd.textContent = '(' + feitos.length + ')';
       [bEnvio, bEnv].forEach((box) => {
         box.querySelectorAll('[data-aj]').forEach((e) => e.onclick = () =>
           ccAjustar(e.getAttribute('data-aj'), parseInt(e.getAttribute('data-d'), 10)));
@@ -10185,6 +10249,7 @@
           '<input id="cc-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:230px">' +
           '<button id="cc-ch-agora" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="preenche com a hora do servidor + 10 min">+10min</button>' +
           '<button id="cc-ch-cmd" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="copiar o horário de um comando do jogo">📋 de um comando</button>') +
+        '<div id="cc-alvo-hist" style="font-size:10px;margin:2px 0 6px;line-height:1.8"></div>' +
         // Comandos do jogo: copiar horário pra coordenar em cima, ou escolher um pra snipar.
         '<div id="cc-cmds-box" style="display:none;border:1px solid #4a3b28;border-radius:6px;padding:6px;margin:4px 0">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
@@ -10307,13 +10372,15 @@
               ' · passo <input id="cc-passo" class="twmgr-inp" type="number" min="1" step="10" style="width:52px;font-size:10px;padding:1px">ms' +
             '</span>' +
           '</div>' +
-          '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
-            '<span>tipo</span><span>de</span><span>para</span><span>estado</span><span>sai</span><span>chegada</span><span>falta</span><span></span></div>' +
           '<div data-secbody="fila">' +
-            '<div style="font-size:9px;color:#8fe39a;margin:0 0 2px;font-weight:600">▸ a enviar</div>' +
-            '<div id="cc-fila-envio" style="max-height:180px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
-            '<div style="font-size:9px;color:#8f7d57;margin:8px 0 2px;font-weight:600">✓ enviados / concluídos</div>' +
-            '<div id="cc-fila-enviados" style="max-height:130px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px;opacity:.9"></div>' +
+            '<div style="display:flex;gap:2px;margin-bottom:0">' +
+              '<span class="cc-ftab" data-ftab="envio" style="flex:1;text-align:center;padding:4px;cursor:pointer;font-size:10px;border:1px solid #4a3b28;border-bottom:none;border-radius:4px 4px 0 0">▸ A enviar <span id="cc-ftab-n-envio" style="color:#8f7d57"></span></span>' +
+              '<span class="cc-ftab" data-ftab="enviados" style="flex:1;text-align:center;padding:4px;cursor:pointer;font-size:10px;border:1px solid #4a3b28;border-bottom:none;border-radius:4px 4px 0 0">✓ Enviados <span id="cc-ftab-n-enviados" style="color:#8f7d57"></span></span>' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#8f7d57;padding:3px 5px 2px;border:1px solid #3a2e1b;border-bottom:none">' +
+              '<span>tipo</span><span>de</span><span>para</span><span>estado</span><span>sai</span><span>chegada</span><span>falta</span><span></span></div>' +
+            '<div id="cc-fila-envio" style="max-height:210px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:0 0 6px 6px"></div>' +
+            '<div id="cc-fila-enviados" style="display:none;max-height:210px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:0 0 6px 6px"></div>' +
           '</div>' +
         '</div>';
       host.insertBefore(d, host.firstChild);
@@ -10338,6 +10405,8 @@
       const ordEl = document.getElementById('cc-fila-ordem');
       ordEl.value = config.cmd.filaOrdem || 'chegada';
       ordEl.addEventListener('change', () => { config.cmd.filaOrdem = ordEl.value; save(); ccRender(); });
+      document.querySelectorAll('.cc-ftab').forEach((el) => el.addEventListener('click', () => ccFilaTab(el.getAttribute('data-ftab'))));
+      ccFilaTab();
       const passoEl = document.getElementById('cc-passo');
       passoEl.value = config.cmd.passoMs || 50;
       passoEl.addEventListener('change', () => {
@@ -10402,10 +10471,23 @@
       alvoEl.addEventListener('input', () => {
         const a = ccAlvo();
         const ok = document.getElementById('cc-alvo-ok');
-        if (ok) { ok.textContent = a ? '✓ ' + a.coord : (alvoEl.value ? '✗ formato' : ''); ok.style.color = a ? '#8fe39a' : '#ff7568'; }
+        if (ok) {
+          if (a) {
+            const nome = ccNomeAlvo(a.coord), dono = ccDonoAlvo(a.coord);
+            ok.textContent = '✓ ' + a.coord + (nome ? ' · ' + nome : '') + (dono ? ' (' + dono + ')' : '');
+            ok.style.color = '#8fe39a';
+          } else { ok.textContent = alvoEl.value ? '✗ formato' : ''; ok.style.color = '#ff7568'; }
+        }
+        if (a) { config.cmd.ultimoAlvo = a.coord; save(); }
         recalc();
       });
-      document.getElementById('cc-chegada').addEventListener('input', recalc);
+      document.getElementById('cc-chegada').addEventListener('input', () => {
+        config.cmd.ultimaChegada = document.getElementById('cc-chegada').value || ''; save(); recalc();
+      });
+      // Restaura o último alvo/data e desenha o histórico.
+      if (config.cmd.ultimoAlvo && !alvoEl.value) { alvoEl.value = config.cmd.ultimoAlvo; alvoEl.dispatchEvent(new Event('input')); }
+      if (config.cmd.ultimaChegada) { const ce = document.getElementById('cc-chegada'); if (ce && !ce.value) ce.value = config.cmd.ultimaChegada; }
+      ccHistRender();
       // Os eventos das caixas de tropa são religados dentro de ccRenderTropas(), porque a grade
       // é reconstruída quando descobrimos as unidades reais do mundo.
 

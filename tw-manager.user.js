@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.7.1
+// @version      11.8.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.7.1';
+  const VERSION = '11.8.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -8848,6 +8848,7 @@
       { id: 'support', ico: '🛡', rot: 'Apoio',   hint: 'Apoio de várias aldeias pousando junto no mesmo alvo.' },
       { id: 'nobre',   ico: '👑', rot: 'NT/Ondas', hint: 'Ondas com composição e origem próprias: nuke na frente, nobres atrás, ou uma tropa dividida em várias levas.' },
       { id: 'fake',    ico: '🎭', rot: 'Fake',    hint: 'Vários alvos de uma vez; o alvo único acima é ignorado.' },
+      { id: 'massa',   ico: '🚚', rot: 'Apoio massa', hint: 'Apoio das origens marcadas pro(s) alvo(s), disparado AGORA (não agenda). Em cada unidade: número, 50% ou tudo.' },
     ];
     function ccTipo() { return (config.cmd && config.cmd.tipo) || 'attack'; }
     function telaAtual() {
@@ -9846,7 +9847,10 @@
         .join(' ');
     }
     function ccRender() {
-      const box = document.getElementById('cc-fila'); if (!box) return;
+      // Fila dividida: "a enviar" (novo/preparado/armado) e "enviados/concluídos" (o resto).
+      const bEnvio = document.getElementById('cc-fila-envio');
+      const bEnv = document.getElementById('cc-fila-enviados');
+      if (!bEnvio || !bEnv) return;
       const f = cmdFila();
       const ord = document.getElementById('cc-fila-ordem');
       if (ord && ord.value !== config.cmd.filaOrdem) ord.value = config.cmd.filaOrdem;
@@ -9856,11 +9860,10 @@
         const pend = f.filter((c) => c.state === 'novo' || c.state === 'preparado' || c.state === 'armado').length;
         cn.textContent = f.length ? ('(' + pend + ' pendente(s) de ' + f.length + ')') : '';
       }
-      if (!f.length) { box.innerHTML = '<div style="color:#8f7d57;padding:6px;font-size:10px">— nenhum comando armado —</div>'; return; }
       const agora = serverNow();
       const passo = Math.max(1, config.cmd.passoMs || 50);
       const corDe = { novo: '#cbb98f', preparado: '#ffd76a', armado: '#8fe39a', enviado: '#8fe39a', erro: '#ff7568', abortado: '#8f7d57' };
-      box.innerHTML = ccFilaOrdenada().map((c) => {
+      const linha = (c) => {
         // "falta" = quanto falta pra SAIR (não pra chegar). Preparado, sendAt é a saída exata;
         // antes disso estima pela viagem local (arriveAt − tempo de viagem).
         const estFalta = ccEstimaDeComando(c);
@@ -9909,12 +9912,21 @@
               '</span>'
             : '') +
           '</div>';
-      }).join('');
-      box.querySelectorAll('[data-aj]').forEach((e) => e.onclick = () =>
-        ccAjustar(e.getAttribute('data-aj'), parseInt(e.getAttribute('data-d'), 10)));
-      box.querySelectorAll('[data-sw]').forEach((e) => e.onclick = () =>
-        ccTrocar(e.getAttribute('data-sw'), parseInt(e.getAttribute('data-dir'), 10)));
-      box.querySelectorAll('[data-cc-ab]').forEach((el) => el.onclick = () => cmdAbortar(el.getAttribute('data-cc-ab')));
+      };
+      const ehEnvio = (c) => c.state === 'novo' || c.state === 'preparado' || c.state === 'armado';
+      const ordenada = ccFilaOrdenada();
+      const envio = ordenada.filter(ehEnvio);
+      const feitos = ordenada.filter((c) => !ehEnvio(c));
+      const vazio = (t) => '<div style="color:#8f7d57;padding:6px;font-size:10px">' + t + '</div>';
+      bEnvio.innerHTML = envio.length ? envio.map(linha).join('') : vazio('— nada a enviar —');
+      bEnv.innerHTML = feitos.length ? feitos.map(linha).join('') : vazio('— nada enviado ainda —');
+      [bEnvio, bEnv].forEach((box) => {
+        box.querySelectorAll('[data-aj]').forEach((e) => e.onclick = () =>
+          ccAjustar(e.getAttribute('data-aj'), parseInt(e.getAttribute('data-d'), 10)));
+        box.querySelectorAll('[data-sw]').forEach((e) => e.onclick = () =>
+          ccTrocar(e.getAttribute('data-sw'), parseInt(e.getAttribute('data-dir'), 10)));
+        box.querySelectorAll('[data-cc-ab]').forEach((el) => el.onclick = () => cmdAbortar(el.getAttribute('data-cc-ab')));
+      });
     }
 
     // Relógio a 100ms; a fila só 1x por segundo. Redesenhar a lista 10x/s atrapalharia o clique
@@ -10209,9 +10221,20 @@
           '<div id="cc-ondas" style="max-height:170px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
           '<div id="cc-trem-aviso" style="font-size:10px;color:#ffd76a;margin:4px 0 0"></div>' +
         '</div>' +
+          // Apoio em massa: aparece só quando a aba 🚚 está ativa. Usa as origens marcadas abaixo.
+          '<div id="cc-massa-cfg" style="display:none">' +
+            '<label style="font-size:10px;display:block">Alvo(s) <span style="color:#6b5c3f">(um por linha)</span></label>' +
+            '<textarea id="cc-massa-alvos" class="twmgr-inp" style="width:100%;height:36px;font-size:10px" placeholder="500|600"></textarea>' +
+            '<label style="font-size:10px;display:block;margin-top:3px;cursor:pointer"><input type="checkbox" id="cc-massa-dividir"> dividir as tropas entre os alvos (senão manda o cheio pra cada)</label>' +
+            '<div style="font-size:9px;color:#8f7d57;margin:4px 0 2px">Tropas por aldeia — número, <b>50%</b> ou <b>tudo</b>:</div>' +
+            '<div id="cc-massa-unidades" style="display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px"></div>' +
+            '<button id="cc-massa-enviar" class="twmgr-btn twmgr-go" style="width:100%">🚚 Enviar apoio agora</button>' +
+            '<div id="cc-massa-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
+            '<div id="cc-massa-rel" style="font-size:10px;margin-top:4px;color:#cbb98f;font-family:Consolas,monospace;white-space:pre-wrap;max-height:160px;overflow-y:auto"></div>' +
+          '</div>' +
         '</div>' +   // fim de #cc-aba-corpo
         // Tropas digitadas AQUI, não nas caixas do jogo. "tudo" = manda o estoque inteiro daquela origem.
-        '<div style="margin:8px 0 4px;border-top:1px solid #3a2e1b;padding-top:6px">' +
+        '<div id="cc-tropas-sec" style="margin:8px 0 4px;border-top:1px solid #3a2e1b;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
             '<span data-sec="tropas" style="font-size:10px;color:#e8d29a;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Tropas por origem</span>' +
             '<span style="font-size:10px">' +
@@ -10252,7 +10275,7 @@
           '<div id="cc-resumo" style="font-size:10px;color:#cbb98f;margin-top:3px"></div>' +
           '</div>' +
         '</div>' +
-        '<div style="display:flex;gap:6px;align-items:center">' +
+        '<div id="cc-armar-row" style="display:flex;gap:6px;align-items:center">' +
           '<button id="cc-armar" class="twmgr-btn twmgr-go" style="flex:1">▶ Armar comando</button>' +
           '<button id="cc-limpar" class="twmgr-btn twmgr-ghost" title="remove enviados/erros da lista">🧹</button>' +
           '<button id="cc-diag" class="twmgr-btn twmgr-ghost" title="copia um relatório do estado interno pra área de transferência">🐛</button>' +
@@ -10270,20 +10293,11 @@
           '</div>' +
           '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#8f7d57;padding:0 5px 2px">' +
             '<span>tipo</span><span>de</span><span>para</span><span>estado</span><span>sai</span><span>chegada</span><span>falta</span><span></span></div>' +
-          '<div data-secbody="fila"><div id="cc-fila" style="max-height:180px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div></div>' +
-        '</div>' +
-        // ---- Apoio em massa: dispara AGORA (sem agendar), das origens marcadas acima ----
-        '<div style="margin-top:8px;border-top:1px solid #3a2e1b;padding-top:6px">' +
-          '<span id="cc-massa-tog" style="font-size:10px;color:#e8d29a;font-weight:600;cursor:pointer" title="recolher/expandir">▸ 🚚 Apoio em massa</span>' +
-          '<div id="cc-massa-body" style="display:none;margin-top:5px">' +
-            '<div style="font-size:9px;color:#8f7d57;margin-bottom:4px">Manda apoio das <b>origens marcadas acima</b> pro(s) alvo(s), o quanto antes (não agenda). Em cada unidade: um número, <b>50%</b> ou <b>tudo</b>.</div>' +
-            '<label style="font-size:10px;display:block">Alvo(s) <span style="color:#6b5c3f">(um por linha)</span></label>' +
-            '<textarea id="cc-massa-alvos" class="twmgr-inp" style="width:100%;height:36px;font-size:10px" placeholder="500|600"></textarea>' +
-            '<label style="font-size:10px;display:block;margin-top:3px;cursor:pointer"><input type="checkbox" id="cc-massa-dividir"> dividir as tropas entre os alvos (senão manda o cheio pra cada)</label>' +
-            '<div id="cc-massa-unidades" style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0"></div>' +
-            '<button id="cc-massa-enviar" class="twmgr-btn twmgr-go" style="width:100%">🚚 Enviar apoio agora</button>' +
-            '<div id="cc-massa-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
-            '<div id="cc-massa-rel" style="font-size:10px;margin-top:4px;color:#cbb98f;font-family:Consolas,monospace;white-space:pre-wrap;max-height:160px;overflow-y:auto"></div>' +
+          '<div data-secbody="fila">' +
+            '<div style="font-size:9px;color:#8fe39a;margin:0 0 2px;font-weight:600">▸ a enviar</div>' +
+            '<div id="cc-fila-envio" style="max-height:180px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px"></div>' +
+            '<div style="font-size:9px;color:#8f7d57;margin:8px 0 2px;font-weight:600">✓ enviados / concluídos</div>' +
+            '<div id="cc-fila-enviados" style="max-height:130px;overflow-y:auto;background:#120d07;border:1px solid #3a2e1b;border-radius:6px;opacity:.9"></div>' +
           '</div>' +
         '</div>';
       host.insertBefore(d, host.firstChild);
@@ -10294,12 +10308,6 @@
       document.getElementById('cc-diag').addEventListener('click', ccDiagnostico);
       // Apoio em massa
       document.getElementById('cc-massa-enviar').addEventListener('click', () => { keepAwake(true); ccMassaEnviar(); });
-      document.getElementById('cc-massa-tog').addEventListener('click', () => {
-        const b = document.getElementById('cc-massa-body');
-        const abrir = b.style.display === 'none';
-        b.style.display = abrir ? 'block' : 'none';
-        document.getElementById('cc-massa-tog').textContent = (abrir ? '▾' : '▸') + ' 🚚 Apoio em massa';
-      });
       ccMassaUnidades();
       // Atalhos do editor de ondas
       document.getElementById('cc-nt-preset').onclick = ccNtMontar;
@@ -10341,6 +10349,11 @@
         if (cfg) cfg.style.display = (tipo === 'nobre') ? 'block' : 'none';
         const fk = document.getElementById('cc-fake-cfg');
         if (fk) fk.style.display = (tipo === 'fake') ? 'block' : 'none';
+        // Apoio em massa: mostra a UI própria e some com o fluxo de agendamento (grade + Armar).
+        const massa = (tipo === 'massa');
+        const mcfg = document.getElementById('cc-massa-cfg'); if (mcfg) mcfg.style.display = massa ? 'block' : 'none';
+        const tsec = document.getElementById('cc-tropas-sec'); if (tsec) tsec.style.display = massa ? 'none' : 'block';
+        const arow = document.getElementById('cc-armar-row'); if (arow) arow.style.display = massa ? 'none' : 'flex';
         // O campo de alvo único não serve pro fake (que usa a lista) — deixa claro.
         const al = document.getElementById('cc-alvo');
         if (al) { al.disabled = (tipo === 'fake'); al.style.opacity = (tipo === 'fake') ? '.4' : '1'; }

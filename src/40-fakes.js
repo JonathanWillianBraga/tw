@@ -152,12 +152,28 @@
     save();
     fakeTimer = setTimeout(fakeTick, 30000);
   }
+  async function fillFakeGroups() {
+    const selEl = document.getElementById('twmgr-fk-group'); if (!selEl) return;
+    let groups = []; try { groups = await getGroups(); } catch (e) { /* sem grupos: fica só "Todas" */ }
+    const cur = config.fakes.group || '';
+    selEl.innerHTML = '<option value="">Todas as aldeias</option>' +
+      groups.map((g) => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('');
+    selEl.value = cur;
+  }
   async function renderFakeOrigins() {
     const cont = document.getElementById('twmgr-fk-origins'); if (!cont) return;
     let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
+    const gid = config.fakes.group || '';
+    if (gid) {
+      try { const inGrp = await getVillagesInGroup(gid); const ok = {}; inGrp.forEach((v) => { ok[v.vid] = 1; }); vils = vils.filter((v) => ok[v.vid]); }
+      catch (e) { pushLog('Fakes: não consegui filtrar pelo grupo (' + (e.message || e) + '); mostrando todas.', 'err', 'fakes'); }
+    }
     const sel = config.fakes.origins || {};
-    cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-fk-origin" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
+    cont.innerHTML = vils.length
+      ? vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-fk-origin" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('')
+      : '<div style="font-size:10px;color:#8a7a55;padding:4px">nenhuma aldeia neste grupo</div>';
     cont.querySelectorAll('.twmgr-fk-origin').forEach((cb) => cb.addEventListener('change', readFakesCfg));
+    const cnt = document.getElementById('twmgr-fk-count'); if (cnt) cnt.textContent = vils.length ? ('(' + vils.length + ')') : '';
   }
   function readFakesCfg() {
     const c = config.fakes, g = (id) => document.getElementById(id);
@@ -169,7 +185,11 @@
     if (g('twmgr-fk-siege')) c.siege = g('twmgr-fk-siege').value;
     if (g('twmgr-fk-filler')) c.filler = g('twmgr-fk-filler').value;
     const mode = document.querySelector('input[name="twmgr-fk-mode"]:checked'); if (mode) c.mode = mode.value;
-    const origins = {}; document.querySelectorAll('.twmgr-fk-origin').forEach((cb) => { if (cb.checked) origins[cb.getAttribute('data-vid')] = true; }); c.origins = origins;
+    // MERGE (não substitui): o filtro por grupo esconde checkboxes de outros grupos —
+    // reconstruir do zero apagaria as origens já marcadas fora do grupo visível agora.
+    const origins = Object.assign({}, c.origins || {});
+    document.querySelectorAll('.twmgr-fk-origin').forEach((cb) => { const vid = cb.getAttribute('data-vid'); if (cb.checked) origins[vid] = true; else delete origins[vid]; });
+    c.origins = origins;
     save();
   }
   async function fakePreview() { await fakeGenerate(true); }

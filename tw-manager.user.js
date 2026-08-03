@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.3.0
+// @version      11.4.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.3.0';
+  const VERSION = '11.4.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -2864,12 +2864,28 @@
     save();
     fakeTimer = setTimeout(fakeTick, 30000);
   }
+  async function fillFakeGroups() {
+    const selEl = document.getElementById('twmgr-fk-group'); if (!selEl) return;
+    let groups = []; try { groups = await getGroups(); } catch (e) { /* sem grupos: fica só "Todas" */ }
+    const cur = config.fakes.group || '';
+    selEl.innerHTML = '<option value="">Todas as aldeias</option>' +
+      groups.map((g) => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('');
+    selEl.value = cur;
+  }
   async function renderFakeOrigins() {
     const cont = document.getElementById('twmgr-fk-origins'); if (!cont) return;
     let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
+    const gid = config.fakes.group || '';
+    if (gid) {
+      try { const inGrp = await getVillagesInGroup(gid); const ok = {}; inGrp.forEach((v) => { ok[v.vid] = 1; }); vils = vils.filter((v) => ok[v.vid]); }
+      catch (e) { pushLog('Fakes: não consegui filtrar pelo grupo (' + (e.message || e) + '); mostrando todas.', 'err', 'fakes'); }
+    }
     const sel = config.fakes.origins || {};
-    cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-fk-origin" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
+    cont.innerHTML = vils.length
+      ? vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#d3c299;margin:1px 0"><input type="checkbox" class="twmgr-fk-origin" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('')
+      : '<div style="font-size:10px;color:#8a7a55;padding:4px">nenhuma aldeia neste grupo</div>';
     cont.querySelectorAll('.twmgr-fk-origin').forEach((cb) => cb.addEventListener('change', readFakesCfg));
+    const cnt = document.getElementById('twmgr-fk-count'); if (cnt) cnt.textContent = vils.length ? ('(' + vils.length + ')') : '';
   }
   function readFakesCfg() {
     const c = config.fakes, g = (id) => document.getElementById(id);
@@ -2881,7 +2897,11 @@
     if (g('twmgr-fk-siege')) c.siege = g('twmgr-fk-siege').value;
     if (g('twmgr-fk-filler')) c.filler = g('twmgr-fk-filler').value;
     const mode = document.querySelector('input[name="twmgr-fk-mode"]:checked'); if (mode) c.mode = mode.value;
-    const origins = {}; document.querySelectorAll('.twmgr-fk-origin').forEach((cb) => { if (cb.checked) origins[cb.getAttribute('data-vid')] = true; }); c.origins = origins;
+    // MERGE (não substitui): o filtro por grupo esconde checkboxes de outros grupos —
+    // reconstruir do zero apagaria as origens já marcadas fora do grupo visível agora.
+    const origins = Object.assign({}, c.origins || {});
+    document.querySelectorAll('.twmgr-fk-origin').forEach((cb) => { const vid = cb.getAttribute('data-vid'); if (cb.checked) origins[vid] = true; else delete origins[vid]; });
+    c.origins = origins;
     save();
   }
   async function fakePreview() { await fakeGenerate(true); }
@@ -6467,8 +6487,9 @@
           '<label class="twmgr-lbl">Alvos (cole vários)</label><textarea id="twmgr-fk-targets" class="twmgr-inp" style="width:100%;height:52px;margin:2px 0 6px" placeholder="430|522 428|524 430|520 …"></textarea>' +
           '<label class="twmgr-lbl">Chegada</label><input id="twmgr-fk-arr" class="twmgr-inp" type="datetime-local" step="1" style="width:100%;margin:2px 0 0">') +
         sec('Origens',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Origens que enviam</span><span style="font-size:9px"><a id="twmgr-fk-all" style="cursor:pointer;color:#e6cf7d">todas</a> · <a id="twmgr-fk-none" style="cursor:pointer;color:#e6cf7d">nenhuma</a></span></div>' +
-          '<div id="twmgr-fk-origins" style="max-height:96px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo</span><select id="twmgr-fk-group" class="twmgr-inp" style="width:150px"><option value="">Todas as aldeias</option></select></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Origens que enviam <span id="twmgr-fk-count" style="color:#8a7a55"></span></span><span style="font-size:9px"><a id="twmgr-fk-all" style="cursor:pointer;color:#e6cf7d">todas</a> · <a id="twmgr-fk-none" style="cursor:pointer;color:#e6cf7d">nenhuma</a></span></div>' +
+          '<div id="twmgr-fk-origins" style="max-height:180px;overflow-y:auto;border:1px solid #3a2c1a;border-radius:6px;padding:4px"></div>' +
           '<div class="twmgr-row" style="margin-top:6px"><span class="twmgr-lbl">Distribuição</span><span style="font-size:10px"><label><input type="radio" name="twmgr-fk-mode" value="split"> dividir</label> <label><input type="radio" name="twmgr-fk-mode" value="all"> todas→todos</label></span></div>') +
         sec('Estratégia do fake',
           '<div class="twmgr-row"><span class="twmgr-lbl">Isca (1x)</span><select id="twmgr-fk-siege" class="twmgr-inp" style="width:110px"><option value="ram">Aríete</option><option value="catapult">Catapulta</option><option value="none">nenhum</option></select></div>' +
@@ -6801,6 +6822,8 @@
     document.getElementById('twmgr-fk-filler').value = config.fakes.filler || 'spy';
     const fkMode = document.querySelector('input[name="twmgr-fk-mode"][value="' + (config.fakes.mode || 'split') + '"]'); if (fkMode) fkMode.checked = true;
     renderFakeOrigins();
+    fillFakeGroups();
+    document.getElementById('twmgr-fk-group').addEventListener('change', (e) => { config.fakes.group = e.target.value; save(); renderFakeOrigins(); });
     document.getElementById('twmgr-fk-all').addEventListener('click', () => { document.querySelectorAll('.twmgr-fk-origin').forEach((cb) => cb.checked = true); readFakesCfg(); });
     document.getElementById('twmgr-fk-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-fk-origin').forEach((cb) => cb.checked = false); readFakesCfg(); });
     ['twmgr-fk-targets', 'twmgr-fk-arr', 'twmgr-fk-offset', 'twmgr-fk-pct', 'twmgr-fk-minpop', 'twmgr-fk-siege', 'twmgr-fk-filler'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFakesCfg); });

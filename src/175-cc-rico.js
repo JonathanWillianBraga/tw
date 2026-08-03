@@ -1943,6 +1943,73 @@
       });
       pushLog('Snipe disponível em ' + dados.length + ' ataque(s) a caminho.', '', 'cmd');
     }
+
+    // ---- Comandos agendados na lista "Próprios comandos" da aldeia ----
+    // Injeta os comandos AINDA NÃO ENVIADOS desta aldeia na tabela de comandos do jogo,
+    // ordenados pela chegada, pra você conferir que encaixam no timing dos comandos reais.
+    let _ccOvTimer = null;
+    function ccOverviewTabela() {
+      let tb = document.querySelector('#commands_table');
+      if (tb) return tb;
+      // Fallback: pela heading "Próprios comandos" ou por uma tabela com linhas de comando saindo.
+      const heads = Array.prototype.slice.call(document.querySelectorAll('h4,th,caption,td,.vis'))
+        .filter((e) => /pr[óo]prios comandos|own commands/i.test(e.textContent || ''));
+      for (const h of heads) {
+        const t = h.closest('table') || (h.parentElement && h.parentElement.querySelector('table'));
+        if (t && t.querySelector('a[href*="screen=info_command"]')) return t;
+      }
+      const tabs = Array.prototype.slice.call(document.querySelectorAll('table'))
+        .filter((t) => t.querySelector('a[href*="screen=info_command"]'));
+      return tabs.find((t) => /ataque a|apoio a|retorno de/i.test(t.textContent || '')) || null;
+    }
+    function mountCmdOverview() {
+      if (!config.cmd || !config.cmd.enabled) return;
+      const tb = ccOverviewTabela();
+      if (!tb) return;
+      const body = tb.querySelector('tbody') || tb;
+      body.querySelectorAll('tr[data-cc-ag]').forEach((el) => el.remove());
+      const pend = (config.cmd.fila || []).filter((c) => String(c.origin) === String(CUR_VID) &&
+        (c.state === 'novo' || c.state === 'preparado' || c.state === 'armado'));
+      if (!pend.length) { if (_ccOvTimer) { clearInterval(_ccOvTimer); _ccOvTimer = null; } return; }
+      const reais = Array.prototype.slice.call(body.querySelectorAll('tr'))
+        .filter((t) => !t.hasAttribute('data-cc-ag') && t.querySelector('a[href*="screen=info_command"]'));
+      const ncol = (reais[0] || body.querySelector('tr'));
+      const nc = ncol ? Math.max(2, ncol.querySelectorAll('td').length) : 3;
+      const arrOf = (tr) => { for (const td of tr.querySelectorAll('td')) { const ms = ccParseChegada(td.textContent || ''); if (ms) return ms; } return null; };
+      pend.sort((a, b) => a.arriveAt - b.arriveAt).forEach((c) => {
+        const nome = ccNomeAlvo(c.x + '|' + c.y);
+        const rot = { support: 'Apoio', fake: 'Fake', nobre: 'Nobre' }[c.tipo] || 'Ataque';
+        const est = ccEstimaDeComando(c);
+        const saiEm = c.sendAt ? c.sendAt : (est != null ? c.arriveAt - est : null);
+        const tr = document.createElement('tr');
+        tr.setAttribute('data-cc-ag', '1');
+        tr.style.background = 'rgba(154,111,14,.14)';
+        let html = '';
+        for (let i = 0; i < nc; i++) html += '<td style="padding:3px 6px;vertical-align:top">' +
+          (i === 0
+            ? '<b style="color:#7d510a">🕒 ' + esc(rot) + ' agendado</b> → ' + esc(c.x + '|' + c.y) + (nome ? ' ' + esc(nome) : '') +
+              '<div style="font-size:11px;color:#8a6410">sai ' + (saiEm ? srvClockMs(saiEm) : '—') + ' · ' + ccTropaResumo(c.amounts) + '</div>'
+            : i === nc - 2 ? '<span style="color:#7d510a">' + srvClockMs(c.arriveAt) + '</span>'
+            : i === nc - 1 ? '<span class="cc-ov-falta" data-arr="' + c.arriveAt + '" style="color:#7d510a"></span>'
+            : '') + '</td>';
+        tr.innerHTML = html;
+        let ref = null;
+        for (const r of reais) { const a = arrOf(r); if (a && a > c.arriveAt) { ref = r; break; } }
+        if (ref) body.insertBefore(tr, ref);
+        else if (reais.length && reais[reais.length - 1].nextSibling) body.insertBefore(tr, reais[reais.length - 1].nextSibling);
+        else body.appendChild(tr);
+      });
+      const tick = () => {
+        const now = serverNow();
+        document.querySelectorAll('.cc-ov-falta').forEach((el) => { const a = +el.getAttribute('data-arr'); el.textContent = a ? fmt(a - now) : ''; });
+        // Se o jogo re-renderizou a tabela e apagou as nossas linhas, re-injeta.
+        if (!document.querySelector('tr[data-cc-ag]')) { clearInterval(_ccOvTimer); _ccOvTimer = null; mountCmdOverview(); }
+      };
+      tick();
+      if (_ccOvTimer) clearInterval(_ccOvTimer);
+      _ccOvTimer = setInterval(tick, 1000);
+    }
+
     // Unidades que defendem. Usadas pra sugerir de onde mandar o snipe.
     const CC_DEF = ['spear', 'sword', 'heavy', 'archer'];
     // Valores de defesa do TW por unidade (geral/cavalaria/arqueiro). Serve pra ordenar os
@@ -3024,5 +3091,6 @@
     // ---- boot da ilha (replica o que o boot antigo fazia pra CC) ----
     try { if (telaAtual() === 'place') mountCmdCenter(); } catch (e) { pushLog('Central rica nao montou: ' + (e.message || e), 'err', 'cmd'); }
     try { mountSnipeIncomings(); } catch (e) { pushLog('Snipe rico falhou: ' + (e.message || e), 'err', 'cmd'); }
+    try { mountCmdOverview(); } catch (e) { /* silencioso: injeção na lista de comandos é opcional */ }
     try { cmdBoot(); } catch (e) { pushLog('cmdBoot falhou: ' + (e.message || e), 'err', 'cmd'); }
   })();

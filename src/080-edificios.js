@@ -1,12 +1,4 @@
   // ==================== EDIFÍCIOS (fila planejada por template ATK/DEF) ====================
-  function parseTpl(text) {
-    const out = [];
-    (text || '').split('\n').forEach((line) => {
-      const m = line.trim().match(/^([a-z_]+)\s+(\d+)$/i);
-      if (m && BUILD_KEYS.indexOf(m[1].toLowerCase()) >= 0) out.push({ b: m[1].toLowerCase(), lvl: +m[2] });
-    });
-    return out;
-  }
   async function getBuildState(vid) {
     const res = await fetch('/game.php?village=' + vid + '&screen=main', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
@@ -101,16 +93,20 @@
     const assign = config.build.villages || {};
     const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.build.templates[assign[v].tpl]);
     if (!ativas.length) { pushLog('Edifícios: nenhuma aldeia ativa — adicione aldeias e aplique um modelo na tabela.', '', 'build'); config.build.nextAt = now + 300000; save(); scheduleBuild(); return; }
-    // Guarda anticolisão com o Obra (módulo do Johann): se ele estiver rodando, as aldeias que ELE
-    // gerencia via grupo nativo saem deste ciclo. Dois motores enfileirando obra na mesma aldeia
-    // brigam pela fila e gastam recurso fora de ordem.
-    let doObra = {};
+    // Guarda anticolisão: o Obra (módulo do Johann) também enfileira obra. Se os dois pegarem a
+    // mesma aldeia, brigam pela fila e gastam recurso fora de ordem. O Edifícios cede, porque ele é
+    // o genérico e o Obra trabalha por grupo nativo do jogo.
+    const donoOutro = {};
     if (config.obra && config.obra.running) {
-      try { doObra = await getGroupProfileMapObra(); } catch (e) { pushLog('Edifícios: não consegui checar as aldeias do Obra (' + (e.message || e) + ') — sigo sem a guarda.', '', 'build'); }
+      try { Object.keys(await getGroupProfileMapObra()).forEach((v) => { donoOutro[v] = 'Obra'; }); }
+      catch (e) { pushLog('Edifícios: não consegui checar as aldeias do Obra (' + (e.message || e) + ') — sigo sem a guarda.', '', 'build'); }
     }
-    const vids = ativas.filter((v) => !doObra[v]);
-    const puladas = ativas.length - vids.length;
-    if (puladas) pushLog('Edifícios: ' + puladas + ' aldeia(s) puladas — já estão sendo construídas pelo Obra.', '', 'build');
+    const vids = ativas.filter((v) => !donoOutro[v]);
+    if (ativas.length !== vids.length) {
+      const porDono = {};
+      ativas.filter((v) => donoOutro[v]).forEach((v) => { porDono[donoOutro[v]] = (porDono[donoOutro[v]] || 0) + 1; });
+      pushLog('Edifícios: pulei ' + Object.keys(porDono).map((d) => porDono[d] + ' aldeia(s) do ' + d).join(' e ') + ' — já estão construindo por lá.', '', 'build');
+    }
     config.build.demand = {};
     let built = 0;
     for (const vid of vids) {

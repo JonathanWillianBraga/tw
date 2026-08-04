@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.14.0
+// @version      11.15.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.14.0';
+  const VERSION = '11.15.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -171,7 +171,7 @@
   const defRecruit = () => ({
     running: false, nextAt: 0, interval: 600, targetHours: 2, refillBelowMin: 30,
     groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
-    groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo (mantido p/ Edifícios/Cultivo)
+    groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo
   });
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
   // Cada modo roda de forma INDEPENDENTE (pode ligar Equilíbrio e Solidário ao mesmo tempo, por
@@ -192,16 +192,6 @@
   // (templates) + atribuição POR ALDEIA (villages: vid -> {tpl, paused, coord, name, done, total}).
   // `plans` (atk/def) ficou só como semente da migração — quem manda agora é `templates`.
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, templates: {}, villages: {}, filterGroup: '', demand: {} });
-  // Cultivo — 3 fases (batem com os cards: f1 = main<20 · f2 = main 20 e stable<15 · f3 = graduada/recrutando).
-  // FASE 1: leva o Ed. principal até 20 + o que ele depende (armazém "lidera" p/ bancar os níveis; fazenda leve p/ pop). Sem estábulo.
-  const BB_TPL_F1 = 'main 5\nstorage 5\nfarm 5\nmain 10\nstorage 8\nfarm 8\nmain 14\nstorage 12\nfarm 10\nmain 17\nstorage 18\nmain 20\nstorage 20';
-  // FASE 2: destrava e fecha o Estábulo 15 (quartel 5 + ferreiro 5 = pré-req; depois estábulo até 15). Ao fechar = graduada.
-  const BB_TPL_F2 = 'barracks 5\nsmith 5\nstable 5\nfarm 13\nstable 9\nfarm 15\nstable 12\nstable 15';
-  // FASE 3 (graduada, já recrutando): autossuficiência. Recurso + armazém lideram (reduz feed, sem travar), fazenda
-  // acompanha a pop das tropas, quartel/estábulo -> 20 p/ velocidade de recrutamento. Baixa prioridade no fim: oficina (cerco ATK), mercado, muralha.
-  const BB_TPL_F3 = 'wood 12\nstone 12\niron 12\nstorage 22\nfarm 20\nbarracks 10\nstable 18\nsmith 10\nwood 18\nstone 18\niron 18\nstorage 25\nfarm 25\nbarracks 15\nsmith 15\nwood 22\nstone 22\niron 22\nstorage 27\nfarm 27\nstable 20\nbarracks 20\nwood 25\nstone 25\niron 25\nstorage 30\nfarm 30\ngarage 10\nmarket 15\nwall 15';
-  const BB_TPL = BB_TPL_F1 + '\n' + BB_TPL_F2 + '\n' + BB_TPL_F3;
-  const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, feedFillPct: 90, feedAllowOverfill: false, gradMain: 20, gradStable: 15, inflight: {} });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
   const defMap = () => ({
     running: false, nextAt: 0,
@@ -352,7 +342,7 @@
     nextAt: 0,
     demand: {},              // { [vid]: { b, cost, coord, profile } }
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -518,18 +508,6 @@
     });
     if (c.build.filterGroup == null) c.build.filterGroup = '';
     delete c.build.atkTpl; delete c.build.defTpl;
-    if (!c.bb) c.bb = defBB();
-    if (!c.bb.tpl) c.bb.tpl = BB_TPL;
-    if (c.bb.defCoords == null) c.bb.defCoords = '';
-    if (c.bb.feedReserve == null) c.bb.feedReserve = 40;
-    if (c.bb.feedMaxDist == null) c.bb.feedMaxDist = 15;
-    if (c.bb.feedFillPct == null) c.bb.feedFillPct = 90;
-    if (c.bb.feedAllowOverfill == null) c.bb.feedAllowOverfill = false;
-    if (c.bb.maxQueue == null) c.bb.maxQueue = 5;
-    if (c.bb.interval == null) c.bb.interval = 600;
-    if (c.bb.gradMain == null) c.bb.gradMain = 20;
-    if (c.bb.gradStable == null) c.bb.gradStable = 15;
-    if (!c.bb.inflight) c.bb.inflight = {};
     if (!c.map) c.map = defMap();
     // Reformulação do Mapa: de one-shot pra ciclo contínuo, com base de conhecimento e
     // blacklists. Campos novos entram sem apagar o que já existe.
@@ -683,12 +661,12 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, buildTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
   const marketTimers = { cunhagem: null, equilibrio: null, solidario: null, cunhar: null };   // 1 timer por modo — rodam de forma independente
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
   function anyMarketRunning() { return !!(config.market && config.market.modes && MARKET_MODES.some((k) => config.market.modes[k] && config.market.modes[k].running)); }
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || anyMarketRunning() || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || anyMarketRunning() || (config.build && config.build.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.

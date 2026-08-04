@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.14.0
+// @version      11.15.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.14.0';
+  const VERSION = '11.15.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -171,7 +171,7 @@
   const defRecruit = () => ({
     running: false, nextAt: 0, interval: 600, targetHours: 2, refillBelowMin: 30,
     groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
-    groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo (mantido p/ Edifícios/Cultivo)
+    groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo
   });
   const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
   // Cada modo roda de forma INDEPENDENTE (pode ligar Equilíbrio e Solidário ao mesmo tempo, por
@@ -192,16 +192,6 @@
   // (templates) + atribuição POR ALDEIA (villages: vid -> {tpl, paused, coord, name, done, total}).
   // `plans` (atk/def) ficou só como semente da migração — quem manda agora é `templates`.
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, templates: {}, villages: {}, filterGroup: '', demand: {} });
-  // Cultivo — 3 fases (batem com os cards: f1 = main<20 · f2 = main 20 e stable<15 · f3 = graduada/recrutando).
-  // FASE 1: leva o Ed. principal até 20 + o que ele depende (armazém "lidera" p/ bancar os níveis; fazenda leve p/ pop). Sem estábulo.
-  const BB_TPL_F1 = 'main 5\nstorage 5\nfarm 5\nmain 10\nstorage 8\nfarm 8\nmain 14\nstorage 12\nfarm 10\nmain 17\nstorage 18\nmain 20\nstorage 20';
-  // FASE 2: destrava e fecha o Estábulo 15 (quartel 5 + ferreiro 5 = pré-req; depois estábulo até 15). Ao fechar = graduada.
-  const BB_TPL_F2 = 'barracks 5\nsmith 5\nstable 5\nfarm 13\nstable 9\nfarm 15\nstable 12\nstable 15';
-  // FASE 3 (graduada, já recrutando): autossuficiência. Recurso + armazém lideram (reduz feed, sem travar), fazenda
-  // acompanha a pop das tropas, quartel/estábulo -> 20 p/ velocidade de recrutamento. Baixa prioridade no fim: oficina (cerco ATK), mercado, muralha.
-  const BB_TPL_F3 = 'wood 12\nstone 12\niron 12\nstorage 22\nfarm 20\nbarracks 10\nstable 18\nsmith 10\nwood 18\nstone 18\niron 18\nstorage 25\nfarm 25\nbarracks 15\nsmith 15\nwood 22\nstone 22\niron 22\nstorage 27\nfarm 27\nstable 20\nbarracks 20\nwood 25\nstone 25\niron 25\nstorage 30\nfarm 30\ngarage 10\nmarket 15\nwall 15';
-  const BB_TPL = BB_TPL_F1 + '\n' + BB_TPL_F2 + '\n' + BB_TPL_F3;
-  const defBB = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, group: null, tpl: BB_TPL, defCoords: '', feedReserve: 40, feedMaxDist: 15, feedFillPct: 90, feedAllowOverfill: false, gradMain: 20, gradStable: 15, inflight: {} });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
   const defMap = () => ({
     running: false, nextAt: 0,
@@ -352,7 +342,7 @@
     nextAt: 0,
     demand: {},              // { [vid]: { b, cost, coord, profile } }
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), bb: defBB(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -518,18 +508,6 @@
     });
     if (c.build.filterGroup == null) c.build.filterGroup = '';
     delete c.build.atkTpl; delete c.build.defTpl;
-    if (!c.bb) c.bb = defBB();
-    if (!c.bb.tpl) c.bb.tpl = BB_TPL;
-    if (c.bb.defCoords == null) c.bb.defCoords = '';
-    if (c.bb.feedReserve == null) c.bb.feedReserve = 40;
-    if (c.bb.feedMaxDist == null) c.bb.feedMaxDist = 15;
-    if (c.bb.feedFillPct == null) c.bb.feedFillPct = 90;
-    if (c.bb.feedAllowOverfill == null) c.bb.feedAllowOverfill = false;
-    if (c.bb.maxQueue == null) c.bb.maxQueue = 5;
-    if (c.bb.interval == null) c.bb.interval = 600;
-    if (c.bb.gradMain == null) c.bb.gradMain = 20;
-    if (c.bb.gradStable == null) c.bb.gradStable = 15;
-    if (!c.bb.inflight) c.bb.inflight = {};
     if (!c.map) c.map = defMap();
     // Reformulação do Mapa: de one-shot pra ciclo contínuo, com base de conhecimento e
     // blacklists. Campos novos entram sem apagar o que já existe.
@@ -683,12 +661,12 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, buildTimer = null, bbTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, buildTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
   const marketTimers = { cunhagem: null, equilibrio: null, solidario: null, cunhar: null };   // 1 timer por modo — rodam de forma independente
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
   function anyMarketRunning() { return !!(config.market && config.market.modes && MARKET_MODES.some((k) => config.market.modes[k] && config.market.modes[k].running)); }
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || anyMarketRunning() || (config.build && config.build.running) || (config.bb && config.bb.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || anyMarketRunning() || (config.build && config.build.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.
@@ -843,14 +821,6 @@
       const s = (config.build.stats || {}), as = config.build.villages || {};
       const pausadas = Object.keys(as).filter((v) => as[v].paused).length;
       arr = [{ v: fmtN(s.villages), l: 'aldeias construindo', hl: true }, { v: fmtN(pausadas), l: 'pausadas' }];
-    } else if (mod === 'bb') {
-      const s = (config.bb.stats || {});
-      arr = [
-        { v: fmtN(s.total), l: 'no grupo', hl: true },
-        { v: fmtN(s.f1), l: 'fase 1' },
-        { v: fmtN(s.f2), l: 'fase 2' },
-        { v: fmtN(s.f3), l: 'fase 3' },
-      ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});
       // O card "no alcance" mostrava s.mapped, que é barbCount: os bárbaros do MUNDO INTEIRO que
@@ -2673,7 +2643,7 @@
     let groups = [];
     try { groups = await getGroups(); } catch (e) { pushLog('Recrutar: erro ao listar grupos: ' + (e.message || e), 'err'); return; }
     _twGroupsCache = groups;
-    [['twmgr-r-gatk', config.recruit.groupAtk], ['twmgr-r-gdef', config.recruit.groupDef], ['twmgr-bb-group', config.bb.group], ['twmgr-bm-group', config.map && config.map.group], ['twmgr-farm-group', config.farm && config.farm.group], ['twmgr-bld-group', config.build && config.build.filterGroup]].forEach(([id, cur]) => {
+    [['twmgr-r-gatk', config.recruit.groupAtk], ['twmgr-r-gdef', config.recruit.groupDef], ['twmgr-bm-group', config.map && config.map.group], ['twmgr-farm-group', config.farm && config.farm.group], ['twmgr-bld-group', config.build && config.build.filterGroup]].forEach(([id, cur]) => {
       const sel = document.getElementById(id); if (!sel) return;
       sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((g) => '<option value="' + g.id + '"' + (String(cur) === String(g.id) ? ' selected' : '') + '>' + esc(g.name) + '</option>').join('');
     });
@@ -4355,14 +4325,6 @@
   function marketStop(modeKey) { readMarketCfg(); config.market.modes[modeKey].running = false; save(); clearTimeout(marketTimers[modeKey]); setMarketStatus(modeKey, false); pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + ') parado.', '', 'market'); }
 
   // ==================== EDIFÍCIOS (fila planejada por template ATK/DEF) ====================
-  function parseTpl(text) {
-    const out = [];
-    (text || '').split('\n').forEach((line) => {
-      const m = line.trim().match(/^([a-z_]+)\s+(\d+)$/i);
-      if (m && BUILD_KEYS.indexOf(m[1].toLowerCase()) >= 0) out.push({ b: m[1].toLowerCase(), lvl: +m[2] });
-    });
-    return out;
-  }
   async function getBuildState(vid) {
     const res = await fetch('/game.php?village=' + vid + '&screen=main', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
@@ -4457,16 +4419,20 @@
     const assign = config.build.villages || {};
     const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.build.templates[assign[v].tpl]);
     if (!ativas.length) { pushLog('Edifícios: nenhuma aldeia ativa — adicione aldeias e aplique um modelo na tabela.', '', 'build'); config.build.nextAt = now + 300000; save(); scheduleBuild(); return; }
-    // Guarda anticolisão com o Obra (módulo do Johann): se ele estiver rodando, as aldeias que ELE
-    // gerencia via grupo nativo saem deste ciclo. Dois motores enfileirando obra na mesma aldeia
-    // brigam pela fila e gastam recurso fora de ordem.
-    let doObra = {};
+    // Guarda anticolisão: o Obra (módulo do Johann) também enfileira obra. Se os dois pegarem a
+    // mesma aldeia, brigam pela fila e gastam recurso fora de ordem. O Edifícios cede, porque ele é
+    // o genérico e o Obra trabalha por grupo nativo do jogo.
+    const donoOutro = {};
     if (config.obra && config.obra.running) {
-      try { doObra = await getGroupProfileMapObra(); } catch (e) { pushLog('Edifícios: não consegui checar as aldeias do Obra (' + (e.message || e) + ') — sigo sem a guarda.', '', 'build'); }
+      try { Object.keys(await getGroupProfileMapObra()).forEach((v) => { donoOutro[v] = 'Obra'; }); }
+      catch (e) { pushLog('Edifícios: não consegui checar as aldeias do Obra (' + (e.message || e) + ') — sigo sem a guarda.', '', 'build'); }
     }
-    const vids = ativas.filter((v) => !doObra[v]);
-    const puladas = ativas.length - vids.length;
-    if (puladas) pushLog('Edifícios: ' + puladas + ' aldeia(s) puladas — já estão sendo construídas pelo Obra.', '', 'build');
+    const vids = ativas.filter((v) => !donoOutro[v]);
+    if (ativas.length !== vids.length) {
+      const porDono = {};
+      ativas.filter((v) => donoOutro[v]).forEach((v) => { porDono[donoOutro[v]] = (porDono[donoOutro[v]] || 0) + 1; });
+      pushLog('Edifícios: pulei ' + Object.keys(porDono).map((d) => porDono[d] + ' aldeia(s) do ' + d).join(' e ') + ' — já estão construindo por lá.', '', 'build');
+    }
     config.build.demand = {};
     let built = 0;
     for (const vid of vids) {
@@ -5080,172 +5046,6 @@
         esc(d.coord || vid) + ' [' + esc((OBRA_PROFILE_META[d.profile] || {}).name || d.profile) + '] → ' + esc(bn) + ' (' + d.cost.wood + '/' + d.cost.stone + '/' + d.cost.iron + ')</div>';
     }).join('');
   }
-
-  // ==================== MÓDULO BB (aldeias bárbaras conquistadas) ====================
-  // Constrói a ladder BB, abastece JIT das aldeias grandes próximas, e ao graduar (EP+estábulo) recruta CL sozinho.
-  // Recursos que EU já mandei pra este destino e ainda não chegaram (evita reenviar e transbordar).
-  function bbInflightSum(vid) {
-    const now = Date.now();
-    const arr = (config.bb.inflight && config.bb.inflight[vid]) || [];
-    const out = { wood: 0, stone: 0, iron: 0 };
-    arr.forEach((e) => { if (e.arriveAt > now && out[e.r] != null) out[e.r] += e.amt; });
-    return out;
-  }
-  function bbInflightAdd(vid, amt, dur) {
-    config.bb.inflight = config.bb.inflight || {};
-    const arr = config.bb.inflight[vid] = config.bb.inflight[vid] || [];
-    const at = Date.now() + ((dur && dur > 0 ? dur : 3600) * 1000);   // sem duração lida -> assume 1h
-    ['wood', 'stone', 'iron'].forEach((r) => { if ((amt[r] || 0) > 0) arr.push({ r: r, amt: amt[r], arriveAt: at }); });
-  }
-  async function feedBB(v, needCost, sources, srcState) {
-    let ms; try { ms = await getMarketState(v.vid); } catch (e) { return false; }
-    if (!ms.storage) return false;
-    // "efetivo" = recurso atual + o que já está a caminho. Sem isso, cada ciclo relê o atual (baixo,
-    // porque o transporte ainda não chegou) e manda de novo -> quando tudo chega junto, transborda.
-    const inf = bbInflightSum(v.vid);
-    const eff = { wood: ms.wood + inf.wood, stone: ms.stone + inf.stone, iron: ms.iron + inf.iron };
-    const free = { wood: Math.max(0, ms.storage - eff.wood), stone: Math.max(0, ms.storage - eff.stone), iron: Math.max(0, ms.storage - eff.iron) };
-    // Estoque-alvo PROATIVO: manter a bárbara cheia até feedFillPct% do armazém, pra ela seguir construindo E
-    // recrutando entre ciclos. O teto é RESPEITADO (não passa do %). Só fura se `feedAllowOverfill` estiver
-    // ligado: aí `needCost` (custo da próxima obra) vira piso e enche até bancá-la, evitando travar obra cara.
-    const fillTo = ms.storage * ((config.bb.feedFillPct != null ? config.bb.feedFillPct : 90) / 100);
-    const overfill = !!config.bb.feedAllowOverfill;
-    const want = {
-      wood: overfill ? Math.max(fillTo, (needCost && needCost.wood) || 0) : fillTo,
-      stone: overfill ? Math.max(fillTo, (needCost && needCost.stone) || 0) : fillTo,
-      iron: overfill ? Math.max(fillTo, (needCost && needCost.iron) || 0) : fillTo,
-    };
-    const target = {
-      wood: Math.max(0, Math.min(want.wood - eff.wood, free.wood)),
-      stone: Math.max(0, Math.min(want.stone - eff.stone, free.stone)),
-      iron: Math.max(0, Math.min(want.iron - eff.iron, free.iron)),
-    };
-    if (target.wood + target.stone + target.iron <= 0) return false;
-    const cm = (v.coord || '').match(/(\d+)\|(\d+)/); if (!cm) return false;
-    const vx = +cm[1], vy = +cm[2];
-    const near = sources.map((s) => { const c = s.coord.match(/(\d+)\|(\d+)/); return c ? { s, d: Math.sqrt(Math.pow(+c[1] - vx, 2) + Math.pow(+c[2] - vy, 2)) } : null; })
-      .filter((o) => o && o.d <= (config.bb.feedMaxDist || 15)).sort((a, b) => a.d - b.d);
-    let sent = false;
-    for (const o of near) {
-      if (target.wood + target.stone + target.iron <= 0) break;
-      const s = o.s;
-      let ss = srcState[s.vid];
-      if (!ss) { try { ss = srcState[s.vid] = await getMarketState(s.vid); } catch (e) { srcState[s.vid] = { capacity: 0 }; continue; } }
-      if (!ss.capacity || !ss.storage) continue;
-      const reserve = (config.bb.feedReserve || 40) / 100 * ss.storage;
-      const avail = { wood: Math.max(0, ss.wood - reserve), stone: Math.max(0, ss.stone - reserve), iron: Math.max(0, ss.iron - reserve) };
-      let amt = { wood: Math.min(target.wood, avail.wood), stone: Math.min(target.stone, avail.stone), iron: Math.min(target.iron, avail.iron) };
-      let tot = amt.wood + amt.stone + amt.iron;
-      if (tot <= 0) continue;
-      if (tot > ss.capacity) { const f = ss.capacity / tot; amt = { wood: Math.floor(amt.wood * f), stone: Math.floor(amt.stone * f), iron: Math.floor(amt.iron * f) }; }
-      if (amt.wood + amt.stone + amt.iron <= 0) continue;
-      try {
-        const dur = await sendMarketResources(s.vid, v.coord, amt);
-        sent = true;
-        pushLog('Cultivo (abastece): ' + s.coord + ' → ' + v.coord + ' (' + amt.wood + '/' + amt.stone + '/' + amt.iron + ')', 'ok', 'bb');
-        ss.wood -= amt.wood; ss.stone -= amt.stone; ss.iron -= amt.iron; ss.capacity -= (amt.wood + amt.stone + amt.iron);
-        target.wood -= amt.wood; target.stone -= amt.stone; target.iron -= amt.iron;
-        bbInflightAdd(v.vid, amt, dur);   // marca o que está a caminho deste destino
-      } catch (e) { /* alvo/erro -> tenta próxima fonte */ }
-      await sleep(250);
-    }
-    return sent;
-  }
-  async function bbTick() {
-    clearTimeout(bbTimer);
-    if (!config.bb.running) return;
-    if (lockOther()) { bbTimer = setTimeout(bbTick, 5000); return; }
-    if (captchaBlocked()) { bbTimer = setTimeout(bbTick, 30000); return; }
-    claimLock();
-    const now = Date.now();
-    if ((config.bb.nextAt || 0) > now) { scheduleBB(); return; }
-    // poda transportes que já chegaram
-    config.bb.inflight = config.bb.inflight || {};
-    Object.keys(config.bb.inflight).forEach((vid) => {
-      config.bb.inflight[vid] = (config.bb.inflight[vid] || []).filter((e) => e.arriveAt > now);
-      if (!config.bb.inflight[vid].length) delete config.bb.inflight[vid];
-    });
-    if (!config.bb.group) { pushLog('Cultivo: selecione o grupo na aba.', '', 'bb'); config.bb.nextAt = now + 300000; save(); scheduleBB(); return; }
-    let vils;
-    try { vils = await getVillagesInGroup(config.bb.group); }
-    catch (e) { pushLog('Cultivo: erro ao ler o grupo (' + (e.message || e) + ').', 'err', 'bb'); config.bb.nextAt = now + 120000; save(); scheduleBB(); return; }
-    try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {}
-    if (!vils.length) { pushLog('Cultivo: grupo vazio — adicione as aldeias conquistadas ao grupo.', '', 'bb'); config.bb.nextAt = now + 300000; save(); scheduleBB(); return; }
-    const tpl = parseTpl(config.bb.tpl);
-    const defSet = {}; ((config.bb.defCoords || '').match(/\d{1,3}\|\d{1,3}/g) || []).forEach((c) => defSet[c] = 1);
-    const bbSet = {}; vils.forEach((v) => bbSet[v.vid] = 1);
-    let allV = []; try { allV = await getAllVillagesCached(); } catch (e) {}
-    const sources = allV.filter((v) => !bbSet[v.vid] && v.coord);
-    const srcState = {};
-    // Conserta aldeia do grupo sem coord (getVillagesInGroup às vezes não parseia) — sem isso ela fica órfã
-    // (feed não roda + vira sempre ATK). O getAllVillages traz a coord de todas.
-    const coordByVid = {}; allV.forEach((a) => { if (a.coord) coordByVid[a.vid] = a.coord; });
-    let built = 0, recruited = 0, fed = 0, f1 = 0, f2 = 0, f3 = 0;
-    const gMain = config.bb.gradMain || 20, gStable = config.bb.gradStable || 15;
-    for (const v of vils) {
-      { const pare = devoParar('bb'); if (pare) { pushLog('Cultivo: ciclo interrompido — ' + pare + '.', '', 'bb'); break; } }
-      if (!v.coord && coordByVid[v.vid]) v.coord = coordByVid[v.vid];
-      let st;
-      try { st = await getBuildState(v.vid); }
-      catch (e) { pushLog('Cultivo em ' + (v.coord || v.vid) + ': erro ao ler o estado.', 'err', 'bb'); continue; }
-      const grad = (st.level.main || 0) >= gMain && (st.level.stable || 0) >= gStable;
-      if (grad) f3++; else if ((st.level.main || 0) >= gMain) f2++; else f1++;
-      // Obra na fila conta como atingida (ver getBuildState/levelEff) — senão o mesmo prédio é
-      // reenfileirado todo ciclo e a ladder nunca avança. Graduação/fases seguem no nível REAL,
-      // porque "graduada" tem que significar estábulo de pé, não estábulo encomendado.
-      const r = computeBuild(Object.assign({}, st, { level: st.levelEff || st.level }), tpl);
-      if (r.build && st.queueLen < (config.bb.maxQueue || 5)) {
-        const bn = (BUILD_META[r.build.b] && BUILD_META[r.build.b].name) || r.build.b;
-        try { await enqueueBuild(v.vid, r.build.b); built++; pushLog('Cultivo: ' + (v.coord || v.vid) + ' → ' + bn + ' na fila (' + r.build.cost.wood + '/' + r.build.cost.stone + '/' + r.build.cost.iron + ')', 'ok', 'bb'); }
-        catch (e) { pushLog('Cultivo em ' + (v.coord || v.vid) + ': ' + (e.message || e), 'err', 'bb'); }
-      }
-      if (grad) {
-        const tag = defSet[v.coord] ? 'def' : 'atk';
-        try {
-          const rs = await getRecruitState(v.vid);
-          const rc = computeRecruit(rs, config.recruit.profiles[tag].targets, config.recruit, rs.queuedSec);
-          if (Object.keys(rc.amounts).length) {
-            await sendRecruit(v.vid, rc.amounts); recruited++;
-            pushLog('Cultivo: ' + (v.coord || v.vid) + ' [' + tag + '] recrutou ' + Object.entries(rc.amounts).map((e) => e[1] + ' ' + e[0]).join(', '), 'ok', 'bb');
-          } else if (rs.units.light && !rs.units.light.reqMet) {
-            pushLog('Cultivo em ' + (v.coord || v.vid) + ': cavalaria leve não pesquisada — pesquise no ferreiro.', 'err', 'bb');
-          }
-        } catch (e) { pushLog('Cultivo (recruta) em ' + (v.coord || v.vid) + ': ' + (e.message || e), 'err', 'bb'); }
-      }
-      // Feed PROATIVO: alimenta toda aldeia todo ciclo (mantém cheia p/ obra + recrutamento), usando o
-      // custo da obra travada como piso quando existir. Antes só rodava quando a obra travava (r.demand).
-      try { if (await feedBB(v, r.demand ? r.demand.cost : null, sources, srcState)) fed++; } catch (e) {}
-      await sleep(300);
-    }
-    config.bb.stats = { total: vils.length, f1: f1, f2: f2, f3: f3 };
-    config.bb.nextAt = now + Math.max(60, config.bb.interval || 600) * 1000; save();
-    refreshCards('bb');
-    pushLog('Cultivo: ciclo concluído — ' + built + ' obra(s), ' + recruited + ' recruta(s), ' + fed + ' abastecida(s). Próximo em ' + Math.round((config.bb.interval || 600) / 60) + ' min.', 'ok', 'bb');
-    scheduleBB();
-  }
-  function scheduleBB() { clearTimeout(bbTimer); if (!config.bb.running) return; bbTimer = setTimeout(bbTick, Math.min(Math.max((config.bb.nextAt || 0) - Date.now(), 1000), 60000)); }
-  function readBBCfg() {
-    const c = config.bb, g = (id) => document.getElementById(id);
-    if (g('twmgr-bb-group')) c.group = g('twmgr-bb-group').value || null;
-    if (g('twmgr-bb-tpl')) c.tpl = g('twmgr-bb-tpl').value;
-    if (g('twmgr-bb-def')) c.defCoords = g('twmgr-bb-def').value;
-    if (g('twmgr-bb-fill')) c.feedFillPct = Math.max(10, Math.min(100, parseInt(g('twmgr-bb-fill').value, 10) || 90));
-    if (g('twmgr-bb-overfill')) c.feedAllowOverfill = g('twmgr-bb-overfill').checked;
-    if (g('twmgr-bb-reserve')) c.feedReserve = Math.max(0, Math.min(90, parseInt(g('twmgr-bb-reserve').value, 10) || 40));
-    if (g('twmgr-bb-dist')) c.feedMaxDist = Math.max(1, parseInt(g('twmgr-bb-dist').value, 10) || 15);
-    if (g('twmgr-bb-max')) c.maxQueue = Math.max(1, parseInt(g('twmgr-bb-max').value, 10) || 5);
-    if (g('twmgr-bb-int')) c.interval = Math.max(1, parseInt(g('twmgr-bb-int').value, 10) || 10) * 60;
-    save();
-  }
-  function setBBStatus(on) { setBtnState('twmgr-bb-start', 'twmgr-bb-stop', on, '● BB ativo', '▶ Iniciar BB'); }
-  function bbStart() {
-    readBBCfg();
-    if (!config.bb.group) { pushLog('Cultivo: selecione o grupo primeiro.', 'err', 'bb'); return; }
-    if (!config.recruit.profiles.atk.targets || !Object.keys(config.recruit.profiles.atk.targets).length) pushLog('Cultivo: dica — configure os alvos ATK/DEF na aba Recrutar (o Cultivo usa eles ao graduar).', '', 'bb');
-    config.bb.running = true; config.bb.nextAt = 0; save();
-    setBBStatus(true); pushLog('Cultivo iniciado.', 'ok', 'bb'); bbTick();
-  }
-  function bbStop() { readBBCfg(); config.bb.running = false; save(); clearTimeout(bbTimer); setBBStatus(false); pushLog('Cultivo parado.', '', 'bb'); }
 
   // ==================== ASSISTENTE DE SAQUE: TEMPLATE B ====================
   // Descobre o template_id do B (e as unidades) direto do am_farm; envia via o endpoint
@@ -6455,11 +6255,6 @@
       else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#c23a2c'; }
       else { bl.style.color = '#2e7d3a'; bl.textContent = (config.build.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.build.nextAt - now) : '● construindo…'; }
     }
-    const bb = document.getElementById('twmgr-bb-status'); if (bb) {
-      if (!config.bb.running) { bb.textContent = ''; }
-      else if (lockOther()) { bb.textContent = '⏸ outra aba'; bb.style.color = '#c23a2c'; }
-      else { bb.style.color = '#2e7d3a'; bb.textContent = (config.bb.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.bb.nextAt - now) : '● desenvolvendo…'; }
-    }
     const bm = document.getElementById('twmgr-bm-status'); if (bm) {
       if (!config.map || !config.map.running) { bm.textContent = ''; }
       else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#c23a2c'; }
@@ -6497,7 +6292,6 @@
       if (dot) dot.style.display = (atk && atk.running) ? 'inline' : 'none';
     });
     const ring = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('twmgr-run', !!on && !lockOther()); };
-    ring('twmgr-btab-bb', config.bb && config.bb.running);
     ring('twmgr-btab-map', (config.map && config.map.running) || (config.lock && config.lock.running));
     ring('twmgr-btab-scav', config.scav.running);
     ring('twmgr-btab-farm', config.farm.running);
@@ -6776,7 +6570,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'map', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -6804,7 +6598,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
@@ -6995,29 +6789,6 @@
         '<div class="twmgr-actions"><button id="twmgr-bld-start" class="twmgr-btn twmgr-go">▶ Construir</button><button id="twmgr-bld-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-bld-status" class="twmgr-cstatus"></div>' +
         modLog('build') +
-      '</div>' +
-      '<div id="twmgr-tab-bb" style="display:none">' +
-        hint('🌱 Desenvolve aldeias <b>bárbaras conquistadas</b>: constrói a ladder, abastece das grandes próximas e ao graduar recruta CL sozinho.') +
-        cardsDiv('bb') +
-        sec('Grupo',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo Cultivo</span><select id="twmgr-bb-group" class="twmgr-inp" style="width:170px"></select></div>' +
-          '<div style="text-align:right;margin-top:2px"><button id="twmgr-bb-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button></div>') +
-        sec('Ladder de obra (chave nível, em ordem)',
-          '<textarea id="twmgr-bb-tpl" class="twmgr-inp" style="width:100%;height:96px;font-family:monospace;font-size:10px"></textarea>' +
-          '<div style="text-align:right;margin:2px 0 6px"><button id="twmgr-bb-tpl-reset" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="volta pro padrão do script (fase 1 + fase 2)">↺ reset padrão</button></div>' +
-          '<div style="font-size:10px;color:#6e5a2a;margin:4px 0 2px">Aldeias DEF (coords, 1 por linha) — o resto vira ATK</div>' +
-          '<textarea id="twmgr-bb-def" class="twmgr-inp" style="width:100%;height:44px;font-family:monospace;font-size:10px" placeholder="ex: 470|592"></textarea>') +
-        sec('Abastecimento',
-          '<div class="twmgr-row"><span class="twmgr-lbl" title="Mantém cada bárbara cheia até esse % do armazém dela, todo ciclo (obra + recrutamento). Maior = mais generoso.">Encher aldeia até (%)</span><input id="twmgr-bb-fill" class="twmgr-inp" type="number" min="10" max="100" value="90" style="width:56px"></div>' +
-          '<label class="twmgr-check" style="margin:4px 0" title="Se ligado, o feed fura o teto acima quando um nível de obra custar mais que ele (não trava obra cara). Desligado = respeita o teto sempre."><input id="twmgr-bb-overfill" type="checkbox"> Furar o teto p/ bancar obra cara</label>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Reserva na fonte (%)</span><input id="twmgr-bb-reserve" class="twmgr-inp" type="number" min="0" max="90" value="40" style="width:56px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Dist. máx. fonte (campos)</span><input id="twmgr-bb-dist" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
-        sec('Ritmo',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Máx na fila</span><input id="twmgr-bb-max" class="twmgr-inp" type="number" min="1" value="5" style="width:56px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-bb-int" class="twmgr-inp" type="number" min="1" value="10" style="width:56px"></div>') +
-        '<div class="twmgr-actions"><button id="twmgr-bb-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-bb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
-        '<div id="twmgr-bb-status" class="twmgr-cstatus"></div>' +
-        modLog('bb') +
       '</div>' +
       '<div id="twmgr-tab-map" style="display:none">' +
         hint('🗺️ Fica <b>ligado por ciclos</b>. A cada ciclo relê o mapa, acha bárbaro novo no seu raio e manda explorador em quem <b>você ainda não conhece</b> — quem não está no assistente de saque, ou está mas o relatório não trouxe nada. Quem já tem explorador a caminho é pulado.') +
@@ -7414,26 +7185,6 @@
     document.getElementById('twmgr-bld-stop').addEventListener('click', buildStop);
     setBuildStatus(config.build.running);
 
-    document.getElementById('twmgr-bb-tpl').value = config.bb.tpl || BB_TPL;
-    document.getElementById('twmgr-bb-def').value = config.bb.defCoords || '';
-    document.getElementById('twmgr-bb-fill').value = config.bb.feedFillPct != null ? config.bb.feedFillPct : 90;
-    document.getElementById('twmgr-bb-overfill').checked = !!config.bb.feedAllowOverfill;
-    document.getElementById('twmgr-bb-reserve').value = config.bb.feedReserve != null ? config.bb.feedReserve : 40;
-    document.getElementById('twmgr-bb-dist').value = config.bb.feedMaxDist != null ? config.bb.feedMaxDist : 15;
-    document.getElementById('twmgr-bb-max').value = config.bb.maxQueue || 5;
-    document.getElementById('twmgr-bb-int').value = Math.round((config.bb.interval || 600) / 60);
-    ['twmgr-bb-group', 'twmgr-bb-tpl', 'twmgr-bb-def', 'twmgr-bb-fill', 'twmgr-bb-overfill', 'twmgr-bb-reserve', 'twmgr-bb-dist', 'twmgr-bb-max', 'twmgr-bb-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readBBCfg); });
-    document.getElementById('twmgr-bb-reload').addEventListener('click', fillGroupSelects);
-    document.getElementById('twmgr-bb-tpl-reset').addEventListener('click', () => {
-      if (!confirm('Resetar a ladder do Cultivo pro padrão do script?')) return;
-      config.bb.tpl = BB_TPL; save();
-      document.getElementById('twmgr-bb-tpl').value = BB_TPL;
-      pushLog('Cultivo: ladder resetada pro padrão.', 'ok', 'bb');
-    });
-    document.getElementById('twmgr-bb-start').addEventListener('click', bbStart);
-    document.getElementById('twmgr-bb-stop').addEventListener('click', bbStop);
-    setBBStatus(config.bb.running);
-
     // Bárbaros do Mapa (BM)
     document.getElementById('twmgr-bm-dist').value = config.map.maxDist != null ? config.map.maxDist : 20;
     document.getElementById('twmgr-bm-days').value = config.map.minDaysSinceScout != null ? config.map.minDaysSinceScout : 0;
@@ -7481,7 +7232,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'map', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -7531,7 +7282,6 @@
     if (config.fakes.running) { config.fakes.gen.forEach((f) => { if (f.state === 'scheduled') f.state = 'armed'; }); rlog('Fakes rearmados.', 'fakes'); retomar(fakeTick); }
     MARKET_MODES.forEach((mkKey) => { if (config.market.modes[mkKey].running) { rlog('Mercado (' + MARKET_MODE_LABEL[mkKey] + ') retomado.', 'market'); retomar(() => scheduleMarket(mkKey)); } });
     if (config.build.running) { rlog('Edifícios retomado.', 'build'); retomar(scheduleBuild); }
-    if (config.bb && config.bb.running) { rlog('Cultivo retomado.', 'bb'); retomar(scheduleBB); }
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); retomar(scheduleMap); }
     if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); retomar(etiquetaTick); }
     if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); retomar(scheduleLock); }
@@ -8813,12 +8563,12 @@
         wall: !!(config.wall && config.wall.running), recruit: !!(config.recruit && config.recruit.running),
         marketModes: MARKET_MODES.filter((k) => config.market && config.market.modes && config.market.modes[k] && config.market.modes[k].running),
         build: !!(config.build && config.build.running),
-        bb: !!(config.bb && config.bb.running), map: !!(config.map && config.map.running),
+        map: !!(config.map && config.map.running),
         alvos: !!config.running,
       };
       clearTimeout(scavTimer); clearTimeout(farmTimer); clearTimeout(wallTimer); clearTimeout(recruitTimer);
       MARKET_MODES.forEach((k) => clearTimeout(marketTimers[k]));
-      clearTimeout(buildTimer); clearTimeout(bbTimer); clearTimeout(mapTimer);
+      clearTimeout(buildTimer); clearTimeout(mapTimer);
       clearTimeout(sendTimer);
       if (uiTimer) { clearInterval(uiTimer); uiTimer = null; }   // o tick de 1s vira jitter durante o spin
       _captchaPausado = true;   // o MutationObserver dele varre o body inteiro a cada mutação
@@ -8843,7 +8593,6 @@
       try { if (era.recruit) scheduleRecruit(); } catch (e) {}
       try { (era.marketModes || []).forEach((k) => scheduleMarket(k)); } catch (e) {}
       try { if (era.build) scheduleBuild(); } catch (e) {}
-      try { if (era.bb) scheduleBB(); } catch (e) {}
       try { if (era.map) scheduleMap(); } catch (e) {}
       try { if (era.alvos) scheduleWake(); } catch (e) {}
       if (!uiTimer) uiTimer = setInterval(tickUI, 1000);

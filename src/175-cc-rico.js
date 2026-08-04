@@ -204,12 +204,12 @@
         wall: !!(config.wall && config.wall.running), recruit: !!(config.recruit && config.recruit.running),
         marketModes: MARKET_MODES.filter((k) => config.market && config.market.modes && config.market.modes[k] && config.market.modes[k].running),
         build: !!(config.build && config.build.running),
-        bb: !!(config.bb && config.bb.running), map: !!(config.map && config.map.running),
+        map: !!(config.map && config.map.running),
         alvos: !!config.running,
       };
       clearTimeout(scavTimer); clearTimeout(farmTimer); clearTimeout(wallTimer); clearTimeout(recruitTimer);
       MARKET_MODES.forEach((k) => clearTimeout(marketTimers[k]));
-      clearTimeout(buildTimer); clearTimeout(bbTimer); clearTimeout(mapTimer);
+      clearTimeout(buildTimer); clearTimeout(mapTimer);
       clearTimeout(sendTimer);
       if (uiTimer) { clearInterval(uiTimer); uiTimer = null; }   // o tick de 1s vira jitter durante o spin
       _captchaPausado = true;   // o MutationObserver dele varre o body inteiro a cada mutação
@@ -234,7 +234,6 @@
       try { if (era.recruit) scheduleRecruit(); } catch (e) {}
       try { (era.marketModes || []).forEach((k) => scheduleMarket(k)); } catch (e) {}
       try { if (era.build) scheduleBuild(); } catch (e) {}
-      try { if (era.bb) scheduleBB(); } catch (e) {}
       try { if (era.map) scheduleMap(); } catch (e) {}
       try { if (era.alvos) scheduleWake(); } catch (e) {}
       if (!uiTimer) uiTimer = setInterval(tickUI, 1000);

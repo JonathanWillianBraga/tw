@@ -73,14 +73,6 @@
       const s = (config.build.stats || {}), as = config.build.villages || {};
       const pausadas = Object.keys(as).filter((v) => as[v].paused).length;
       arr = [{ v: fmtN(s.villages), l: 'aldeias construindo', hl: true }, { v: fmtN(pausadas), l: 'pausadas' }];
-    } else if (mod === 'bb') {
-      const s = (config.bb.stats || {});
-      arr = [
-        { v: fmtN(s.total), l: 'no grupo', hl: true },
-        { v: fmtN(s.f1), l: 'fase 1' },
-        { v: fmtN(s.f2), l: 'fase 2' },
-        { v: fmtN(s.f3), l: 'fase 3' },
-      ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});
       // O card "no alcance" mostrava s.mapped, que é barbCount: os bárbaros do MUNDO INTEIRO que

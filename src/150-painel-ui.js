@@ -110,7 +110,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'map', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -138,7 +138,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
@@ -329,29 +329,6 @@
         '<div class="twmgr-actions"><button id="twmgr-bld-start" class="twmgr-btn twmgr-go">▶ Construir</button><button id="twmgr-bld-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-bld-status" class="twmgr-cstatus"></div>' +
         modLog('build') +
-      '</div>' +
-      '<div id="twmgr-tab-bb" style="display:none">' +
-        hint('🌱 Desenvolve aldeias <b>bárbaras conquistadas</b>: constrói a ladder, abastece das grandes próximas e ao graduar recruta CL sozinho.') +
-        cardsDiv('bb') +
-        sec('Grupo',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo Cultivo</span><select id="twmgr-bb-group" class="twmgr-inp" style="width:170px"></select></div>' +
-          '<div style="text-align:right;margin-top:2px"><button id="twmgr-bb-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button></div>') +
-        sec('Ladder de obra (chave nível, em ordem)',
-          '<textarea id="twmgr-bb-tpl" class="twmgr-inp" style="width:100%;height:96px;font-family:monospace;font-size:10px"></textarea>' +
-          '<div style="text-align:right;margin:2px 0 6px"><button id="twmgr-bb-tpl-reset" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="volta pro padrão do script (fase 1 + fase 2)">↺ reset padrão</button></div>' +
-          '<div style="font-size:10px;color:#6e5a2a;margin:4px 0 2px">Aldeias DEF (coords, 1 por linha) — o resto vira ATK</div>' +
-          '<textarea id="twmgr-bb-def" class="twmgr-inp" style="width:100%;height:44px;font-family:monospace;font-size:10px" placeholder="ex: 470|592"></textarea>') +
-        sec('Abastecimento',
-          '<div class="twmgr-row"><span class="twmgr-lbl" title="Mantém cada bárbara cheia até esse % do armazém dela, todo ciclo (obra + recrutamento). Maior = mais generoso.">Encher aldeia até (%)</span><input id="twmgr-bb-fill" class="twmgr-inp" type="number" min="10" max="100" value="90" style="width:56px"></div>' +
-          '<label class="twmgr-check" style="margin:4px 0" title="Se ligado, o feed fura o teto acima quando um nível de obra custar mais que ele (não trava obra cara). Desligado = respeita o teto sempre."><input id="twmgr-bb-overfill" type="checkbox"> Furar o teto p/ bancar obra cara</label>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Reserva na fonte (%)</span><input id="twmgr-bb-reserve" class="twmgr-inp" type="number" min="0" max="90" value="40" style="width:56px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Dist. máx. fonte (campos)</span><input id="twmgr-bb-dist" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
-        sec('Ritmo',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Máx na fila</span><input id="twmgr-bb-max" class="twmgr-inp" type="number" min="1" value="5" style="width:56px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-bb-int" class="twmgr-inp" type="number" min="1" value="10" style="width:56px"></div>') +
-        '<div class="twmgr-actions"><button id="twmgr-bb-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-bb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
-        '<div id="twmgr-bb-status" class="twmgr-cstatus"></div>' +
-        modLog('bb') +
       '</div>' +
       '<div id="twmgr-tab-map" style="display:none">' +
         hint('🗺️ Fica <b>ligado por ciclos</b>. A cada ciclo relê o mapa, acha bárbaro novo no seu raio e manda explorador em quem <b>você ainda não conhece</b> — quem não está no assistente de saque, ou está mas o relatório não trouxe nada. Quem já tem explorador a caminho é pulado.') +
@@ -748,26 +725,6 @@
     document.getElementById('twmgr-bld-stop').addEventListener('click', buildStop);
     setBuildStatus(config.build.running);
 
-    document.getElementById('twmgr-bb-tpl').value = config.bb.tpl || BB_TPL;
-    document.getElementById('twmgr-bb-def').value = config.bb.defCoords || '';
-    document.getElementById('twmgr-bb-fill').value = config.bb.feedFillPct != null ? config.bb.feedFillPct : 90;
-    document.getElementById('twmgr-bb-overfill').checked = !!config.bb.feedAllowOverfill;
-    document.getElementById('twmgr-bb-reserve').value = config.bb.feedReserve != null ? config.bb.feedReserve : 40;
-    document.getElementById('twmgr-bb-dist').value = config.bb.feedMaxDist != null ? config.bb.feedMaxDist : 15;
-    document.getElementById('twmgr-bb-max').value = config.bb.maxQueue || 5;
-    document.getElementById('twmgr-bb-int').value = Math.round((config.bb.interval || 600) / 60);
-    ['twmgr-bb-group', 'twmgr-bb-tpl', 'twmgr-bb-def', 'twmgr-bb-fill', 'twmgr-bb-overfill', 'twmgr-bb-reserve', 'twmgr-bb-dist', 'twmgr-bb-max', 'twmgr-bb-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readBBCfg); });
-    document.getElementById('twmgr-bb-reload').addEventListener('click', fillGroupSelects);
-    document.getElementById('twmgr-bb-tpl-reset').addEventListener('click', () => {
-      if (!confirm('Resetar a ladder do Cultivo pro padrão do script?')) return;
-      config.bb.tpl = BB_TPL; save();
-      document.getElementById('twmgr-bb-tpl').value = BB_TPL;
-      pushLog('Cultivo: ladder resetada pro padrão.', 'ok', 'bb');
-    });
-    document.getElementById('twmgr-bb-start').addEventListener('click', bbStart);
-    document.getElementById('twmgr-bb-stop').addEventListener('click', bbStop);
-    setBBStatus(config.bb.running);
-
     // Bárbaros do Mapa (BM)
     document.getElementById('twmgr-bm-dist').value = config.map.maxDist != null ? config.map.maxDist : 20;
     document.getElementById('twmgr-bm-days').value = config.map.minDaysSinceScout != null ? config.map.minDaysSinceScout : 0;
@@ -815,7 +772,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'bb', 'map', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'map', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -865,7 +822,6 @@
     if (config.fakes.running) { config.fakes.gen.forEach((f) => { if (f.state === 'scheduled') f.state = 'armed'; }); rlog('Fakes rearmados.', 'fakes'); retomar(fakeTick); }
     MARKET_MODES.forEach((mkKey) => { if (config.market.modes[mkKey].running) { rlog('Mercado (' + MARKET_MODE_LABEL[mkKey] + ') retomado.', 'market'); retomar(() => scheduleMarket(mkKey)); } });
     if (config.build.running) { rlog('Edifícios retomado.', 'build'); retomar(scheduleBuild); }
-    if (config.bb && config.bb.running) { rlog('Cultivo retomado.', 'bb'); retomar(scheduleBB); }
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); retomar(scheduleMap); }
     if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); retomar(etiquetaTick); }
     if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); retomar(scheduleLock); }

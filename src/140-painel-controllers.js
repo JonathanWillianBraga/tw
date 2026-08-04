@@ -42,11 +42,6 @@
       else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#c23a2c'; }
       else { bl.style.color = '#2e7d3a'; bl.textContent = (config.build.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.build.nextAt - now) : '● construindo…'; }
     }
-    const bb = document.getElementById('twmgr-bb-status'); if (bb) {
-      if (!config.bb.running) { bb.textContent = ''; }
-      else if (lockOther()) { bb.textContent = '⏸ outra aba'; bb.style.color = '#c23a2c'; }
-      else { bb.style.color = '#2e7d3a'; bb.textContent = (config.bb.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.bb.nextAt - now) : '● desenvolvendo…'; }
-    }
     const bm = document.getElementById('twmgr-bm-status'); if (bm) {
       if (!config.map || !config.map.running) { bm.textContent = ''; }
       else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#c23a2c'; }
@@ -84,7 +79,6 @@
       if (dot) dot.style.display = (atk && atk.running) ? 'inline' : 'none';
     });
     const ring = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('twmgr-run', !!on && !lockOther()); };
-    ring('twmgr-btab-bb', config.bb && config.bb.running);
     ring('twmgr-btab-map', (config.map && config.map.running) || (config.lock && config.lock.running));
     ring('twmgr-btab-scav', config.scav.running);
     ring('twmgr-btab-farm', config.farm.running);

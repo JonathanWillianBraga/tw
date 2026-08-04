@@ -15,21 +15,6 @@
     const ws = document.getElementById('twmgr-wall-status'); if (ws) { if (!config.wall.running) { ws.textContent = ''; } else if (lockOther()) { ws.textContent = '⏸ outra aba está ativa'; ws.style.color = '#c23a2c'; } else { ws.style.color = '#2e7d3a'; ws.textContent = (config.wall.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.wall.nextAt - now) : '● quebrando…'; } }
     const rs = document.getElementById('twmgr-recruit-status'); if (rs) { if (!config.recruit.running) { rs.textContent = ''; } else if (lockOther()) { rs.textContent = '⏸ outra aba está ativa'; rs.style.color = '#c23a2c'; } else { rs.style.color = '#2e7d3a'; rs.textContent = (config.recruit.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.recruit.nextAt - now) : '● recrutando…'; } }
     const clk = document.getElementById('twmgr-srvclock'); if (clk) { try { clk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
-    const fks = document.getElementById('twmgr-fk-status');
-    if (fks) {
-      if (!config.fakes.running) { fks.textContent = ''; }
-      else if (lockOther()) { fks.textContent = '⏸ outra aba'; fks.style.color = '#c23a2c'; }
-      else {
-        const gg = config.fakes.gen || [];
-        const pend = gg.filter((f) => f.state === 'armed' || f.state === 'scheduled').length;
-        const sent = gg.filter((f) => f.state === 'sent').length;
-        const err = gg.filter((f) => f.state === 'error').length;
-        const nx = gg.filter((f) => f.sendAt && (f.state === 'scheduled' || f.state === 'armed')).sort((a, b) => a.sendAt - b.sendAt)[0];
-        fks.style.color = '#2e7d3a';
-        fks.textContent = '● ' + sent + ' env · ' + pend + ' pend' + (err ? (' · ' + err + ' erro') : '') + (nx ? (' · próx ' + fmt(nx.sendAt - serverNow())) : '');
-      }
-    }
-    if (document.getElementById('twmgr-cards-fakes')) refreshCards('fakes');
     MARKET_MODES.forEach((mkKey) => {
       const mk = document.getElementById('twmgr-mk-' + mkKey + '-status'); if (!mk) return;
       const st = config.market.modes[mkKey];
@@ -79,12 +64,17 @@
       if (dot) dot.style.display = (atk && atk.running) ? 'inline' : 'none';
     });
     const ring = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('twmgr-run', !!on && !lockOther()); };
-    ring('twmgr-btab-map', (config.map && config.map.running) || (config.lock && config.lock.running));
+    // Muralha e Mapa viraram sub-abas do Saque (v11.16.0): o indicador de atividade vai pro botão da
+    // SUB-aba, e a aba Saque acende se qualquer um dos três estiver rodando — senão dá pra ter
+    // Muralha ativa com a barra principal apagada e ninguém percebe.
+    const mapaAtivo = !!((config.map && config.map.running) || (config.lock && config.lock.running));
+    const muroAtivo = !!(config.wall && config.wall.running);
+    ring('twmgr-sbtab-farm', config.farm.running);
+    ring('twmgr-sbtab-wall', muroAtivo);
+    ring('twmgr-sbtab-map', mapaAtivo);
     ring('twmgr-btab-scav', config.scav.running);
-    ring('twmgr-btab-farm', config.farm.running);
-    ring('twmgr-btab-wall', config.wall && config.wall.running);
+    ring('twmgr-btab-farm', config.farm.running || muroAtivo || mapaAtivo);
     ring('twmgr-btab-recruit', config.recruit.running);
-    ring('twmgr-btab-fakes', config.fakes.running);
     ring('twmgr-btab-market', anyMarketRunning());
     ring('twmgr-btab-build', config.build.running);
     ring('twmgr-btab-planner', config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running));

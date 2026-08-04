@@ -4,7 +4,7 @@
     const box = document.getElementById('twmgr-cards-' + mod); if (!box) return;
     box.innerHTML = arr.map((c) =>
       (c.br ? '<div class="twmgr-card-break"></div>' : '') +
-      '<div class="twmgr-card-mini' + (c.wide ? ' twmgr-card-wide' : '') + '"><div class="twmgr-card-v"' + (c.hl ? ' style="color:#1f8fa0"' : '') + '>' + (c.v == null ? '—' : c.v) + '</div><div class="twmgr-card-l">' + c.l + '</div></div>'
+      '<div class="twmgr-card-mini' + (c.wide ? ' twmgr-card-wide' : '') + (c.hl ? ' twmgr-card-hl' : '') + '"><div class="twmgr-card-v">' + (c.v == null ? '—' : c.v) + '</div><div class="twmgr-card-l">' + c.l + '</div></div>'
     ).join('');
   }
   // Monta e desenha os cards de um módulo a partir de config[...].stats (populado nos ticks).
@@ -16,28 +16,17 @@
       arr = [
         { v: fmtN(s.active), l: 'aldeias' },
         { v: fmtN(s.activeTotal), l: 'saques ativos', hl: true },
-        { v: fmtN(s.a), l: 'A' }, { v: fmtN(s.b), l: 'B' }, { v: fmtN(s.c), l: 'C' },
+        // A/B/C num card só: são três números pequenos e secundários: em cards separados ocupavam uma
+        // linha inteira de 3 cards grandes e roubavam o destaque do "saques ativos".
+        { v: fmtN(s.a) + ' / ' + fmtN(s.b) + ' / ' + fmtN(s.c), l: 'A / B / C' },
         { v: fmtN(lt.today), l: 'saqueado hoje', br: true },
         { v: fmtN(lt.estimate), l: 'estimativa fim do dia' },
-        { v: fmtN((s.dailyCap || {}).cap), l: 'capacidade enviada hoje' },
-        // Só vale comparar com o "saqueado hoje" se a contagem cobrir o dia inteiro. Se o script foi
-        // instalado/aberto no meio do dia, a capacidade está incompleta e a conta estoura 100%.
-        (function () {
-          const dc = s.dailyCap || {}, cap = dc.cap || 0;
-          const parcial = (dc.startSec || 0) > 900;
-          if (!cap || lt.today == null) return { v: '—', l: 'eficiência (saque ÷ capacidade)', hl: true, wide: true };
-          const pct = Math.round(lt.today / cap * 100) + '%';
-          return parcial
-            ? { v: pct, l: 'eficiência — parcial, vale só a partir de amanhã', wide: true }
-            : { v: pct, l: 'eficiência (saque ÷ capacidade)', hl: true, wide: true };
-        }()),
       ];
     } else if (mod === 'wall') {
       const s = (config.wall.stats || {});
       arr = [
-        { v: fmtN(s.pending), l: 'muros p/ derrubar', hl: true },
-        { v: fmtN(s.total), l: 'quebras (total)' },
-        { v: fmtN(s.last), l: 'último ciclo' },
+        { v: fmtN(s.pending), l: 'aldeias p/ quebrar muralha', hl: true },
+        { v: fmtN(s.active), l: 'quebras a caminho' },
       ];
     } else if (mod === 'scav') {
       const s = (config.scav.stats || {}), ct = s.coleta || {};
@@ -48,27 +37,7 @@
       ];
     } else if (mod === 'recruit') {
       const s = (config.recruit.stats || {});
-      arr = [{ v: fmtN(s.villages), l: 'aldeias recrutando', wide: true, hl: true }];
-    } else if (mod === 'fakes') {
-      const g = config.fakes.gen || [];
-      const armed = g.filter((f) => f.state === 'armed' || f.state === 'scheduled').length;
-      const pend = g.filter((f) => f.state === 'armed').length;
-      const sent = g.filter((f) => f.state === 'sent').length;
-      const err = g.filter((f) => f.state === 'error').length;
-      arr = [
-        { v: fmtN(armed), l: 'armados', hl: true }, { v: fmtN(pend), l: 'pendentes' },
-        { v: fmtN(sent), l: 'enviados' }, { v: fmtN(err), l: 'erros' },
-      ];
-    } else if (mod === 'market') {
-      // Soma os modos — podem estar rodando ao mesmo tempo agora, então o card é um agregado.
-      const s = { sending: 0, receiving: 0, wood: 0, stone: 0, iron: 0, coins: 0 };
-      MARKET_MODES.forEach((k) => { const ms = (config.market.modes[k] && config.market.modes[k].stats) || {}; s.sending += ms.sending || 0; s.receiving += ms.receiving || 0; s.wood += ms.wood || 0; s.stone += ms.stone || 0; s.iron += ms.iron || 0; s.coins += ms.coins || 0; });
-      arr = [
-        { v: fmtN(s.sending), l: 'enviando', hl: true },
-        { v: fmtN(s.receiving), l: 'recebendo' },
-        { v: fmtN(s.wood), l: 'madeira' }, { v: fmtN(s.stone), l: 'argila' }, { v: fmtN(s.iron), l: 'ferro' },
-        { v: fmtN(s.coins), l: 'moedas' },
-      ];
+      arr = [{ v: fmtN(s.villages), l: 'aldeias recrutando', hl: true }, { v: fmtN(s.metas), l: 'atingiram a meta' }];
     } else if (mod === 'build') {
       const s = (config.build.stats || {}), as = config.build.villages || {};
       const pausadas = Object.keys(as).filter((v) => as[v].paused).length;
@@ -86,7 +55,7 @@
         { v: fmtN(s.novos), l: 'bárbaros novos' },
         { v: fmtN(s.sent), l: 'explorados' },
         { v: fmtN(s.left), l: 'de fora' },
-        { v: fmtN(s.blPerda), l: 'bl: perdi tropa' },
+        { v: fmtN(s.blPerda), l: 'bl: perdi tropa', br: true },
         { v: fmtN(s.blDefesa), l: 'bl: tem defesa' },
         { v: fmtN(s.mapped), l: 'bárbaros no mundo' },
       ];
@@ -102,8 +71,7 @@
       const e = config.etiqueta || {};
       arr = [
         { v: fmtN(e.lastCount || 0), l: 'na lista', hl: true },
-        { v: fmtN(Object.keys(e.jaEnviados || {}).length), l: 'ja etiquetados' },
-        { v: (e.intervalMin || 2) + ' min', l: 'intervalo' },
+        { v: fmtN(Object.keys(e.jaEnviados || {}).length), l: 'já etiquetados' },
       ];
     } else if (mod === 'planner') {
       const attacks = (config.planner && config.planner.attacks) || [];
@@ -1010,7 +978,7 @@
     // reconhecimento somando cavalaria que o jogo nem exigia.
     const tplOnlySpy = { a: false, b: false };
     let vPoints = null;
-    const fakePct = (config.fakes && config.fakes.pct) || 1;
+    const fakePct = FAKE_LIMIT_PCT;
     if (!dyn && tpl) {
       const popOf = (u) => Object.keys(u || {}).reduce((s, k) => s + (parseInt(u[k], 10) || 0) * (FAKE_POP[k] || 1), 0);
       const soSpy = (u) => { const ks = Object.keys(u || {}).filter((k) => (parseInt(u[k], 10) || 0) > 0); return ks.length > 0 && ks.every((k) => k === 'spy'); };
@@ -1316,6 +1284,17 @@
     const axeN = Math.max(1, config.wall.axeCount || 80);
     const delay = Math.max(0, config.farm.delay != null ? config.farm.delay : 500);
     const demo = config.wall.sentDemo || {};
+    // Quebras A CAMINHO: as coords pra onde eu mandei e que ainda aparecem nos meus comandos de
+    // ataque. Filtro o ícone de saque fora, senão um saque pra mesma aldeia contaria como quebra.
+    // Sem isso o card mediria "quebras que eu disparei algum dia", que não diz nada do agora.
+    config.wall.ativos = config.wall.ativos || {};
+    let quebrasNoAr = 0;
+    try {
+      const pa = await getPendingAttack();
+      Object.keys(config.wall.ativos).forEach((c) => {
+        if (pa.coords.has(c) && !pa.farmCoords.has(c)) quebrasNoAr++; else delete config.wall.ativos[c];
+      });
+    } catch (e) { quebrasNoAr = Object.keys(config.wall.ativos).length; }
     const COOLDOWN = 6 * 3600 * 1000;   // não re-manda no mesmo report por 6h
     // Alvos com muralha na faixa (assistente = conta inteira), MAIORES primeiro.
     let eligible = [];
@@ -1350,6 +1329,7 @@
           await sendAttack(c.s.vid, tx, ty, amounts);
           avail.axe -= axeN; avail.ram -= rams; avail.spy = (avail.spy || 0) - spies;
           demo[t.reportId] = now; count++; done = true;
+          config.wall.ativos[t.coord] = now;   // p/ o card contar quantas quebras estão no ar
           pushLog('Muralha: ' + c.s.name + ' → ' + t.coord + ' (muro ' + t.wall + ', ' + (Math.round(c.d * 10) / 10) + ' campos) com ' + axeN + ' bárbaro + ' + rams + ' aríete' + (spies ? ' + ' + spies + ' explorador' : ''), 'ok', 'wall');
           await sleep(delay + Math.floor(Math.random() * 250));
           break;
@@ -1375,6 +1355,7 @@
     config.wall.stats.pending = pendingWalls;
     config.wall.stats.total = (config.wall.stats.total || 0) + count;
     config.wall.stats.last = count;
+    config.wall.stats.active = quebrasNoAr + count;   // as deste ciclo também estão no ar
     config.wall.nextAt = now + Math.max(60, config.wall.interval || 600) * 1000;
     save();
     refreshCards('wall');

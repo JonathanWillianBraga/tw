@@ -389,7 +389,7 @@
     catch (e) { pushLog('Recrutar: erro ao resolver os alvos (' + (e.message || e) + ').', 'err', 'recruit'); config.recruit.nextAt = now + 120000; save(); scheduleRecruit(); return; }
     const vids = Object.keys(map);
     if (!vids.length) { pushLog('Recrutar: nenhum grupo mapeado com aldeias.', '', 'recruit'); config.recruit.nextAt = now + 300000; save(); scheduleRecruit(); return; }
-    let totalSent = 0;
+    let totalSent = 0, metas = 0;
     for (const vid of vids) {
       { const pare = devoParar('recruit'); if (pare) { pushLog('Recrutar: ciclo interrompido — ' + pare + '.', '', 'recruit'); break; } }
       const targets = map[vid].targets || {};
@@ -411,12 +411,17 @@
           totalSent++;
         } catch (e) { pushLog('Recrutar em ' + nm + ': ' + (e.message || e), 'err', 'recruit'); }
       } else {
+        // "Atingiu a meta" é diferente de "não deu pra recrutar": se faltou recurso, o computeRecruit
+        // devolve wantCost > 0 (é a demanda que vai pro Equilíbrio). Sem nada querido, o alvo está cumprido.
+        const querendo = wantCost && ((wantCost.wood || 0) + (wantCost.stone || 0) + (wantCost.iron || 0)) > 0;
+        if (!querendo) metas++;
         pushLog(nm + ': nada a recrutar — ' + reason + ' (' + qStr + ')', '', 'recruit');
       }
       await sleep(300);
     }
     config.recruit.stats = config.recruit.stats || {};
     config.recruit.stats.villages = vids.length;
+    config.recruit.stats.metas = metas;
     config.recruit.nextAt = now + Math.max(60, config.recruit.interval || 600) * 1000;
     save();
     refreshCards('recruit');

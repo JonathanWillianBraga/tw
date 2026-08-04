@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.15.0
+// @version      11.16.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.15.0';
+  const VERSION = '11.16.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -173,7 +173,10 @@
     groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
     groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo
   });
-  const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
+  // Limite de fake do mundo: o ataque precisa de pop >= pontos_da_origem * FAKE_LIMIT_PCT%. Era o
+  // ajuste "pct" do módulo Fakes; virou constante quando ele saiu (v11.16.0). Quem usa é o SAQUE,
+  // pra não montar template que o jogo recusa. 1% é o valor deste mundo.
+  const FAKE_LIMIT_PCT = 1;
   // Cada modo roda de forma INDEPENDENTE (pode ligar Equilíbrio e Solidário ao mesmo tempo, por
   // exemplo) — por isso running/nextAt/stats vivem por modo, dentro de "modes". Os campos de
   // configuração (destCoord, reserve, thresholdPct, solidario* etc.) continuam compartilhados no
@@ -188,7 +191,7 @@
     thresholdPct: 50, maxDist: 15,
     groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {},
   });
-  // Edifícios = gerenciador no molde do "Gerente de conta → Construção" do jogo: N modelos nomeados
+  // Construções = gerenciador no molde do "Gerente de conta → Construção" do jogo: N modelos nomeados
   // (templates) + atribuição POR ALDEIA (villages: vid -> {tpl, paused, coord, name, done, total}).
   // `plans` (atk/def) ficou só como semente da migração — quem manda agora é `templates`.
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, templates: {}, villages: {}, filterGroup: '', demand: {} });
@@ -342,7 +345,7 @@
     nextAt: 0,
     demand: {},              // { [vid]: { b, cost, coord, profile } }
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), market: defMarket(), build: defBuild(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -417,17 +420,6 @@
     if (c.recruit.targetHours == null) c.recruit.targetHours = 2;
     if (c.recruit.refillBelowMin == null) c.recruit.refillBelowMin = 30;
     if (c.recruit.interval == null) c.recruit.interval = 600;
-    if (!c.fakes) c.fakes = defFakes();
-    if (c.fakes.offsetMs == null) c.fakes.offsetMs = 150;
-    if (c.fakes.pct == null) c.fakes.pct = 1;
-    if (c.fakes.minPop == null) c.fakes.minPop = 0;
-    if (!c.fakes.mode) c.fakes.mode = 'split';
-    if (!c.fakes.siege) c.fakes.siege = 'ram';
-    if (!c.fakes.filler) c.fakes.filler = 'spy';
-    if (!c.fakes.origins) c.fakes.origins = {};
-    if (!c.fakes.gen) c.fakes.gen = [];
-    if (c.fakes.targetsRaw == null) c.fakes.targetsRaw = '';
-    if (c.fakes.arrLocal == null) c.fakes.arrLocal = '';
     if (!c.market) c.market = defMarket();
     // Migração: cada modo era mutuamente exclusivo (1 running/nextAt/mode pro Mercado inteiro).
     // Agora cada modo tem seu próprio estado — se o usuário tinha um modo ligado, esse modo
@@ -661,12 +653,12 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, buildTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, buildTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
   const marketTimers = { cunhagem: null, equilibrio: null, solidario: null, cunhar: null };   // 1 timer por modo — rodam de forma independente
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
   function anyMarketRunning() { return !!(config.market && config.market.modes && MARKET_MODES.some((k) => config.market.modes[k] && config.market.modes[k].running)); }
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || anyMarketRunning() || (config.build && config.build.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || anyMarketRunning() || (config.build && config.build.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.
@@ -752,7 +744,7 @@
     const box = document.getElementById('twmgr-cards-' + mod); if (!box) return;
     box.innerHTML = arr.map((c) =>
       (c.br ? '<div class="twmgr-card-break"></div>' : '') +
-      '<div class="twmgr-card-mini' + (c.wide ? ' twmgr-card-wide' : '') + '"><div class="twmgr-card-v"' + (c.hl ? ' style="color:#1f8fa0"' : '') + '>' + (c.v == null ? '—' : c.v) + '</div><div class="twmgr-card-l">' + c.l + '</div></div>'
+      '<div class="twmgr-card-mini' + (c.wide ? ' twmgr-card-wide' : '') + (c.hl ? ' twmgr-card-hl' : '') + '"><div class="twmgr-card-v">' + (c.v == null ? '—' : c.v) + '</div><div class="twmgr-card-l">' + c.l + '</div></div>'
     ).join('');
   }
   // Monta e desenha os cards de um módulo a partir de config[...].stats (populado nos ticks).
@@ -764,28 +756,17 @@
       arr = [
         { v: fmtN(s.active), l: 'aldeias' },
         { v: fmtN(s.activeTotal), l: 'saques ativos', hl: true },
-        { v: fmtN(s.a), l: 'A' }, { v: fmtN(s.b), l: 'B' }, { v: fmtN(s.c), l: 'C' },
+        // A/B/C num card só: são três números pequenos e secundários: em cards separados ocupavam uma
+        // linha inteira de 3 cards grandes e roubavam o destaque do "saques ativos".
+        { v: fmtN(s.a) + ' / ' + fmtN(s.b) + ' / ' + fmtN(s.c), l: 'A / B / C' },
         { v: fmtN(lt.today), l: 'saqueado hoje', br: true },
         { v: fmtN(lt.estimate), l: 'estimativa fim do dia' },
-        { v: fmtN((s.dailyCap || {}).cap), l: 'capacidade enviada hoje' },
-        // Só vale comparar com o "saqueado hoje" se a contagem cobrir o dia inteiro. Se o script foi
-        // instalado/aberto no meio do dia, a capacidade está incompleta e a conta estoura 100%.
-        (function () {
-          const dc = s.dailyCap || {}, cap = dc.cap || 0;
-          const parcial = (dc.startSec || 0) > 900;
-          if (!cap || lt.today == null) return { v: '—', l: 'eficiência (saque ÷ capacidade)', hl: true, wide: true };
-          const pct = Math.round(lt.today / cap * 100) + '%';
-          return parcial
-            ? { v: pct, l: 'eficiência — parcial, vale só a partir de amanhã', wide: true }
-            : { v: pct, l: 'eficiência (saque ÷ capacidade)', hl: true, wide: true };
-        }()),
       ];
     } else if (mod === 'wall') {
       const s = (config.wall.stats || {});
       arr = [
-        { v: fmtN(s.pending), l: 'muros p/ derrubar', hl: true },
-        { v: fmtN(s.total), l: 'quebras (total)' },
-        { v: fmtN(s.last), l: 'último ciclo' },
+        { v: fmtN(s.pending), l: 'aldeias p/ quebrar muralha', hl: true },
+        { v: fmtN(s.active), l: 'quebras a caminho' },
       ];
     } else if (mod === 'scav') {
       const s = (config.scav.stats || {}), ct = s.coleta || {};
@@ -796,27 +777,7 @@
       ];
     } else if (mod === 'recruit') {
       const s = (config.recruit.stats || {});
-      arr = [{ v: fmtN(s.villages), l: 'aldeias recrutando', wide: true, hl: true }];
-    } else if (mod === 'fakes') {
-      const g = config.fakes.gen || [];
-      const armed = g.filter((f) => f.state === 'armed' || f.state === 'scheduled').length;
-      const pend = g.filter((f) => f.state === 'armed').length;
-      const sent = g.filter((f) => f.state === 'sent').length;
-      const err = g.filter((f) => f.state === 'error').length;
-      arr = [
-        { v: fmtN(armed), l: 'armados', hl: true }, { v: fmtN(pend), l: 'pendentes' },
-        { v: fmtN(sent), l: 'enviados' }, { v: fmtN(err), l: 'erros' },
-      ];
-    } else if (mod === 'market') {
-      // Soma os modos — podem estar rodando ao mesmo tempo agora, então o card é um agregado.
-      const s = { sending: 0, receiving: 0, wood: 0, stone: 0, iron: 0, coins: 0 };
-      MARKET_MODES.forEach((k) => { const ms = (config.market.modes[k] && config.market.modes[k].stats) || {}; s.sending += ms.sending || 0; s.receiving += ms.receiving || 0; s.wood += ms.wood || 0; s.stone += ms.stone || 0; s.iron += ms.iron || 0; s.coins += ms.coins || 0; });
-      arr = [
-        { v: fmtN(s.sending), l: 'enviando', hl: true },
-        { v: fmtN(s.receiving), l: 'recebendo' },
-        { v: fmtN(s.wood), l: 'madeira' }, { v: fmtN(s.stone), l: 'argila' }, { v: fmtN(s.iron), l: 'ferro' },
-        { v: fmtN(s.coins), l: 'moedas' },
-      ];
+      arr = [{ v: fmtN(s.villages), l: 'aldeias recrutando', hl: true }, { v: fmtN(s.metas), l: 'atingiram a meta' }];
     } else if (mod === 'build') {
       const s = (config.build.stats || {}), as = config.build.villages || {};
       const pausadas = Object.keys(as).filter((v) => as[v].paused).length;
@@ -834,7 +795,7 @@
         { v: fmtN(s.novos), l: 'bárbaros novos' },
         { v: fmtN(s.sent), l: 'explorados' },
         { v: fmtN(s.left), l: 'de fora' },
-        { v: fmtN(s.blPerda), l: 'bl: perdi tropa' },
+        { v: fmtN(s.blPerda), l: 'bl: perdi tropa', br: true },
         { v: fmtN(s.blDefesa), l: 'bl: tem defesa' },
         { v: fmtN(s.mapped), l: 'bárbaros no mundo' },
       ];
@@ -850,8 +811,7 @@
       const e = config.etiqueta || {};
       arr = [
         { v: fmtN(e.lastCount || 0), l: 'na lista', hl: true },
-        { v: fmtN(Object.keys(e.jaEnviados || {}).length), l: 'ja etiquetados' },
-        { v: (e.intervalMin || 2) + ' min', l: 'intervalo' },
+        { v: fmtN(Object.keys(e.jaEnviados || {}).length), l: 'já etiquetados' },
       ];
     } else if (mod === 'planner') {
       const attacks = (config.planner && config.planner.attacks) || [];
@@ -1758,7 +1718,7 @@
     // reconhecimento somando cavalaria que o jogo nem exigia.
     const tplOnlySpy = { a: false, b: false };
     let vPoints = null;
-    const fakePct = (config.fakes && config.fakes.pct) || 1;
+    const fakePct = FAKE_LIMIT_PCT;
     if (!dyn && tpl) {
       const popOf = (u) => Object.keys(u || {}).reduce((s, k) => s + (parseInt(u[k], 10) || 0) * (FAKE_POP[k] || 1), 0);
       const soSpy = (u) => { const ks = Object.keys(u || {}).filter((k) => (parseInt(u[k], 10) || 0) > 0); return ks.length > 0 && ks.every((k) => k === 'spy'); };
@@ -2064,6 +2024,17 @@
     const axeN = Math.max(1, config.wall.axeCount || 80);
     const delay = Math.max(0, config.farm.delay != null ? config.farm.delay : 500);
     const demo = config.wall.sentDemo || {};
+    // Quebras A CAMINHO: as coords pra onde eu mandei e que ainda aparecem nos meus comandos de
+    // ataque. Filtro o ícone de saque fora, senão um saque pra mesma aldeia contaria como quebra.
+    // Sem isso o card mediria "quebras que eu disparei algum dia", que não diz nada do agora.
+    config.wall.ativos = config.wall.ativos || {};
+    let quebrasNoAr = 0;
+    try {
+      const pa = await getPendingAttack();
+      Object.keys(config.wall.ativos).forEach((c) => {
+        if (pa.coords.has(c) && !pa.farmCoords.has(c)) quebrasNoAr++; else delete config.wall.ativos[c];
+      });
+    } catch (e) { quebrasNoAr = Object.keys(config.wall.ativos).length; }
     const COOLDOWN = 6 * 3600 * 1000;   // não re-manda no mesmo report por 6h
     // Alvos com muralha na faixa (assistente = conta inteira), MAIORES primeiro.
     let eligible = [];
@@ -2098,6 +2069,7 @@
           await sendAttack(c.s.vid, tx, ty, amounts);
           avail.axe -= axeN; avail.ram -= rams; avail.spy = (avail.spy || 0) - spies;
           demo[t.reportId] = now; count++; done = true;
+          config.wall.ativos[t.coord] = now;   // p/ o card contar quantas quebras estão no ar
           pushLog('Muralha: ' + c.s.name + ' → ' + t.coord + ' (muro ' + t.wall + ', ' + (Math.round(c.d * 10) / 10) + ' campos) com ' + axeN + ' bárbaro + ' + rams + ' aríete' + (spies ? ' + ' + spies + ' explorador' : ''), 'ok', 'wall');
           await sleep(delay + Math.floor(Math.random() * 250));
           break;
@@ -2123,6 +2095,7 @@
     config.wall.stats.pending = pendingWalls;
     config.wall.stats.total = (config.wall.stats.total || 0) + count;
     config.wall.stats.last = count;
+    config.wall.stats.active = quebrasNoAr + count;   // as deste ciclo também estão no ar
     config.wall.nextAt = now + Math.max(60, config.wall.interval || 600) * 1000;
     save();
     refreshCards('wall');
@@ -2593,7 +2566,7 @@
     catch (e) { pushLog('Recrutar: erro ao resolver os alvos (' + (e.message || e) + ').', 'err', 'recruit'); config.recruit.nextAt = now + 120000; save(); scheduleRecruit(); return; }
     const vids = Object.keys(map);
     if (!vids.length) { pushLog('Recrutar: nenhum grupo mapeado com aldeias.', '', 'recruit'); config.recruit.nextAt = now + 300000; save(); scheduleRecruit(); return; }
-    let totalSent = 0;
+    let totalSent = 0, metas = 0;
     for (const vid of vids) {
       { const pare = devoParar('recruit'); if (pare) { pushLog('Recrutar: ciclo interrompido — ' + pare + '.', '', 'recruit'); break; } }
       const targets = map[vid].targets || {};
@@ -2615,12 +2588,17 @@
           totalSent++;
         } catch (e) { pushLog('Recrutar em ' + nm + ': ' + (e.message || e), 'err', 'recruit'); }
       } else {
+        // "Atingiu a meta" é diferente de "não deu pra recrutar": se faltou recurso, o computeRecruit
+        // devolve wantCost > 0 (é a demanda que vai pro Equilíbrio). Sem nada querido, o alvo está cumprido.
+        const querendo = wantCost && ((wantCost.wood || 0) + (wantCost.stone || 0) + (wantCost.iron || 0)) > 0;
+        if (!querendo) metas++;
         pushLog(nm + ': nada a recrutar — ' + reason + ' (' + qStr + ')', '', 'recruit');
       }
       await sleep(300);
     }
     config.recruit.stats = config.recruit.stats || {};
     config.recruit.stats.villages = vids.length;
+    config.recruit.stats.metas = metas;
     config.recruit.nextAt = now + Math.max(60, config.recruit.interval || 600) * 1000;
     save();
     refreshCards('recruit');
@@ -2752,7 +2730,12 @@
     } catch (e) { pushLog('Diag Recrutar falhou: ' + (e.message || e), 'err'); }
   }
 
-  // ==================== FAKES (multi-alvo, multi-origem, fake eficiente) ====================
+  // ==================== ENVIO (primitivas de ataque/apoio compartilhadas) ====================
+  // Sobrou do módulo Fakes, aposentado na v11.16.0. Nada aqui é específico de fake: é o preparo de
+  // comando em 2 etapas do jogo (`try=confirm` -> `action=command`) mais helpers de aldeia/pontos.
+  // Quem consome: a Central de Comando (fakePrepare, getFakeVillage), o Coordenado (attackPrepare/
+  // attackFire) e o Saque (FAKE_POP, carryOf, getVillagePoints). Os nomes com "fake" ficaram por
+  // histórico — renomear obrigaria a mexer em 175/180/060 sem ganho real.
   async function fakePrepare(vid, x, y, amounts, kind) {
     const p1 = new URLSearchParams();
     Object.entries(amounts).forEach(([u, a]) => p1.set(u, String(a)));
@@ -2799,16 +2782,6 @@
     const popMax = pm ? (parseInt((pm.textContent || '').replace(/\D/g, ''), 10) || 0) : 0;
     return { avail: applyReservationsToAvail(vid, avail), popMax: popMax };
   }
-  function computeFakeComp(T, avail, siege, filler) {
-    const amounts = {}; let pop = 0;
-    if (siege && siege !== 'none' && (avail[siege] || 0) >= 1) { amounts[siege] = 1; pop += FAKE_POP[siege] || 1; }
-    const fp = FAKE_POP[filler] || 1;
-    const need = Math.max(0, T - pop);
-    let q = Math.ceil(need / fp);
-    let ok = true;
-    if (q > 0) { if ((avail[filler] || 0) >= q) { amounts[filler] = (amounts[filler] || 0) + q; pop += q * fp; } else { ok = false; const have = avail[filler] || 0; if (have > 0) { amounts[filler] = (amounts[filler] || 0) + have; pop += have * fp; } } }
-    return { amounts: amounts, pop: pop, ok: ok && pop >= T && Object.keys(amounts).length > 0 };
-  }
   let _pointsCache = null;
   async function getVillagePoints() {
     if (_pointsCache) return _pointsCache;
@@ -2819,143 +2792,6 @@
     _pointsCache = map;
     return map;
   }
-  function fakeCapacity(T, availIn, siege, filler) {
-    const avail = Object.assign({}, availIn);
-    let total = 0, withSiege = 0;
-    while (total < 5000) {
-      const c = computeFakeComp(T, avail, siege, filler);
-      if (!c.ok) break;
-      if (c.amounts[siege]) withSiege++;
-      Object.entries(c.amounts).forEach(([u, n]) => { avail[u] = Math.max(0, (avail[u] || 0) - n); });
-      total++;
-    }
-    return { total: total, withSiege: withSiege };
-  }
-  async function fakeGenerate(preview) {
-    readFakesCfg();
-    const cfg = config.fakes;
-    const targets = parseCoords(cfg.targetsRaw);
-    const origins = Object.keys(cfg.origins).filter((v) => cfg.origins[v]);
-    if (!targets.length) { pushLog('Fakes: nenhum alvo válido colado.', 'err', 'fakes'); return null; }
-    if (!origins.length) { pushLog('Fakes: selecione ao menos 1 origem.', 'err', 'fakes'); return null; }
-    if (!cfg.arrLocal) { pushLog('Fakes: defina o horário de chegada.', 'err', 'fakes'); return null; }
-    const arriveAt = arrivalToServerMs(cfg.arrLocal);
-    let points = {}; try { points = await getVillagePoints(); } catch (e) { pushLog('Fakes: não li os pontos (village.txt), usando a fazenda como base.', 'err', 'fakes'); }
-    const pairs = [];
-    if (cfg.mode === 'all') { origins.forEach((o) => targets.forEach((t) => pairs.push({ origin: o, x: t.x, y: t.y }))); }
-    else { targets.forEach((t, i) => { pairs.push({ origin: origins[i % origins.length], x: t.x, y: t.y }); }); }
-    const byO = {}; pairs.forEach((p) => { (byO[p.origin] = byO[p.origin] || []).push(p); });
-    const gen = [];
-    for (const o of Object.keys(byO)) {
-      let st; try { st = await getFakeVillage(o); } catch (e) { pushLog('Fakes: erro ao ler a aldeia ' + o + ' (' + (e.message || e) + ').', 'err', 'fakes'); continue; }
-      const base = points[o] || st.popMax;
-      const T = cfg.minPop > 0 ? cfg.minPop : Math.max(1, Math.ceil((cfg.pct / 100) * base));
-      const cap = fakeCapacity(T, st.avail, cfg.siege, cfg.filler);
-      const avail = Object.assign({}, st.avail);
-      let made = 0, failed = 0, comp0 = null;
-      for (const p of byO[o]) {
-        const c = computeFakeComp(T, avail, cfg.siege, cfg.filler);
-        if (!c.ok) { failed++; continue; }
-        Object.entries(c.amounts).forEach(([u, n]) => { avail[u] = Math.max(0, (avail[u] || 0) - n); });
-        if (!comp0) comp0 = c;
-        made++;
-        gen.push({ id: genId(), origin: o, x: p.x, y: p.y, amounts: c.amounts, arriveAt: arriveAt, durSec: null, sendAt: 0, state: 'armed', error: null });
-      }
-      const cdesc = comp0 ? Object.entries(comp0.amounts).map(([u, n]) => u + '=' + n).join('+') + ' (pop ' + comp0.pop + ')' : '—';
-      pushLog(o + ': ' + made + ' fake(s)' + (failed ? ', ' + failed + ' sem tropa' : '') + ' · teto ' + cap.total + ' (' + cap.withSiege + ' c/ isca) · ' + cdesc + ' · pop mín ' + T + (points[o] ? ' (1% de ' + points[o] + ' pts)' : ''), '', 'fakes');
-    }
-    pushLog('Fakes ' + (preview ? '(prévia)' : 'gerados') + ': ' + gen.length + ' no total, chega ' + (cfg.arrLocal || '').replace('T', ' ') + '.', 'ok', 'fakes');
-    return gen;
-  }
-  function scheduleFakeFire(f) {
-    const lead = 12000;
-    const delayPrep = Math.max(0, (f.sendAt - lead) - serverNow());
-    setTimeout(async () => {
-      if (!config.fakes.running || f.state !== 'scheduled' || lockOther()) return;
-      let prep;
-      try { prep = await fakePrepare(f.origin, f.x, f.y, f.amounts); }
-      catch (e) { f.state = 'error'; f.error = (e.message || e); save(); pushLog('Fake ' + f.x + '|' + f.y + ': preparo falhou (' + f.error + ').', 'err', 'fakes'); return; }
-      const fireDelay = Math.max(0, (f.sendAt - config.fakes.offsetMs) - serverNow());
-      setTimeout(async () => {
-        if (!config.fakes.running || f.state !== 'scheduled' || lockOther()) return;
-        try { await fakeFire(prep); f.state = 'sent'; f.sentAt = serverNow(); pushLog('🎭 Fake enviado → ' + f.x + '|' + f.y + ' (de ' + f.origin + ')', 'ok', 'fakes'); }
-        catch (e) { f.state = 'error'; f.error = (e.message || e); pushLog('Fake ' + f.x + '|' + f.y + ': envio falhou (' + f.error + ').', 'err', 'fakes'); }
-        save();
-      }, fireDelay);
-    }, delayPrep);
-  }
-  async function fakeTick() {
-    clearTimeout(fakeTimer);
-    if (!config.fakes.running) return;
-    if (lockOther()) { fakeTimer = setTimeout(fakeTick, 5000); return; }
-    if (captchaBlocked()) { fakeTimer = setTimeout(fakeTick, 30000); return; }
-    claimLock();
-    const nowS = serverNow();
-    for (const f of config.fakes.gen) {
-      if (f.state === 'sent' || f.state === 'error' || f.state === 'scheduled') continue;
-      if (!f.arriveAt) { f.state = 'error'; f.error = 'sem horário'; continue; }
-      if (f.durSec == null) {
-        try { const p = await fakePrepare(f.origin, f.x, f.y, f.amounts); f.durSec = p.dur; }
-        catch (e) { f.state = 'error'; f.error = (e.message || e); pushLog('Fake ' + f.x + '|' + f.y + ': ' + f.error, 'err', 'fakes'); continue; }
-        if (!f.durSec) { f.state = 'error'; f.error = 'sem duração'; continue; }
-      }
-      f.sendAt = f.arriveAt - f.durSec * 1000;
-      if (f.sendAt - nowS < -2000) { f.state = 'error'; f.error = 'envio no passado'; continue; }
-      f.state = 'scheduled'; scheduleFakeFire(f);
-    }
-    save();
-    fakeTimer = setTimeout(fakeTick, 30000);
-  }
-  async function fillFakeGroups() {
-    const selEl = document.getElementById('twmgr-fk-group'); if (!selEl) return;
-    let groups = []; try { groups = await getGroups(); } catch (e) { /* sem grupos: fica só "Todas" */ }
-    const cur = config.fakes.group || '';
-    selEl.innerHTML = '<option value="">Todas as aldeias</option>' +
-      groups.map((g) => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('');
-    selEl.value = cur;
-  }
-  async function renderFakeOrigins() {
-    const cont = document.getElementById('twmgr-fk-origins'); if (!cont) return;
-    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
-    const gid = config.fakes.group || '';
-    if (gid) {
-      try { const inGrp = await getVillagesInGroup(gid); const ok = {}; inGrp.forEach((v) => { ok[v.vid] = 1; }); vils = vils.filter((v) => ok[v.vid]); }
-      catch (e) { pushLog('Fakes: não consegui filtrar pelo grupo (' + (e.message || e) + '); mostrando todas.', 'err', 'fakes'); }
-    }
-    const sel = config.fakes.origins || {};
-    cont.innerHTML = vils.length
-      ? vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-fk-origin" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('')
-      : '<div style="font-size:10px;color:#6e5a2f;padding:4px">nenhuma aldeia neste grupo</div>';
-    cont.querySelectorAll('.twmgr-fk-origin').forEach((cb) => cb.addEventListener('change', readFakesCfg));
-    const cnt = document.getElementById('twmgr-fk-count'); if (cnt) cnt.textContent = vils.length ? ('(' + vils.length + ')') : '';
-  }
-  function readFakesCfg() {
-    const c = config.fakes, g = (id) => document.getElementById(id);
-    if (g('twmgr-fk-targets')) c.targetsRaw = g('twmgr-fk-targets').value;
-    if (g('twmgr-fk-arr')) c.arrLocal = g('twmgr-fk-arr').value;
-    if (g('twmgr-fk-offset')) c.offsetMs = Math.max(0, parseInt(g('twmgr-fk-offset').value, 10) || 150);
-    if (g('twmgr-fk-pct')) c.pct = Math.max(0, parseFloat((g('twmgr-fk-pct').value || '').replace(',', '.')) || 1);
-    if (g('twmgr-fk-minpop')) c.minPop = Math.max(0, parseInt(g('twmgr-fk-minpop').value, 10) || 0);
-    if (g('twmgr-fk-siege')) c.siege = g('twmgr-fk-siege').value;
-    if (g('twmgr-fk-filler')) c.filler = g('twmgr-fk-filler').value;
-    const mode = document.querySelector('input[name="twmgr-fk-mode"]:checked'); if (mode) c.mode = mode.value;
-    // MERGE (não substitui): o filtro por grupo esconde checkboxes de outros grupos —
-    // reconstruir do zero apagaria as origens já marcadas fora do grupo visível agora.
-    const origins = Object.assign({}, c.origins || {});
-    document.querySelectorAll('.twmgr-fk-origin').forEach((cb) => { const vid = cb.getAttribute('data-vid'); if (cb.checked) origins[vid] = true; else delete origins[vid]; });
-    c.origins = origins;
-    save();
-  }
-  async function fakePreview() { await fakeGenerate(true); }
-  function setFakeStatus(on) { setBtnState('twmgr-fk-start', 'twmgr-fk-stop', on, '● Armado', '▶ Armar'); }
-  async function fakeStart() {
-    const gen = await fakeGenerate(false);
-    if (!gen || !gen.length) return;
-    config.fakes.gen = gen; config.fakes.running = true; save();
-    setFakeStatus(true); pushLog('Fakes armados — ' + gen.length + ' no total.', 'ok', 'fakes'); fakeTick();
-  }
-  function fakeStop() { readFakesCfg(); config.fakes.running = false; save(); clearTimeout(fakeTimer); setFakeStatus(false); pushLog('Fakes desarmados.', '', 'fakes'); }
-
   // ==================== PLANNER (Ataque Coordenado) ====================
   // Lê o "home available" — tropas em casa (aproximação: usa o max do input do jogo se disponível,
   // senão cai no data-all-count do link geral). O Fase 3 (UI) confirma o parser no jogo real.
@@ -4324,7 +4160,7 @@
   }
   function marketStop(modeKey) { readMarketCfg(); config.market.modes[modeKey].running = false; save(); clearTimeout(marketTimers[modeKey]); setMarketStatus(modeKey, false); pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + ') parado.', '', 'market'); }
 
-  // ==================== EDIFÍCIOS (fila planejada por template ATK/DEF) ====================
+  // ==================== CONSTRUÇÕES (modelos nomeados aplicados por aldeia) ===============
   async function getBuildState(vid) {
     const res = await fetch('/game.php?village=' + vid + '&screen=main', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
@@ -4418,32 +4254,32 @@
     if ((config.build.nextAt || 0) > now) { scheduleBuild(); return; }
     const assign = config.build.villages || {};
     const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.build.templates[assign[v].tpl]);
-    if (!ativas.length) { pushLog('Edifícios: nenhuma aldeia ativa — adicione aldeias e aplique um modelo na tabela.', '', 'build'); config.build.nextAt = now + 300000; save(); scheduleBuild(); return; }
+    if (!ativas.length) { pushLog('Construções: nenhuma aldeia ativa — adicione aldeias e aplique um modelo na tabela.', '', 'build'); config.build.nextAt = now + 300000; save(); scheduleBuild(); return; }
     // Guarda anticolisão: o Obra (módulo do Johann) também enfileira obra. Se os dois pegarem a
-    // mesma aldeia, brigam pela fila e gastam recurso fora de ordem. O Edifícios cede, porque ele é
+    // mesma aldeia, brigam pela fila e gastam recurso fora de ordem. O Construções cede, porque é
     // o genérico e o Obra trabalha por grupo nativo do jogo.
     const donoOutro = {};
     if (config.obra && config.obra.running) {
       try { Object.keys(await getGroupProfileMapObra()).forEach((v) => { donoOutro[v] = 'Obra'; }); }
-      catch (e) { pushLog('Edifícios: não consegui checar as aldeias do Obra (' + (e.message || e) + ') — sigo sem a guarda.', '', 'build'); }
+      catch (e) { pushLog('Construções: não consegui checar as aldeias do Obra (' + (e.message || e) + ') — sigo sem a guarda.', '', 'build'); }
     }
     const vids = ativas.filter((v) => !donoOutro[v]);
     if (ativas.length !== vids.length) {
       const porDono = {};
       ativas.filter((v) => donoOutro[v]).forEach((v) => { porDono[donoOutro[v]] = (porDono[donoOutro[v]] || 0) + 1; });
-      pushLog('Edifícios: pulei ' + Object.keys(porDono).map((d) => porDono[d] + ' aldeia(s) do ' + d).join(' e ') + ' — já estão construindo por lá.', '', 'build');
+      pushLog('Construções: pulei ' + Object.keys(porDono).map((d) => porDono[d] + ' aldeia(s) do ' + d).join(' e ') + ' — já estão construindo por lá.', '', 'build');
     }
     config.build.demand = {};
     let built = 0;
     for (const vid of vids) {
-      { const pare = devoParar('build'); if (pare) { pushLog('Edifícios: ciclo interrompido — ' + pare + '.', '', 'build'); break; } }
+      { const pare = devoParar('build'); if (pare) { pushLog('Construções: ciclo interrompido — ' + pare + '.', '', 'build'); break; } }
       const alvo = assign[vid];
       const tplObj = config.build.templates[alvo.tpl] || {};
       const plan = tplObj.plan || [];
       const rotulo = alvo.name || alvo.coord || vid;
       let st;
       try { st = await getBuildState(vid); }
-      catch (e) { pushLog('Edifícios em ' + rotulo + ': erro ao ler o estado (' + (e.message || e) + ').', 'err', 'build'); continue; }
+      catch (e) { pushLog('Construções em ' + rotulo + ': erro ao ler o estado (' + (e.message || e) + ').', 'err', 'build'); continue; }
       // "Ordens" da tabela = quantos itens ATIVOS do modelo já foram atingidos / total (espelha o X/50 do jogo).
       // Usa o nível REAL (não o da fila) — o número tem que dizer o que está de pé na aldeia.
       const ativos = plan.filter((it) => it.en !== false);
@@ -4477,7 +4313,7 @@
           break;
         }
         try { await enqueueBuild(vid, r.build.b); }
-        catch (e) { pushLog('Edifícios em ' + rotulo + ': ' + (e.message || e), 'err', 'build'); break; }
+        catch (e) { pushLog('Construções em ' + rotulo + ': ' + (e.message || e), 'err', 'build'); break; }
         postos.push((BUILD_META[r.build.b] && BUILD_META[r.build.b].name) || r.build.b);
         built++; slots--;
         if (slots <= 0) break;
@@ -4490,7 +4326,7 @@
         if (novo.queueLen <= st.queueLen) { st = novo; break; }
         st = novo;
       }
-      if (postos.length) pushLog('Edifícios: ' + rotulo + ' → ' + postos.join(', ') + ' na fila (' + postos.length + ' obra' + (postos.length > 1 ? 's' : '') + ').', 'ok', 'build');
+      if (postos.length) pushLog('Construções: ' + rotulo + ' → ' + postos.join(', ') + ' na fila (' + postos.length + ' obra' + (postos.length > 1 ? 's' : '') + ').', 'ok', 'build');
       await sleep(300);
     }
     renderBuildVillages();
@@ -4499,7 +4335,7 @@
     config.build.nextAt = now + Math.max(60, config.build.interval || 600) * 1000;
     save();
     refreshCards('build');
-    pushLog('Edifícios: ciclo concluído — ' + built + ' obra(s) enfileirada(s). Próximo em ' + Math.round((config.build.interval || 600) / 60) + ' min.', 'ok', 'build');
+    pushLog('Construções: ciclo concluído — ' + built + ' obra(s) enfileirada(s). Próximo em ' + Math.round((config.build.interval || 600) / 60) + ' min.', 'ok', 'build');
     scheduleBuild();
   }
   function scheduleBuild() { clearTimeout(buildTimer); if (!config.build.running) return; buildTimer = setTimeout(buildTick, Math.min(Math.max((config.build.nextAt || 0) - Date.now(), 1000), 60000)); }
@@ -4686,7 +4522,7 @@
     // é a rede de segurança — o código fica selecionável do mesmo jeito.
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(codigo).then(
-        () => { avisar('copiado pra área de transferência'); alert('Código copiado!\n\nManda pro seu amigo colar no 📥 do módulo Edifícios.'); },
+        () => { avisar('copiado pra área de transferência'); alert('Código copiado!\n\nManda pro seu amigo colar no 📥 da aba Construções.'); },
         () => { prompt('Copie o código do modelo (Ctrl+C):', codigo); avisar('mostrado pra copiar'); }
       );
     } else { prompt('Copie o código do modelo (Ctrl+C):', codigo); avisar('mostrado pra copiar'); }
@@ -4726,9 +4562,9 @@
       const gid = config.build.filterGroup || '';
       const vs = gid ? await getVillagesInGroup(gid) : await getAllVillagesCached();   // ambos devolvem ARRAY
       _bldPool = (vs || []).map((v) => ({ vid: String(v.vid), coord: v.coord || null, name: v.name || v.coord || String(v.vid) }));
-      pushLog('Edifícios: ' + _bldPool.length + ' aldeia(s) carregadas' + (gid ? ' do grupo selecionado' : '') + '.', '', 'build');
+      pushLog('Construções: ' + _bldPool.length + ' aldeia(s) carregadas' + (gid ? ' do grupo selecionado' : '') + '.', '', 'build');
     } catch (e) {
-      pushLog('Edifícios: erro ao carregar as aldeias (' + (e.message || e) + ').', 'err', 'build');
+      pushLog('Construções: erro ao carregar as aldeias (' + (e.message || e) + ').', 'err', 'build');
     }
     if (btn) btn.textContent = '↻';
     renderBuildVillages();
@@ -4788,7 +4624,7 @@
     config.build.stats.villages = Object.keys(assign).filter((v) => !assign[v].paused).length;
     save(); renderBuildVillages(); refreshCards('build');
     const rotulo = { apply: 'modelo aplicado em', pause: 'pausada(s):', resume: 'retomada(s):', remove: 'removida(s) da gestão:' }[acao];
-    pushLog('Edifícios: ' + rotulo + ' ' + n + ' aldeia(s).', 'ok', 'build');
+    pushLog('Construções: ' + rotulo + ' ' + n + ' aldeia(s).', 'ok', 'build');
   }
   function bindBuildVillageHandlers() {
     const box = document.getElementById('twmgr-bld-vils'); if (!box) return;
@@ -4814,16 +4650,16 @@
     readBuildCfg();
     const assign = config.build.villages || {};
     const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.build.templates[assign[v].tpl]);
-    if (!ativas.length) { pushLog('Edifícios: nenhuma aldeia ativa — carregue a lista (↻), marque as aldeias e aplique um modelo.', 'err', 'build'); return; }
+    if (!ativas.length) { pushLog('Construções: nenhuma aldeia ativa — carregue a lista (↻), marque as aldeias e aplique um modelo.', 'err', 'build'); return; }
     config.build.running = true; config.build.nextAt = 0; save();
     setBuildStatus(true);
-    pushLog('Edifícios iniciado — ' + ativas.length + ' aldeia(s) ativa(s) em ' + bldTplIds().length + ' modelo(s).', 'ok', 'build');
+    pushLog('Construções iniciado — ' + ativas.length + ' aldeia(s) ativa(s) em ' + bldTplIds().length + ' modelo(s).', 'ok', 'build');
     buildTick();
   }
-  function buildStop() { readBuildCfg(); config.build.running = false; save(); clearTimeout(buildTimer); setBuildStatus(false); pushLog('Edifícios parado.', '', 'build'); }
+  function buildStop() { readBuildCfg(); config.build.running = false; save(); clearTimeout(buildTimer); setBuildStatus(false); pushLog('Construções parado.', '', 'build'); }
 
   // ==================== OBRA (construção por perfil, via grupos nativos do TW) ====================
-  // Diferente do Edifícios (só atk/def fixo pra todas as aldeias), aqui cada aldeia entra no fluxo
+  // Diferente do Construções (que é por aldeia, cadastrada à mão), aqui cada aldeia entra no fluxo
   // automaticamente ao ser colocada num dos 5 grupos do jogo — nenhum cadastro manual extra.
   // Fazenda e Armazém são condicionais (não seguem a ordem estática do template) na maioria dos
   // perfis: só entram quando o gatilho ao vivo dispara. Fast Nobre quebra essa regra do Armazém
@@ -6228,21 +6064,6 @@
     const ws = document.getElementById('twmgr-wall-status'); if (ws) { if (!config.wall.running) { ws.textContent = ''; } else if (lockOther()) { ws.textContent = '⏸ outra aba está ativa'; ws.style.color = '#c23a2c'; } else { ws.style.color = '#2e7d3a'; ws.textContent = (config.wall.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.wall.nextAt - now) : '● quebrando…'; } }
     const rs = document.getElementById('twmgr-recruit-status'); if (rs) { if (!config.recruit.running) { rs.textContent = ''; } else if (lockOther()) { rs.textContent = '⏸ outra aba está ativa'; rs.style.color = '#c23a2c'; } else { rs.style.color = '#2e7d3a'; rs.textContent = (config.recruit.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.recruit.nextAt - now) : '● recrutando…'; } }
     const clk = document.getElementById('twmgr-srvclock'); if (clk) { try { clk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
-    const fks = document.getElementById('twmgr-fk-status');
-    if (fks) {
-      if (!config.fakes.running) { fks.textContent = ''; }
-      else if (lockOther()) { fks.textContent = '⏸ outra aba'; fks.style.color = '#c23a2c'; }
-      else {
-        const gg = config.fakes.gen || [];
-        const pend = gg.filter((f) => f.state === 'armed' || f.state === 'scheduled').length;
-        const sent = gg.filter((f) => f.state === 'sent').length;
-        const err = gg.filter((f) => f.state === 'error').length;
-        const nx = gg.filter((f) => f.sendAt && (f.state === 'scheduled' || f.state === 'armed')).sort((a, b) => a.sendAt - b.sendAt)[0];
-        fks.style.color = '#2e7d3a';
-        fks.textContent = '● ' + sent + ' env · ' + pend + ' pend' + (err ? (' · ' + err + ' erro') : '') + (nx ? (' · próx ' + fmt(nx.sendAt - serverNow())) : '');
-      }
-    }
-    if (document.getElementById('twmgr-cards-fakes')) refreshCards('fakes');
     MARKET_MODES.forEach((mkKey) => {
       const mk = document.getElementById('twmgr-mk-' + mkKey + '-status'); if (!mk) return;
       const st = config.market.modes[mkKey];
@@ -6292,12 +6113,17 @@
       if (dot) dot.style.display = (atk && atk.running) ? 'inline' : 'none';
     });
     const ring = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('twmgr-run', !!on && !lockOther()); };
-    ring('twmgr-btab-map', (config.map && config.map.running) || (config.lock && config.lock.running));
+    // Muralha e Mapa viraram sub-abas do Saque (v11.16.0): o indicador de atividade vai pro botão da
+    // SUB-aba, e a aba Saque acende se qualquer um dos três estiver rodando — senão dá pra ter
+    // Muralha ativa com a barra principal apagada e ninguém percebe.
+    const mapaAtivo = !!((config.map && config.map.running) || (config.lock && config.lock.running));
+    const muroAtivo = !!(config.wall && config.wall.running);
+    ring('twmgr-sbtab-farm', config.farm.running);
+    ring('twmgr-sbtab-wall', muroAtivo);
+    ring('twmgr-sbtab-map', mapaAtivo);
     ring('twmgr-btab-scav', config.scav.running);
-    ring('twmgr-btab-farm', config.farm.running);
-    ring('twmgr-btab-wall', config.wall && config.wall.running);
+    ring('twmgr-btab-farm', config.farm.running || muroAtivo || mapaAtivo);
     ring('twmgr-btab-recruit', config.recruit.running);
-    ring('twmgr-btab-fakes', config.fakes.running);
     ring('twmgr-btab-market', anyMarketRunning());
     ring('twmgr-btab-build', config.build.running);
     ring('twmgr-btab-planner', config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running));
@@ -6490,10 +6316,23 @@
       ".twmgr-fmrow{border-bottom:1px solid rgba(255,255,255,.04)}",
       ".twmgr-fmrow:hover{background:rgba(212,175,55,.06)}",
       ".twmgr-fmck{width:15px;height:15px;cursor:pointer;vertical-align:middle;margin:0}",
+      ".twmgr-subtabs{display:flex;gap:5px;margin-bottom:9px}",
+      ".twmgr-subtab{flex:1 1 0;min-width:0;display:flex;align-items:center;justify-content:center;gap:4px;padding:6px 4px;font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;border:1px solid #c4a35f;border-radius:8px;background:rgba(0,0,0,.05);color:#6e5a2a;transition:.15s;position:relative}",
+      ".twmgr-subtab:hover{background:rgba(0,0,0,.10);color:#4a3418}",
+      ".twmgr-subtab.active{background:linear-gradient(180deg,#c9a33f,#b18f4d);border-color:#7d510a;color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}",
+      ".twmgr-subtab.twmgr-run::after{content:'';position:absolute;top:3px;right:4px;width:6px;height:6px;border-radius:50%;background:#2e8b3f;box-shadow:0 0 0 2px rgba(46,139,63,.25)}",
       ".twmgr-card-break{flex-basis:100%;height:0}",
       ".twmgr-cards{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}",
-      ".twmgr-card-mini{flex:1 1 0;min-width:58px;background:linear-gradient(165deg,#e6d4a4,#ecdcb2);border:1px solid #b18f4d;border-radius:9px;padding:7px 6px 6px;text-align:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}",
-      ".twmgr-card-wide{flex-basis:100%}",
+      ".twmgr-card-mini{flex:1 1 0;min-width:66px;background:linear-gradient(165deg,#e6d4a4,#ecdcb2);border:1px solid #b18f4d;border-radius:9px;padding:7px 6px 6px;text-align:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}",
+      // O card de destaque de cada módulo: antes era um ciano inline (#1f8fa0) que não é da paleta
+      // pergaminho e brigava com o resto. Agora é o mesmo dourado, só mais escuro e com a moldura
+      // marcada — destaca pela hierarquia, não por trocar de cor.
+      ".twmgr-card-hl{background:linear-gradient(165deg,#efd9a0,#f6e6bd);border-color:#9a6f0e;box-shadow:inset 0 0 0 1px rgba(154,111,14,.18)}",
+      ".twmgr-card-hl .twmgr-card-v{color:#7d510a;font-size:21px}",
+      ".twmgr-card-hl .twmgr-card-l{color:#5c4527}",      // flex-basis:100% sozinho NÃO forçava linha inteira: o .twmgr-card-mini tem flex:1 1 0, e o
+      // shrink:1 deixava o card encolher pra caber ao lado dos outros em vez de quebrar a linha.
+      // Com shrink:0 ele ocupa a linha de verdade. Estava silenciosamente sem efeito em Coletas e Cadeado.
+      ".twmgr-card-wide{flex-basis:100%;flex-shrink:0}",
       ".twmgr-card-v{font-size:19px;font-weight:800;color:#9a6f0e;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
       ".twmgr-card-l{font-size:8px;color:#6e5a2f;margin-top:4px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
       ".twmgr-section{border:1px solid #c4a35f;border-radius:9px;padding:8px 9px;margin-bottom:9px;background:rgba(0,0,0,.14)}",
@@ -6570,10 +6409,21 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'map', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
+    ['scav', 'farm', 'recruit', 'market', 'build', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
+  }
+
+  // Sub-aba do Saque. Guarda a escolha no localStorage (preferência de tela, igual à largura do
+  // painel) pra quem vive na Muralha não cair no Saque a cada recarregamento de página.
+  const FARM_SUB_KEY = 'twMgr_farmSub';
+  function showFarmSub(name) {
+    ['farm', 'wall', 'map'].forEach((n) => {
+      const c = document.getElementById('twmgr-sub-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
+      const b = document.getElementById('twmgr-sbtab-' + n); if (b) b.classList.toggle('active', n === name);
+    });
+    try { localStorage.setItem(FARM_SUB_KEY, name); } catch (e) {}
   }
 
   function buildUI() {
@@ -6584,6 +6434,10 @@
     if (document.getElementById('twmgr-panel')) { console.warn('[TWMgr] painel ja existe — buildUI ignorado.'); return; }
     const p = document.createElement('div'); p.id = 'twmgr-panel';
     const tabBtn = (n, ico, label) => '<div id="twmgr-btab-' + n + '" class="twmgr-tab" data-tab="' + n + '"><span class="twmgr-tab-ico">' + ico + '</span><span class="twmgr-tab-lbl">' + label + '</span></div>';
+    // Sub-abas dentro de um módulo (hoje só o Saque: Saque / Muralha / Mapa). O ponto é tirar peso da
+    // barra principal sem esconder módulo: Muralha e Mapa só fazem sentido perto do Saque — um derruba
+    // muralha dos alvos do assistente, o outro descobre bárbaro novo pra saquear.
+    const subBtn = (n, ico, label) => '<div id="twmgr-sbtab-' + n + '" class="twmgr-subtab" data-sub-farm="' + n + '"><span>' + ico + '</span> ' + label + '</div>';
     // Saque: matriz estilo FarmGod — A/B/C são checkboxes; regra "1 por linha" garantida no JS (marcar um desmarca os outros).
     const fmRow = (k, label) => '<tr class="twmgr-fmrow">' +
       '<td style="text-align:left;padding:3px 6px">' + label + '</td>' +
@@ -6598,7 +6452,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
@@ -6620,6 +6474,12 @@
         modLog('scav') +
       '</div>' +
       '<div id="twmgr-tab-farm" style="display:none">' +
+        '<div class="twmgr-subtabs">' +
+          subBtn('farm', '🐎', 'Saque') +
+          subBtn('wall', '🐏', 'Muralha') +
+          subBtn('map', '🗺️', 'Mapa') +
+        '</div>' +
+        '<div id="twmgr-sub-farm">' +
         '<div id="twmgr-farm-prog" class="twmgr-hint">Saque parado.</div>' +
         cardsDiv('farm') +
         sec('Ataque por cor (marque 1 por linha)',
@@ -6643,8 +6503,8 @@
         '<div class="twmgr-actions"><button id="twmgr-farm-start" class="twmgr-btn twmgr-go">▶ Saquear</button><button id="twmgr-farm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-farm-status" class="twmgr-cstatus"></div>' +
         modLog('farm') +
-      '</div>' +
-      '<div id="twmgr-tab-wall" style="display:none">' +
+        '</div>' +
+        '<div id="twmgr-sub-wall" style="display:none">' +
         hint('🐏 Manda bárbaro + aríete + explorador pra derrubar muralhas dos alvos do assistente. Roda em paralelo ao Saque.') +
         cardsDiv('wall') +
         sec('Faixa de muralha',
@@ -6658,6 +6518,50 @@
         '<div class="twmgr-actions"><button id="twmgr-wall-start" class="twmgr-btn twmgr-go">▶ Quebrar</button><button id="twmgr-wall-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-wall-status" class="twmgr-cstatus"></div>' +
         modLog('wall') +
+        '</div>' +
+        '<div id="twmgr-sub-map" style="display:none">' +
+        hint('🗺️ Fica <b>ligado por ciclos</b>. A cada ciclo relê o mapa, acha bárbaro novo no seu raio e manda explorador em quem <b>você ainda não conhece</b> — quem não está no assistente de saque, ou está mas o relatório não trouxe nada. Quem já tem explorador a caminho é pulado.') +
+        cardsDiv('map') +
+        sec('Origem',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo origem (vazio = todas)</span><select id="twmgr-bm-group" class="twmgr-inp" style="width:150px"></select></div>' +
+          '<div style="text-align:right;margin-top:2px"><button id="twmgr-bm-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button> <button id="twmgr-bm-refmap" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="recarrega /map/village.txt">↻ mapa</button></div>') +
+        sec('Filtros de alvo',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-bm-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="0 = nunca reexplora quem já tem relatório com dados. Acima de 0, reexplora intel mais velho que isso.">Reexplorar intel com + de (dias)</span><input id="twmgr-bm-days" class="twmgr-inp" type="number" min="0" step="0.5" value="0" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Pontos de/até</span><span><input id="twmgr-bm-minpts" class="twmgr-inp" type="number" min="0" value="26" style="width:56px"> a <input id="twmgr-bm-maxpts" class="twmgr-inp" type="number" min="1" value="5000" style="width:56px"></span></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Máx alvos por aldeia/ciclo</span><input id="twmgr-bm-maxper" class="twmgr-inp" type="number" min="1" value="20" style="width:66px"></div>') +
+        sec('Exploradores',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Reserva de spy (guardar/aldeia)</span><input id="twmgr-bm-reserve" class="twmgr-inp" type="number" min="0" value="30" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Spy por alvo</span><input id="twmgr-bm-spy" class="twmgr-inp" type="number" min="1" value="1" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Delay entre envios (ms)</span><input id="twmgr-bm-delay" class="twmgr-inp" type="number" min="0" step="100" value="500" style="width:66px"></div>') +
+        sec('Ciclo',
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="De quanto em quanto tempo ele relê o mapa e procura bárbaro novo.">Intervalo do ciclo (min)</span><input id="twmgr-bm-ciclo" class="twmgr-inp" type="number" min="5" step="5" value="30" style="width:66px"></div>' +
+          '<div id="twmgr-bm-next" style="font-size:10px;color:#6e5a2a;text-align:right"></div>') +
+        sec('Blacklist',
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="A partir de quantas unidades de defesa no relatório a aldeia entra na blacklist.">Defesa mínima p/ blacklist</span><input id="twmgr-bm-defmin" class="twmgr-inp" type="number" min="1" value="1" style="width:66px"></div>' +
+          '<label class="twmgr-check" title="Quando uma aldeia entrar na blacklist por DEFESA, apaga os relatórios dela no jogo — o que a tira da listagem do assistente. Não afeta a blacklist de tropa perdida. NÃO TEM DESFAZER: pra voltar, a aldeia teria que reaparecer sozinha na busca do assistente."><input id="twmgr-bm-rmassist" type="checkbox"> Apagar do assistente quem tem defesa <b style="color:#a5544a">(irreversível)</b></label>' +
+          '<div class="twmgr-hint" style="margin:0">O Saque já pula quem está em qualquer uma das duas listas, mesmo com essa opção desligada.</div>') +
+        '<div class="twmgr-actions"><button id="twmgr-bm-preview" class="twmgr-btn twmgr-ghost">💡 Prévia</button><button id="twmgr-bm-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-bm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+        '<div id="twmgr-bm-status" class="twmgr-cstatus"></div>' +
+        // Três listas na mesma área, alternadas — alvos do próximo ciclo e as duas blacklists.
+        '<div id="twmgr-bm-subtabs" style="display:flex;gap:4px;margin:9px 0 0">' +
+          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="alvos" style="flex:1;padding:4px;font-size:10px">🎯 Alvos (<span id="twmgr-bm-count">0</span>)</button>' +
+          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="perda" style="flex:1;padding:4px;font-size:10px">💀 Perdi tropa (<span id="twmgr-bm-nperda">0</span>)</button>' +
+          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="defesa" style="flex:1;padding:4px;font-size:10px">🛡️ Tem defesa (<span id="twmgr-bm-ndefesa">0</span>)</button>' +
+        '</div>' +
+        '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;margin-top:4px"></div>' +
+        '<div id="twmgr-bm-bl" style="max-height:220px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;margin-top:4px;display:none"></div>' +
+        modLog('map') +
+        sec('🔒 Cadeado automático',
+          '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">Rastreia bárbaras no raio de TODAS as suas aldeias (a mais perto conta) e tranca (reserva pra tribo) as com pontuação mínima, das mais fortes pras mais fracas. Pula quem tem relatório vermelho no último ataque (checado aldeia por aldeia, cobre até abandonadas). Nunca destrava o que já travou — só soma.</div>' +
+          cardsDiv('lock') +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Raio (campos, X)</span><input id="twmgr-lk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="10" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Pontos mín. (Y)</span><input id="twmgr-lk-pts" class="twmgr-inp" type="number" min="0" value="500" style="width:80px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Repetir rastreamento (min)</span><input id="twmgr-lk-int" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>' +
+          '<div class="twmgr-actions"><button id="twmgr-lk-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-lk-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+          '<div id="twmgr-lk-status" class="twmgr-cstatus"></div>' +
+          modLog('lock')) +
+        '</div>' +
       '</div>' +
       '<div id="twmgr-tab-recruit" style="display:none">' +
         hint('Recruta por <b>grupo</b> do TW: mantém a fila alvo por edifício e para no alvo de tropas. Vazio = contínuo.') +
@@ -6679,32 +6583,8 @@
         '<div id="twmgr-recruit-status" class="twmgr-cstatus"></div>' +
         modLog('recruit') +
       '</div>' +
-      '<div id="twmgr-tab-fakes" style="display:none">' +
-        hint('Fakes com <b>chegada</b> em horário marcado. 1 isca + explorador (neutro, não revela off/def).') +
-        cardsDiv('fakes') +
-        sec('Alvos e chegada',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Relógio do servidor</span><b id="twmgr-srvclock" style="color:#9a6f0e">--:--:--</b></div>' +
-          '<label class="twmgr-lbl">Alvos (cole vários)</label><textarea id="twmgr-fk-targets" class="twmgr-inp" style="width:100%;height:52px;margin:2px 0 6px" placeholder="430|522 428|524 430|520 …"></textarea>' +
-          '<label class="twmgr-lbl">Chegada</label><input id="twmgr-fk-arr" class="twmgr-inp" type="datetime-local" step="1" style="width:100%;margin:2px 0 0">') +
-        sec('Origens',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo</span><select id="twmgr-fk-group" class="twmgr-inp" style="width:150px"><option value="">Todas as aldeias</option></select></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Origens que enviam <span id="twmgr-fk-count" style="color:#6e5a2f"></span></span><span style="font-size:9px"><a id="twmgr-fk-all" style="cursor:pointer;color:#7a5710">todas</a> · <a id="twmgr-fk-none" style="cursor:pointer;color:#7a5710">nenhuma</a></span></div>' +
-          '<div id="twmgr-fk-origins" style="max-height:180px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px"></div>' +
-          '<div class="twmgr-row" style="margin-top:6px"><span class="twmgr-lbl">Distribuição</span><span style="font-size:10px"><label><input type="radio" name="twmgr-fk-mode" value="split"> dividir</label> <label><input type="radio" name="twmgr-fk-mode" value="all"> todas→todos</label></span></div>') +
-        sec('Estratégia do fake',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Isca (1x)</span><select id="twmgr-fk-siege" class="twmgr-inp" style="width:110px"><option value="ram">Aríete</option><option value="catapult">Catapulta</option><option value="none">nenhum</option></select></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Preencher com</span><select id="twmgr-fk-filler" class="twmgr-inp" style="width:110px">' + UNITS.map(([u, n]) => '<option value="' + u + '">' + n + '</option>').join('') + '</select></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Pop mín (% dos pontos)</span><input id="twmgr-fk-pct" class="twmgr-inp" type="number" min="0" step="0.5" value="1" style="width:56px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Pop mín fixa (0=auto)</span><input id="twmgr-fk-minpop" class="twmgr-inp" type="number" min="0" value="0" style="width:56px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Offset envio (ms)</span><input id="twmgr-fk-offset" class="twmgr-inp" type="number" min="0" value="150" style="width:56px"></div>') +
-        '<button id="twmgr-fk-preview" class="twmgr-btn twmgr-ghost" style="width:100%;margin-bottom:6px">💡 Prever fakes</button>' +
-        '<div class="twmgr-actions"><button id="twmgr-fk-start" class="twmgr-btn twmgr-go">▶ Armar</button><button id="twmgr-fk-stop" class="twmgr-btn twmgr-stop">■ Desarmar</button></div>' +
-        '<div id="twmgr-fk-status" class="twmgr-cstatus"></div>' +
-        modLog('fakes') +
-      '</div>' +
       '<div id="twmgr-tab-market" style="display:none">' +
         hint('Mercado: cada modo roda de forma <b>independente</b> — pode ligar quantos quiser ao mesmo tempo (ex.: Equilíbrio + Solidário juntos). <b>Cunhagem</b> junta recurso de grupos de origem em uma ou mais aldeias destino (e pode cunhar moedas de ouro automaticamente nelas); <b>Equilíbrio</b> nivela as aldeias por %; <b>Solidário</b> abastece só o grupo escolhido (que só recebe) com qualquer outra aldeia sua doando.') +
-        cardsDiv('market') +
         sec('💰 Cunhagem',
             '<div class="twmgr-row"><span class="twmgr-lbl">Grupos de origem</span></div>' +
             '<div id="twmgr-mk-srcgroups" style="max-height:100px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px;margin-bottom:6px"></div>' +
@@ -6789,49 +6669,6 @@
         '<div class="twmgr-actions"><button id="twmgr-bld-start" class="twmgr-btn twmgr-go">▶ Construir</button><button id="twmgr-bld-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-bld-status" class="twmgr-cstatus"></div>' +
         modLog('build') +
-      '</div>' +
-      '<div id="twmgr-tab-map" style="display:none">' +
-        hint('🗺️ Fica <b>ligado por ciclos</b>. A cada ciclo relê o mapa, acha bárbaro novo no seu raio e manda explorador em quem <b>você ainda não conhece</b> — quem não está no assistente de saque, ou está mas o relatório não trouxe nada. Quem já tem explorador a caminho é pulado.') +
-        cardsDiv('map') +
-        sec('Origem',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo origem (vazio = todas)</span><select id="twmgr-bm-group" class="twmgr-inp" style="width:150px"></select></div>' +
-          '<div style="text-align:right;margin-top:2px"><button id="twmgr-bm-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button> <button id="twmgr-bm-refmap" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="recarrega /map/village.txt">↻ mapa</button></div>') +
-        sec('Filtros de alvo',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-bm-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:66px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl" title="0 = nunca reexplora quem já tem relatório com dados. Acima de 0, reexplora intel mais velho que isso.">Reexplorar intel com + de (dias)</span><input id="twmgr-bm-days" class="twmgr-inp" type="number" min="0" step="0.5" value="0" style="width:66px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Pontos de/até</span><span><input id="twmgr-bm-minpts" class="twmgr-inp" type="number" min="0" value="26" style="width:56px"> a <input id="twmgr-bm-maxpts" class="twmgr-inp" type="number" min="1" value="5000" style="width:56px"></span></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Máx alvos por aldeia/ciclo</span><input id="twmgr-bm-maxper" class="twmgr-inp" type="number" min="1" value="20" style="width:66px"></div>') +
-        sec('Exploradores',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Reserva de spy (guardar/aldeia)</span><input id="twmgr-bm-reserve" class="twmgr-inp" type="number" min="0" value="30" style="width:66px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Spy por alvo</span><input id="twmgr-bm-spy" class="twmgr-inp" type="number" min="1" value="1" style="width:66px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Delay entre envios (ms)</span><input id="twmgr-bm-delay" class="twmgr-inp" type="number" min="0" step="100" value="500" style="width:66px"></div>') +
-        sec('Ciclo',
-          '<div class="twmgr-row"><span class="twmgr-lbl" title="De quanto em quanto tempo ele relê o mapa e procura bárbaro novo.">Intervalo do ciclo (min)</span><input id="twmgr-bm-ciclo" class="twmgr-inp" type="number" min="5" step="5" value="30" style="width:66px"></div>' +
-          '<div id="twmgr-bm-next" style="font-size:10px;color:#6e5a2a;text-align:right"></div>') +
-        sec('Blacklist',
-          '<div class="twmgr-row"><span class="twmgr-lbl" title="A partir de quantas unidades de defesa no relatório a aldeia entra na blacklist.">Defesa mínima p/ blacklist</span><input id="twmgr-bm-defmin" class="twmgr-inp" type="number" min="1" value="1" style="width:66px"></div>' +
-          '<label class="twmgr-check" title="Quando uma aldeia entrar na blacklist por DEFESA, apaga os relatórios dela no jogo — o que a tira da listagem do assistente. Não afeta a blacklist de tropa perdida. NÃO TEM DESFAZER: pra voltar, a aldeia teria que reaparecer sozinha na busca do assistente."><input id="twmgr-bm-rmassist" type="checkbox"> Apagar do assistente quem tem defesa <b style="color:#a5544a">(irreversível)</b></label>' +
-          '<div class="twmgr-hint" style="margin:0">O Saque já pula quem está em qualquer uma das duas listas, mesmo com essa opção desligada.</div>') +
-        '<div class="twmgr-actions"><button id="twmgr-bm-preview" class="twmgr-btn twmgr-ghost">💡 Prévia</button><button id="twmgr-bm-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-bm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
-        '<div id="twmgr-bm-status" class="twmgr-cstatus"></div>' +
-        // Três listas na mesma área, alternadas — alvos do próximo ciclo e as duas blacklists.
-        '<div id="twmgr-bm-subtabs" style="display:flex;gap:4px;margin:9px 0 0">' +
-          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="alvos" style="flex:1;padding:4px;font-size:10px">🎯 Alvos (<span id="twmgr-bm-count">0</span>)</button>' +
-          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="perda" style="flex:1;padding:4px;font-size:10px">💀 Perdi tropa (<span id="twmgr-bm-nperda">0</span>)</button>' +
-          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="defesa" style="flex:1;padding:4px;font-size:10px">🛡️ Tem defesa (<span id="twmgr-bm-ndefesa">0</span>)</button>' +
-        '</div>' +
-        '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;margin-top:4px"></div>' +
-        '<div id="twmgr-bm-bl" style="max-height:220px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;margin-top:4px;display:none"></div>' +
-        modLog('map') +
-        sec('🔒 Cadeado automático',
-          '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">Rastreia bárbaras no raio de TODAS as suas aldeias (a mais perto conta) e tranca (reserva pra tribo) as com pontuação mínima, das mais fortes pras mais fracas. Pula quem tem relatório vermelho no último ataque (checado aldeia por aldeia, cobre até abandonadas). Nunca destrava o que já travou — só soma.</div>' +
-          cardsDiv('lock') +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Raio (campos, X)</span><input id="twmgr-lk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="10" style="width:66px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Pontos mín. (Y)</span><input id="twmgr-lk-pts" class="twmgr-inp" type="number" min="0" value="500" style="width:80px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Repetir rastreamento (min)</span><input id="twmgr-lk-int" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>' +
-          '<div class="twmgr-actions"><button id="twmgr-lk-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-lk-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
-          '<div id="twmgr-lk-status" class="twmgr-cstatus"></div>' +
-          modLog('lock')) +
       '</div>' +
       '<div id="twmgr-tab-planner" style="display:none">' +
         hint('🎯 Coordenado: monte vários ataques independentes — cada um com seu próprio alvo, aldeias e tropas — e arme cada um separadamente (o botão libera um novo ataque em branco assim que você arma). Cada aldeia pode mandar <b>várias ondas</b> (+ onda) dentro do mesmo ataque. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
@@ -7012,26 +6849,6 @@
     ['twmgr-r-gatk', 'twmgr-r-gdef', 'twmgr-r-hours', 'twmgr-r-refill'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readRecruitCfg); });
     document.querySelectorAll('.twmgr-ron, .twmgr-rt').forEach((el) => el.addEventListener('change', readRecruitCfg));
     setRecruitStatus(config.recruit.running);
-
-    document.getElementById('twmgr-fk-targets').value = config.fakes.targetsRaw || '';
-    document.getElementById('twmgr-fk-arr').value = config.fakes.arrLocal || '';
-    document.getElementById('twmgr-fk-offset').value = config.fakes.offsetMs != null ? config.fakes.offsetMs : 150;
-    document.getElementById('twmgr-fk-pct').value = config.fakes.pct != null ? config.fakes.pct : 1;
-    document.getElementById('twmgr-fk-minpop').value = config.fakes.minPop || 0;
-    document.getElementById('twmgr-fk-siege').value = config.fakes.siege || 'ram';
-    document.getElementById('twmgr-fk-filler').value = config.fakes.filler || 'spy';
-    const fkMode = document.querySelector('input[name="twmgr-fk-mode"][value="' + (config.fakes.mode || 'split') + '"]'); if (fkMode) fkMode.checked = true;
-    renderFakeOrigins();
-    fillFakeGroups();
-    document.getElementById('twmgr-fk-group').addEventListener('change', (e) => { config.fakes.group = e.target.value; save(); renderFakeOrigins(); });
-    document.getElementById('twmgr-fk-all').addEventListener('click', () => { document.querySelectorAll('.twmgr-fk-origin').forEach((cb) => cb.checked = true); readFakesCfg(); });
-    document.getElementById('twmgr-fk-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-fk-origin').forEach((cb) => cb.checked = false); readFakesCfg(); });
-    ['twmgr-fk-targets', 'twmgr-fk-arr', 'twmgr-fk-offset', 'twmgr-fk-pct', 'twmgr-fk-minpop', 'twmgr-fk-siege', 'twmgr-fk-filler'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFakesCfg); });
-    document.querySelectorAll('input[name="twmgr-fk-mode"]').forEach((r) => r.addEventListener('change', readFakesCfg));
-    document.getElementById('twmgr-fk-preview').addEventListener('click', fakePreview);
-    document.getElementById('twmgr-fk-start').addEventListener('click', fakeStart);
-    document.getElementById('twmgr-fk-stop').addEventListener('click', fakeStop);
-    setFakeStatus(config.fakes.running);
 
     // ---- Planner (Coordenado) ----
     renderPlannerTabs();
@@ -7224,6 +7041,7 @@
     setLockStatus(config.lock.running);
 
     document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.getAttribute('data-tab'))));
+    document.querySelectorAll('[data-sub-farm]').forEach((b) => b.addEventListener('click', () => showFarmSub(b.getAttribute('data-sub-farm'))));
     // Toggle expandir/recolher o log por módulo
     document.querySelectorAll('.twmgr-modlog-head').forEach((h) => h.addEventListener('click', () => {
       const mod = h.getAttribute('data-modlog'); const body = document.getElementById('twmgr-modlog-body-' + mod); if (!body) return;
@@ -7232,7 +7050,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'map', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -7245,6 +7063,9 @@
     makeDraggable(p, document.getElementById('twmgr-head'));
     initPanelResize(p);
 
+    let subIni = 'farm';
+    try { const sv = localStorage.getItem(FARM_SUB_KEY); if (['farm', 'wall', 'map'].indexOf(sv) >= 0) subIni = sv; } catch (e) {}
+    showFarmSub(subIni);
     showTab('farm');
     renderLog();
     setStatus(config.running);
@@ -7279,9 +7100,8 @@
     if (config.farm.running) { rlog('Saque retomado.', 'farm'); retomar(scheduleFarm); }
     if (config.wall.running) { rlog('Muralha retomada.', 'wall'); retomar(scheduleWall); }
     if (config.recruit.running) { rlog('Recrutar retomado.', 'recruit'); retomar(scheduleRecruit); }
-    if (config.fakes.running) { config.fakes.gen.forEach((f) => { if (f.state === 'scheduled') f.state = 'armed'; }); rlog('Fakes rearmados.', 'fakes'); retomar(fakeTick); }
     MARKET_MODES.forEach((mkKey) => { if (config.market.modes[mkKey].running) { rlog('Mercado (' + MARKET_MODE_LABEL[mkKey] + ') retomado.', 'market'); retomar(() => scheduleMarket(mkKey)); } });
-    if (config.build.running) { rlog('Edifícios retomado.', 'build'); retomar(scheduleBuild); }
+    if (config.build.running) { rlog('Construções retomado.', 'build'); retomar(scheduleBuild); }
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); retomar(scheduleMap); }
     if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); retomar(etiquetaTick); }
     if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); retomar(scheduleLock); }

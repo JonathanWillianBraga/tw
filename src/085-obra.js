@@ -1,5 +1,5 @@
   // ==================== OBRA (construção por perfil, via grupos nativos do TW) ====================
-  // Diferente do Edifícios (só atk/def fixo pra todas as aldeias), aqui cada aldeia entra no fluxo
+  // Diferente do Construções (que é por aldeia, cadastrada à mão), aqui cada aldeia entra no fluxo
   // automaticamente ao ser colocada num dos 5 grupos do jogo — nenhum cadastro manual extra.
   // Fazenda e Armazém são condicionais (não seguem a ordem estática do template) na maioria dos
   // perfis: só entram quando o gatilho ao vivo dispara. Fast Nobre quebra essa regra do Armazém

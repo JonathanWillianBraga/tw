@@ -52,6 +52,14 @@ e esquecer de buildar, todo mundo continua recebendo a versão velha.
   ficam presos no escopo dele e NÃO colidem com o resto; ele herda os helpers do escopo
   externo por closure. Se for mexer nele, lembre que é um mundo à parte.
 
+### Abas do painel
+
+A barra principal tem **9 abas**. `Muralha` e `Mapa` NÃO são abas: viraram **sub-abas dentro do
+Saque** (v11.16.0) — `subBtn()` monta a barra, `showFarmSub()` troca, e os painéis são
+`#twmgr-sub-farm|wall|map`. O Cadeado vive dentro do Mapa, então foi junto. O indicador de
+atividade fica no botão da sub-aba, e a aba Saque acende se qualquer um dos três estiver rodando.
+Chaves de módulo (`wall`, `map`) seguem valendo em `config`, `refreshCards` e `pushLog`.
+
 ## Convenções
 
 - **Versão:** ao publicar, bumpe `@version` **e** `const VERSION` (em `src/010-core.js`)
@@ -70,10 +78,10 @@ e esquecer de buildar, todo mundo continua recebendo a versão velha.
 | `010-core` | header UserScript, constantes, helpers, abre a IIFE |
 | `020-engine` | motor auto-ATK/coleta/saque, timing, envio |
 | `030-recrutar` `040-tropas` | recrutamento, grade de tropas, `getAllVillages` |
-| `050-fakes` | fakes multi-alvo |
-| `060-planner` `065-blindagem` `070-paladino` | coordenado, blindagem, paladino |
-| `075-mercado` `080-edificios` `085-obra` | mercado, edifícios, obra |
-| `090-bb` `095-saque-tplB` `100-barbaros-mapa` | cultivo, saque template B, bárbaros do mapa |
+| `050-envio` | primitivas de ataque/apoio compartilhadas (era o módulo Fakes) |
+| `060-planner` `065-blindagem` `070-paladino` | coordenado (a Blindagem é uma seção DENTRO da aba dele), paladino |
+| `075-mercado` `080-edificios` `085-obra` | mercado, **Construções** (rotulado assim na UI), obra |
+| `095-saque-tplB` `100-barbaros-mapa` | saque template B, bárbaros do mapa (o `090-bb`/Cultivo foi aposentado na v11.15.0) |
 | `110-cadeado` `120-etiqueta` | reserva de bárbara, auto-rótulo |
 | `130-captcha` `140-painel-controllers` `150-painel-ui` | captcha, controladores, UI do painel |
 | `160-desviar` `170-mapa` | desviar, filtros do mapa |

@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.15.0
+// @version      11.16.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.15.0';
+  const VERSION = '11.16.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -173,7 +173,10 @@
     groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
     groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo
   });
-  const defFakes = () => ({ running: false, offsetMs: 150, targetsRaw: '', arrLocal: '', mode: 'split', pct: 1, minPop: 0, siege: 'ram', filler: 'spy', origins: {}, gen: [] });
+  // Limite de fake do mundo: o ataque precisa de pop >= pontos_da_origem * FAKE_LIMIT_PCT%. Era o
+  // ajuste "pct" do módulo Fakes; virou constante quando ele saiu (v11.16.0). Quem usa é o SAQUE,
+  // pra não montar template que o jogo recusa. 1% é o valor deste mundo.
+  const FAKE_LIMIT_PCT = 1;
   // Cada modo roda de forma INDEPENDENTE (pode ligar Equilíbrio e Solidário ao mesmo tempo, por
   // exemplo) — por isso running/nextAt/stats vivem por modo, dentro de "modes". Os campos de
   // configuração (destCoord, reserve, thresholdPct, solidario* etc.) continuam compartilhados no
@@ -188,7 +191,7 @@
     thresholdPct: 50, maxDist: 15,
     groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {},
   });
-  // Edifícios = gerenciador no molde do "Gerente de conta → Construção" do jogo: N modelos nomeados
+  // Construções = gerenciador no molde do "Gerente de conta → Construção" do jogo: N modelos nomeados
   // (templates) + atribuição POR ALDEIA (villages: vid -> {tpl, paused, coord, name, done, total}).
   // `plans` (atk/def) ficou só como semente da migração — quem manda agora é `templates`.
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, templates: {}, villages: {}, filterGroup: '', demand: {} });
@@ -342,7 +345,7 @@
     nextAt: 0,
     demand: {},              // { [vid]: { b, cost, coord, profile } }
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), fakes: defFakes(), market: defMarket(), build: defBuild(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), market: defMarket(), build: defBuild(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -417,17 +420,6 @@
     if (c.recruit.targetHours == null) c.recruit.targetHours = 2;
     if (c.recruit.refillBelowMin == null) c.recruit.refillBelowMin = 30;
     if (c.recruit.interval == null) c.recruit.interval = 600;
-    if (!c.fakes) c.fakes = defFakes();
-    if (c.fakes.offsetMs == null) c.fakes.offsetMs = 150;
-    if (c.fakes.pct == null) c.fakes.pct = 1;
-    if (c.fakes.minPop == null) c.fakes.minPop = 0;
-    if (!c.fakes.mode) c.fakes.mode = 'split';
-    if (!c.fakes.siege) c.fakes.siege = 'ram';
-    if (!c.fakes.filler) c.fakes.filler = 'spy';
-    if (!c.fakes.origins) c.fakes.origins = {};
-    if (!c.fakes.gen) c.fakes.gen = [];
-    if (c.fakes.targetsRaw == null) c.fakes.targetsRaw = '';
-    if (c.fakes.arrLocal == null) c.fakes.arrLocal = '';
     if (!c.market) c.market = defMarket();
     // Migração: cada modo era mutuamente exclusivo (1 running/nextAt/mode pro Mercado inteiro).
     // Agora cada modo tem seu próprio estado — se o usuário tinha um modo ligado, esse modo
@@ -661,12 +653,12 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, fakeTimer = null, buildTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, buildTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
   const marketTimers = { cunhagem: null, equilibrio: null, solidario: null, cunhar: null };   // 1 timer por modo — rodam de forma independente
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
   function anyMarketRunning() { return !!(config.market && config.market.modes && MARKET_MODES.some((k) => config.market.modes[k] && config.market.modes[k].running)); }
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || (config.fakes && config.fakes.running) || anyMarketRunning() || (config.build && config.build.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || anyMarketRunning() || (config.build && config.build.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.

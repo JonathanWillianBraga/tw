@@ -30,10 +30,23 @@
       ".twmgr-fmrow{border-bottom:1px solid rgba(255,255,255,.04)}",
       ".twmgr-fmrow:hover{background:rgba(212,175,55,.06)}",
       ".twmgr-fmck{width:15px;height:15px;cursor:pointer;vertical-align:middle;margin:0}",
+      ".twmgr-subtabs{display:flex;gap:5px;margin-bottom:9px}",
+      ".twmgr-subtab{flex:1 1 0;min-width:0;display:flex;align-items:center;justify-content:center;gap:4px;padding:6px 4px;font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;border:1px solid #c4a35f;border-radius:8px;background:rgba(0,0,0,.05);color:#6e5a2a;transition:.15s;position:relative}",
+      ".twmgr-subtab:hover{background:rgba(0,0,0,.10);color:#4a3418}",
+      ".twmgr-subtab.active{background:linear-gradient(180deg,#c9a33f,#b18f4d);border-color:#7d510a;color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}",
+      ".twmgr-subtab.twmgr-run::after{content:'';position:absolute;top:3px;right:4px;width:6px;height:6px;border-radius:50%;background:#2e8b3f;box-shadow:0 0 0 2px rgba(46,139,63,.25)}",
       ".twmgr-card-break{flex-basis:100%;height:0}",
       ".twmgr-cards{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}",
-      ".twmgr-card-mini{flex:1 1 0;min-width:58px;background:linear-gradient(165deg,#e6d4a4,#ecdcb2);border:1px solid #b18f4d;border-radius:9px;padding:7px 6px 6px;text-align:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}",
-      ".twmgr-card-wide{flex-basis:100%}",
+      ".twmgr-card-mini{flex:1 1 0;min-width:66px;background:linear-gradient(165deg,#e6d4a4,#ecdcb2);border:1px solid #b18f4d;border-radius:9px;padding:7px 6px 6px;text-align:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}",
+      // O card de destaque de cada módulo: antes era um ciano inline (#1f8fa0) que não é da paleta
+      // pergaminho e brigava com o resto. Agora é o mesmo dourado, só mais escuro e com a moldura
+      // marcada — destaca pela hierarquia, não por trocar de cor.
+      ".twmgr-card-hl{background:linear-gradient(165deg,#efd9a0,#f6e6bd);border-color:#9a6f0e;box-shadow:inset 0 0 0 1px rgba(154,111,14,.18)}",
+      ".twmgr-card-hl .twmgr-card-v{color:#7d510a;font-size:21px}",
+      ".twmgr-card-hl .twmgr-card-l{color:#5c4527}",      // flex-basis:100% sozinho NÃO forçava linha inteira: o .twmgr-card-mini tem flex:1 1 0, e o
+      // shrink:1 deixava o card encolher pra caber ao lado dos outros em vez de quebrar a linha.
+      // Com shrink:0 ele ocupa a linha de verdade. Estava silenciosamente sem efeito em Coletas e Cadeado.
+      ".twmgr-card-wide{flex-basis:100%;flex-shrink:0}",
       ".twmgr-card-v{font-size:19px;font-weight:800;color:#9a6f0e;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
       ".twmgr-card-l{font-size:8px;color:#6e5a2f;margin-top:4px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
       ".twmgr-section{border:1px solid #c4a35f;border-radius:9px;padding:8px 9px;margin-bottom:9px;background:rgba(0,0,0,.14)}",
@@ -110,10 +123,21 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'map', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
+    ['scav', 'farm', 'recruit', 'market', 'build', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
+  }
+
+  // Sub-aba do Saque. Guarda a escolha no localStorage (preferência de tela, igual à largura do
+  // painel) pra quem vive na Muralha não cair no Saque a cada recarregamento de página.
+  const FARM_SUB_KEY = 'twMgr_farmSub';
+  function showFarmSub(name) {
+    ['farm', 'wall', 'map'].forEach((n) => {
+      const c = document.getElementById('twmgr-sub-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
+      const b = document.getElementById('twmgr-sbtab-' + n); if (b) b.classList.toggle('active', n === name);
+    });
+    try { localStorage.setItem(FARM_SUB_KEY, name); } catch (e) {}
   }
 
   function buildUI() {
@@ -124,6 +148,10 @@
     if (document.getElementById('twmgr-panel')) { console.warn('[TWMgr] painel ja existe — buildUI ignorado.'); return; }
     const p = document.createElement('div'); p.id = 'twmgr-panel';
     const tabBtn = (n, ico, label) => '<div id="twmgr-btab-' + n + '" class="twmgr-tab" data-tab="' + n + '"><span class="twmgr-tab-ico">' + ico + '</span><span class="twmgr-tab-lbl">' + label + '</span></div>';
+    // Sub-abas dentro de um módulo (hoje só o Saque: Saque / Muralha / Mapa). O ponto é tirar peso da
+    // barra principal sem esconder módulo: Muralha e Mapa só fazem sentido perto do Saque — um derruba
+    // muralha dos alvos do assistente, o outro descobre bárbaro novo pra saquear.
+    const subBtn = (n, ico, label) => '<div id="twmgr-sbtab-' + n + '" class="twmgr-subtab" data-sub-farm="' + n + '"><span>' + ico + '</span> ' + label + '</div>';
     // Saque: matriz estilo FarmGod — A/B/C são checkboxes; regra "1 por linha" garantida no JS (marcar um desmarca os outros).
     const fmRow = (k, label) => '<tr class="twmgr-fmrow">' +
       '<td style="text-align:left;padding:3px 6px">' + label + '</td>' +
@@ -138,7 +166,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
@@ -160,6 +188,12 @@
         modLog('scav') +
       '</div>' +
       '<div id="twmgr-tab-farm" style="display:none">' +
+        '<div class="twmgr-subtabs">' +
+          subBtn('farm', '🐎', 'Saque') +
+          subBtn('wall', '🐏', 'Muralha') +
+          subBtn('map', '🗺️', 'Mapa') +
+        '</div>' +
+        '<div id="twmgr-sub-farm">' +
         '<div id="twmgr-farm-prog" class="twmgr-hint">Saque parado.</div>' +
         cardsDiv('farm') +
         sec('Ataque por cor (marque 1 por linha)',
@@ -183,8 +217,8 @@
         '<div class="twmgr-actions"><button id="twmgr-farm-start" class="twmgr-btn twmgr-go">▶ Saquear</button><button id="twmgr-farm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-farm-status" class="twmgr-cstatus"></div>' +
         modLog('farm') +
-      '</div>' +
-      '<div id="twmgr-tab-wall" style="display:none">' +
+        '</div>' +
+        '<div id="twmgr-sub-wall" style="display:none">' +
         hint('🐏 Manda bárbaro + aríete + explorador pra derrubar muralhas dos alvos do assistente. Roda em paralelo ao Saque.') +
         cardsDiv('wall') +
         sec('Faixa de muralha',
@@ -198,6 +232,50 @@
         '<div class="twmgr-actions"><button id="twmgr-wall-start" class="twmgr-btn twmgr-go">▶ Quebrar</button><button id="twmgr-wall-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-wall-status" class="twmgr-cstatus"></div>' +
         modLog('wall') +
+        '</div>' +
+        '<div id="twmgr-sub-map" style="display:none">' +
+        hint('🗺️ Fica <b>ligado por ciclos</b>. A cada ciclo relê o mapa, acha bárbaro novo no seu raio e manda explorador em quem <b>você ainda não conhece</b> — quem não está no assistente de saque, ou está mas o relatório não trouxe nada. Quem já tem explorador a caminho é pulado.') +
+        cardsDiv('map') +
+        sec('Origem',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo origem (vazio = todas)</span><select id="twmgr-bm-group" class="twmgr-inp" style="width:150px"></select></div>' +
+          '<div style="text-align:right;margin-top:2px"><button id="twmgr-bm-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button> <button id="twmgr-bm-refmap" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="recarrega /map/village.txt">↻ mapa</button></div>') +
+        sec('Filtros de alvo',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-bm-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="0 = nunca reexplora quem já tem relatório com dados. Acima de 0, reexplora intel mais velho que isso.">Reexplorar intel com + de (dias)</span><input id="twmgr-bm-days" class="twmgr-inp" type="number" min="0" step="0.5" value="0" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Pontos de/até</span><span><input id="twmgr-bm-minpts" class="twmgr-inp" type="number" min="0" value="26" style="width:56px"> a <input id="twmgr-bm-maxpts" class="twmgr-inp" type="number" min="1" value="5000" style="width:56px"></span></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Máx alvos por aldeia/ciclo</span><input id="twmgr-bm-maxper" class="twmgr-inp" type="number" min="1" value="20" style="width:66px"></div>') +
+        sec('Exploradores',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Reserva de spy (guardar/aldeia)</span><input id="twmgr-bm-reserve" class="twmgr-inp" type="number" min="0" value="30" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Spy por alvo</span><input id="twmgr-bm-spy" class="twmgr-inp" type="number" min="1" value="1" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Delay entre envios (ms)</span><input id="twmgr-bm-delay" class="twmgr-inp" type="number" min="0" step="100" value="500" style="width:66px"></div>') +
+        sec('Ciclo',
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="De quanto em quanto tempo ele relê o mapa e procura bárbaro novo.">Intervalo do ciclo (min)</span><input id="twmgr-bm-ciclo" class="twmgr-inp" type="number" min="5" step="5" value="30" style="width:66px"></div>' +
+          '<div id="twmgr-bm-next" style="font-size:10px;color:#6e5a2a;text-align:right"></div>') +
+        sec('Blacklist',
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="A partir de quantas unidades de defesa no relatório a aldeia entra na blacklist.">Defesa mínima p/ blacklist</span><input id="twmgr-bm-defmin" class="twmgr-inp" type="number" min="1" value="1" style="width:66px"></div>' +
+          '<label class="twmgr-check" title="Quando uma aldeia entrar na blacklist por DEFESA, apaga os relatórios dela no jogo — o que a tira da listagem do assistente. Não afeta a blacklist de tropa perdida. NÃO TEM DESFAZER: pra voltar, a aldeia teria que reaparecer sozinha na busca do assistente."><input id="twmgr-bm-rmassist" type="checkbox"> Apagar do assistente quem tem defesa <b style="color:#a5544a">(irreversível)</b></label>' +
+          '<div class="twmgr-hint" style="margin:0">O Saque já pula quem está em qualquer uma das duas listas, mesmo com essa opção desligada.</div>') +
+        '<div class="twmgr-actions"><button id="twmgr-bm-preview" class="twmgr-btn twmgr-ghost">💡 Prévia</button><button id="twmgr-bm-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-bm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+        '<div id="twmgr-bm-status" class="twmgr-cstatus"></div>' +
+        // Três listas na mesma área, alternadas — alvos do próximo ciclo e as duas blacklists.
+        '<div id="twmgr-bm-subtabs" style="display:flex;gap:4px;margin:9px 0 0">' +
+          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="alvos" style="flex:1;padding:4px;font-size:10px">🎯 Alvos (<span id="twmgr-bm-count">0</span>)</button>' +
+          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="perda" style="flex:1;padding:4px;font-size:10px">💀 Perdi tropa (<span id="twmgr-bm-nperda">0</span>)</button>' +
+          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="defesa" style="flex:1;padding:4px;font-size:10px">🛡️ Tem defesa (<span id="twmgr-bm-ndefesa">0</span>)</button>' +
+        '</div>' +
+        '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;margin-top:4px"></div>' +
+        '<div id="twmgr-bm-bl" style="max-height:220px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;margin-top:4px;display:none"></div>' +
+        modLog('map') +
+        sec('🔒 Cadeado automático',
+          '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">Rastreia bárbaras no raio de TODAS as suas aldeias (a mais perto conta) e tranca (reserva pra tribo) as com pontuação mínima, das mais fortes pras mais fracas. Pula quem tem relatório vermelho no último ataque (checado aldeia por aldeia, cobre até abandonadas). Nunca destrava o que já travou — só soma.</div>' +
+          cardsDiv('lock') +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Raio (campos, X)</span><input id="twmgr-lk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="10" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Pontos mín. (Y)</span><input id="twmgr-lk-pts" class="twmgr-inp" type="number" min="0" value="500" style="width:80px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Repetir rastreamento (min)</span><input id="twmgr-lk-int" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>' +
+          '<div class="twmgr-actions"><button id="twmgr-lk-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-lk-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+          '<div id="twmgr-lk-status" class="twmgr-cstatus"></div>' +
+          modLog('lock')) +
+        '</div>' +
       '</div>' +
       '<div id="twmgr-tab-recruit" style="display:none">' +
         hint('Recruta por <b>grupo</b> do TW: mantém a fila alvo por edifício e para no alvo de tropas. Vazio = contínuo.') +
@@ -219,32 +297,8 @@
         '<div id="twmgr-recruit-status" class="twmgr-cstatus"></div>' +
         modLog('recruit') +
       '</div>' +
-      '<div id="twmgr-tab-fakes" style="display:none">' +
-        hint('Fakes com <b>chegada</b> em horário marcado. 1 isca + explorador (neutro, não revela off/def).') +
-        cardsDiv('fakes') +
-        sec('Alvos e chegada',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Relógio do servidor</span><b id="twmgr-srvclock" style="color:#9a6f0e">--:--:--</b></div>' +
-          '<label class="twmgr-lbl">Alvos (cole vários)</label><textarea id="twmgr-fk-targets" class="twmgr-inp" style="width:100%;height:52px;margin:2px 0 6px" placeholder="430|522 428|524 430|520 …"></textarea>' +
-          '<label class="twmgr-lbl">Chegada</label><input id="twmgr-fk-arr" class="twmgr-inp" type="datetime-local" step="1" style="width:100%;margin:2px 0 0">') +
-        sec('Origens',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo</span><select id="twmgr-fk-group" class="twmgr-inp" style="width:150px"><option value="">Todas as aldeias</option></select></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Origens que enviam <span id="twmgr-fk-count" style="color:#6e5a2f"></span></span><span style="font-size:9px"><a id="twmgr-fk-all" style="cursor:pointer;color:#7a5710">todas</a> · <a id="twmgr-fk-none" style="cursor:pointer;color:#7a5710">nenhuma</a></span></div>' +
-          '<div id="twmgr-fk-origins" style="max-height:180px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px"></div>' +
-          '<div class="twmgr-row" style="margin-top:6px"><span class="twmgr-lbl">Distribuição</span><span style="font-size:10px"><label><input type="radio" name="twmgr-fk-mode" value="split"> dividir</label> <label><input type="radio" name="twmgr-fk-mode" value="all"> todas→todos</label></span></div>') +
-        sec('Estratégia do fake',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Isca (1x)</span><select id="twmgr-fk-siege" class="twmgr-inp" style="width:110px"><option value="ram">Aríete</option><option value="catapult">Catapulta</option><option value="none">nenhum</option></select></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Preencher com</span><select id="twmgr-fk-filler" class="twmgr-inp" style="width:110px">' + UNITS.map(([u, n]) => '<option value="' + u + '">' + n + '</option>').join('') + '</select></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Pop mín (% dos pontos)</span><input id="twmgr-fk-pct" class="twmgr-inp" type="number" min="0" step="0.5" value="1" style="width:56px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Pop mín fixa (0=auto)</span><input id="twmgr-fk-minpop" class="twmgr-inp" type="number" min="0" value="0" style="width:56px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Offset envio (ms)</span><input id="twmgr-fk-offset" class="twmgr-inp" type="number" min="0" value="150" style="width:56px"></div>') +
-        '<button id="twmgr-fk-preview" class="twmgr-btn twmgr-ghost" style="width:100%;margin-bottom:6px">💡 Prever fakes</button>' +
-        '<div class="twmgr-actions"><button id="twmgr-fk-start" class="twmgr-btn twmgr-go">▶ Armar</button><button id="twmgr-fk-stop" class="twmgr-btn twmgr-stop">■ Desarmar</button></div>' +
-        '<div id="twmgr-fk-status" class="twmgr-cstatus"></div>' +
-        modLog('fakes') +
-      '</div>' +
       '<div id="twmgr-tab-market" style="display:none">' +
         hint('Mercado: cada modo roda de forma <b>independente</b> — pode ligar quantos quiser ao mesmo tempo (ex.: Equilíbrio + Solidário juntos). <b>Cunhagem</b> junta recurso de grupos de origem em uma ou mais aldeias destino (e pode cunhar moedas de ouro automaticamente nelas); <b>Equilíbrio</b> nivela as aldeias por %; <b>Solidário</b> abastece só o grupo escolhido (que só recebe) com qualquer outra aldeia sua doando.') +
-        cardsDiv('market') +
         sec('💰 Cunhagem',
             '<div class="twmgr-row"><span class="twmgr-lbl">Grupos de origem</span></div>' +
             '<div id="twmgr-mk-srcgroups" style="max-height:100px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px;margin-bottom:6px"></div>' +
@@ -329,49 +383,6 @@
         '<div class="twmgr-actions"><button id="twmgr-bld-start" class="twmgr-btn twmgr-go">▶ Construir</button><button id="twmgr-bld-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-bld-status" class="twmgr-cstatus"></div>' +
         modLog('build') +
-      '</div>' +
-      '<div id="twmgr-tab-map" style="display:none">' +
-        hint('🗺️ Fica <b>ligado por ciclos</b>. A cada ciclo relê o mapa, acha bárbaro novo no seu raio e manda explorador em quem <b>você ainda não conhece</b> — quem não está no assistente de saque, ou está mas o relatório não trouxe nada. Quem já tem explorador a caminho é pulado.') +
-        cardsDiv('map') +
-        sec('Origem',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo origem (vazio = todas)</span><select id="twmgr-bm-group" class="twmgr-inp" style="width:150px"></select></div>' +
-          '<div style="text-align:right;margin-top:2px"><button id="twmgr-bm-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button> <button id="twmgr-bm-refmap" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="recarrega /map/village.txt">↻ mapa</button></div>') +
-        sec('Filtros de alvo',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-bm-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:66px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl" title="0 = nunca reexplora quem já tem relatório com dados. Acima de 0, reexplora intel mais velho que isso.">Reexplorar intel com + de (dias)</span><input id="twmgr-bm-days" class="twmgr-inp" type="number" min="0" step="0.5" value="0" style="width:66px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Pontos de/até</span><span><input id="twmgr-bm-minpts" class="twmgr-inp" type="number" min="0" value="26" style="width:56px"> a <input id="twmgr-bm-maxpts" class="twmgr-inp" type="number" min="1" value="5000" style="width:56px"></span></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Máx alvos por aldeia/ciclo</span><input id="twmgr-bm-maxper" class="twmgr-inp" type="number" min="1" value="20" style="width:66px"></div>') +
-        sec('Exploradores',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Reserva de spy (guardar/aldeia)</span><input id="twmgr-bm-reserve" class="twmgr-inp" type="number" min="0" value="30" style="width:66px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Spy por alvo</span><input id="twmgr-bm-spy" class="twmgr-inp" type="number" min="1" value="1" style="width:66px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Delay entre envios (ms)</span><input id="twmgr-bm-delay" class="twmgr-inp" type="number" min="0" step="100" value="500" style="width:66px"></div>') +
-        sec('Ciclo',
-          '<div class="twmgr-row"><span class="twmgr-lbl" title="De quanto em quanto tempo ele relê o mapa e procura bárbaro novo.">Intervalo do ciclo (min)</span><input id="twmgr-bm-ciclo" class="twmgr-inp" type="number" min="5" step="5" value="30" style="width:66px"></div>' +
-          '<div id="twmgr-bm-next" style="font-size:10px;color:#6e5a2a;text-align:right"></div>') +
-        sec('Blacklist',
-          '<div class="twmgr-row"><span class="twmgr-lbl" title="A partir de quantas unidades de defesa no relatório a aldeia entra na blacklist.">Defesa mínima p/ blacklist</span><input id="twmgr-bm-defmin" class="twmgr-inp" type="number" min="1" value="1" style="width:66px"></div>' +
-          '<label class="twmgr-check" title="Quando uma aldeia entrar na blacklist por DEFESA, apaga os relatórios dela no jogo — o que a tira da listagem do assistente. Não afeta a blacklist de tropa perdida. NÃO TEM DESFAZER: pra voltar, a aldeia teria que reaparecer sozinha na busca do assistente."><input id="twmgr-bm-rmassist" type="checkbox"> Apagar do assistente quem tem defesa <b style="color:#a5544a">(irreversível)</b></label>' +
-          '<div class="twmgr-hint" style="margin:0">O Saque já pula quem está em qualquer uma das duas listas, mesmo com essa opção desligada.</div>') +
-        '<div class="twmgr-actions"><button id="twmgr-bm-preview" class="twmgr-btn twmgr-ghost">💡 Prévia</button><button id="twmgr-bm-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-bm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
-        '<div id="twmgr-bm-status" class="twmgr-cstatus"></div>' +
-        // Três listas na mesma área, alternadas — alvos do próximo ciclo e as duas blacklists.
-        '<div id="twmgr-bm-subtabs" style="display:flex;gap:4px;margin:9px 0 0">' +
-          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="alvos" style="flex:1;padding:4px;font-size:10px">🎯 Alvos (<span id="twmgr-bm-count">0</span>)</button>' +
-          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="perda" style="flex:1;padding:4px;font-size:10px">💀 Perdi tropa (<span id="twmgr-bm-nperda">0</span>)</button>' +
-          '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="defesa" style="flex:1;padding:4px;font-size:10px">🛡️ Tem defesa (<span id="twmgr-bm-ndefesa">0</span>)</button>' +
-        '</div>' +
-        '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;margin-top:4px"></div>' +
-        '<div id="twmgr-bm-bl" style="max-height:220px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;margin-top:4px;display:none"></div>' +
-        modLog('map') +
-        sec('🔒 Cadeado automático',
-          '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">Rastreia bárbaras no raio de TODAS as suas aldeias (a mais perto conta) e tranca (reserva pra tribo) as com pontuação mínima, das mais fortes pras mais fracas. Pula quem tem relatório vermelho no último ataque (checado aldeia por aldeia, cobre até abandonadas). Nunca destrava o que já travou — só soma.</div>' +
-          cardsDiv('lock') +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Raio (campos, X)</span><input id="twmgr-lk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="10" style="width:66px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Pontos mín. (Y)</span><input id="twmgr-lk-pts" class="twmgr-inp" type="number" min="0" value="500" style="width:80px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Repetir rastreamento (min)</span><input id="twmgr-lk-int" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>' +
-          '<div class="twmgr-actions"><button id="twmgr-lk-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-lk-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
-          '<div id="twmgr-lk-status" class="twmgr-cstatus"></div>' +
-          modLog('lock')) +
       '</div>' +
       '<div id="twmgr-tab-planner" style="display:none">' +
         hint('🎯 Coordenado: monte vários ataques independentes — cada um com seu próprio alvo, aldeias e tropas — e arme cada um separadamente (o botão libera um novo ataque em branco assim que você arma). Cada aldeia pode mandar <b>várias ondas</b> (+ onda) dentro do mesmo ataque. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
@@ -552,26 +563,6 @@
     ['twmgr-r-gatk', 'twmgr-r-gdef', 'twmgr-r-hours', 'twmgr-r-refill'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readRecruitCfg); });
     document.querySelectorAll('.twmgr-ron, .twmgr-rt').forEach((el) => el.addEventListener('change', readRecruitCfg));
     setRecruitStatus(config.recruit.running);
-
-    document.getElementById('twmgr-fk-targets').value = config.fakes.targetsRaw || '';
-    document.getElementById('twmgr-fk-arr').value = config.fakes.arrLocal || '';
-    document.getElementById('twmgr-fk-offset').value = config.fakes.offsetMs != null ? config.fakes.offsetMs : 150;
-    document.getElementById('twmgr-fk-pct').value = config.fakes.pct != null ? config.fakes.pct : 1;
-    document.getElementById('twmgr-fk-minpop').value = config.fakes.minPop || 0;
-    document.getElementById('twmgr-fk-siege').value = config.fakes.siege || 'ram';
-    document.getElementById('twmgr-fk-filler').value = config.fakes.filler || 'spy';
-    const fkMode = document.querySelector('input[name="twmgr-fk-mode"][value="' + (config.fakes.mode || 'split') + '"]'); if (fkMode) fkMode.checked = true;
-    renderFakeOrigins();
-    fillFakeGroups();
-    document.getElementById('twmgr-fk-group').addEventListener('change', (e) => { config.fakes.group = e.target.value; save(); renderFakeOrigins(); });
-    document.getElementById('twmgr-fk-all').addEventListener('click', () => { document.querySelectorAll('.twmgr-fk-origin').forEach((cb) => cb.checked = true); readFakesCfg(); });
-    document.getElementById('twmgr-fk-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-fk-origin').forEach((cb) => cb.checked = false); readFakesCfg(); });
-    ['twmgr-fk-targets', 'twmgr-fk-arr', 'twmgr-fk-offset', 'twmgr-fk-pct', 'twmgr-fk-minpop', 'twmgr-fk-siege', 'twmgr-fk-filler'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFakesCfg); });
-    document.querySelectorAll('input[name="twmgr-fk-mode"]').forEach((r) => r.addEventListener('change', readFakesCfg));
-    document.getElementById('twmgr-fk-preview').addEventListener('click', fakePreview);
-    document.getElementById('twmgr-fk-start').addEventListener('click', fakeStart);
-    document.getElementById('twmgr-fk-stop').addEventListener('click', fakeStop);
-    setFakeStatus(config.fakes.running);
 
     // ---- Planner (Coordenado) ----
     renderPlannerTabs();
@@ -764,6 +755,7 @@
     setLockStatus(config.lock.running);
 
     document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.getAttribute('data-tab'))));
+    document.querySelectorAll('[data-sub-farm]').forEach((b) => b.addEventListener('click', () => showFarmSub(b.getAttribute('data-sub-farm'))));
     // Toggle expandir/recolher o log por módulo
     document.querySelectorAll('.twmgr-modlog-head').forEach((h) => h.addEventListener('click', () => {
       const mod = h.getAttribute('data-modlog'); const body = document.getElementById('twmgr-modlog-body-' + mod); if (!body) return;
@@ -772,7 +764,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'fakes', 'market', 'build', 'map', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -785,6 +777,9 @@
     makeDraggable(p, document.getElementById('twmgr-head'));
     initPanelResize(p);
 
+    let subIni = 'farm';
+    try { const sv = localStorage.getItem(FARM_SUB_KEY); if (['farm', 'wall', 'map'].indexOf(sv) >= 0) subIni = sv; } catch (e) {}
+    showFarmSub(subIni);
     showTab('farm');
     renderLog();
     setStatus(config.running);
@@ -819,9 +814,8 @@
     if (config.farm.running) { rlog('Saque retomado.', 'farm'); retomar(scheduleFarm); }
     if (config.wall.running) { rlog('Muralha retomada.', 'wall'); retomar(scheduleWall); }
     if (config.recruit.running) { rlog('Recrutar retomado.', 'recruit'); retomar(scheduleRecruit); }
-    if (config.fakes.running) { config.fakes.gen.forEach((f) => { if (f.state === 'scheduled') f.state = 'armed'; }); rlog('Fakes rearmados.', 'fakes'); retomar(fakeTick); }
     MARKET_MODES.forEach((mkKey) => { if (config.market.modes[mkKey].running) { rlog('Mercado (' + MARKET_MODE_LABEL[mkKey] + ') retomado.', 'market'); retomar(() => scheduleMarket(mkKey)); } });
-    if (config.build.running) { rlog('Edifícios retomado.', 'build'); retomar(scheduleBuild); }
+    if (config.build.running) { rlog('Construções retomado.', 'build'); retomar(scheduleBuild); }
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); retomar(scheduleMap); }
     if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); retomar(etiquetaTick); }
     if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); retomar(scheduleLock); }

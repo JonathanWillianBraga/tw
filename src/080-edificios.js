@@ -1,4 +1,4 @@
-  // ==================== EDIFÍCIOS (fila planejada por template ATK/DEF) ====================
+  // ==================== CONSTRUÇÕES (modelos nomeados aplicados por aldeia) ===============
   async function getBuildState(vid) {
     const res = await fetch('/game.php?village=' + vid + '&screen=main', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
@@ -92,32 +92,32 @@
     if ((config.build.nextAt || 0) > now) { scheduleBuild(); return; }
     const assign = config.build.villages || {};
     const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.build.templates[assign[v].tpl]);
-    if (!ativas.length) { pushLog('Edifícios: nenhuma aldeia ativa — adicione aldeias e aplique um modelo na tabela.', '', 'build'); config.build.nextAt = now + 300000; save(); scheduleBuild(); return; }
+    if (!ativas.length) { pushLog('Construções: nenhuma aldeia ativa — adicione aldeias e aplique um modelo na tabela.', '', 'build'); config.build.nextAt = now + 300000; save(); scheduleBuild(); return; }
     // Guarda anticolisão: o Obra (módulo do Johann) também enfileira obra. Se os dois pegarem a
-    // mesma aldeia, brigam pela fila e gastam recurso fora de ordem. O Edifícios cede, porque ele é
+    // mesma aldeia, brigam pela fila e gastam recurso fora de ordem. O Construções cede, porque é
     // o genérico e o Obra trabalha por grupo nativo do jogo.
     const donoOutro = {};
     if (config.obra && config.obra.running) {
       try { Object.keys(await getGroupProfileMapObra()).forEach((v) => { donoOutro[v] = 'Obra'; }); }
-      catch (e) { pushLog('Edifícios: não consegui checar as aldeias do Obra (' + (e.message || e) + ') — sigo sem a guarda.', '', 'build'); }
+      catch (e) { pushLog('Construções: não consegui checar as aldeias do Obra (' + (e.message || e) + ') — sigo sem a guarda.', '', 'build'); }
     }
     const vids = ativas.filter((v) => !donoOutro[v]);
     if (ativas.length !== vids.length) {
       const porDono = {};
       ativas.filter((v) => donoOutro[v]).forEach((v) => { porDono[donoOutro[v]] = (porDono[donoOutro[v]] || 0) + 1; });
-      pushLog('Edifícios: pulei ' + Object.keys(porDono).map((d) => porDono[d] + ' aldeia(s) do ' + d).join(' e ') + ' — já estão construindo por lá.', '', 'build');
+      pushLog('Construções: pulei ' + Object.keys(porDono).map((d) => porDono[d] + ' aldeia(s) do ' + d).join(' e ') + ' — já estão construindo por lá.', '', 'build');
     }
     config.build.demand = {};
     let built = 0;
     for (const vid of vids) {
-      { const pare = devoParar('build'); if (pare) { pushLog('Edifícios: ciclo interrompido — ' + pare + '.', '', 'build'); break; } }
+      { const pare = devoParar('build'); if (pare) { pushLog('Construções: ciclo interrompido — ' + pare + '.', '', 'build'); break; } }
       const alvo = assign[vid];
       const tplObj = config.build.templates[alvo.tpl] || {};
       const plan = tplObj.plan || [];
       const rotulo = alvo.name || alvo.coord || vid;
       let st;
       try { st = await getBuildState(vid); }
-      catch (e) { pushLog('Edifícios em ' + rotulo + ': erro ao ler o estado (' + (e.message || e) + ').', 'err', 'build'); continue; }
+      catch (e) { pushLog('Construções em ' + rotulo + ': erro ao ler o estado (' + (e.message || e) + ').', 'err', 'build'); continue; }
       // "Ordens" da tabela = quantos itens ATIVOS do modelo já foram atingidos / total (espelha o X/50 do jogo).
       // Usa o nível REAL (não o da fila) — o número tem que dizer o que está de pé na aldeia.
       const ativos = plan.filter((it) => it.en !== false);
@@ -151,7 +151,7 @@
           break;
         }
         try { await enqueueBuild(vid, r.build.b); }
-        catch (e) { pushLog('Edifícios em ' + rotulo + ': ' + (e.message || e), 'err', 'build'); break; }
+        catch (e) { pushLog('Construções em ' + rotulo + ': ' + (e.message || e), 'err', 'build'); break; }
         postos.push((BUILD_META[r.build.b] && BUILD_META[r.build.b].name) || r.build.b);
         built++; slots--;
         if (slots <= 0) break;
@@ -164,7 +164,7 @@
         if (novo.queueLen <= st.queueLen) { st = novo; break; }
         st = novo;
       }
-      if (postos.length) pushLog('Edifícios: ' + rotulo + ' → ' + postos.join(', ') + ' na fila (' + postos.length + ' obra' + (postos.length > 1 ? 's' : '') + ').', 'ok', 'build');
+      if (postos.length) pushLog('Construções: ' + rotulo + ' → ' + postos.join(', ') + ' na fila (' + postos.length + ' obra' + (postos.length > 1 ? 's' : '') + ').', 'ok', 'build');
       await sleep(300);
     }
     renderBuildVillages();
@@ -173,7 +173,7 @@
     config.build.nextAt = now + Math.max(60, config.build.interval || 600) * 1000;
     save();
     refreshCards('build');
-    pushLog('Edifícios: ciclo concluído — ' + built + ' obra(s) enfileirada(s). Próximo em ' + Math.round((config.build.interval || 600) / 60) + ' min.', 'ok', 'build');
+    pushLog('Construções: ciclo concluído — ' + built + ' obra(s) enfileirada(s). Próximo em ' + Math.round((config.build.interval || 600) / 60) + ' min.', 'ok', 'build');
     scheduleBuild();
   }
   function scheduleBuild() { clearTimeout(buildTimer); if (!config.build.running) return; buildTimer = setTimeout(buildTick, Math.min(Math.max((config.build.nextAt || 0) - Date.now(), 1000), 60000)); }
@@ -360,7 +360,7 @@
     // é a rede de segurança — o código fica selecionável do mesmo jeito.
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(codigo).then(
-        () => { avisar('copiado pra área de transferência'); alert('Código copiado!\n\nManda pro seu amigo colar no 📥 do módulo Edifícios.'); },
+        () => { avisar('copiado pra área de transferência'); alert('Código copiado!\n\nManda pro seu amigo colar no 📥 da aba Construções.'); },
         () => { prompt('Copie o código do modelo (Ctrl+C):', codigo); avisar('mostrado pra copiar'); }
       );
     } else { prompt('Copie o código do modelo (Ctrl+C):', codigo); avisar('mostrado pra copiar'); }
@@ -400,9 +400,9 @@
       const gid = config.build.filterGroup || '';
       const vs = gid ? await getVillagesInGroup(gid) : await getAllVillagesCached();   // ambos devolvem ARRAY
       _bldPool = (vs || []).map((v) => ({ vid: String(v.vid), coord: v.coord || null, name: v.name || v.coord || String(v.vid) }));
-      pushLog('Edifícios: ' + _bldPool.length + ' aldeia(s) carregadas' + (gid ? ' do grupo selecionado' : '') + '.', '', 'build');
+      pushLog('Construções: ' + _bldPool.length + ' aldeia(s) carregadas' + (gid ? ' do grupo selecionado' : '') + '.', '', 'build');
     } catch (e) {
-      pushLog('Edifícios: erro ao carregar as aldeias (' + (e.message || e) + ').', 'err', 'build');
+      pushLog('Construções: erro ao carregar as aldeias (' + (e.message || e) + ').', 'err', 'build');
     }
     if (btn) btn.textContent = '↻';
     renderBuildVillages();
@@ -462,7 +462,7 @@
     config.build.stats.villages = Object.keys(assign).filter((v) => !assign[v].paused).length;
     save(); renderBuildVillages(); refreshCards('build');
     const rotulo = { apply: 'modelo aplicado em', pause: 'pausada(s):', resume: 'retomada(s):', remove: 'removida(s) da gestão:' }[acao];
-    pushLog('Edifícios: ' + rotulo + ' ' + n + ' aldeia(s).', 'ok', 'build');
+    pushLog('Construções: ' + rotulo + ' ' + n + ' aldeia(s).', 'ok', 'build');
   }
   function bindBuildVillageHandlers() {
     const box = document.getElementById('twmgr-bld-vils'); if (!box) return;
@@ -488,11 +488,11 @@
     readBuildCfg();
     const assign = config.build.villages || {};
     const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.build.templates[assign[v].tpl]);
-    if (!ativas.length) { pushLog('Edifícios: nenhuma aldeia ativa — carregue a lista (↻), marque as aldeias e aplique um modelo.', 'err', 'build'); return; }
+    if (!ativas.length) { pushLog('Construções: nenhuma aldeia ativa — carregue a lista (↻), marque as aldeias e aplique um modelo.', 'err', 'build'); return; }
     config.build.running = true; config.build.nextAt = 0; save();
     setBuildStatus(true);
-    pushLog('Edifícios iniciado — ' + ativas.length + ' aldeia(s) ativa(s) em ' + bldTplIds().length + ' modelo(s).', 'ok', 'build');
+    pushLog('Construções iniciado — ' + ativas.length + ' aldeia(s) ativa(s) em ' + bldTplIds().length + ' modelo(s).', 'ok', 'build');
     buildTick();
   }
-  function buildStop() { readBuildCfg(); config.build.running = false; save(); clearTimeout(buildTimer); setBuildStatus(false); pushLog('Edifícios parado.', '', 'build'); }
+  function buildStop() { readBuildCfg(); config.build.running = false; save(); clearTimeout(buildTimer); setBuildStatus(false); pushLog('Construções parado.', '', 'build'); }
 

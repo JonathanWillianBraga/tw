@@ -30,6 +30,15 @@
       ".twmgr-fmrow{border-bottom:1px solid rgba(255,255,255,.04)}",
       ".twmgr-fmrow:hover{background:rgba(212,175,55,.06)}",
       ".twmgr-fmck{width:15px;height:15px;cursor:pointer;vertical-align:middle;margin:0}",
+      // Tela de edicao sobreposta ao painel. `inset:0` cobre tudo, inclusive a barra de abas.
+      ".twmgr-tela{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;background:linear-gradient(160deg,#e2cd97,#ecdcb2);border-radius:12px;overflow:hidden}",
+      ".twmgr-tela-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;background:linear-gradient(90deg,#6e5015,#9a721c 55%,#caa031);color:#fff;font-weight:700;font-size:12px;border-bottom:1px solid #8a6a20}",
+      ".twmgr-tela-x{cursor:pointer;color:#fff;font-size:15px;line-height:1;opacity:.85;padding:0 2px}",
+      ".twmgr-tela-x:hover{opacity:1}",
+      ".twmgr-tela-body{flex:1 1 auto;overflow-y:auto;padding:10px 12px}",
+      ".twmgr-tela-body::-webkit-scrollbar{width:9px}.twmgr-tela-body::-webkit-scrollbar-thumb{background:#b18f4d;border-radius:4px}",
+      ".twmgr-link-tela{cursor:pointer;color:#7d510a;font-size:10px;font-weight:600;text-decoration:none}",
+      ".twmgr-link-tela:hover{text-decoration:underline}",
       ".twmgr-subtabs{display:flex;gap:5px;margin-bottom:9px}",
       ".twmgr-subtab{flex:1 1 0;min-width:0;display:flex;align-items:center;justify-content:center;gap:4px;padding:6px 4px;font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;border:1px solid #c4a35f;border-radius:8px;background:rgba(0,0,0,.05);color:#6e5a2a;transition:.15s;position:relative}",
       ".twmgr-subtab:hover{background:rgba(0,0,0,.10);color:#4a3418}",
@@ -174,6 +183,62 @@
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
       '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      // Telas de modelo: overlay DENTRO do painel, nao aba nova. Ficam fora do #twmgr-body pra
+      // cobrir o painel inteiro (inclusive a barra de abas) enquanto abertas -- e uma tela cheia
+      // de edicao, entao trocar de aba no meio nao faz sentido.
+      '<div id="twmgr-tela-tpl-build" class="twmgr-tela" style="display:none">' +
+        '<div class="twmgr-tela-head"><span>🏗️ Modelos de construção</span>' +
+          '<a id="twmgr-bld-fechar-tpl" class="twmgr-tela-x" title="voltar">✕</a></div>' +
+        '<div class="twmgr-tela-body">' +
+        sec('Gerenciar modelos',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<select id="twmgr-bld-tpl" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-bld-tpl-new" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="criar modelo">✚</button>' +
+            '<button id="twmgr-bld-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
+            '<button id="twmgr-bld-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
+            '<button id="twmgr-bld-tpl-exp" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="exportar: gera um código pra mandar pra um amigo">📤</button>' +
+            '<button id="twmgr-bld-tpl-imp" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="importar: cola o código que um amigo te mandou">📥</button>' +
+          '</div>' +
+          '<div id="twmgr-bld-sum" class="twmgr-bld-sum"></div>' +
+          '<div id="twmgr-bld-plan" class="twmgr-bld-plan"></div>' +
+          '<div class="twmgr-row" style="gap:4px;margin-top:6px">' +
+            '<select id="twmgr-bld-add-b" class="twmgr-inp" style="flex:1">' +
+              Object.keys(BUILD_META).map((k) => '<option value="' + k + '">' + BUILD_META[k].ico + ' ' + BUILD_META[k].name + ' (máx ' + BUILD_META[k].max + ')</option>').join('') +
+            '</select>' +
+            '<input id="twmgr-bld-add-lvl" class="twmgr-inp" type="number" min="1" placeholder="nv" style="width:52px">' +
+            '<button id="twmgr-bld-add" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">+</button>' +
+          '</div>' +
+          '<div style="display:flex;gap:6px;margin-top:4px">' +
+            '<button id="twmgr-bld-reset" class="twmgr-btn twmgr-ghost" style="flex:1;font-size:10px">↺ reset padrão</button>' +
+            '<button id="twmgr-bld-clear" class="twmgr-btn twmgr-ghost" style="flex:1;font-size:10px">🗑 limpar tudo</button>' +
+          '</div>' +
+          '<div style="font-size:9px;color:#6e5a2a;margin:7px 0 3px">Prioridades deste modelo (0 = desligado) — furam a ordem da lista quando disparam:</div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">🌾 Fazenda se sobrar menos de</span><input id="twmgr-bld-farmpct" class="twmgr-inp" type="number" min="0" max="99" value="0" style="width:52px" title="% de população ainda disponível"><span style="font-size:10px;color:#6e5a2a">% da pop.</span></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">📦 Armazém se sobrar menos de</span><input id="twmgr-bld-storagepct" class="twmgr-inp" type="number" min="0" max="99" value="0" style="width:52px" title="% de capacidade de armazenamento ainda livre"><span style="font-size:10px;color:#6e5a2a">% da cap.</span></div>')
+        '</div>' +
+      '</div>' +
+      '<div id="twmgr-tela-tpl-pq" class="twmgr-tela" style="display:none">' +
+        '<div class="twmgr-tela-head"><span>⚗️ Modelos de pesquisa</span>' +
+          '<a id="twmgr-pq-fechar-tpl" class="twmgr-tela-x" title="voltar">✕</a></div>' +
+        '<div class="twmgr-tela-body">' +
+        sec('Gerenciar modelos',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<select id="twmgr-pq-tpl" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-pq-tpl-new" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="criar modelo">✚</button>' +
+            '<button id="twmgr-pq-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
+            '<button id="twmgr-pq-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
+          '</div>' +
+          '<div style="font-size:9px;color:#6e5a2a;margin:6px 0 3px">Ordem = prioridade. A primeira tropa que ainda falta é a que entra na pesquisa.</div>' +
+          '<div id="twmgr-pq-order" class="twmgr-bld-plan"></div>' +
+          '<div class="twmgr-row" style="gap:4px;margin-top:6px">' +
+            '<select id="twmgr-pq-add" class="twmgr-inp" style="flex:1">' +
+              UNITS.filter((par) => par[0] !== 'knight' && par[0] !== 'snob').map((par) => '<option value="' + par[0] + '">' + par[1] + '</option>').join('') +
+            '</select>' +
+            '<button id="twmgr-pq-add-btn" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">+</button>' +
+          '</div>' +
+          '<div style="margin-top:4px"><button id="twmgr-pq-reset" class="twmgr-btn twmgr-ghost" style="width:100%;font-size:10px">↺ ordem padrão</button></div>')
+        '</div>' +
+      '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
@@ -359,31 +424,7 @@
             '<select id="twmgr-bld-mass-tpl" class="twmgr-inp" style="flex:1"></select>' +
             '<button id="twmgr-bld-mass-go" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">✓</button>' +
           '</div>') +
-        sec('Gerenciar modelos',
-          '<div class="twmgr-row" style="gap:4px">' +
-            '<select id="twmgr-bld-tpl" class="twmgr-inp" style="flex:1"></select>' +
-            '<button id="twmgr-bld-tpl-new" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="criar modelo">✚</button>' +
-            '<button id="twmgr-bld-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
-            '<button id="twmgr-bld-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
-            '<button id="twmgr-bld-tpl-exp" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="exportar: gera um código pra mandar pra um amigo">📤</button>' +
-            '<button id="twmgr-bld-tpl-imp" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="importar: cola o código que um amigo te mandou">📥</button>' +
-          '</div>' +
-          '<div id="twmgr-bld-sum" class="twmgr-bld-sum"></div>' +
-          '<div id="twmgr-bld-plan" class="twmgr-bld-plan"></div>' +
-          '<div class="twmgr-row" style="gap:4px;margin-top:6px">' +
-            '<select id="twmgr-bld-add-b" class="twmgr-inp" style="flex:1">' +
-              Object.keys(BUILD_META).map((k) => '<option value="' + k + '">' + BUILD_META[k].ico + ' ' + BUILD_META[k].name + ' (máx ' + BUILD_META[k].max + ')</option>').join('') +
-            '</select>' +
-            '<input id="twmgr-bld-add-lvl" class="twmgr-inp" type="number" min="1" placeholder="nv" style="width:52px">' +
-            '<button id="twmgr-bld-add" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">+</button>' +
-          '</div>' +
-          '<div style="display:flex;gap:6px;margin-top:4px">' +
-            '<button id="twmgr-bld-reset" class="twmgr-btn twmgr-ghost" style="flex:1;font-size:10px">↺ reset padrão</button>' +
-            '<button id="twmgr-bld-clear" class="twmgr-btn twmgr-ghost" style="flex:1;font-size:10px">🗑 limpar tudo</button>' +
-          '</div>' +
-          '<div style="font-size:9px;color:#6e5a2a;margin:7px 0 3px">Prioridades deste modelo (0 = desligado) — furam a ordem da lista quando disparam:</div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">🌾 Fazenda se sobrar menos de</span><input id="twmgr-bld-farmpct" class="twmgr-inp" type="number" min="0" max="99" value="0" style="width:52px" title="% de população ainda disponível"><span style="font-size:10px;color:#6e5a2a">% da pop.</span></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">📦 Armazém se sobrar menos de</span><input id="twmgr-bld-storagepct" class="twmgr-inp" type="number" min="0" max="99" value="0" style="width:52px" title="% de capacidade de armazenamento ainda livre"><span style="font-size:10px;color:#6e5a2a">% da cap.</span></div>') +
+        '<div style="text-align:right;margin:-4px 0 8px"><a id="twmgr-bld-abrir-tpl" class="twmgr-link-tela">&raquo; Gerenciar modelos</a></div>' +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Máx na fila</span><input id="twmgr-bld-max" class="twmgr-inp" type="number" min="1" value="5" style="width:56px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-bld-int" class="twmgr-inp" type="number" min="1" value="10" style="width:56px"></div>') +
@@ -412,22 +453,7 @@
             '<select id="twmgr-pq-mass-tpl" class="twmgr-inp" style="flex:1"></select>' +
             '<button id="twmgr-pq-mass-go" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">✓</button>' +
           '</div>') +
-        sec('Gerenciar modelos',
-          '<div class="twmgr-row" style="gap:4px">' +
-            '<select id="twmgr-pq-tpl" class="twmgr-inp" style="flex:1"></select>' +
-            '<button id="twmgr-pq-tpl-new" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="criar modelo">✚</button>' +
-            '<button id="twmgr-pq-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
-            '<button id="twmgr-pq-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
-          '</div>' +
-          '<div style="font-size:9px;color:#6e5a2a;margin:6px 0 3px">Ordem = prioridade. A primeira tropa que ainda falta é a que entra na pesquisa.</div>' +
-          '<div id="twmgr-pq-order" class="twmgr-bld-plan"></div>' +
-          '<div class="twmgr-row" style="gap:4px;margin-top:6px">' +
-            '<select id="twmgr-pq-add" class="twmgr-inp" style="flex:1">' +
-              UNITS.filter((par) => par[0] !== 'knight' && par[0] !== 'snob').map((par) => '<option value="' + par[0] + '">' + par[1] + '</option>').join('') +
-            '</select>' +
-            '<button id="twmgr-pq-add-btn" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">+</button>' +
-          '</div>' +
-          '<div style="margin-top:4px"><button id="twmgr-pq-reset" class="twmgr-btn twmgr-ghost" style="width:100%;font-size:10px">↺ ordem padrão</button></div>') +
+        '<div style="text-align:right;margin:-4px 0 8px"><a id="twmgr-pq-abrir-tpl" class="twmgr-link-tela">&raquo; Gerenciar modelos</a></div>' +
         sec('Abastecimento quando falta recurso',
           '<label class="twmgr-check" title="Puxa da aldeia mais próxima que tenha excedente"><input id="twmgr-pq-feed" type="checkbox"> Pedir recurso pra pesquisar</label>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Reserva na fonte (%)</span><input id="twmgr-pq-reserve" class="twmgr-inp" type="number" min="0" max="90" value="40" style="width:56px"></div>' +
@@ -834,6 +860,14 @@
     setLockStatus(config.lock.running);
 
     document.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.getAttribute('data-tab'))));
+    // Abrir/fechar as telas de modelo. Fechar sempre re-renderiza a tabela de aldeias, porque
+    // criar/apagar modelo muda o que a coluna Modelo mostra.
+    const abreTela = (id) => { const el = document.getElementById(id); if (el) el.style.display = 'flex'; };
+    const fechaTela = (id) => { const el = document.getElementById(id); if (el) el.style.display = 'none'; };
+    document.getElementById('twmgr-bld-abrir-tpl').addEventListener('click', () => abreTela('twmgr-tela-tpl-build'));
+    document.getElementById('twmgr-bld-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-build'); renderBuildVillages(); });
+    document.getElementById('twmgr-pq-abrir-tpl').addEventListener('click', () => abreTela('twmgr-tela-tpl-pq'));
+    document.getElementById('twmgr-pq-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-pq'); renderResearchVillages(); });
     document.querySelectorAll('[data-sub-farm]').forEach((b) => b.addEventListener('click', () => showFarmSub(b.getAttribute('data-sub-farm'))));
     // Toggle expandir/recolher o log por módulo
     document.querySelectorAll('.twmgr-modlog-head').forEach((h) => h.addEventListener('click', () => {

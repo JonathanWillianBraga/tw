@@ -2,8 +2,10 @@
     if (document.getElementById('twmgr-css')) return;
     const s = document.createElement('style'); s.id = 'twmgr-css';
     s.textContent = [
-      "#twmgr-panel{position:fixed;top:12px;right:12px;z-index:99999;width:480px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);display:flex;flex-direction:column;font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#4a3418;background:linear-gradient(160deg,#e2cd97,#ecdcb2);border:1px solid #b8912e;border-radius:12px;box-shadow:0 12px 34px rgba(0,0,0,.6);overflow:hidden}",
+      "#twmgr-panel{position:fixed;top:12px;right:12px;z-index:99999;width:640px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);display:flex;flex-direction:column;font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#4a3418;background:linear-gradient(160deg,#e2cd97,#ecdcb2);border:1px solid #b8912e;border-radius:12px;box-shadow:0 12px 34px rgba(0,0,0,.6);overflow:hidden}",
       "#twmgr-panel *{box-sizing:border-box}",
+      "#twmgr-grip{position:absolute;left:0;top:0;bottom:0;width:7px;cursor:ew-resize;z-index:6}",
+      "#twmgr-grip:hover{background:linear-gradient(90deg,rgba(122,87,16,.45),transparent)}",
       "#twmgr-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;cursor:move;background:linear-gradient(90deg,#6e5015,#9a721c 55%,#caa031);color:#fff;border-bottom:1px solid #8a6a20}",
       "#twmgr-head .twmgr-title{font-weight:700;font-size:12px;letter-spacing:.3px;display:flex;align-items:center;gap:6px}",
       "#twmgr-head .twmgr-ver{font-weight:400;font-size:8px;opacity:.75}",
@@ -79,6 +81,18 @@
       "#twmgr-panel.twmgr-collapsed #twmgr-head{border-bottom:none}",
       ".twmgr-dot{width:9px;height:9px;border-radius:50%;background:#a9843f;transition:.2s;flex:0 0 auto}",
       ".twmgr-dot.on{background:#2e8b3f;box-shadow:0 0 8px #2e8b3f}",
+      ".twmgr-bld-sum{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:5px}",
+      ".twmgr-bld-sumcell{display:inline-flex;align-items:center;gap:2px;background:#e9d8ac;border:1px solid #c4a35f;border-radius:5px;padding:1px 4px;font-size:9px;color:#6a4e18}",
+      ".twmgr-bld-sumcell img{width:12px;height:12px;vertical-align:middle}",
+      // Tabela de aldeias: rola sozinha e nunca alarga o painel — a coluna Aldeia e a que cede.
+      ".twmgr-bld-vils{max-height:230px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px}",
+      ".twmgr-bld-vils::-webkit-scrollbar{width:8px}.twmgr-bld-vils::-webkit-scrollbar-thumb{background:#b18f4d;border-radius:4px}",
+      ".twmgr-bld-tab{width:100%;border-collapse:collapse;font-size:9px;table-layout:fixed}",
+      ".twmgr-bld-tab th{position:sticky;top:0;background:#e6d4a4;color:#5c4527;font-weight:600;text-align:left;padding:3px 4px;border-bottom:1px solid #c4a35f;z-index:1}",
+      ".twmgr-bld-tab td{padding:2px 4px;border-bottom:1px solid #d3b678;color:#4a3418;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".twmgr-bld-tab tr.row_b td{background:rgba(0,0,0,.05)}",
+      ".twmgr-bld-tab tr.twmgr-bld-off td{opacity:.55}",
+      ".twmgr-bld-tab a{color:#7d510a;cursor:pointer;text-decoration:none}.twmgr-bld-tab a:hover{text-decoration:underline}",
       ".twmgr-bld-plan{max-height:260px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;padding:3px}",
       ".twmgr-bld-plan::-webkit-scrollbar{width:8px}.twmgr-bld-plan::-webkit-scrollbar-thumb{background:#b18f4d;border-radius:4px}",
       ".twmgr-bld-item{display:grid;grid-template-columns:22px 16px 18px 1fr 44px 18px 18px 18px;align-items:center;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:#4a3418}",
@@ -91,8 +105,6 @@
       ".twmgr-bld-up,.twmgr-bld-down,.twmgr-bld-rm{cursor:pointer;text-align:center;font-size:11px;color:#5c4527;border-radius:4px;user-select:none;padding:1px 0}",
       ".twmgr-bld-up:hover,.twmgr-bld-down:hover{background:rgba(212,175,55,.18);color:#a9781a}",
       ".twmgr-bld-rm{color:#a5544a}.twmgr-bld-rm:hover{background:rgba(231,76,60,.22);color:#c23a2c}",
-      ".twmgr-bld-sub{background:rgba(212,175,55,.08) !important;border:1px solid #a9843f !important;color:#5c4527 !important}",
-      ".twmgr-bld-sub.on{background:linear-gradient(180deg,#8a6410,#a9843f) !important;color:#a9781a !important;border-color:#7d510a !important}",
     ].join('');
     document.head.appendChild(s);
   }
@@ -124,6 +136,7 @@
     const sec = (title, inner) => '<div class="twmgr-section">' + (title ? '<div class="twmgr-sec-h">' + title + '</div>' : '') + inner + '</div>';
     const modLog = (mod) => '<div class="twmgr-modlog"><div class="twmgr-modlog-head" data-modlog="' + mod + '">▸ Log do módulo (<span id="twmgr-modlog-count-' + mod + '">0</span>)</div><div id="twmgr-modlog-body-' + mod + '" class="twmgr-modlog-body" style="display:none"></div></div>';
     p.innerHTML =
+      '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
       '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('wall', '🐏', 'Muralha') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('fakes', '🎭', 'Fakes') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Edifícios') + tabBtn('bb', '🌱', 'Cultivo') + tabBtn('map', '🗺️', 'Mapa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       '<div id="twmgr-body">' +
@@ -265,13 +278,36 @@
         modLog('market') +
       '</div>' +
       '<div id="twmgr-tab-build" style="display:none">' +
-        hint('🏗️ Plano de obras por perfil <b>ATK/DEF</b>. Ordem da lista = prioridade; item caro vira demanda pro Equilíbrio.') +
+        hint('🏗️ Modelos de construção aplicados <b>por aldeia</b>, no molde do Gerente de conta. Ordem da lista = prioridade; item caro vira demanda pro Equilíbrio.') +
         cardsDiv('build') +
-        sec('Plano de obras',
-          '<div class="twmgr-bld-subtabs" style="display:flex;gap:4px;margin-bottom:6px">' +
-            '<button class="twmgr-btn twmgr-bld-sub twmgr-bld-sub-atk on" data-prof="atk" style="flex:1;padding:4px 6px;font-size:11px">⚔️ ATK</button>' +
-            '<button class="twmgr-btn twmgr-bld-sub twmgr-bld-sub-def" data-prof="def" style="flex:1;padding:4px 6px;font-size:11px">🛡️ DEF</button>' +
+        sec('Gerenciar construções da aldeia',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<span class="twmgr-lbl" style="flex:0 0 auto">Grupo</span>' +
+            '<select id="twmgr-bld-group" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-bld-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
           '</div>' +
+          '<div id="twmgr-bld-vils" class="twmgr-bld-vils"></div>' +
+          '<div id="twmgr-bld-vils-info" style="font-size:9px;color:#6e5a2a;text-align:right;margin-top:2px"></div>' +
+          '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
+            '<select id="twmgr-bld-mass-acao" class="twmgr-inp" style="flex:1">' +
+              '<option value="apply">Utilizar modelo</option>' +
+              '<option value="pause">Pausar</option>' +
+              '<option value="resume">Retomar</option>' +
+              '<option value="remove">Remover</option>' +
+            '</select>' +
+            '<select id="twmgr-bld-mass-tpl" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-bld-mass-go" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">✓</button>' +
+          '</div>') +
+        sec('Gerenciar modelos',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<select id="twmgr-bld-tpl" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-bld-tpl-new" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="criar modelo">✚</button>' +
+            '<button id="twmgr-bld-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
+            '<button id="twmgr-bld-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
+            '<button id="twmgr-bld-tpl-exp" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="exportar: gera um código pra mandar pra um amigo">📤</button>' +
+            '<button id="twmgr-bld-tpl-imp" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="importar: cola o código que um amigo te mandou">📥</button>' +
+          '</div>' +
+          '<div id="twmgr-bld-sum" class="twmgr-bld-sum"></div>' +
           '<div id="twmgr-bld-plan" class="twmgr-bld-plan"></div>' +
           '<div class="twmgr-row" style="gap:4px;margin-top:6px">' +
             '<select id="twmgr-bld-add-b" class="twmgr-inp" style="flex:1">' +
@@ -283,7 +319,10 @@
           '<div style="display:flex;gap:6px;margin-top:4px">' +
             '<button id="twmgr-bld-reset" class="twmgr-btn twmgr-ghost" style="flex:1;font-size:10px">↺ reset padrão</button>' +
             '<button id="twmgr-bld-clear" class="twmgr-btn twmgr-ghost" style="flex:1;font-size:10px">🗑 limpar tudo</button>' +
-          '</div>') +
+          '</div>' +
+          '<div style="font-size:9px;color:#6e5a2a;margin:7px 0 3px">Prioridades deste modelo (0 = desligado) — furam a ordem da lista quando disparam:</div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">🌾 Fazenda se sobrar menos de</span><input id="twmgr-bld-farmpct" class="twmgr-inp" type="number" min="0" max="99" value="0" style="width:52px" title="% de população ainda disponível"><span style="font-size:10px;color:#6e5a2a">% da pop.</span></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">📦 Armazém se sobrar menos de</span><input id="twmgr-bld-storagepct" class="twmgr-inp" type="number" min="0" max="99" value="0" style="width:52px" title="% de capacidade de armazenamento ainda livre"><span style="font-size:10px;color:#6e5a2a">% da cap.</span></div>') +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Máx na fila</span><input id="twmgr-bld-max" class="twmgr-inp" type="number" min="1" value="5" style="width:56px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-bld-int" class="twmgr-inp" type="number" min="1" value="10" style="width:56px"></div>') +
@@ -678,12 +717,33 @@
     document.getElementById('twmgr-bld-max').value = config.build.maxQueue || 5;
     document.getElementById('twmgr-bld-int').value = Math.round((config.build.interval || 600) / 60);
     ['twmgr-bld-max', 'twmgr-bld-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readBuildCfg); });
-    document.querySelectorAll('.twmgr-bld-sub').forEach((el) => el.addEventListener('click', () => bldSwitchProf(el.getAttribute('data-prof'))));
+    document.getElementById('twmgr-bld-tpl').addEventListener('change', (e) => bldSwitchProf(e.target.value));
+    document.getElementById('twmgr-bld-tpl-new').addEventListener('click', bldNovoModelo);
+    document.getElementById('twmgr-bld-tpl-ren').addEventListener('click', bldRenomearModelo);
+    document.getElementById('twmgr-bld-tpl-del').addEventListener('click', bldApagarModelo);
+    document.getElementById('twmgr-bld-tpl-exp').addEventListener('click', bldExportarModelo);
+    document.getElementById('twmgr-bld-tpl-imp').addEventListener('click', bldImportarModelo);
     document.getElementById('twmgr-bld-add').addEventListener('click', bldAddItem);
     document.getElementById('twmgr-bld-reset').addEventListener('click', bldResetDefault);
     document.getElementById('twmgr-bld-clear').addEventListener('click', bldClearAll);
+    ['twmgr-bld-farmpct', 'twmgr-bld-storagepct'].forEach((id) => {
+      document.getElementById(id).addEventListener('change', () => {
+        const t = bldTpl(); if (!t) return;
+        const v = (x) => Math.max(0, Math.min(99, parseInt(document.getElementById(x).value, 10) || 0));
+        t.farmPct = v('twmgr-bld-farmpct'); t.storagePct = v('twmgr-bld-storagepct');
+        document.getElementById('twmgr-bld-farmpct').value = t.farmPct;
+        document.getElementById('twmgr-bld-storagepct').value = t.storagePct;
+        save();
+      });
+    });
+    document.getElementById('twmgr-bld-group').addEventListener('change', (e) => { config.build.filterGroup = e.target.value; save(); bldCarregarAldeias(); });
+    document.getElementById('twmgr-bld-vil-reload').addEventListener('click', bldCarregarAldeias);
+    document.getElementById('twmgr-bld-mass-go').addEventListener('click', bldAcaoEmMassa);
     bindBuildPlanHandlers();
-    renderBuildPlan();
+    bindBuildVillageHandlers();
+    bldRenderTplSelect();
+    bldSwitchProf(_bldActiveProf);
+    renderBuildVillages();
     document.getElementById('twmgr-bld-start').addEventListener('click', buildStart);
     document.getElementById('twmgr-bld-stop').addEventListener('click', buildStop);
     setBuildStatus(config.build.running);
@@ -766,6 +826,7 @@
     setInterval(() => checkForUpdate(false), 3600000);
     applyCollapsed();
     makeDraggable(p, document.getElementById('twmgr-head'));
+    initPanelResize(p);
 
     showTab('farm');
     renderLog();
@@ -819,6 +880,38 @@
     installBotHooks();
     startCaptchaWatcher();
     startAutoReload();
+  }
+
+  // Largura do painel — 640px de padrão, mas as tabelas (aldeias, planos) pedem mais em tela grande
+  // e menos em notebook. Arrastar a borda ESQUERDA redimensiona; a largura fica salva por navegador,
+  // fora do config do jogo (é preferência de tela, não de conta — não faz sentido sincronizar).
+  const PANEL_W_KEY = 'twMgr_panelW', PANEL_W_MIN = 380;
+  function initPanelResize(panel) {
+    try {
+      const salvo = parseInt(localStorage.getItem(PANEL_W_KEY), 10);
+      if (salvo >= PANEL_W_MIN) panel.style.width = Math.min(salvo, window.innerWidth - 24) + 'px';
+    } catch (e) {}
+    const grip = document.getElementById('twmgr-grip'); if (!grip) return;
+    let arrasta = false, x0 = 0, w0 = 0, dir0 = 0;
+    grip.addEventListener('mousedown', (e) => {
+      const r = panel.getBoundingClientRect();
+      arrasta = true; x0 = e.clientX; w0 = r.width; dir0 = r.right;
+      document.body.style.userSelect = 'none';
+      e.preventDefault(); e.stopPropagation();   // senão o makeDraggable do cabeçalho também morde
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!arrasta) return;
+      const w = Math.max(PANEL_W_MIN, Math.min(window.innerWidth - 24, w0 + (x0 - e.clientX)));
+      panel.style.width = w + 'px';
+      // Se o painel foi arrastado, ele está ancorado pela ESQUERDA — sem reposicionar, mexer na
+      // borda esquerda cresceria pro lado errado. Fixa a borda direita e deixa a esquerda andar.
+      if (panel.style.right === 'auto') panel.style.left = (dir0 - w) + 'px';
+    });
+    document.addEventListener('mouseup', () => {
+      if (!arrasta) return;
+      arrasta = false; document.body.style.userSelect = '';
+      try { localStorage.setItem(PANEL_W_KEY, String(Math.round(panel.getBoundingClientRect().width))); } catch (e) {}
+    });
   }
 
   function makeDraggable(panel, handle) {

@@ -107,7 +107,10 @@
       catch (e) { pushLog('Cultivo em ' + (v.coord || v.vid) + ': erro ao ler o estado.', 'err', 'bb'); continue; }
       const grad = (st.level.main || 0) >= gMain && (st.level.stable || 0) >= gStable;
       if (grad) f3++; else if ((st.level.main || 0) >= gMain) f2++; else f1++;
-      const r = computeBuild(st, tpl);
+      // Obra na fila conta como atingida (ver getBuildState/levelEff) — senão o mesmo prédio é
+      // reenfileirado todo ciclo e a ladder nunca avança. Graduação/fases seguem no nível REAL,
+      // porque "graduada" tem que significar estábulo de pé, não estábulo encomendado.
+      const r = computeBuild(Object.assign({}, st, { level: st.levelEff || st.level }), tpl);
       if (r.build && st.queueLen < (config.bb.maxQueue || 5)) {
         const bn = (BUILD_META[r.build.b] && BUILD_META[r.build.b].name) || r.build.b;
         try { await enqueueBuild(v.vid, r.build.b); built++; pushLog('Cultivo: ' + (v.coord || v.vid) + ' → ' + bn + ' na fila (' + r.build.cost.wood + '/' + r.build.cost.stone + '/' + r.build.cost.iron + ')', 'ok', 'bb'); }

@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.13.0
+// @version      11.14.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.13.0';
+  const VERSION = '11.14.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -188,7 +188,10 @@
     thresholdPct: 50, maxDist: 15,
     groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {},
   });
-  const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
+  // Edifícios = gerenciador no molde do "Gerente de conta → Construção" do jogo: N modelos nomeados
+  // (templates) + atribuição POR ALDEIA (villages: vid -> {tpl, paused, coord, name, done, total}).
+  // `plans` (atk/def) ficou só como semente da migração — quem manda agora é `templates`.
+  const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, templates: {}, villages: {}, filterGroup: '', demand: {} });
   // Cultivo — 3 fases (batem com os cards: f1 = main<20 · f2 = main 20 e stable<15 · f3 = graduada/recrutando).
   // FASE 1: leva o Ed. principal até 20 + o que ele depende (armazém "lidera" p/ bancar os níveis; fazenda leve p/ pop). Sem estábulo.
   const BB_TPL_F1 = 'main 5\nstorage 5\nfarm 5\nmain 10\nstorage 8\nfarm 8\nmain 14\nstorage 12\nfarm 10\nmain 17\nstorage 18\nmain 20\nstorage 20';
@@ -493,6 +496,27 @@
     ['atk', 'def'].forEach((k) => {
       c.build.plans[k] = (c.build.plans[k] || []).filter((it) => it && BUILD_META[it.b]).map((it) => ({ b: it.b, lvl: Math.max(1, Math.min(BUILD_META[it.b].max, parseInt(it.lvl, 10) || 1)), en: it.en !== false }));
     });
+    // Migração v11.14 — modelos nomeados + atribuição por aldeia. Os planos ATK/DEF viram os dois
+    // primeiros modelos ("Ofensiva"/"Defensiva"), então quem atualiza não perde a lista que montou.
+    const sanPlan = (p) => (p || []).filter((it) => it && BUILD_META[it.b]).map((it) => ({ b: it.b, lvl: Math.max(1, Math.min(BUILD_META[it.b].max, parseInt(it.lvl, 10) || 1)), en: it.en !== false }));
+    if (!c.build.templates || typeof c.build.templates !== 'object') c.build.templates = {};
+    if (!Object.keys(c.build.templates).length) {
+      c.build.templates = { atk: { name: 'Ofensiva', plan: c.build.plans.atk.slice() }, def: { name: 'Defensiva', plan: c.build.plans.def.slice() } };
+    }
+    Object.keys(c.build.templates).forEach((id) => {
+      const t = c.build.templates[id];
+      if (!t || typeof t !== 'object') { delete c.build.templates[id]; return; }
+      t.name = String(t.name || id).slice(0, 40);
+      t.plan = sanPlan(t.plan);
+    });
+    // Atribuições órfãs (modelo apagado) somem sozinhas — evita aldeia presa num modelo inexistente.
+    if (!c.build.villages || typeof c.build.villages !== 'object') c.build.villages = {};
+    Object.keys(c.build.villages).forEach((vid) => {
+      const a = c.build.villages[vid];
+      if (!a || typeof a !== 'object' || !c.build.templates[a.tpl]) { delete c.build.villages[vid]; return; }
+      a.paused = !!a.paused;
+    });
+    if (c.build.filterGroup == null) c.build.filterGroup = '';
     delete c.build.atkTpl; delete c.build.defTpl;
     if (!c.bb) c.bb = defBB();
     if (!c.bb.tpl) c.bb.tpl = BB_TPL;

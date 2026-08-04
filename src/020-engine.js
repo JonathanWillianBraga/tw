@@ -70,8 +70,9 @@
         { v: fmtN(s.coins), l: 'moedas' },
       ];
     } else if (mod === 'build') {
-      const s = (config.build.stats || {});
-      arr = [{ v: fmtN(s.villages), l: 'aldeias construindo', wide: true, hl: true }];
+      const s = (config.build.stats || {}), as = config.build.villages || {};
+      const pausadas = Object.keys(as).filter((v) => as[v].paused).length;
+      arr = [{ v: fmtN(s.villages), l: 'aldeias construindo', hl: true }, { v: fmtN(pausadas), l: 'pausadas' }];
     } else if (mod === 'bb') {
       const s = (config.bb.stats || {});
       arr = [

@@ -4011,11 +4011,14 @@
     // doadoras elegíveis = união dos grupos de origem, menos união dos grupos excluídos
     const srcGroups = config.market.cunhagemSourceGroups || [];
     const excGroups = config.market.cunhagemExcludeGroups || [];
-    if (!srcGroups.length) { pushLog('Cunhagem: nenhum grupo de origem configurado.', 'err', 'market'); return; }
     const srcSet = {}, excSet = {};
-    for (const gid of srcGroups) {
-      try { (await getVillagesInGroup(gid)).forEach((v) => { srcSet[v.vid] = true; }); }
-      catch (e) { pushLog('Cunhagem: erro ao listar grupo ' + gid + ' (' + (e.message || e) + ').', 'err', 'market'); }
+    if (srcGroups.length) {
+      for (const gid of srcGroups) {
+        try { (await getVillagesInGroup(gid)).forEach((v) => { srcSet[v.vid] = true; }); }
+        catch (e) { pushLog('Cunhagem: erro ao listar grupo ' + gid + ' (' + (e.message || e) + ').', 'err', 'market'); }
+      }
+    } else {
+      vils.forEach((v) => { srcSet[v.vid] = true; });   // "nenhum" grupo de origem selecionado = todas as aldeias
     }
     for (const gid of excGroups) {
       try { (await getVillagesInGroup(gid)).forEach((v) => { excSet[v.vid] = true; }); }
@@ -4273,14 +4276,32 @@
     const cur = config.market.groupSolidario;
     sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((gr) => '<option value="' + gr.id + '"' + (String(cur) === String(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
   }
-  async function fillMarketCunhagemGroupSelects() {
-    const selSrc = document.getElementById('twmgr-mk-srcgroups'), selExc = document.getElementById('twmgr-mk-excgroups');
-    if (!selSrc && !selExc) return;
+  async function renderMarketCunhagemGroups() {
+    const contSrc = document.getElementById('twmgr-mk-srcgroups'), contExc = document.getElementById('twmgr-mk-excgroups');
+    if (!contSrc && !contExc) return;
     let groups = [];
     try { groups = await getGroups(); } catch (e) { pushLog('Cunhagem: erro ao listar grupos: ' + (e.message || e), 'err', 'market'); return; }
     const curSrc = config.market.cunhagemSourceGroups || [], curExc = config.market.cunhagemExcludeGroups || [];
-    if (selSrc) selSrc.innerHTML = groups.map((gr) => '<option value="' + gr.id + '"' + (curSrc.includes(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
-    if (selExc) selExc.innerHTML = groups.map((gr) => '<option value="' + gr.id + '"' + (curExc.includes(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
+    const rowHtml = (cls, gid, name, checked) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="' + cls + '" data-gid="' + gid + '"' + (checked ? ' checked' : '') + '>' + esc(name) + '</label>';
+    // checkbox "nenhum" e as demais são mutuamente exclusivas: marcar "nenhum" desmarca o resto (= todas as
+    // aldeias, sem filtro de grupo), e marcar qualquer grupo específico desmarca "nenhum".
+    const bindExclusivity = (cont, cls) => {
+      cont.querySelectorAll('.' + cls).forEach((cb) => cb.addEventListener('change', () => {
+        if (cb.getAttribute('data-gid') === '') { if (cb.checked) cont.querySelectorAll('.' + cls).forEach((o) => { if (o !== cb) o.checked = false; }); }
+        else if (cb.checked) { const none = cont.querySelector('.' + cls + '[data-gid=""]'); if (none) none.checked = false; }
+        readMarketCfg();
+      }));
+    };
+    if (contSrc) {
+      contSrc.innerHTML = rowHtml('twmgr-mk-srcgrp', '', 'nenhum (= todas as aldeias)', !curSrc.length) +
+        groups.map((gr) => rowHtml('twmgr-mk-srcgrp', gr.id, gr.name, curSrc.includes(gr.id))).join('');
+      bindExclusivity(contSrc, 'twmgr-mk-srcgrp');
+    }
+    if (contExc) {
+      contExc.innerHTML = rowHtml('twmgr-mk-excgrp', '', 'nenhum (= não exclui nada)', !curExc.length) +
+        groups.map((gr) => rowHtml('twmgr-mk-excgrp', gr.id, gr.name, curExc.includes(gr.id))).join('');
+      bindExclusivity(contExc, 'twmgr-mk-excgrp');
+    }
   }
   function readMarketCfg() {
     const c = config.market, g = (id) => document.getElementById(id);
@@ -4291,8 +4312,8 @@
     if (g('twmgr-mk-stopon')) c.cunhagemStopEnabled = g('twmgr-mk-stopon').checked;
     if (g('twmgr-mk-stophours')) c.cunhagemStopHours = Math.max(0.1, parseFloat((g('twmgr-mk-stophours').value || '').replace(',', '.')) || 2);
     if (g('twmgr-mk-automint')) c.autoMint = g('twmgr-mk-automint').checked;
-    if (g('twmgr-mk-srcgroups')) c.cunhagemSourceGroups = Array.from(g('twmgr-mk-srcgroups').selectedOptions).map((o) => o.value);
-    if (g('twmgr-mk-excgroups')) c.cunhagemExcludeGroups = Array.from(g('twmgr-mk-excgroups').selectedOptions).map((o) => o.value);
+    if (g('twmgr-mk-srcgroups')) c.cunhagemSourceGroups = Array.from(document.querySelectorAll('.twmgr-mk-srcgrp:checked')).map((cb) => cb.getAttribute('data-gid')).filter(Boolean);
+    if (g('twmgr-mk-excgroups')) c.cunhagemExcludeGroups = Array.from(document.querySelectorAll('.twmgr-mk-excgrp:checked')).map((cb) => cb.getAttribute('data-gid')).filter(Boolean);
     if (g('twmgr-mk-int')) c.interval = Math.max(1, parseInt(g('twmgr-mk-int').value, 10) || 10) * 60;
     if (g('twmgr-mk-thr')) c.thresholdPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-thr').value, 10) || 50));
     if (g('twmgr-mk-dist')) c.maxDist = Math.max(1, parseFloat((g('twmgr-mk-dist').value || '').replace(',', '.')) || 15);
@@ -4314,7 +4335,6 @@
     readMarketCfg();
     if (modeKey === 'cunhagem') {
       if (!config.market.destCoords.length) { pushLog('Cunhagem: configure ao menos 1 destino válido (ex.: 464|604).', 'err', 'market'); return; }
-      if (!config.market.cunhagemSourceGroups.length) { pushLog('Cunhagem: selecione ao menos 1 grupo de origem.', 'err', 'market'); return; }
     }
     if (modeKey === 'solidario' && !config.market.groupSolidario) { pushLog('Solidário: selecione um grupo.', 'err', 'market'); return; }
     config.market.modes[modeKey].running = true; config.market.modes[modeKey].nextAt = 0;
@@ -6576,8 +6596,10 @@
         hint('Mercado: cada modo roda de forma <b>independente</b> — pode ligar quantos quiser ao mesmo tempo (ex.: Equilíbrio + Solidário juntos). <b>Cunhagem</b> junta recurso de grupos de origem em uma ou mais aldeias destino (e pode cunhar moedas de ouro automaticamente nelas); <b>Equilíbrio</b> nivela as aldeias por %; <b>Solidário</b> abastece só o grupo escolhido (que só recebe) com qualquer outra aldeia sua doando.') +
         cardsDiv('market') +
         sec('💰 Cunhagem',
-            '<div class="twmgr-row"><span class="twmgr-lbl">Grupos de origem</span><select id="twmgr-mk-srcgroups" class="twmgr-inp" multiple style="width:160px;height:70px"></select></div>' +
-            '<div class="twmgr-row"><span class="twmgr-lbl">Grupos excluídos</span><select id="twmgr-mk-excgroups" class="twmgr-inp" multiple style="width:160px;height:70px"></select></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl">Grupos de origem</span></div>' +
+            '<div id="twmgr-mk-srcgroups" style="max-height:100px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px;margin-bottom:6px"></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl">Grupos excluídos</span></div>' +
+            '<div id="twmgr-mk-excgroups" style="max-height:100px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px;margin-bottom:6px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Aldeias destino (1 coord. por linha)</span></div>' +
             '<textarea id="twmgr-mk-destcoords" class="twmgr-inp" style="width:100%;height:52px;margin:2px 0 6px" placeholder="464|604&#10;465|605"></textarea>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Reserva madeira/argila/ferro</span>' +
@@ -7008,9 +7030,9 @@
     document.getElementById('twmgr-mk-sdonor').value = config.market.solidarioDonorPct != null ? config.market.solidarioDonorPct : 50;
     document.getElementById('twmgr-mk-sgargalo').value = config.market.solidarioGargaloKeepPct != null ? config.market.solidarioGargaloKeepPct : 90;
     document.getElementById('twmgr-mk-sdist').value = config.market.solidarioMaxDist != null ? config.market.solidarioMaxDist : 20;
-    fillMarketCunhagemGroupSelects();
+    renderMarketCunhagemGroups();
     fillMarketSolidarioGroupSelect();
-    ['twmgr-mk-destcoords', 'twmgr-mk-rwood', 'twmgr-mk-rstone', 'twmgr-mk-riron', 'twmgr-mk-automint', 'twmgr-mk-stopon', 'twmgr-mk-stophours', 'twmgr-mk-srcgroups', 'twmgr-mk-excgroups', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
+    ['twmgr-mk-destcoords', 'twmgr-mk-rwood', 'twmgr-mk-rstone', 'twmgr-mk-riron', 'twmgr-mk-automint', 'twmgr-mk-stopon', 'twmgr-mk-stophours', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
     // Cada modo tem seu próprio par Iniciar/Parar — rodam independentes, pode ligar vários ao mesmo tempo.
     MARKET_MODES.forEach((mkKey) => {
       document.getElementById('twmgr-mk-' + mkKey + '-start').addEventListener('click', () => marketStart(mkKey));

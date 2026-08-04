@@ -4324,6 +4324,7 @@
     if (modeKey === 'solidario' && !config.market.groupSolidario) { pushLog('Solidário: selecione um grupo.', 'err', 'market'); return; }
     config.market.modes[modeKey].running = true; config.market.modes[modeKey].nextAt = 0;
     config.market.modes[modeKey].stopAt = (modeKey === 'cunhagem' && config.market.cunhagemStopEnabled) ? Date.now() + config.market.cunhagemStopHours * 3600000 : 0;
+    if (modeKey === 'cunhagem') config.market.modes.cunhagem.totalCoins = 0;   // cada "ligar" começa uma contagem nova (o total antigo fica visível até religar)
     save();
     setMarketStatus(modeKey, true);
     pushLog(MARKET_START_MSG[modeKey](), 'ok', 'market');

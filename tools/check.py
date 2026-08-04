@@ -184,6 +184,59 @@ def checa_bom(caminho):
             erros.append("arquivo comeca com BOM — remova (o Tampermonkey engasga)")
 
 
+def checa_painel_inteiro(src, limpo):
+    """O painel montado em UMA expressao de strings somadas chegou inteiro no innerHTML?
+
+    Se uma linha do meio perde o `+`, o JavaScript NAO reclama: o Automatic Semicolon
+    Insertion fecha o comando ali e o resto vira expressao solta, avaliada e descartada.
+    O painel nasce sem metade das partes e nada aparece no console.
+
+    Aconteceu na v11.18.0: sobraram cabecalho e abas, o corpo inteiro sumiu. Nem este check
+    nem `new Function(src)` pegaram, porque o arquivo estava sintaticamente VALIDO -- e o corte
+    e invisivel no texto (nao ha `;` nenhum onde o ASI fecha).
+
+    Analisa o codigo SEM strings nem comentarios. Uma linha continua a expressao se: termina em
+    operador, OU fica dentro de ( [ { aberto, OU a proxima linha comeca com operador.
+    """
+    FIM_OK = ("+", "(", ",", "=>", "?", ":", "&&", "||", "[", "{", ".", "=", "!", "&", "|")
+    INI_OK = ("+", "?", ":", ".", "&&", "||", ")", "]", "}", ",", ";")
+    linhas = limpo.split(chr(10))
+    cruas = src.split(chr(10))
+    for i, linha in enumerate(linhas):
+        if "innerHTML" not in linha or "=" not in linha:
+            continue
+        if "twmgr-head" not in chr(10).join(cruas[i:i + 40]):
+            continue          # so o painel principal; outros innerHTML pequenos nao interessam
+        prof = 0
+        for j in range(i, min(i + 3000, len(linhas))):
+            t = linhas[j]
+            nu = t.strip()
+            prof += t.count("(") - t.count(")")
+            prof += t.count("[") - t.count("]")
+            prof += t.count("{") - t.count("}")
+            if not nu:
+                continue
+            if nu.endswith(";") and prof <= 0:
+                break                    # fim da expressao, tudo certo
+            if prof > 0 or nu.endswith(FIM_OK):
+                continue                 # continua por construcao
+            # A linha CRUA, nao a limpa: sem as strings, "'</div>' +" vira so "+" e o teste de
+            # "comeca com operador" aceitaria exatamente o caso quebrado que eu quero pegar.
+            prox = ""
+            for k in range(j + 1, min(j + 6, len(linhas))):
+                if linhas[k].strip():
+                    prox = cruas[k].strip()
+                    break
+            if prox.startswith(INI_OK):
+                continue                 # a proxima linha continua a conta
+            bruto = cruas[j].strip()[-55:].encode("ascii", "replace").decode("ascii")
+            erros.append(
+                "linha %d: a concatenacao do painel nao continua aqui (falta `+`?) -- o ASI "
+                "fecha a expressao e todo o resto do painel e descartado em silencio: ...%s"
+                % (j + 1, bruto))
+            break
+
+
 def main():
     if not os.path.exists(ALVO):
         print("nao achei", ALVO)
@@ -196,6 +249,7 @@ def main():
     checa_balanceamento(limpo)
     checa_guarda_captcha(src)
     checa_versao(src)
+    checa_painel_inteiro(src, limpo)
 
     for a in avisos:
         print("  aviso: %s" % a)

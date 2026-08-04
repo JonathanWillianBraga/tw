@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.23.0
+// @version      11.23.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.23.0';
+  const VERSION = '11.23.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -11327,7 +11327,7 @@
               '<input id="cc-cmds-off" class="twmgr-inp" type="number" step="10" value="0" style="width:60px;font-size:10px;padding:1px">ms' +
               ' <a id="cc-cmds-fechar" style="cursor:pointer;color:#c0483a;margin-left:6px">✕</a></span>' +
           '</div>' +
-          '<div id="cc-cmds-lista" style="max-height:200px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+          '<div id="cc-cmds-lista" style="height:220px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
         '</div>' +
         // Abas em vez de rádios: cada tipo tem configuração própria, e a aba deixa claro
         // qual conjunto de campos está valendo.
@@ -11372,12 +11372,12 @@
             '<span style="font-size:9px;color:#6f6153">grupo ' +
               '<select id="cc-op-grupo" class="twmgr-inp" style="width:110px;font-size:9px;padding:1px"><option value="">todas</option></select></span>' +
           '</div>' +
-          '<div id="cc-op-vilas" style="max-height:150px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px;margin-bottom:6px"></div>' +
+          '<div id="cc-op-vilas" style="height:220px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px;margin-bottom:6px"></div>' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">' +
             '<span style="font-size:9px;color:#6f6153">Ondas <span style="color:#8a7d6d">(ordem de chegada)</span></span>' +
             '<a id="cc-op-limpar" style="cursor:pointer;color:#c0483a;font-size:9px">limpar ondas</a>' +
           '</div>' +
-          '<div id="cc-op-ondas" style="max-height:230px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+          '<div id="cc-op-ondas" style="height:380px;min-height:100px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
           '<div id="cc-op-resumo" style="font-size:10px;color:#6f6153;margin-top:4px"></div>' +
         '</div>' +
           // Apoio em massa: aparece só quando a aba 🚚 está ativa. Usa as origens marcadas abaixo.
@@ -11389,7 +11389,7 @@
             '<div id="cc-massa-unidades" style="display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px"></div>' +
             '<button id="cc-massa-enviar" class="twmgr-btn twmgr-go" style="width:100%">🚚 Enviar apoio agora</button>' +
             '<div id="cc-massa-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
-            '<div id="cc-massa-rel" style="font-size:10px;margin-top:4px;color:#6f6153;font-family:Consolas,monospace;white-space:pre-wrap;max-height:160px;overflow-y:auto"></div>' +
+            '<div id="cc-massa-rel" style="font-size:10px;margin-top:4px;color:#6f6153;font-family:Consolas,monospace;white-space:pre-wrap;height:200px;min-height:60px;resize:vertical;overflow-y:auto"></div>' +
           '</div>' +
         '</div>' +   // fim de #cc-aba-corpo
         // Tropas digitadas AQUI, não nas caixas do jogo. "tudo" = manda o estoque inteiro daquela origem.
@@ -11434,7 +11434,7 @@
           '<div id="cc-vel-aviso" style="font-size:10px;color:#8a7d6d;margin-bottom:3px"></div>' +
           '<div style="display:grid;grid-template-columns:18px 128px 40px 58px 40px 1fr;gap:6px;font-size:9px;color:#8a7d6d;padding:0 5px 2px">' +
             '<span></span><span>aldeia</span><span>dist.</span><span>viagem</span><span>mais lenta</span><span>saída</span></div>' +
-          '<div id="cc-origens" style="max-height:170px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+          '<div id="cc-origens" style="height:240px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
           '<div id="cc-resumo" style="font-size:10px;color:#6f6153;margin-top:3px"></div>' +
           '</div>' +
         '</div>' +
@@ -11461,8 +11461,8 @@
             '</div>' +
             '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#8a7d6d;padding:3px 5px 2px;border:1px solid #ece4d8;border-bottom:none">' +
               '<span>tipo</span><span>de</span><span>para</span><span>estado</span><span>sai</span><span>chegada</span><span>falta</span><span></span></div>' +
-            '<div id="cc-fila-envio" style="max-height:210px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
-            '<div id="cc-fila-enviados" style="display:none;max-height:210px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
+            '<div id="cc-fila-envio" style="height:260px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
+            '<div id="cc-fila-enviados" style="display:none;height:260px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
           '</div>' +
         '</div>';
       host.insertBefore(d, host.firstChild);

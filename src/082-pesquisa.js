@@ -378,7 +378,7 @@
     const linhas = Object.keys(mapa).sort((a, b) => String(mapa[a].name).localeCompare(String(mapa[b].name), 'pt-BR', { numeric: true }));
     if (!linhas.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">- clique em &#8635; pra carregar suas aldeias -</div>'; return; }
     box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr>' +
-      '<th style="width:16px"><input type="checkbox" id="twmgr-pq-all"></th><th>Aldeia</th><th>Modelo</th><th>Estado</th><th></th>' +
+      '<th class="twmgr-tab-ck"><input type="checkbox" id="twmgr-pq-all"></th><th>Aldeia</th><th>Modelo</th><th>Estado</th><th></th>' +
       '</tr></thead><tbody>' +
       linhas.map((vid, i) => {
         const v = mapa[vid], a = assign[vid];
@@ -388,7 +388,7 @@
           : 'Ativo ( <a class="twmgr-pq-tog" data-vid="' + vid + '">Pausar</a> )';
         const rm = a ? '<a class="twmgr-pq-vrm" data-vid="' + vid + '" title="tirar da gestao">Remover</a>' : '';
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + (a ? '' : ' twmgr-bld-off') + '">' +
-          '<td><input type="checkbox" class="twmgr-pq-vsel" data-vid="' + vid + '"></td>' +
+          '<td class="twmgr-tab-ck"><input type="checkbox" class="twmgr-pq-vsel" data-vid="' + vid + '"></td>' +
           '<td title="' + esc(v.name) + '">' + esc(v.name) + '</td>' +
           '<td>' + tplNome + '</td><td>' + estado + '</td><td>' + rm + '</td></tr>';
       }).join('') + '</tbody></table>';

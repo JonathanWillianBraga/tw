@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.18.1
+// @version      11.18.2
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.18.1';
+  const VERSION = '11.18.2';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -4627,7 +4627,7 @@
     const linhas = Object.keys(mapa).sort((a, b) => String(mapa[a].name).localeCompare(String(mapa[b].name), 'pt-BR', { numeric: true }));
     if (!linhas.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">— clique em ↻ pra carregar suas aldeias —</div>'; return; }
     box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr>' +
-      '<th style="width:16px"><input type="checkbox" id="twmgr-bld-all"></th><th>Aldeia</th><th>Modelo</th><th>Ordens</th><th>Estado</th><th></th>' +
+      '<th class="twmgr-tab-ck"><input type="checkbox" id="twmgr-bld-all"></th><th>Aldeia</th><th>Modelo</th><th>Ordens</th><th>Estado</th><th></th>' +
       '</tr></thead><tbody>' +
       linhas.map((vid, i) => {
         const v = mapa[vid], a = assign[vid];
@@ -4638,7 +4638,7 @@
           : 'Ativo ( <a class="twmgr-bld-tog" data-vid="' + vid + '">Pausar</a> )';
         const rm = a ? '<a class="twmgr-bld-vrm" data-vid="' + vid + '" title="tirar da gestão">Remover</a>' : '';
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + (a ? '' : ' twmgr-bld-off') + '">' +
-          '<td><input type="checkbox" class="twmgr-bld-vsel" data-vid="' + vid + '"></td>' +
+          '<td class="twmgr-tab-ck"><input type="checkbox" class="twmgr-bld-vsel" data-vid="' + vid + '"></td>' +
           '<td title="' + esc(v.name) + '">' + esc(v.name) + '</td>' +
           '<td>' + tplNome + '</td><td>' + ordens + '</td><td>' + estado + '</td><td>' + rm + '</td></tr>';
       }).join('') + '</tbody></table>';
@@ -5086,7 +5086,7 @@
     const linhas = Object.keys(mapa).sort((a, b) => String(mapa[a].name).localeCompare(String(mapa[b].name), 'pt-BR', { numeric: true }));
     if (!linhas.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">- clique em &#8635; pra carregar suas aldeias -</div>'; return; }
     box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr>' +
-      '<th style="width:16px"><input type="checkbox" id="twmgr-pq-all"></th><th>Aldeia</th><th>Modelo</th><th>Estado</th><th></th>' +
+      '<th class="twmgr-tab-ck"><input type="checkbox" id="twmgr-pq-all"></th><th>Aldeia</th><th>Modelo</th><th>Estado</th><th></th>' +
       '</tr></thead><tbody>' +
       linhas.map((vid, i) => {
         const v = mapa[vid], a = assign[vid];
@@ -5096,7 +5096,7 @@
           : 'Ativo ( <a class="twmgr-pq-tog" data-vid="' + vid + '">Pausar</a> )';
         const rm = a ? '<a class="twmgr-pq-vrm" data-vid="' + vid + '" title="tirar da gestao">Remover</a>' : '';
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + (a ? '' : ' twmgr-bld-off') + '">' +
-          '<td><input type="checkbox" class="twmgr-pq-vsel" data-vid="' + vid + '"></td>' +
+          '<td class="twmgr-tab-ck"><input type="checkbox" class="twmgr-pq-vsel" data-vid="' + vid + '"></td>' +
           '<td title="' + esc(v.name) + '">' + esc(v.name) + '</td>' +
           '<td>' + tplNome + '</td><td>' + estado + '</td><td>' + rm + '</td></tr>';
       }).join('') + '</tbody></table>';
@@ -6920,6 +6920,9 @@
       ".twmgr-bld-tab{width:100%;border-collapse:collapse;font-size:9px;table-layout:fixed}",
       ".twmgr-bld-tab th{position:sticky;top:0;background:#e6d4a4;color:#5c4527;font-weight:600;text-align:left;padding:3px 4px;border-bottom:1px solid #c4a35f;z-index:1}",
       ".twmgr-bld-tab td{padding:2px 4px;border-bottom:1px solid #d3b678;color:#4a3418;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      // Coluna do checkbox: 16px era menos que o proprio checkbox (15px) + o padding da celula,
+      // entao ele saia apertado contra o nome da aldeia. Largura propria e sem padding lateral.
+      ".twmgr-bld-tab th.twmgr-tab-ck,.twmgr-bld-tab td.twmgr-tab-ck{width:26px;padding-left:2px;padding-right:2px;text-align:center}",
       ".twmgr-bld-tab tr.row_b td{background:rgba(0,0,0,.05)}",
       ".twmgr-bld-tab tr.twmgr-bld-off td{opacity:.55}",
       ".twmgr-bld-tab a{color:#7d510a;cursor:pointer;text-decoration:none}.twmgr-bld-tab a:hover{text-decoration:underline}",

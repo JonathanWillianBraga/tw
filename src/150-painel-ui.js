@@ -112,6 +112,9 @@
       ".twmgr-bld-tab{width:100%;border-collapse:collapse;font-size:9px;table-layout:fixed}",
       ".twmgr-bld-tab th{position:sticky;top:0;background:#e6d4a4;color:#5c4527;font-weight:600;text-align:left;padding:3px 4px;border-bottom:1px solid #c4a35f;z-index:1}",
       ".twmgr-bld-tab td{padding:2px 4px;border-bottom:1px solid #d3b678;color:#4a3418;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      // Coluna do checkbox: 16px era menos que o proprio checkbox (15px) + o padding da celula,
+      // entao ele saia apertado contra o nome da aldeia. Largura propria e sem padding lateral.
+      ".twmgr-bld-tab th.twmgr-tab-ck,.twmgr-bld-tab td.twmgr-tab-ck{width:26px;padding-left:2px;padding-right:2px;text-align:center}",
       ".twmgr-bld-tab tr.row_b td{background:rgba(0,0,0,.05)}",
       ".twmgr-bld-tab tr.twmgr-bld-off td{opacity:.55}",
       ".twmgr-bld-tab a{color:#7d510a;cursor:pointer;text-decoration:none}.twmgr-bld-tab a:hover{text-decoration:underline}",

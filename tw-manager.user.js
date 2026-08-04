@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.19.0
+// @version      11.20.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.19.0';
+  const VERSION = '11.20.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -9883,8 +9883,8 @@
       const grade = document.getElementById('cc-tropas-grade'); if (!grade) return;
       const antes = ccComposicao();   // preserva o que já estava digitado ao reconstruir
       grade.innerHTML = ccUnidadesUI().map(([u, n]) =>
-        '<div data-un="' + u + '" style="flex:1 1 62px;min-width:56px;text-align:center;background:#ffffff;' +
-        'border:1px solid #ece4d8;border-radius:6px;padding:3px 2px">' +
+        '<div data-un="' + u + '" style="text-align:center;background:#ffffff;' +
+        'border:1px solid #ece4d8;border-radius:6px;padding:3px 2px;min-width:0">' +
           '<div data-maxbtn="' + u + '" title="' + esc(n) + ' — clique para mandar TUDO" ' +
                'style="cursor:pointer;height:18px;line-height:18px;border-radius:4px">' + unitIcon(u, n) + '</div>' +
           '<input id="cc-u-' + u + '" class="twmgr-inp cc-un" type="number" min="0" ' +
@@ -10211,11 +10211,14 @@
       let semTropaAgora = 0;
       marcadas.forEach((v) => {
         const nome = v.coord || v.vid;
-        const amounts = ccResolverPara(comp, v.avail);
+        // Tropa manual desta aldeia (⚙ na lista de Origens) tem prioridade sobre o modelo global.
+        const ov = ccOrigOverrideGet(v.vid);
+        const compOrigem = ov || comp;
+        const amounts = ccResolverPara(compOrigem, v.avail);
         if (!Object.keys(amounts).length) { pulados.push(nome + ' (nada a enviar)'); return; }
         // Tropa faltando NÃO impede agendar: você pode estar marcando um ataque full pra daqui
         // a horas, com a tropa saqueando agora. O preparo (60s antes) é que confere de verdade.
-        if (!ccTemTropa(v, comp)) semTropaAgora++;
+        if (!ccTemTropa(v, compOrigem)) semTropaAgora++;
         // Tempo pela composição REAL desta aldeia — não pela global.
         const t = (v.x != null) ? ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, amounts) : null;
         if (t != null && (arriveAt - t) <= srvNowP()) { pulados.push(nome + ' (longe demais)'); return; }
@@ -10391,7 +10394,8 @@
       cont.innerHTML = '<span style="color:#584526">recentes:</span> ' + h.map((x) => {
         const nome = ccNomeAlvo(x.coord), dono = ccDonoAlvo(x.coord);
         const rot = x.coord + (nome ? ' ' + nome : '') + (dono ? ' (' + dono + ')' : '');
-        return '<a class="cc-hist-a" data-coord="' + x.coord + '" style="cursor:pointer;color:#a2643a;margin-right:2px" title="' + esc(rot) + '">' + esc(x.coord) + '</a>';
+        return '<a class="cc-hist-a" data-coord="' + x.coord + '" style="cursor:pointer;color:#a2643a;margin-right:2px" title="' + esc(rot) + '"><b>' + esc(x.coord) + '</b>' +
+          (nome ? ' <span style="color:#8a7d6d">' + esc(nome) + '</span>' : '') + '</a>';
       }).join(' · ');
       cont.querySelectorAll('.cc-hist-a').forEach((el) => el.onclick = () => {
         const al = document.getElementById('cc-alvo'); if (al) { al.value = el.getAttribute('data-coord'); al.dispatchEvent(new Event('input')); }
@@ -10405,6 +10409,57 @@
       for (const u in comp.amounts) { if ((av[u] || 0) < comp.amounts[u]) return false; }
       for (const u in comp.max) { if (!(av[u] > 0)) return false; }
       return true;
+    }
+
+    // ---- Tropa manual por aldeia (sobrepõe o modelo global de "Tropas por origem") ----
+    // Mesmo formato de ccComposicao() ({amounts,max}), então ccResolverPara() atende os dois.
+    // Guardado em config.cmd.origOverride[vid]. _ccOrigAbertos é só estado de UI (não persiste).
+    let _ccOrigAbertos = {};
+    function ccOrigOverrideGet(vid) { return (config.cmd.origOverride && config.cmd.origOverride[vid]) || null; }
+    function ccOrigOverrideSet(vid, amounts) {
+      config.cmd.origOverride = config.cmd.origOverride || {};
+      if (Object.keys(amounts).some((u) => amounts[u] > 0)) config.cmd.origOverride[vid] = { amounts: amounts, max: {} };
+      else delete config.cmd.origOverride[vid];
+      save();
+    }
+    function ccOrigOverrideHTML(v) {
+      const ov = ccOrigOverrideGet(v.vid);
+      const listaU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
+      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+      return '<div class="cc-ov-edit" style="grid-column:1/-1;display:flex;flex-wrap:wrap;gap:5px;align-items:center;' +
+        'margin:4px 0 1px 24px;padding:5px 6px;background:#fbf7ee;border:1px solid #ece4d8;border-radius:5px">' +
+        '<span style="font-size:9px;color:#6f6153;width:100%">tropa manual desta aldeia (ignora o modelo acima):</span>' +
+        listaU.map((u) => '<label style="display:flex;flex-direction:column;align-items:center;font-size:8px;color:#6f6153;gap:1px">' +
+          unitIcon(u, rot[u] || u) +
+          '<input class="cc-ov-inp" data-vid="' + v.vid + '" data-u="' + u + '" type="number" min="0" ' +
+            'value="' + ((ov && ov.amounts[u]) || '') + '" placeholder="0" style="width:38px;padding:1px;text-align:center;font-size:10px">' +
+        '</label>').join('') +
+        (ov ? '<a class="cc-ov-clear" data-vid="' + v.vid + '" href="#" style="font-size:9px;color:#c0483a;cursor:pointer;margin-left:4px">✕ usar modelo</a>' : '') +
+      '</div>';
+    }
+
+    // ---- Filtro de grupo nas Origens (mesma ideia do filtro do módulo Fakes) ----
+    let _ccGrupoVidsSet = null;
+    async function ccAplicarFiltroGrupo() {
+      const gid = config.cmd.origGrupo || '';
+      if (!gid) { _ccGrupoVidsSet = null; ccRenderOrigens(); return; }
+      try {
+        const vs = await getVillagesInGroup(gid);
+        _ccGrupoVidsSet = new Set(vs.map((x) => String(x.vid)));
+      } catch (e) {
+        _ccGrupoVidsSet = null;
+        pushLog('Centro de Comando: não consegui filtrar pelo grupo (' + (e.message || e) + ').', 'err', 'cmd');
+      }
+      ccRenderOrigens();
+    }
+    async function ccCarregarGrupos() {
+      const sel = document.getElementById('cc-org-grupo'); if (!sel) return;
+      let grupos = []; try { grupos = await getGroups(); } catch (e) { /* sem grupos: fica só "Todas" */ }
+      const cur = config.cmd.origGrupo || '';
+      sel.innerHTML = '<option value="">Todas as aldeias</option>' +
+        grupos.map((g) => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('');
+      sel.value = cur;
+      if (cur) ccAplicarFiltroGrupo();   // grupo já estava salvo de uma sessão anterior: reaplica
     }
 
     // Lista de origens: cada aldeia sua com distância, tempo de viagem pela unidade mais lenta
@@ -10441,7 +10496,10 @@
       const sel = config.cmd.origens || {};
       const ch = ccChegadaMs();
 
-      const linhas = CCVILAS.map((v) => {
+      // Filtro de grupo: restringe as aldeias exibidas (não mexe na leitura de tropas nem em
+      // seleções já feitas fora do grupo visível — só o que aparece na lista).
+      const vilas = _ccGrupoVidsSet ? CCVILAS.filter((v) => _ccGrupoVidsSet.has(String(v.vid))) : CCVILAS;
+      const linhas = vilas.map((v) => {
         const d = (alvo && v.x != null) ? fieldDist(v.x, v.y, +alvo.x, +alvo.y) : null;
         // Composição REAL desta aldeia — é dela que sai a unidade mais lenta e, portanto, o tempo.
         const compV = temComp ? ccCompParaVelocidade(comp, v.avail) : {};
@@ -10456,6 +10514,8 @@
       const rotUn = {}; UNITS.forEach(([u, n]) => { rotUn[u] = n; });
       cont.innerHTML = linhas.map((L) => {
         const v = L.v, on = !!sel[v.vid];
+        const ov = ccOrigOverrideGet(v.vid);
+        const aberto = !!_ccOrigAbertos[v.vid];
         let sit, cor;
         if (!L.temTropa) { sit = '⚠ sem tropa'; cor = '#c0483a'; }
         else if (L.daTempo === false) { sit = '⚠ longe demais'; cor = '#c0483a'; }
@@ -10478,18 +10538,22 @@
                  unitIcon(u, rot) + fmtN(q) + extra + '</span>';
         }).filter(Boolean).join(' ');
         return '<label style="display:block;padding:3px 5px;border-bottom:1px solid rgba(0,0,0,.07);cursor:pointer">' +
-          '<span style="display:grid;grid-template-columns:18px 116px 44px 66px 46px 1fr;gap:6px;align-items:center;font-size:10px">' +
+          '<span style="display:grid;grid-template-columns:18px 128px 40px 58px 40px 1fr;gap:6px;align-items:center;font-size:10px">' +
             '<input type="checkbox" data-cc-org="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
-            '<span style="overflow:hidden" title="' + esc((v.nome || '') + ' ' + (v.coord || '')) + '">' +
-              '<span style="color:#a2643a;white-space:nowrap">' + esc(v.coord || v.vid) + '</span>' +
-              (v.nome ? '<span style="display:block;color:#8a7d6d;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(v.nome) + '</span>' : '') +
+            '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="' + esc((v.nome || '') + ' ' + (v.coord || '')) + '">' +
+              (v.nome ? '<b style="color:#584526">' + esc(v.nome) + '</b> ' : '') +
+              '<span style="color:#a2643a">' + esc(v.coord || v.vid) + '</span>' +
             '</span>' +
             '<span style="color:#8a7d6d">' + (L.d == null ? '—' : L.d.toFixed(1) + ' c') + '</span>' +
             '<span style="color:#6f6153">' + (L.t == null ? '—' : fmt(L.t)) + '</span>' +
             '<span style="color:#8a7d6d" title="unidade mais lenta que sai desta aldeia">' + (L.lenta ? esc(rotUn[L.lenta] || L.lenta) : '—') + '</span>' +
-            '<span style="color:' + cor + '">' + sit + '</span>' +
+            '<span style="display:flex;align-items:center;justify-content:space-between;gap:4px">' +
+              '<span style="color:' + cor + '">' + sit + '</span>' +
+              '<a class="cc-ov-tog" data-vid="' + v.vid + '" href="#" title="' + (ov ? 'tropa manual definida pra esta aldeia — clique pra editar' : 'definir tropa manual só pra esta aldeia (ignora o modelo acima)') + '" style="cursor:pointer;text-decoration:none;color:' + (ov ? '#a2643a' : '#c4b9a8') + ';font-weight:' + (ov ? '700' : '400') + '">⚙</a>' +
+            '</span>' +
           '</span>' +
           (tropas ? '<span style="display:block;font-size:9px;margin:1px 0 0 24px;line-height:1.5">' + tropas + '</span>' : '') +
+          (aberto ? ccOrigOverrideHTML(v) : '') +
         '</label>';
       }).join('') || '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma aldeia —</div>';
 
@@ -10500,6 +10564,29 @@
           save(); ccResumo();
         };
       });
+      // Tropa manual por aldeia: abre/fecha o editor, edita os números, ou volta pro modelo global.
+      cont.querySelectorAll('.cc-ov-tog').forEach((el) => el.addEventListener('click', (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        const vid = el.getAttribute('data-vid');
+        _ccOrigAbertos[vid] = !_ccOrigAbertos[vid];
+        ccRenderOrigens();
+      }));
+      cont.querySelectorAll('.cc-ov-edit').forEach((el) => { el.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); }); });
+      cont.querySelectorAll('.cc-ov-inp').forEach((el) => el.addEventListener('change', () => {
+        const vid = el.getAttribute('data-vid');
+        const amounts = {};
+        cont.querySelectorAll('.cc-ov-inp[data-vid="' + vid + '"]').forEach((e2) => {
+          const n = parseInt(e2.value, 10) || 0; if (n > 0) amounts[e2.getAttribute('data-u')] = n;
+        });
+        ccOrigOverrideSet(vid, amounts);
+        ccResumo();
+      }));
+      cont.querySelectorAll('.cc-ov-clear').forEach((el) => el.addEventListener('click', (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        const vid = el.getAttribute('data-vid');
+        if (config.cmd.origOverride) delete config.cmd.origOverride[vid];
+        save(); ccRenderOrigens();
+      }));
       // Aviso quando a velocidade vier da tabela de reserva em vez do servidor.
       const av = document.getElementById('cc-vel-aviso');
       if (av) {
@@ -11108,7 +11195,7 @@
           '<div id="cc-modelos" style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:5px"></div>' +
           // Montada em ccRenderTropas() a partir das unidades que ESTE mundo tem — a lista fixa
           // de 12 mostrava arqueiro e arqueiro a cavalo em mundos que não os têm.
-          '<div id="cc-tropas-grade" style="display:flex;flex-wrap:wrap;gap:4px"></div>' +
+          '<div id="cc-tropas-grade" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:6px"></div>' +
           '</div>' +
         '</div>' +
         // Origens: cada aldeia com distância e tempo já calculados pela unidade mais lenta.
@@ -11129,8 +11216,12 @@
             '<label style="margin-right:10px;cursor:pointer" title="linha &quot;Na Aldeia&quot; do jogo"><input type="radio" name="cc-fonte" value="casa"> na aldeia agora</label>' +
             '<label style="cursor:pointer" title="linha &quot;suas próprias&quot; do jogo: inclui o que está fora e em trânsito"><input type="radio" name="cc-fonte" value="total"> suas próprias (inclui fora/trânsito)</label>' +
           '</div>' +
+          '<div style="font-size:10px;margin-bottom:5px;display:flex;align-items:center;gap:6px">' +
+            '<span style="color:#6f6153">Grupo</span>' +
+            '<select id="cc-org-grupo" class="twmgr-inp" style="width:170px;font-size:10px;padding:1px 4px"><option value="">Todas as aldeias</option></select>' +
+          '</div>' +
           '<div id="cc-vel-aviso" style="font-size:10px;color:#8a7d6d;margin-bottom:3px"></div>' +
-          '<div style="display:grid;grid-template-columns:18px 116px 44px 66px 46px 1fr;gap:6px;font-size:9px;color:#8a7d6d;padding:0 5px 2px">' +
+          '<div style="display:grid;grid-template-columns:18px 128px 40px 58px 40px 1fr;gap:6px;font-size:9px;color:#8a7d6d;padding:0 5px 2px">' +
             '<span></span><span>aldeia</span><span>dist.</span><span>viagem</span><span>mais lenta</span><span>saída</span></div>' +
           '<div id="cc-origens" style="max-height:170px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
           '<div id="cc-resumo" style="font-size:10px;color:#6f6153;margin-top:3px"></div>' +
@@ -11321,9 +11412,21 @@
         r.addEventListener('change', () => { if (r.checked) { config.cmd.fakeDist = r.value; save(); ccPreviaFake(); } });
       });
 
-      document.getElementById('cc-org-todas').onclick = () => { CCVILAS.forEach((v) => config.cmd.origens[v.vid] = true); save(); ccRenderOrigens(); };
-      document.getElementById('cc-org-nenhuma').onclick = () => { config.cmd.origens = {}; save(); ccRenderOrigens(); };
+      // "todas"/"nenhuma" agem só sobre o que está VISÍVEL (respeita o filtro de grupo).
+      document.getElementById('cc-org-todas').onclick = () => {
+        document.querySelectorAll('#cc-origens [data-cc-org]').forEach((el) => { config.cmd.origens[el.getAttribute('data-cc-org')] = true; });
+        save(); ccRenderOrigens();
+      };
+      document.getElementById('cc-org-nenhuma').onclick = () => {
+        document.querySelectorAll('#cc-origens [data-cc-org]').forEach((el) => { delete config.cmd.origens[el.getAttribute('data-cc-org')]; });
+        save(); ccRenderOrigens();
+      };
       document.getElementById('cc-org-recarregar').onclick = () => ccCarregarOrigens(true);
+      const grupoSel = document.getElementById('cc-org-grupo');
+      if (grupoSel) {
+        ccCarregarGrupos();
+        grupoSel.addEventListener('change', () => { config.cmd.origGrupo = grupoSel.value; save(); ccAplicarFiltroGrupo(); });
+      }
       document.querySelectorAll('input[name="cc-fonte"]').forEach((r) => {
         r.checked = (r.value === (config.cmd.fonteTropa || 'casa'));
         r.addEventListener('change', () => {
@@ -11344,7 +11447,8 @@
         }
         let ok = 0, semTropa = 0, semTempo = 0;
         config.cmd.origens = {};
-        CCVILAS.forEach((v) => {
+        const vilasV = _ccGrupoVidsSet ? CCVILAS.filter((v) => _ccGrupoVidsSet.has(String(v.vid))) : CCVILAS;
+        vilasV.forEach((v) => {
           if (v.x == null) return;
           if (!ccTemTropa(v, comp)) { semTropa++; return; }
           const compV = ccCompParaVelocidade(comp, v.avail);   // por aldeia, não global

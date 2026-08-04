@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.24.0
+// @version      11.24.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.24.0';
+  const VERSION = '11.24.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -10073,6 +10073,37 @@
       a.ondas.splice(i, 1, ...partes);
       save(); ccOpRender();
     }
+    // "Tudo" (mesma ideia do apoio em massa do jogo): preenche com o MÁXIMO disponível.
+    // filtroU presente = só aquela unidade (checkbox de coluna); ausente = todas.
+    // Processa as ondas NA ORDEM da lista — a 1ª onda de uma aldeia pega o disponível
+    // primeiro, a 2ª (se houver) fica com o que sobrar, igual aconteceria mandando na mão.
+    function ccOpAplicarTudo(a, filtroU) {
+      const listaU = filtroU ? [filtroU] : (CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]));
+      (a.ondas || []).forEach((o) => {
+        const dispBase = ccOpDisponivel(o.vid);
+        o.amounts = o.amounts || {};
+        listaU.forEach((u) => {
+          const meu = o.amounts[u] || 0;
+          const teto = (dispBase[u] || 0) + meu;
+          if (teto > 0) o.amounts[u] = teto; else delete o.amounts[u];
+        });
+      });
+      save(); ccOpRender();
+    }
+    // "Tudo" só de UMA onda (uma aldeia só) — todas as unidades dela.
+    function ccOpOndaTudo(id) {
+      const a = ccOpAtivo(); if (!a) return;
+      const o = a.ondas.find((z) => z.id === id); if (!o) return;
+      const dispBase = ccOpDisponivel(o.vid);
+      const listaU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
+      o.amounts = o.amounts || {};
+      listaU.forEach((u) => {
+        const meu = o.amounts[u] || 0;
+        const teto = (dispBase[u] || 0) + meu;
+        if (teto > 0) o.amounts[u] = teto; else delete o.amounts[u];
+      });
+      save(); ccOpRender();
+    }
     // Offset efetivo de CADA onda: automático = posição entre as ondas DA MESMA aldeia (gap
     // ms entre a 1ª, 2ª, 3ª... dela); calibrado à mão sobrescreve. Ondas de aldeias diferentes
     // começam todas em offset 0 (o horário de chegada normal do alvo).
@@ -10233,6 +10264,16 @@
       const base = ccOpChegadaBase(a);
       const offsets = ccOpCalcularOffsets(a);
       const listaU = ccUnidadesUI();
+      // Uma "coluna" por unidade, igual ao apoio em massa do jogo: marcar preenche aquela
+      // tropa com o máximo em TODAS as ondas de uma vez. Some se não há onda pra preencher.
+      const colsBox = document.getElementById('cc-op-tudo-cols');
+      if (colsBox) {
+        colsBox.style.display = (a.ondas || []).length ? 'flex' : 'none';
+        colsBox.innerHTML = '<span style="color:#8a7d6d">tudo por tropa:</span> ' + listaU.map(([u, rot]) =>
+          '<label style="display:flex;align-items:center;gap:2px;cursor:pointer" title="preenche ' + esc(rot) + ' com o máximo em todas as ondas">' +
+            unitIcon(u, rot) + '<input type="checkbox" class="cc-op-tudo-col" data-u="' + u + '"></label>').join('');
+        colsBox.querySelectorAll('.cc-op-tudo-col').forEach((el) => el.onclick = () => ccOpAplicarTudo(a, el.getAttribute('data-u')));
+      }
       boxO.innerHTML = (a.ondas || []).length ? a.ondas.map((o, i) => {
         const v = CCVILAS.find((z) => String(z.vid) === String(o.vid));
         const nome = v ? ((v.nome ? v.nome + ' ' : '') + (v.coord || o.vid)) : o.vid;
@@ -10272,6 +10313,7 @@
           '<div style="margin:2px 0 0 23px;font-size:9px;color:#8a7d6d">' +
             'sai <b style="color:#6f6153">' + (sai ? srvClockMs(sai) : '—') + '</b>' +
             (tViagem == null ? ' <span style="color:#a2643a">(digite tropa pra calcular)</span>' : '') +
+            ' <a class="cc-op-onda-tudo" data-id="' + o.id + '" href="#" style="margin-left:8px;color:#2e7d3a" title="preenche todas as tropas desta aldeia com o máximo disponível">🧺 tudo desta aldeia</a>' +
             ' <span style="margin-left:8px">dividir em</span> ' +
             '<input class="cc-op-divn" data-id="' + o.id + '" type="number" min="2" max="20" value="2" style="width:32px;padding:0 2px;font-size:9px">' +
             ' <a class="cc-op-div" data-id="' + o.id + '" href="#" style="color:#2e7d3a">✂ dividir</a>' +
@@ -10313,6 +10355,9 @@
         const id = el.getAttribute('data-id');
         const nEl = boxO.querySelector('.cc-op-divn[data-id="' + id + '"]');
         ccOpOndaDividir(id, nEl ? nEl.value : 2);
+      });
+      boxO.querySelectorAll('.cc-op-onda-tudo').forEach((el) => el.onclick = (ev) => {
+        ev.preventDefault(); ccOpOndaTudo(el.getAttribute('data-id'));
       });
       if (boxR) boxR.innerHTML = ccOpResumo(a);
     }
@@ -11381,9 +11426,13 @@
           '<div id="cc-op-vilas" style="height:220px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px;margin-bottom:6px"></div>' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">' +
             '<span style="font-size:9px;color:#6f6153">Ondas <span style="color:#8a7d6d">(ordem de chegada)</span></span>' +
-            '<a id="cc-op-limpar" style="cursor:pointer;color:#c0483a;font-size:9px">limpar ondas</a>' +
+            '<span style="font-size:9px"><a id="cc-op-tudo-geral" style="cursor:pointer;color:#2e7d3a">🧺 tudo (todas as ondas)</a> · ' +
+              '<a id="cc-op-limpar" style="cursor:pointer;color:#c0483a">limpar ondas</a></span>' +
           '</div>' +
-          '<div id="cc-op-ondas" style="height:380px;min-height:100px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+          // Por coluna de unidade — igual ao "apoio em massa" do próprio jogo: marcar preenche
+          // aquela tropa com o máximo disponível em TODAS as ondas de uma vez.
+          '<div id="cc-op-tudo-cols" style="display:flex;flex-wrap:wrap;gap:8px;font-size:9px;color:#6f6153;padding:3px 5px;background:#fbf7ee;border:1px solid #ece4d8;border-radius:6px 6px 0 0"></div>' +
+          '<div id="cc-op-ondas" style="height:380px;min-height:100px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
           '<div id="cc-op-resumo" style="font-size:10px;color:#6f6153;margin-top:4px"></div>' +
         '</div>' +
           // Apoio em massa: aparece só quando a aba 🚚 está ativa. Usa as origens marcadas abaixo.
@@ -11505,6 +11554,10 @@
       document.getElementById('cc-op-limpar').onclick = () => {
         const a = ccOpAtivo(); if (!a) return;
         a.ondas = []; save(); ccOpRender();
+      };
+      document.getElementById('cc-op-tudo-geral').onclick = (ev) => {
+        ev.preventDefault();
+        const a = ccOpAtivo(); if (a) ccOpAplicarTudo(a);
       };
       const ordEl = document.getElementById('cc-fila-ordem');
       ordEl.value = config.cmd.filaOrdem || 'chegada';

@@ -283,7 +283,7 @@
   function renderResearchOrder() {
     const box = document.getElementById('twmgr-pq-order'); if (!box) return;
     const ordem = pesqOrdemAtual();
-    if (!ordem.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">- ordem vazia (use o + abaixo) -</div>'; return; }
+    if (!ordem.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">- ordem vazia (use o + abaixo) -</div>'; return; }
     box.innerHTML = ordem.map((u, i) => {
       const par = UNITS.find((x) => x[0] === u);
       const nome = par ? par[1] : u;
@@ -376,7 +376,7 @@
     Object.keys(assign).forEach((vid) => { mapa[vid] = { vid: vid, coord: assign[vid].coord, name: assign[vid].name || assign[vid].coord || vid }; });
     _pesqPool.forEach((v) => { if (!mapa[v.vid]) mapa[v.vid] = v; });
     const linhas = Object.keys(mapa).sort((a, b) => String(mapa[a].name).localeCompare(String(mapa[b].name), 'pt-BR', { numeric: true }));
-    if (!linhas.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">- clique em &#8635; pra carregar suas aldeias -</div>'; return; }
+    if (!linhas.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">- clique em &#8635; pra carregar suas aldeias -</div>'; return; }
     box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr>' +
       '<th class="twmgr-tab-ck"><input type="checkbox" id="twmgr-pq-all"></th><th>Aldeia</th><th>Modelo</th><th>Estado</th><th></th>' +
       '</tr></thead><tbody>' +

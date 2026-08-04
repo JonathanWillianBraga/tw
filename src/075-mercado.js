@@ -354,7 +354,7 @@
     let groups = [];
     try { groups = await getGroups(); } catch (e) { pushLog('Cunhagem: erro ao listar grupos: ' + (e.message || e), 'err', 'market'); return; }
     const cur = config.market.cunhagemSourceGroups || [];
-    const rowHtml = (gid, name, checked) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-mk-srcgrp" data-gid="' + gid + '"' + (checked ? ' checked' : '') + '>' + esc(name) + '</label>';
+    const rowHtml = (gid, name, checked) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#6f6153;margin:1px 0"><input type="checkbox" class="twmgr-mk-srcgrp" data-gid="' + gid + '"' + (checked ? ' checked' : '') + '>' + esc(name) + '</label>';
     cont.innerHTML = rowHtml('', 'nenhum (= todas as aldeias, menos as de destino)', !cur.length) +
       groups.map((gr) => rowHtml(gr.id, gr.name, cur.includes(gr.id))).join('');
     // "nenhum" e os grupos específicos são mutuamente exclusivos: marcar "nenhum" desmarca o resto

@@ -194,7 +194,7 @@
   function renderBuildPlan() {
     const box = document.getElementById('twmgr-bld-plan'); if (!box) return;
     const plan = bldPlanAtual();
-    if (!plan.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">— lista vazia (use o + abaixo pra adicionar) —</div>'; renderBuildSummary(); return; }
+    if (!plan.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">— lista vazia (use o + abaixo pra adicionar) —</div>'; renderBuildSummary(); return; }
     box.innerHTML = plan.map((it, i) => {
       const meta = BUILD_META[it.b] || { name: it.b, ico: '?', max: 30 };
       const disabled = it.en === false ? ' twmgr-bld-off' : '';
@@ -237,7 +237,7 @@
   function renderBuildSummary() {
     const box = document.getElementById('twmgr-bld-sum'); if (!box) return;
     const plan = bldPlanAtual().filter((it) => it.en !== false);
-    if (!plan.length) { box.innerHTML = '<span style="color:#6e5a2a;font-size:10px">— modelo vazio —</span>'; return; }
+    if (!plan.length) { box.innerHTML = '<span style="color:#8a7d6d;font-size:10px">— modelo vazio —</span>'; return; }
     const fim = {};
     plan.forEach((it) => { fim[it.b] = Math.max(fim[it.b] || 0, it.lvl); });
     box.innerHTML = BUILD_KEYS.filter((b) => fim[b]).map((b) => {
@@ -415,7 +415,7 @@
     Object.keys(assign).forEach((vid) => { mapa[vid] = { vid: vid, coord: assign[vid].coord, name: assign[vid].name || assign[vid].coord || vid }; });
     _bldPool.forEach((v) => { if (!mapa[v.vid]) mapa[v.vid] = v; });
     const linhas = Object.keys(mapa).sort((a, b) => String(mapa[a].name).localeCompare(String(mapa[b].name), 'pt-BR', { numeric: true }));
-    if (!linhas.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">— clique em ↻ pra carregar suas aldeias —</div>'; return; }
+    if (!linhas.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">— clique em ↻ pra carregar suas aldeias —</div>'; return; }
     box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr>' +
       '<th class="twmgr-tab-ck"><input type="checkbox" id="twmgr-bld-all"></th><th>Aldeia</th><th>Modelo</th><th>Ordens</th><th>Estado</th><th></th>' +
       '</tr></thead><tbody>' +

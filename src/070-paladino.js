@@ -215,25 +215,25 @@
   }
   async function renderPaladinVillages() {
     const cont = document.getElementById('twmgr-pd-villages'); if (!cont) return;
-    cont.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">carregando…</div>';
+    cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">carregando…</div>';
     let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
     let knights = null, lastErr = null;
     const order = [CUR_VID].concat(vils.map((v) => v.vid)).filter((v, i, arr) => v && arr.indexOf(v) === i);
     for (const vid of order) { try { knights = await getKnightsData(vid); break; } catch (e) { lastErr = e; } }
-    if (!knights) { cont.innerHTML = '<div style="font-size:10px;color:#c23a2c;padding:6px;text-align:center">Erro ao ler paladinos (' + esc((lastErr && lastErr.message) || String(lastErr)) + ')</div>'; return; }
+    if (!knights) { cont.innerHTML = '<div style="font-size:10px;color:#c0483a;padding:6px;text-align:center">Erro ao ler paladinos (' + esc((lastErr && lastErr.message) || String(lastErr)) + ')</div>'; return; }
     const withKnight = {};
     Object.values(knights).forEach((k) => { if (k && k.home_village) withKnight[String(k.home_village.id)] = true; });
     vils = vils.filter((v) => withKnight[v.vid]);   // só aldeias com paladino entram na lista de seleção
-    if (!vils.length) { cont.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— nenhuma aldeia com paladino —</div>'; return; }
+    if (!vils.length) { cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— nenhuma aldeia com paladino —</div>'; return; }
     const sel = config.paladin.villages || {};
-    cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-pd-vil" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
+    cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#6f6153;margin:1px 0"><input type="checkbox" class="twmgr-pd-vil" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
     cont.querySelectorAll('.twmgr-pd-vil').forEach((cb) => cb.addEventListener('change', readPaladinCfg));
   }
   const PALADIN_STATUS_LABEL = { home: '🟢 livre', training: '⏳ treinando', travel: '🚶 viajando', recruiting: '🐣 recrutando', attack: '⚔️ atacando', attacking: '⚔️ atacando', support: '🛡️ apoiando', 'sem-paladino': '— sem paladino', 'sem-regime-4h': '⚠️ sem regime 4h' };
   function renderPaladinStatus() {
     const cont = document.getElementById('twmgr-pd-status-list'); if (!cont) return;
     const villages = Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]);
-    if (!villages.length) { cont.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— marque aldeias acima —</div>'; return; }
+    if (!villages.length) { cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— marque aldeias acima —</div>'; return; }
     const now = Date.now();
     cont.innerHTML = villages.map((vid) => {
       const st = (config.paladin.state && config.paladin.state[vid]) || {};
@@ -241,7 +241,7 @@
       // vez de esconder, já que o código já garante que ele será pulado até ficar livre de novo.
       const label = PALADIN_STATUS_LABEL[st.status] || (st.status ? ('⚔️ ocupado (' + st.status + ')') : '—');
       const rest = st.finishAt && st.finishAt > now ? fmt(st.finishAt - now) : '';
-      return '<div style="display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#5c4527;padding:2px 0;border-bottom:1px solid rgba(0,0,0,.07)">' +
+      return '<div style="display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#6f6153;padding:2px 0;border-bottom:1px solid rgba(0,0,0,.07)">' +
         '<span>' + esc(st.name || ('ID ' + vid)) + (st.level != null ? (' (nv.' + st.level + ')') : '') + '</span>' +
         '<span>' + label + (rest ? ' · ' + rest : '') + '</span>' +
       '</div>';

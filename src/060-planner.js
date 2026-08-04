@@ -207,7 +207,7 @@
     vils.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
     cont.innerHTML = vils.map((v) => {
       const distTxt = v.dist != null ? (' · dist ' + v.dist.toFixed(1)) : '';
-      return '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-pl-vil" data-vid="' + v.vid + '"' + (atk.selected[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '<span style="color:#6e5a2a">' + distTxt + '</span></label>';
+      return '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#6f6153;margin:1px 0"><input type="checkbox" class="twmgr-pl-vil" data-vid="' + v.vid + '"' + (atk.selected[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '<span style="color:#8a7d6d">' + distTxt + '</span></label>';
     }).join('');
     cont.querySelectorAll('.twmgr-pl-vil').forEach((cb) => cb.addEventListener('change', () => {
       const vid = cb.getAttribute('data-vid');
@@ -231,7 +231,7 @@
     const cont = document.getElementById('twmgr-pl-cards'); if (!cont) return;
     const sel = Object.keys(atk.selected || {}).filter((v) => atk.selected[v]);
     if (!sel.length) {
-      cont.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div>';
+      cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div>';
       return;
     }
     const vilBy = {}; (_plVilCache || []).forEach((v) => { vilBy[v.vid] = v; });
@@ -248,18 +248,18 @@
         const arrTxt = baseMs ? fmtArriveLocal(baseMs + (pv.offsetMs || 0)) : '—';
         const grid = UNITS.map(([u, lbl]) => {
           const max = home[u] || 0, cur = (pv.amounts && pv.amounts[u]) || 0;
-          return '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#5c4527"><span style="width:56px">' + unitIcon(u, lbl) + '</span><input class="twmgr-pl-amt" data-vid="' + vid + '" data-widx="' + widx + '" data-u="' + u + '" type="number" min="0" max="' + max + '" value="' + cur + '" style="width:56px" /><span style="color:#6e5a2a">/' + max + '</span></label>';
+          return '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#6f6153"><span style="width:56px">' + unitIcon(u, lbl) + '</span><input class="twmgr-pl-amt" data-vid="' + vid + '" data-widx="' + widx + '" data-u="' + u + '" type="number" min="0" max="' + max + '" value="' + cur + '" style="width:56px" /><span style="color:#8a7d6d">/' + max + '</span></label>';
         }).join('');
-        return '<div style="border-top:1px dashed #dcc78f;padding-top:6px;margin-top:6px">' +
+        return '<div style="border-top:1px dashed #ece4d8;padding-top:6px;margin-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px">' +
-            '<div style="font-size:10px;color:#6e5a2a">Onda ' + (widx + 1) + '</div>' +
+            '<div style="font-size:10px;color:#8a7d6d">Onda ' + (widx + 1) + '</div>' +
             '<div style="display:flex;gap:4px;align-items:center;font-size:10px">' +
               '<select class="twmgr-pl-kind" data-vid="' + vid + '" data-widx="' + widx + '" style="font-size:10px">' + kindSel + '</select>' +
               '<span>off</span><input class="twmgr-pl-off" data-vid="' + vid + '" data-widx="' + widx + '" type="number" value="' + (pv.offsetMs || 0) + '" step="100" style="width:64px;font-size:10px"><span>ms</span>' +
               '<span class="twmgr-pl-wave-del" data-vid="' + vid + '" data-widx="' + widx + '" title="remover onda" style="cursor:pointer;opacity:.7">✕</span>' +
             '</div>' +
           '</div>' +
-          '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">→ chega às <b style="color:#5c4527">' + arrTxt + '</b></div>' +
+          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">→ chega às <b style="color:#6f6153">' + arrTxt + '</b></div>' +
           '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px">' + grid + '</div>' +
           '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">' +
             '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-widx="' + widx + '" data-preset="attack" style="padding:3px 6px;font-size:10px">🧹 all off</button>' +
@@ -270,10 +270,10 @@
           '</div>' +
         '</div>';
       }).join('');
-      return '<div style="border:1px solid #dcc78f;border-radius:6px;padding:6px;margin:6px 0">' +
+      return '<div style="border:1px solid #ece4d8;border-radius:6px;padding:6px;margin:6px 0">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px">' +
-          '<div style="font-size:11px;color:#7a5710"><b>' + esc(v.name) + '</b> ' + warnTxt + '</div>' +
-          '<span class="twmgr-pl-wave-add" data-vid="' + vid + '" title="adicionar onda" style="cursor:pointer;font-size:10px;color:#7a5710;border:1px dashed #a9843f;border-radius:4px;padding:2px 6px">+ onda</span>' +
+          '<div style="font-size:11px;color:#a2643a"><b>' + esc(v.name) + '</b> ' + warnTxt + '</div>' +
+          '<span class="twmgr-pl-wave-add" data-vid="' + vid + '" title="adicionar onda" style="cursor:pointer;font-size:10px;color:#a2643a;border:1px dashed #ddd2c0;border-radius:4px;padding:2px 6px">+ onda</span>' +
         '</div>' +
         wavesHTML +
       '</div>';
@@ -387,13 +387,13 @@
     const p = config.planner;
     cont.innerHTML = p.attacks.map((atk) => {
       const active = atk.id === p.activeId;
-      return '<div class="twmgr-pl-tab' + (active ? ' active' : '') + '" data-id="' + atk.id + '" style="display:flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;cursor:pointer;font-size:10px;border:1px solid ' + (active ? '#7d510a' : '#dcc78f') + ';background:' + (active ? 'rgba(212,175,55,.15)' : 'transparent') + ';color:#5c4527">' +
+      return '<div class="twmgr-pl-tab' + (active ? ' active' : '') + '" data-id="' + atk.id + '" style="display:flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;cursor:pointer;font-size:10px;border:1px solid ' + (active ? '#a2643a' : '#ece4d8') + ';background:' + (active ? 'rgba(162,100,58,.15)' : 'transparent') + ';color:#6f6153">' +
         '<span class="twmgr-pl-tab-dot" style="color:#2e7d3a;display:' + (atk.running ? 'inline' : 'none') + '">●</span>' +
         '<span class="twmgr-pl-tab-name">' + esc(atk.name) + '</span>' +
         '<span class="twmgr-pl-tab-ren" data-id="' + atk.id + '" title="renomear" style="opacity:.6">✎</span>' +
         '<span class="twmgr-pl-tab-del" data-id="' + atk.id + '" title="remover" style="opacity:.6">✕</span>' +
       '</div>';
-    }).join('') + '<div id="twmgr-pl-tab-add" title="adicionar ataque" style="padding:3px 8px;border-radius:6px;cursor:pointer;font-size:12px;border:1px dashed #a9843f;color:#7a5710">+ ataque</div>';
+    }).join('') + '<div id="twmgr-pl-tab-add" title="adicionar ataque" style="padding:3px 8px;border-radius:6px;cursor:pointer;font-size:12px;border:1px dashed #ddd2c0;color:#a2643a">+ ataque</div>';
     cont.querySelectorAll('.twmgr-pl-tab').forEach((el) => el.addEventListener('click', (e) => {
       if (e.target.classList.contains('twmgr-pl-tab-ren') || e.target.classList.contains('twmgr-pl-tab-del')) return;
       plannerSwitchAttack(el.getAttribute('data-id'));
@@ -416,10 +416,10 @@
   }
 
   const PL_STATE_META = {
-    armed:     { label: 'armado',   color: '#6e5a2a' },
-    scheduled: { label: 'agendado', color: '#7a5710' },
+    armed:     { label: 'armado',   color: '#8a7d6d' },
+    scheduled: { label: 'agendado', color: '#a2643a' },
     sent:      { label: 'enviado',  color: '#2e7d3a' },
-    error:     { label: 'erro',     color: '#c23a2c' },
+    error:     { label: 'erro',     color: '#c0483a' },
   };
 
   // Tabela linha-a-linha da fila do ataque ATIVO. Ordenada por sendAt (fallback arriveAt).
@@ -427,12 +427,12 @@
     const cont = document.getElementById('twmgr-pl-queue'); if (!cont) return;
     const rows = ((atk && atk.rows) || []).slice().sort((a, b) => (a.sendAt || a.arriveAt || 0) - (b.sendAt || b.arriveAt || 0));
     if (!rows.length) {
-      cont.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— fila vazia. Arme o ataque pra ver as linhas aqui. —</div>';
+      cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— fila vazia. Arme o ataque pra ver as linhas aqui. —</div>';
       return;
     }
     const vilBy = {}; (_plVilCache || []).forEach((v) => { vilBy[v.vid] = v; });
-    const th = 'text-align:left;padding:2px 4px;font-size:9px;color:#6e5a2a;font-weight:normal;border-bottom:1px solid #dcc78f';
-    const td = 'padding:2px 4px;font-size:10px;color:#5c4527;vertical-align:middle';
+    const th = 'text-align:left;padding:2px 4px;font-size:9px;color:#8a7d6d;font-weight:normal;border-bottom:1px solid #ece4d8';
+    const td = 'padding:2px 4px;font-size:10px;color:#6f6153;vertical-align:middle';
     cont.innerHTML =
       '<table style="width:100%;border-collapse:collapse">' +
         '<thead><tr>' +
@@ -446,7 +446,7 @@
         '</tr></thead>' +
         '<tbody>' + rows.map((r, i) => {
           const v = vilBy[r.origin] || { name: 'ID ' + r.origin };
-          const meta = PL_STATE_META[r.state] || { label: r.state, color: '#6e5a2a' };
+          const meta = PL_STATE_META[r.state] || { label: r.state, color: '#8a7d6d' };
           const errTitle = r.state === 'error' && r.error ? (' title="' + esc(String(r.error)) + '"') : '';
           const arrTxt = r.arriveAt ? fmtArriveLocal(r.arriveAt) : '—';
           const sendTxt = r.sendAt ? fmtArriveLocal(r.sendAt) : '—';
@@ -454,9 +454,9 @@
           const canRemove = r.state === 'sent' || r.state === 'error';
           const actions = canCancel
             ? '<span class="twmgr-pl-queue-cancel" data-id="' + r.id + '" title="cancelar" style="cursor:pointer;color:#c2592c">✕</span>'
-            : (canRemove ? '<span class="twmgr-pl-queue-del" data-id="' + r.id + '" title="remover do histórico" style="cursor:pointer;color:#6e5a2a">🗑</span>' : '');
-          return '<tr style="border-bottom:1px solid #e2cd97">' +
-            '<td style="' + td + ';color:#6e5a2a">' + (i + 1) + '</td>' +
+            : (canRemove ? '<span class="twmgr-pl-queue-del" data-id="' + r.id + '" title="remover do histórico" style="cursor:pointer;color:#8a7d6d">🗑</span>' : '');
+          return '<tr style="border-bottom:1px solid #fdfaf5">' +
+            '<td style="' + td + ';color:#8a7d6d">' + (i + 1) + '</td>' +
             '<td style="' + td + '">' + esc(v.name) + '</td>' +
             '<td style="' + td + '">' + (PL_ICON[r.kind] || '') + '</td>' +
             '<td style="' + td + ';font-family:monospace;font-size:9px">' + arrTxt + '</td>' +

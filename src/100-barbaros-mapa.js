@@ -37,12 +37,12 @@
     BL_DEFESA: 6, // blacklist: tem defesa
   };
   const MAP_INTEL_COR = {
-    1: '#2e8b3f',   // verde   — explorado, sei o que tem
-    2: '#a9781a',   // âmbar   — explorei e não vi nada
+    1: '#3f8f52',   // verde   — explorado, sei o que tem
+    2: '#8b5426',   // âmbar   — explorei e não vi nada
     3: '#9e8046',   // cinza   — buraco no meu conhecimento
     4: '#2f6f9e',   // azul    — explorador voando
     5: '#c9722a',   // laranja — perdi tropa
-    6: '#c23a2c',   // vermelho— tem defesa
+    6: '#c0483a',   // vermelho— tem defesa
   };
   const MAP_INTEL_NOME = {
     1: 'explorado', 2: 'explorei, sem info', 3: 'nunca explorado',
@@ -477,13 +477,13 @@
     const box = document.getElementById('twmgr-bm-list'); if (!box) return;
     const list = config.map.lastPreview || [];
     const cnt = document.getElementById('twmgr-bm-count'); if (cnt) cnt.textContent = list.length;
-    if (!list.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:8px;font-size:10px">— nenhum alvo detectado —</div>'; return; }
+    if (!list.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:8px;font-size:10px">— nenhum alvo detectado —</div>'; return; }
     const now = Date.now();
     box.innerHTML =
-      '<div style="display:grid;grid-template-columns:60px 34px 44px 1fr 44px;gap:4px;padding:3px 4px;border-bottom:1px solid #b18f4d;font-size:9px;color:#6a4e18;font-weight:600"><span>alvo</span><span style="text-align:right">d</span><span style="text-align:right">pts</span><span>de</span><span style="text-align:right">últ.</span></div>' +
+      '<div style="display:grid;grid-template-columns:60px 34px 44px 1fr 44px;gap:4px;padding:3px 4px;border-bottom:1px solid #e0d6c6;font-size:9px;color:#8b5426;font-weight:600"><span>alvo</span><span style="text-align:right">d</span><span style="text-align:right">pts</span><span>de</span><span style="text-align:right">últ.</span></div>' +
       list.slice(0, 200).map((t) => {
         const last = t.lastAt ? (Math.round((now - t.lastAt) / 86400000) + 'd') : 'novo';
-        return '<div style="display:grid;grid-template-columns:60px 34px 44px 1fr 44px;gap:4px;padding:2px 4px;border-bottom:1px solid rgba(255,255,255,.04);font-size:10px;color:#5c4527"><span style="color:#9a6f0e">' + esc(t.coord) + '</span><span style="text-align:right">' + t.dist + '</span><span style="text-align:right">' + (t.pts || 0) + '</span><span style="color:#6e5a2a;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="de ' + esc(t.srcName || '') + '">' + esc(t.src) + '</span><span style="text-align:right;color:' + (t.lastAt ? '#6e5a2a' : '#2e7d3a') + '">' + last + '</span></div>';
+        return '<div style="display:grid;grid-template-columns:60px 34px 44px 1fr 44px;gap:4px;padding:2px 4px;border-bottom:1px solid rgba(255,255,255,.04);font-size:10px;color:#6f6153"><span style="color:#a2643a">' + esc(t.coord) + '</span><span style="text-align:right">' + t.dist + '</span><span style="text-align:right">' + (t.pts || 0) + '</span><span style="color:#8a7d6d;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="de ' + esc(t.srcName || '') + '">' + esc(t.src) + '</span><span style="text-align:right;color:' + (t.lastAt ? '#8a7d6d' : '#2e7d3a') + '">' + last + '</span></div>';
       }).join('');
   }
   // Qual das três listas está visível. Fica em memória — é preferência de tela, não estado.
@@ -504,7 +504,7 @@
     const mapa = qual === 'perda' ? (cfg.blacklistPerda || {}) : (cfg.blacklistDefesa || {});
     const chaves = Object.keys(mapa).sort((a, b) => (mapa[b].at || 0) - (mapa[a].at || 0));
     if (!chaves.length) {
-      box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:14px;font-size:10px">— lista vazia —<br><br>' +
+      box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:14px;font-size:10px">— lista vazia —<br><br>' +
         (qual === 'perda'
           ? 'Entra aqui quem devolveu o saque em <b>vermelho</b> (você perdeu tropa). Sai sozinho quando um saque voltar verde, amarelo ou azul.'
           : 'Entra aqui quem o relatório de exploração mostrou com <b>tropa defensiva</b>. Não sai sozinho — tire na mão quando achar que mudou.') + '</div>';
@@ -512,18 +512,18 @@
     }
     const agora = Date.now();
     box.innerHTML =
-      '<div style="display:grid;grid-template-columns:64px 1fr 52px 22px;gap:4px;padding:3px 5px;border-bottom:1px solid #b18f4d;font-size:9px;color:#6a4e18;font-weight:600">' +
+      '<div style="display:grid;grid-template-columns:64px 1fr 52px 22px;gap:4px;padding:3px 5px;border-bottom:1px solid #e0d6c6;font-size:9px;color:#8b5426;font-weight:600">' +
         '<span>alvo</span><span>' + (qual === 'defesa' ? 'defesa vista' : 'motivo') + '</span><span style="text-align:right">há</span><span></span></div>' +
       chaves.map((coord) => {
         const r = mapa[coord];
         const dias = r.at ? Math.round((agora - r.at) / 86400000) : null;
         const quando = dias == null ? '—' : (dias === 0 ? 'hoje' : dias + 'd');
         const meio = qual === 'defesa'
-          ? '<span style="color:#c23a2c">' + (r.defTotal || '?') + ' unidades</span>' + (r.removido ? ' <span style="color:#6e5a2a">· apagado do assistente</span>' : '')
-          : '<span style="color:#6e5a2a">saque voltou vermelho</span>';
-        return '<div style="display:grid;grid-template-columns:64px 1fr 52px 22px;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:10px;color:#5c4527;align-items:center">' +
-          '<span style="color:#9a6f0e">' + esc(coord) + '</span>' + meio +
-          '<span style="text-align:right;color:#6e5a2a">' + quando + '</span>' +
+          ? '<span style="color:#c0483a">' + (r.defTotal || '?') + ' unidades</span>' + (r.removido ? ' <span style="color:#8a7d6d">· apagado do assistente</span>' : '')
+          : '<span style="color:#8a7d6d">saque voltou vermelho</span>';
+        return '<div style="display:grid;grid-template-columns:64px 1fr 52px 22px;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:10px;color:#6f6153;align-items:center">' +
+          '<span style="color:#a2643a">' + esc(coord) + '</span>' + meio +
+          '<span style="text-align:right;color:#8a7d6d">' + quando + '</span>' +
           '<span class="twmgr-del twmgr-bm-unbl" data-coord="' + esc(coord) + '" data-lista="' + qual + '" title="tirar da blacklist">✕</span></div>';
       }).join('');
     box.querySelectorAll('.twmgr-bm-unbl').forEach((el) => el.addEventListener('click', () => {

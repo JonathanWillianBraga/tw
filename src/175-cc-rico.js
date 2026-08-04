@@ -188,7 +188,7 @@
       // Somados em quadratura: são fontes independentes, somar linearmente exageraria.
       return Math.round(Math.sqrt(jitterRede * jitterRede + jitterTimer * jitterTimer + relogio * relogio));
     }
-    function erroCor(ms) { return ms < 50 ? '#2e7d3a' : (ms < 150 ? '#9a6f0e' : '#c23a2c'); }
+    function erroCor(ms) { return ms < 50 ? '#2e7d3a' : (ms < 150 ? '#a2643a' : '#c0483a'); }
 
     // ==================== MODO SILÊNCIO ====================
     // Reserva a linha em volta de um disparo coordenado: congela os outros módulos pra que nenhum
@@ -794,30 +794,30 @@
                     '</b> · apoio: <b>' + (bS ? esc(bS.name || bS.id) : 'ausente') + '</b>');
         if (bS && bS.name && bS.name !== config.cmd.suporteParam) {
           config.cmd.suporteParam = bS.name; save();
-          linhas.push('<span style="color:#9a6f0e">parâmetro do apoio ajustado para "' + esc(bS.name) + '"</span>');
+          linhas.push('<span style="color:#a2643a">parâmetro do apoio ajustado para "' + esc(bS.name) + '"</span>');
         }
         // 2) Confirma 1 lanceiro para OUTRA aldeia sua (não dá pra atacar aldeia própria).
         const minhas = await getAllVillages();
         const destino = minhas.filter((v) => String(v.vid) !== String(CUR_VID) && v.coord)[0];
-        if (!destino) { linhas.push('<span style="color:#c23a2c">preciso de ao menos 2 aldeias suas pra testar</span>'); return diz(linhas.join('<br>')); }
+        if (!destino) { linhas.push('<span style="color:#c0483a">preciso de ao menos 2 aldeias suas pra testar</span>'); return diz(linhas.join('<br>')); }
         const [dx, dy] = destino.coord.split('|');
         const p = await cmdPrepare(CUR_VID, dx, dy, { spear: 1 }, 'support');
         const ok = (p.tipoDetectado === 'support');
-        linhas.push('confirm em ' + esc(destino.coord) + ' → tipo <b style="color:' + (ok ? '#2e7d3a' : '#c23a2c') + '">' +
+        linhas.push('confirm em ' + esc(destino.coord) + ' → tipo <b style="color:' + (ok ? '#2e7d3a' : '#c0483a') + '">' +
                     esc(p.tipoDetectado) + '</b> · duração ' + (p.dur ? fmt(p.dur * 1000) : '?'));
-        linhas.push('<span style="font-size:9px;color:#6e5a2a">campos: ' + esc(Object.keys(p.params).join(', ').slice(0, 200)) + '</span>');
+        linhas.push('<span style="font-size:9px;color:#8a7d6d">campos: ' + esc(Object.keys(p.params).join(', ').slice(0, 200)) + '</span>');
         if (ok) {
           config.cmd.suporteOkAt = Date.now(); save();
           linhas.push('<span style="color:#2e7d3a">✔ apoio liberado (nada foi enviado)</span>');
         } else {
-          linhas.push('<span style="color:#c23a2c">✖ apoio NÃO liberado — o servidor não confirmou como apoio</span>');
+          linhas.push('<span style="color:#c0483a">✖ apoio NÃO liberado — o servidor não confirmou como apoio</span>');
         }
         pushLog('Verificação de apoio: tipo "' + p.tipoDetectado + '".', ok ? 'ok' : 'err', 'cmd');
         // Falhando, o aviso aparece mesmo no modo silencioso — senão o Apoio trava sem explicação.
         if (!ok && out) out.innerHTML = linhas.join('<br>');
         return ok;
       } catch (e) {
-        linhas.push('<span style="color:#c23a2c">verificação de apoio falhou: ' + esc(e.message || e) + '</span>');
+        linhas.push('<span style="color:#c0483a">verificação de apoio falhou: ' + esc(e.message || e) + '</span>');
         if (out) out.innerHTML = linhas.join('<br>');
         return false;
       }
@@ -891,7 +891,7 @@
       }
       console.log(txt);
       if (msg) {
-        msg.style.color = ok ? '#2e7d3a' : '#9a6f0e';
+        msg.style.color = ok ? '#2e7d3a' : '#a2643a';
         msg.textContent = ok ? 'Diagnóstico copiado — é só colar aqui no chat.'
                              : 'Não consegui copiar; o relatório saiu no console (F12).';
       }
@@ -1009,25 +1009,25 @@
     async function ccCmdsRender(qual, forcar) {
       _ccCmdsQual = qual || _ccCmdsQual;
       const box = document.getElementById('cc-cmds-lista'); if (!box) return;
-      box.innerHTML = '<div style="color:#6e5a2a;padding:6px;font-size:10px">lendo…</div>';
+      box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">lendo…</div>';
       let L = [];
       try { L = await ccLerComandos(_ccCmdsQual, !!forcar); }
-      catch (e) { box.innerHTML = '<div style="color:#c23a2c;padding:6px;font-size:10px">' + esc(e.message || e) + '</div>'; return; }
-      if (!L.length) { box.innerHTML = '<div style="color:#6e5a2a;padding:6px;font-size:10px">— nenhum —</div>'; return; }
+      catch (e) { box.innerHTML = '<div style="color:#c0483a;padding:6px;font-size:10px">' + esc(e.message || e) + '</div>'; return; }
+      if (!L.length) { box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhum —</div>'; return; }
       const agora = srvNowP(), ehIn = (_ccCmdsQual === 'incoming');
       box.innerHTML = L.slice(0, 60).map((c, i) => {
         const jan = ehIn ? ccJanelaSnipe(L, i) : null;
         return '<div style="display:grid;grid-template-columns:1fr 78px 62px 96px;gap:4px;align-items:center;' +
                'padding:2px 5px;border-bottom:1px solid rgba(0,0,0,.07);font-size:10px">' +
-          '<span style="color:#5c4527;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.tipo) + '">' +
-            esc((c.origem || '?') + ' → ' + (c.destino || '?')) + (c.jogador ? ' <span style="color:#6e5a2a">' + esc(c.jogador) + '</span>' : '') + '</span>' +
-          '<span style="color:' + (c.temMs ? '#7a5710' : '#9a6f0e') + '" title="' + (c.temMs ? 'com milésimos' : 'sem milésimos — margem de 1s') + '">' +
+          '<span style="color:#6f6153;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.tipo) + '">' +
+            esc((c.origem || '?') + ' → ' + (c.destino || '?')) + (c.jogador ? ' <span style="color:#8a7d6d">' + esc(c.jogador) + '</span>' : '') + '</span>' +
+          '<span style="color:' + (c.temMs ? '#a2643a' : '#a2643a') + '" title="' + (c.temMs ? 'com milésimos' : 'sem milésimos — margem de 1s') + '">' +
             srvClockMs(c.chega) + '</span>' +
-          '<span style="color:#6e5a2a">' + (c.chega > agora ? fmt(c.chega - agora) : '—') + '</span>' +
+          '<span style="color:#8a7d6d">' + (c.chega > agora ? fmt(c.chega - agora) : '—') + '</span>' +
           '<span style="text-align:right;white-space:nowrap">' +
             '<a data-usar="' + i + '" style="cursor:pointer;color:#2e7d3a" title="usar este horário">📋 usar</a>' +
             (ehIn ? ' <a data-snipe="' + i + '" style="cursor:pointer;color:' +
-                    (ccSnipeViavel(jan) ? '#1f6fb2' : '#c23a2c') + '" title="' +
+                    (ccSnipeViavel(jan) ? '#1f6fb2' : '#c0483a') + '" title="' +
                     ccSnipeTitulo(jan) +
                     '">🎯 snipe</a>' : '') +
           '</span>' +
@@ -1044,7 +1044,7 @@
         const i = +el.getAttribute('data-snipe'), c = L[i], jan = ccJanelaSnipe(L, i);
         const m = document.getElementById('cc-msg');
         if (!ccSnipeViavel(jan)) {
-          if (m) { m.style.color = '#c23a2c'; m.textContent = ccSnipeTitulo(jan); }
+          if (m) { m.style.color = '#c0483a'; m.textContent = ccSnipeTitulo(jan); }
           return;
         }
         // Mira no FIM da janela: colado ao ataque, mas antes dele.
@@ -1065,8 +1065,8 @@
       const grade = document.getElementById('cc-tropas-grade'); if (!grade) return;
       const antes = ccComposicao();   // preserva o que já estava digitado ao reconstruir
       grade.innerHTML = ccUnidadesUI().map(([u, n]) =>
-        '<div data-un="' + u + '" style="flex:1 1 62px;min-width:56px;text-align:center;background:#eeddb6;' +
-        'border:1px solid #c4a35f;border-radius:6px;padding:3px 2px">' +
+        '<div data-un="' + u + '" style="flex:1 1 62px;min-width:56px;text-align:center;background:#ffffff;' +
+        'border:1px solid #ece4d8;border-radius:6px;padding:3px 2px">' +
           '<div data-maxbtn="' + u + '" title="' + esc(n) + ' — clique para mandar TUDO" ' +
                'style="cursor:pointer;height:18px;line-height:18px;border-radius:4px">' + unitIcon(u, n) + '</div>' +
           '<input id="cc-u-' + u + '" class="twmgr-inp cc-un" type="number" min="0" ' +
@@ -1104,9 +1104,9 @@
         const inp = document.getElementById('cc-u-' + u);
         if (!cel || !btn) return;
         const max = chk && chk.checked, tem = inp && (parseInt(inp.value, 10) > 0);
-        cel.style.borderColor = max ? '#7d510a' : (tem ? '#7a6438' : '#c4a35f');
-        cel.style.background = max ? '#e2cd97' : '#eeddb6';
-        btn.style.background = max ? 'rgba(212,175,55,.22)' : 'transparent';
+        cel.style.borderColor = max ? '#a2643a' : (tem ? '#7a6438' : '#ece4d8');
+        cel.style.background = max ? '#fdfaf5' : '#ffffff';
+        btn.style.background = max ? 'rgba(162,100,58,.22)' : 'transparent';
         if (inp) inp.placeholder = max ? 'tudo' : '0';
       });
     }
@@ -1133,13 +1133,13 @@
       const M = ccModelos();
       box.innerHTML = M.length ? M.map((m) =>
         '<span data-mod="' + m.id + '" title="' + esc(ccModeloTxt(m)) + '" ' +
-        'style="display:inline-flex;align-items:center;gap:3px;background:#eeddb6;border:1px solid #b18f4d;' +
-        'border-radius:10px;padding:2px 4px 2px 8px;font-size:10px;color:#7a5710;cursor:pointer">' +
+        'style="display:inline-flex;align-items:center;gap:3px;background:#ffffff;border:1px solid #e0d6c6;' +
+        'border-radius:10px;padding:2px 4px 2px 8px;font-size:10px;color:#a2643a;cursor:pointer">' +
           esc(m.nome) +
-          '<a data-mod-rn="' + m.id + '" title="renomear" style="color:#6e5a2a;padding:0 1px">✎</a>' +
-          '<a data-mod-rm="' + m.id + '" title="apagar" style="color:#c23a2c;padding:0 2px">✕</a>' +
+          '<a data-mod-rn="' + m.id + '" title="renomear" style="color:#8a7d6d;padding:0 1px">✎</a>' +
+          '<a data-mod-rm="' + m.id + '" title="apagar" style="color:#c0483a;padding:0 2px">✕</a>' +
         '</span>').join('')
-        : '<span style="font-size:10px;color:#6e5a2a">sem modelos — monte a composição e clique em "salvar como modelo"</span>';
+        : '<span style="font-size:10px;color:#8a7d6d">sem modelos — monte a composição e clique em "salvar como modelo"</span>';
       box.querySelectorAll('[data-mod]').forEach((el) => el.onclick = (ev) => {
         if (ev.target.hasAttribute('data-mod-rm') || ev.target.hasAttribute('data-mod-rn')) return;
         const m = ccModelos().find((z) => z.id === el.getAttribute('data-mod'));
@@ -1162,7 +1162,7 @@
       const comp = ccComposicao();
       const msg = document.getElementById('cc-msg');
       if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) {
-        if (msg) { msg.style.color = '#c23a2c'; msg.textContent = 'Preencha as tropas antes de salvar o modelo.'; }
+        if (msg) { msg.style.color = '#c0483a'; msg.textContent = 'Preencha as tropas antes de salvar o modelo.'; }
         return;
       }
       let nome = null;
@@ -1195,22 +1195,22 @@
       const box = document.getElementById('cc-ondas'); if (!box) return;
       const O = ccOndas();
       if (!O.length) {
-        box.innerHTML = '<div style="color:#6e5a2a;padding:6px;font-size:10px">— nenhuma onda. Use um atalho acima ou monte a composição e clique em "+ onda". —</div>';
+        box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma onda. Use um atalho acima ou monte a composição e clique em "+ onda". —</div>';
         ccOndasAviso(); return;
       }
       const opts = CCVILAS.map((v) => '<option value="' + v.vid + '">' + esc(v.coord || v.vid) + (v.nome ? ' · ' + esc(v.nome) : '') + '</option>').join('');
       box.innerHTML = O.map((o, i) =>
         '<div style="display:grid;grid-template-columns:24px 92px 1fr 62px 64px;gap:4px;align-items:center;padding:3px 4px;border-bottom:1px solid rgba(0,0,0,.07);font-size:10px">' +
-          '<span style="color:#9a6f0e">' + (i + 1) + '</span>' +
+          '<span style="color:#a2643a">' + (i + 1) + '</span>' +
           '<select data-onda-org="' + o.id + '" class="twmgr-inp" style="width:100%;font-size:9px;padding:1px">' +
             '<option value="">(1ª marcada)</option>' + opts + '</select>' +
-          '<span style="color:#5c4527;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(ccOndaTxt(o)) + '">' + esc(ccOndaTxt(o)) + '</span>' +
+          '<span style="color:#6f6153;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(ccOndaTxt(o)) + '">' + esc(ccOndaTxt(o)) + '</span>' +
           '<input data-onda-off="' + o.id + '" class="twmgr-inp" type="number" step="10" style="width:100%;font-size:9px;padding:1px" value="' + ccOndaOffset(o, i) + '">' +
           '<span style="text-align:right;white-space:nowrap">' +
-            '<a data-onda-up="' + o.id + '" style="cursor:pointer;color:#7a5710" title="subir">▲</a> ' +
-            '<a data-onda-dn="' + o.id + '" style="cursor:pointer;color:#7a5710" title="descer">▼</a> ' +
+            '<a data-onda-up="' + o.id + '" style="cursor:pointer;color:#a2643a" title="subir">▲</a> ' +
+            '<a data-onda-dn="' + o.id + '" style="cursor:pointer;color:#a2643a" title="descer">▼</a> ' +
             '<a data-onda-ed="' + o.id + '" style="cursor:pointer;color:#2e7d3a" title="carregar nas caixas de tropa">✎</a> ' +
-            '<a data-onda-rm="' + o.id + '" style="cursor:pointer;color:#c23a2c" title="remover">✕</a>' +
+            '<a data-onda-rm="' + o.id + '" style="cursor:pointer;color:#c0483a" title="remover">✕</a>' +
           '</span>' +
         '</div>').join('');
       O.forEach((o) => {
@@ -1263,7 +1263,7 @@
       const n = Math.max(1, Math.min(8, parseInt((document.getElementById('cc-trem-n') || {}).value, 10) || 4));
       if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) {
         const m = document.getElementById('cc-msg');
-        if (m) { m.style.color = '#c23a2c'; m.textContent = 'Monte primeiro a composição do NUKE nas caixas de tropa.'; }
+        if (m) { m.style.color = '#c0483a'; m.textContent = 'Monte primeiro a composição do NUKE nas caixas de tropa.'; }
         return;
       }
       // Onda 1 = o nuke que está nas caixas (sem nobre); depois, 1 nobre por onda.
@@ -1278,11 +1278,11 @@
       const n = Math.max(2, Math.min(8, parseInt((document.getElementById('cc-trem-n') || {}).value, 10) || 4));
       const m = document.getElementById('cc-msg');
       if (Object.keys(comp.max).length) {
-        if (m) { m.style.color = '#c23a2c'; m.textContent = 'Pra dividir, use quantidades exatas — "tudo" não dá pra repartir sem saber o estoque da origem.'; }
+        if (m) { m.style.color = '#c0483a'; m.textContent = 'Pra dividir, use quantidades exatas — "tudo" não dá pra repartir sem saber o estoque da origem.'; }
         return;
       }
       if (!Object.keys(comp.amounts).length) {
-        if (m) { m.style.color = '#c23a2c'; m.textContent = 'Preencha as tropas que serão divididas.'; }
+        if (m) { m.style.color = '#c0483a'; m.textContent = 'Preencha as tropas que serão divididas.'; }
         return;
       }
       // Divide igual e joga o resto nas primeiras ondas (4000/3 -> 1334,1333,1333).
@@ -1341,7 +1341,7 @@
     // apoio/ataque de várias aldeias pousar junto.
     function ccArmar() {
       const msg = document.getElementById('cc-msg');
-      const dizer = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c23a2c'; } };
+      const dizer = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c0483a'; } };
       const tipo = ccTipo();
 
       const arriveAt0 = ccChegadaMs();
@@ -1386,7 +1386,7 @@
         if (!armados) return dizer('Nenhuma onda armada. ' + (pulados.length ? pulados.join(', ') : ''));
         return dizer(armados + ' onda(s) armada(s), a 1ª chegando ' + srvClockMs(arriveAt) +
                      (pulados.length ? ' · pulada(s): ' + pulados.join(', ') : ''),
-                     pulados.length ? '#9a6f0e' : '#2e7d3a');
+                     pulados.length ? '#a2643a' : '#2e7d3a');
       }
 
       let armados = 0, pulados = [];
@@ -1408,7 +1408,7 @@
       dizer(armados + ' comando(s) armado(s) chegando ' + srvClockMs(arriveAt) +
             (semTropaAgora ? ' · ' + semTropaAgora + ' sem a tropa completa agora (confere no preparo)' : '') +
             (pulados.length ? ' · pulados: ' + pulados.join(', ') : ''),
-            semTropaAgora ? '#9a6f0e' : '#2e7d3a');
+            semTropaAgora ? '#a2643a' : '#2e7d3a');
     }
 
     // ---- Apoio em massa ----
@@ -1466,7 +1466,7 @@
     async function ccMassaEnviar() {
       const msg = document.getElementById('cc-massa-msg');
       const rel = document.getElementById('cc-massa-rel');
-      const diz = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c23a2c'; } };
+      const diz = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c0483a'; } };
       if (!config.cmd.suporteOkAt) return diz('O apoio ainda não foi verificado neste mundo — deixe a praça aberta alguns segundos e tente de novo.');
       const alvos = ((document.getElementById('cc-massa-alvos') || {}).value || '').split(/\n/)
         .map((s) => { const m = s.match(/(\d{1,3})\s*\|\s*(\d{1,3})/); return m ? { x: m[1], y: m[2] } : null; })
@@ -1481,7 +1481,7 @@
 
       const rotU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]).filter((u) => u !== 'snob');
       const rotNome = {}; UNITS.forEach(([u, n]) => { rotNome[u] = n; });
-      diz('Enviando… (não feche a praça)', '#5c4527'); if (rel) rel.textContent = '';
+      diz('Enviando… (não feche a praça)', '#6f6153'); if (rel) rel.textContent = '';
       const linhas = []; const totais = {}; let enviados = 0, falhas = 0;
       for (const v of marcadas) {
         const resolvido = ccMassaResolver(spec, v.avail);
@@ -1507,7 +1507,7 @@
       const header = 'ordem: ' + rotU.map((u) => rotNome[u] || u).join('/');
       const total = 'TOTAL: ' + rotU.map((u) => totais[u] || 0).join('/');
       if (rel) rel.textContent = header + '\n' + linhas.join('\n') + '\n────────\n' + total;
-      diz(enviados + ' apoio(s) enviado(s)' + (falhas ? ' · ' + falhas + ' falha(s)' : '') + '.', falhas ? '#9a6f0e' : '#2e7d3a');
+      diz(enviados + ' apoio(s) enviado(s)' + (falhas ? ' · ' + falhas + ' falha(s)' : '') + '.', falhas ? '#a2643a' : '#2e7d3a');
       pushLog('🚚 Apoio em massa: ' + enviados + ' envio(s)' + (falhas ? ', ' + falhas + ' falha(s)' : '') + '.', falhas ? 'err' : 'ok', 'cmd');
     }
 
@@ -1573,7 +1573,7 @@
       cont.innerHTML = '<span style="color:#584526">recentes:</span> ' + h.map((x) => {
         const nome = ccNomeAlvo(x.coord), dono = ccDonoAlvo(x.coord);
         const rot = x.coord + (nome ? ' ' + nome : '') + (dono ? ' (' + dono + ')' : '');
-        return '<a class="cc-hist-a" data-coord="' + x.coord + '" style="cursor:pointer;color:#7a5710;margin-right:2px" title="' + esc(rot) + '">' + esc(x.coord) + '</a>';
+        return '<a class="cc-hist-a" data-coord="' + x.coord + '" style="cursor:pointer;color:#a2643a;margin-right:2px" title="' + esc(rot) + '">' + esc(x.coord) + '</a>';
       }).join(' · ');
       cont.querySelectorAll('.cc-hist-a').forEach((el) => el.onclick = () => {
         const al = document.getElementById('cc-alvo'); if (al) { al.value = el.getAttribute('data-coord'); al.dispatchEvent(new Event('input')); }
@@ -1594,7 +1594,7 @@
     let CCVILAS = [];
     async function ccCarregarOrigens(forcar) {
       const cont = document.getElementById('cc-origens');
-      if (cont && !CCVILAS.length) cont.innerHTML = '<div style="color:#6e5a2a;padding:6px;font-size:10px">carregando aldeias…</div>';
+      if (cont && !CCVILAS.length) cont.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">carregando aldeias…</div>';
       try {
         await ccMundo(false);
         const tropas = await ccTropasTodasAldeias(forcar);
@@ -1639,10 +1639,10 @@
       cont.innerHTML = linhas.map((L) => {
         const v = L.v, on = !!sel[v.vid];
         let sit, cor;
-        if (!L.temTropa) { sit = '⚠ sem tropa'; cor = '#c23a2c'; }
-        else if (L.daTempo === false) { sit = '⚠ longe demais'; cor = '#c23a2c'; }
+        if (!L.temTropa) { sit = '⚠ sem tropa'; cor = '#c0483a'; }
+        else if (L.daTempo === false) { sit = '⚠ longe demais'; cor = '#c0483a'; }
         else if (L.t != null && ch) { sit = 'sai ' + srvClockMs(ch - L.t); cor = '#2e7d3a'; }
-        else { sit = ''; cor = '#6e5a2a'; }
+        else { sit = ''; cor = '#8a7d6d'; }
         // Estoque por unidade. Mostra o número em uso e, entre parênteses, o que está fora/voltando —
         // assim dá pra ver a diferença sem precisar alternar a fonte.
         const listaU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
@@ -1656,24 +1656,24 @@
           const extra = (foraT && (config.cmd.fonteTropa || 'casa') === 'casa')
             ? '<span style="color:#1f6fb2">+' + fmtN(foraT) + '</span>' : '';
           return '<span title="' + esc(rot) + (foraT ? ' · ' + fmtN(foraT) + ' fora/voltando' : '') +
-                 '" style="color:' + (falta ? '#c23a2c' : pedida ? '#9a6f0e' : '#584526') + '">' +
+                 '" style="color:' + (falta ? '#c0483a' : pedida ? '#a2643a' : '#584526') + '">' +
                  unitIcon(u, rot) + fmtN(q) + extra + '</span>';
         }).filter(Boolean).join(' ');
         return '<label style="display:block;padding:3px 5px;border-bottom:1px solid rgba(0,0,0,.07);cursor:pointer">' +
           '<span style="display:grid;grid-template-columns:18px 116px 44px 66px 46px 1fr;gap:6px;align-items:center;font-size:10px">' +
             '<input type="checkbox" data-cc-org="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
             '<span style="overflow:hidden" title="' + esc((v.nome || '') + ' ' + (v.coord || '')) + '">' +
-              '<span style="color:#7a5710;white-space:nowrap">' + esc(v.coord || v.vid) + '</span>' +
-              (v.nome ? '<span style="display:block;color:#6e5a2f;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(v.nome) + '</span>' : '') +
+              '<span style="color:#a2643a;white-space:nowrap">' + esc(v.coord || v.vid) + '</span>' +
+              (v.nome ? '<span style="display:block;color:#8a7d6d;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(v.nome) + '</span>' : '') +
             '</span>' +
-            '<span style="color:#6e5a2a">' + (L.d == null ? '—' : L.d.toFixed(1) + ' c') + '</span>' +
-            '<span style="color:#5c4527">' + (L.t == null ? '—' : fmt(L.t)) + '</span>' +
-            '<span style="color:#6e5a2a" title="unidade mais lenta que sai desta aldeia">' + (L.lenta ? esc(rotUn[L.lenta] || L.lenta) : '—') + '</span>' +
+            '<span style="color:#8a7d6d">' + (L.d == null ? '—' : L.d.toFixed(1) + ' c') + '</span>' +
+            '<span style="color:#6f6153">' + (L.t == null ? '—' : fmt(L.t)) + '</span>' +
+            '<span style="color:#8a7d6d" title="unidade mais lenta que sai desta aldeia">' + (L.lenta ? esc(rotUn[L.lenta] || L.lenta) : '—') + '</span>' +
             '<span style="color:' + cor + '">' + sit + '</span>' +
           '</span>' +
           (tropas ? '<span style="display:block;font-size:9px;margin:1px 0 0 24px;line-height:1.5">' + tropas + '</span>' : '') +
         '</label>';
-      }).join('') || '<div style="color:#6e5a2a;padding:6px;font-size:10px">— nenhuma aldeia —</div>';
+      }).join('') || '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma aldeia —</div>';
 
       cont.querySelectorAll('[data-cc-org]').forEach((el) => {
         el.onchange = () => {
@@ -1692,9 +1692,9 @@
         const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
         const txtLenta = lentas.length === 1 ? ('<b>' + esc(rot[lentas[0]] || lentas[0]) + '</b>')
                        : lentas.length ? '<b>varia por aldeia</b>' : '<b>—</b>';
-        av.innerHTML = !temComp ? '<span style="color:#6e5a2a">digite as tropas pra ver os tempos</span>'
+        av.innerHTML = !temComp ? '<span style="color:#8a7d6d">digite as tropas pra ver os tempos</span>'
           : ('unidade mais lenta: ' + txtLenta + ' · mundo ' + (m.speed || 1) + '×/' + (m.unitSpeed || 1) + '×' +
-             (m.confiavel ? '' : ' · <span style="color:#9a6f0e">velocidades de reserva (o servidor confirma no preparo)</span>'));
+             (m.confiavel ? '' : ' · <span style="color:#a2643a">velocidades de reserva (o servidor confirma no preparo)</span>'));
       }
       ccResumo();
     }
@@ -1711,7 +1711,7 @@
                    (ch ? ' · chegando ' + srvClockMs(ch) : '');
       // O trem sai todo da mesma aldeia; avisar aqui evita a surpresa só na hora de armar.
       if (ccTipo() === 'nobre' && n !== 1) {
-        el.innerHTML = esc(base) + ' · <b style="color:#9a6f0e">o trem exige exatamente 1 origem</b>';
+        el.innerHTML = esc(base) + ' · <b style="color:#a2643a">o trem exige exatamente 1 origem</b>';
         return;
       }
       el.textContent = base;
@@ -1761,10 +1761,10 @@
       if (bd) bd.style.display = (q === 'enviados') ? 'block' : 'none';
       document.querySelectorAll('.cc-ftab').forEach((el) => {
         const on = el.getAttribute('data-ftab') === q;
-        el.style.background = on ? '#e9d8ac' : '#eeddb6';
-        el.style.color = on ? '#9a6f0e' : '#6e5a2a';
+        el.style.background = on ? '#ffffff' : '#ffffff';
+        el.style.color = on ? '#a2643a' : '#8a7d6d';
         el.style.fontWeight = on ? '600' : '400';
-        el.style.borderBottom = on ? '1px solid #e9d8ac' : '1px solid #c4a35f';
+        el.style.borderBottom = on ? '1px solid #ffffff' : '1px solid #ece4d8';
       });
     }
     // Resumo das tropas em TEXTO puro (pra title/tooltip): "50 Expl., 1000 Lanc."
@@ -1799,7 +1799,7 @@
       }
       const agora = serverNow();
       const passo = Math.max(1, config.cmd.passoMs || 50);
-      const corDe = { novo: '#5c4527', preparado: '#9a6f0e', armado: '#2e7d3a', enviado: '#2e7d3a', erro: '#c23a2c', abortado: '#6e5a2a' };
+      const corDe = { novo: '#6f6153', preparado: '#a2643a', armado: '#2e7d3a', enviado: '#2e7d3a', erro: '#c0483a', abortado: '#8a7d6d' };
       const linha = (c) => {
         // "falta" = quanto falta pra SAIR (não pra chegar). Preparado, sendAt é a saída exata;
         // antes disso estima pela viagem local (arriveAt − tempo de viagem).
@@ -1814,36 +1814,36 @@
         const rot = { support: 'apoio', fake: 'fake', nobre: 'nobre' }[c.tipo] || 'ataque';
         // Horário de saída: já confirmado pelo servidor (c.sendAt) ou, antes do preparo,
         // a estimativa local. A estimativa aparece com "~" pra não passar por certeza.
-        let saiTxt = '—', saiCor = '#6e5a2a';
+        let saiTxt = '—', saiCor = '#8a7d6d';
         if (c.sendAt) { saiTxt = srvClockMs(c.sendAt); saiCor = '#2e7d3a'; }
         else {
           const est = ccEstimaDeComando(c);
-          if (est != null && c.arriveAt) { saiTxt = '~' + srvClockMs(c.arriveAt - est); saiCor = '#5c4527'; }
+          if (est != null && c.arriveAt) { saiTxt = '~' + srvClockMs(c.arriveAt - est); saiCor = '#6f6153'; }
         }
         return '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;align-items:center;padding:3px 5px;border-bottom:1px solid rgba(0,0,0,.07);font-size:10px">' +
           '<span style="color:' + (c.tipo === 'support' ? '#1f6fb2' : '#b5602f') + '">' + rot + (c.ondas ? ' ' + c.onda + '/' + c.ondas : '') + '</span>' +
-          '<span style="color:#6e5a2a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(orgNome || String(org)) + '">' +
+          '<span style="color:#8a7d6d;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(orgNome || String(org)) + '">' +
             esc(String(org)) + (orgNome ? '<br><span style="color:#584526">' + esc(orgNome) + '</span>' : '') + '</span>' +
-          '<span style="color:#7a5710;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(alvoNome || (c.x + '|' + c.y)) + '">' +
-            esc(c.x + '|' + c.y) + (alvoNome ? '<br><span style="color:#6e5a2a">' + esc(alvoNome) + '</span>' : '') + '</span>' +
-          '<span style="color:' + (corDe[c.state] || '#5c4527') + '">' + esc(c.state) + (c.erro ? ' · ' + esc(c.erro.slice(0, 40)) : '') + '</span>' +
+          '<span style="color:#a2643a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(alvoNome || (c.x + '|' + c.y)) + '">' +
+            esc(c.x + '|' + c.y) + (alvoNome ? '<br><span style="color:#8a7d6d">' + esc(alvoNome) + '</span>' : '') + '</span>' +
+          '<span style="color:' + (corDe[c.state] || '#6f6153') + '">' + esc(c.state) + (c.erro ? ' · ' + esc(c.erro.slice(0, 40)) : '') + '</span>' +
           '<span style="color:' + saiCor + '" title="horário de saída">' + saiTxt + '</span>' +
-          '<span style="color:#5c4527">' + (c.arriveAt ? srvClockMs(c.arriveAt) : '—') + '</span>' +
-          '<span style="text-align:right;color:' + (dev ? erroCor(Math.abs(c.desvioMs)) : '#6e5a2a') + '">' + (dev || (falta > 0 ? fmt(falta) : '—')) + '</span>' +
+          '<span style="color:#6f6153">' + (c.arriveAt ? srvClockMs(c.arriveAt) : '—') + '</span>' +
+          '<span style="text-align:right;color:' + (dev ? erroCor(Math.abs(c.desvioMs)) : '#8a7d6d') + '">' + (dev || (falta > 0 ? fmt(falta) : '—')) + '</span>' +
           (c.state === 'novo' || c.state === 'preparado' || c.state === 'armado'
-            ? '<span data-cc-ab="' + c.id + '" style="cursor:pointer;color:#c23a2c" title="abortar">✕</span>' : '<span></span>') +
+            ? '<span data-cc-ab="' + c.id + '" style="cursor:pointer;color:#c0483a" title="abortar">✕</span>' : '<span></span>') +
           // Tropas que saem neste comando — largura total, pra não espremer a grade.
-          '<span style="grid-column:1/-1;font-size:9px;color:#6e5a2f;margin:1px 0 0 46px;line-height:1.6">' +
+          '<span style="grid-column:1/-1;font-size:9px;color:#8a7d6d;margin:1px 0 0 46px;line-height:1.6">' +
             (ccTropaResumo(c.amounts) || '<span style="color:#584526">— sem tropa —</span>') + '</span>' +
           // Ajuste fino: mexe na CHEGADA e o horário de saída se recalcula sozinho.
           // Some depois que o comando entra no disparo, quando mudar já não é seguro.
           (ccEditavel(c)
-            ? '<span style="grid-column:1/-1;text-align:right;font-size:9px;color:#6e5a2a;padding-top:1px">' +
-                '<a data-aj="' + c.id + '" data-d="' + (-passo * 10) + '" style="cursor:pointer;color:#7a5710" title="−' + (passo * 10) + 'ms">≪</a> ' +
-                '<a data-aj="' + c.id + '" data-d="' + (-passo) + '" style="cursor:pointer;color:#7a5710" title="−' + passo + 'ms">‹</a> ' +
+            ? '<span style="grid-column:1/-1;text-align:right;font-size:9px;color:#8a7d6d;padding-top:1px">' +
+                '<a data-aj="' + c.id + '" data-d="' + (-passo * 10) + '" style="cursor:pointer;color:#a2643a" title="−' + (passo * 10) + 'ms">≪</a> ' +
+                '<a data-aj="' + c.id + '" data-d="' + (-passo) + '" style="cursor:pointer;color:#a2643a" title="−' + passo + 'ms">‹</a> ' +
                 '<span style="color:#584526">ajuste</span> ' +
-                '<a data-aj="' + c.id + '" data-d="' + passo + '" style="cursor:pointer;color:#7a5710" title="+' + passo + 'ms">›</a> ' +
-                '<a data-aj="' + c.id + '" data-d="' + (passo * 10) + '" style="cursor:pointer;color:#7a5710" title="+' + (passo * 10) + 'ms">≫</a>' +
+                '<a data-aj="' + c.id + '" data-d="' + passo + '" style="cursor:pointer;color:#a2643a" title="+' + passo + 'ms">›</a> ' +
+                '<a data-aj="' + c.id + '" data-d="' + (passo * 10) + '" style="cursor:pointer;color:#a2643a" title="+' + (passo * 10) + 'ms">≫</a>' +
                 ' &nbsp;<a data-sw="' + c.id + '" data-dir="-1" style="cursor:pointer;color:#2e7d3a" title="trocar de lugar com o de cima">▲</a>' +
                 ' <a data-sw="' + c.id + '" data-dir="1" style="cursor:pointer;color:#2e7d3a" title="trocar de lugar com o de baixo">▼</a>' +
               '</span>'
@@ -1854,7 +1854,7 @@
       const ordenada = ccFilaOrdenada();
       const envio = ordenada.filter(ehEnvio);
       const feitos = ordenada.filter((c) => !ehEnvio(c));
-      const vazio = (t) => '<div style="color:#6e5a2a;padding:6px;font-size:10px">' + t + '</div>';
+      const vazio = (t) => '<div style="color:#8a7d6d;padding:6px;font-size:10px">' + t + '</div>';
       bEnvio.innerHTML = envio.length ? envio.map(linha).join('') : vazio('— nada a enviar —');
       bEnv.innerHTML = feitos.length ? feitos.map(linha).join('') : vazio('— nada enviado ainda —');
       const ne = document.getElementById('cc-ftab-n-envio'); if (ne) ne.textContent = '(' + envio.length + ')';
@@ -1886,9 +1886,9 @@
           'aba <b>' + (document.hidden ? 'em 2º plano' : 'visível') + '</b>',
         ];
         // Sem o oscilador ativo, uma aba escondida perde centenas de ms. O usuário precisa ver isso.
-        if (document.hidden && !awakeAtivo()) partes.push('<b style="color:#c23a2c">antichoke inativo — clique em Armar</b>');
-        if (Math.abs(CLK.driftMs || 0) > 50) partes.push('<b style="color:#9a6f0e">relógio oscilando ' + Math.round(CLK.driftMs) + 'ms</b>');
-        if (!window.Timing) partes.push('<b style="color:#c23a2c">sem relógio do jogo!</b>');
+        if (document.hidden && !awakeAtivo()) partes.push('<b style="color:#c0483a">antichoke inativo — clique em Armar</b>');
+        if (Math.abs(CLK.driftMs || 0) > 50) partes.push('<b style="color:#a2643a">relógio oscilando ' + Math.round(CLK.driftMs) + 'ms</b>');
+        if (!window.Timing) partes.push('<b style="color:#c0483a">sem relógio do jogo!</b>');
         st.innerHTML = partes.join(' · ');
       }
       // Viés medido pelo laço fechado (ccMedir). Se ficar em "—" depois de vários envios, a
@@ -1896,7 +1896,7 @@
       const vi = document.getElementById('cc-vies');
       if (vi) {
         const k = (config.cmd && config.cmd.calib) || {};
-        vi.innerHTML = 'viés <b style="color:' + (k.n ? '#2e7d3a' : '#6e5a2a') + '">' +
+        vi.innerHTML = 'viés <b style="color:' + (k.n ? '#2e7d3a' : '#8a7d6d') + '">' +
           (k.n ? (k.biasMs > 0 ? '+' : '') + Math.round(k.biasMs || 0) + 'ms' : '—') + '</b>' +
           (k.n ? ' (' + k.n + ' amostra' + (k.n > 1 ? 's' : '') + ')' : ' <span style="color:#584526">(não calibrou)</span>');
       }
@@ -2005,13 +2005,13 @@
         // Tropas só no hover (title da linha), pra manter one-liner.
         tr.title = 'Agendado na Central · ' + ccTropaTxt(c.amounts) + (saiEm ? ' · sai ' + srvClockMs(saiEm) : '');
         let html = '';
-        for (let i = 0; i < nc; i++) html += '<td style="padding:4px 6px;white-space:nowrap;color:#7d510a">' +
+        for (let i = 0; i < nc; i++) html += '<td style="padding:4px 6px;white-space:nowrap;color:#a2643a">' +
           (i === 0
             ? '🕒 <b>' + esc(rot) + ' agendado</b> → ' + esc(c.x + '|' + c.y) + (nome ? ' ' + esc(nome) : '') +
               (saiEm ? ' <span style="color:#a98a4a">· sai ' + srvClockMs(saiEm) + '</span>' : '')
             : i === nc - 2 ? srvClockMs(c.arriveAt)
             : i === nc - 1 ? '<span class="cc-ov-falta" data-arr="' + c.arriveAt + '"></span>' +
-                '<a href="#" class="cc-ov-x" data-id="' + c.id + '" title="cancelar comando agendado" style="color:#c23a2c;font-weight:bold;margin-left:8px;text-decoration:none">✕</a>'
+                '<a href="#" class="cc-ov-x" data-id="' + c.id + '" title="cancelar comando agendado" style="color:#c0483a;font-weight:bold;margin-left:8px;text-decoration:none">✕</a>'
             : '') + '</td>';
         tr.innerHTML = html;
         let ref = null;
@@ -2075,18 +2075,18 @@
       ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:99999;display:flex;' +
                          'align-items:center;justify-content:center';
       ov.innerHTML =
-        '<div style="background:linear-gradient(180deg,#e2cd97,#ecdcb2);border:1px solid #b18f4d;border-radius:10px;' +
-             'padding:12px;width:min(680px,94vw);max-height:86vh;overflow:auto;color:#6a4e18;font-size:11px">' +
+        '<div style="background:linear-gradient(180deg,#fdfaf5,#fffdfa);border:1px solid #e0d6c6;border-radius:10px;' +
+             'padding:12px;width:min(680px,94vw);max-height:86vh;overflow:auto;color:#8b5426;font-size:11px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-            '<b style="color:#7d510a;font-size:13px">🎯 Snipe em ' + esc(p.destino || '?') + '</b>' +
-            '<a id="cc-sn-x" style="cursor:pointer;color:#c23a2c;font-size:14px">✕</a>' +
+            '<b style="color:#a2643a;font-size:13px">🎯 Snipe em ' + esc(p.destino || '?') + '</b>' +
+            '<a id="cc-sn-x" style="cursor:pointer;color:#c0483a;font-size:14px">✕</a>' +
           '</div>' +
-          '<div style="font-size:10px;color:#5c4527;margin-bottom:4px">' +
+          '<div style="font-size:10px;color:#6f6153;margin-bottom:4px">' +
             'O ataque pousa às <b style="color:#c2593a">' + srvClockMs(p.base) + '</b> · ' +
             'o apoio chega às <b style="color:#2e7d3a">' + srvClockMs(p.chegaEm) + '</b>' +
             ' (<b>' + ccFolgaSnipe() + 'ms antes</b>)' +
             (p.largura != null ? ' · janela de <b>' + p.largura + 'ms</b> desde a onda anterior' : ' · sem onda anterior conhecida') +
-            (p.exato ? '' : ' · <b style="color:#9a6f0e">chegada sem milésimos: 1s de incerteza</b>') +
+            (p.exato ? '' : ' · <b style="color:#a2643a">chegada sem milésimos: 1s de incerteza</b>') +
           '</div>' +
           // A margem precisa ser maior que o erro de disparo: se o apoio atrasar mais que ela,
           // pousa DEPOIS do ataque e não serve pra nada.
@@ -2096,7 +2096,7 @@
             '<span id="cc-sn-folga-av"></span>' +
           '</div>' +
           (viaveis.length
-            ? '<div style="display:grid;grid-template-columns:20px 96px 1fr 74px 70px;gap:6px;font-size:9px;color:#6e5a2a;padding:0 4px 3px">' +
+            ? '<div style="display:grid;grid-template-columns:20px 96px 1fr 74px 70px;gap:6px;font-size:9px;color:#8a7d6d;padding:0 4px 3px">' +
                 '<span></span><span>aldeia</span><span>tropas de defesa</span><span>sai às</span><span>folga</span></div>'
             : '') +
           '<div id="cc-sn-lista"></div>' +
@@ -2113,17 +2113,17 @@
         '<label style="display:grid;grid-template-columns:20px 96px 1fr 74px 70px;gap:6px;align-items:center;' +
         'padding:3px 4px;border-bottom:1px solid rgba(0,0,0,.07);' + (c.viavel ? '' : 'opacity:.45;') + '">' +
           '<input type="checkbox" data-sn="' + i + '"' + (c.viavel && i === 0 ? ' checked' : '') + (c.viavel ? '' : ' disabled') + '>' +
-          '<span style="color:#7a5710">' + esc(c.v.coord) + '</span>' +
-          '<span style="color:#5c4527;font-size:10px">' +
+          '<span style="color:#a2643a">' + esc(c.v.coord) + '</span>' +
+          '<span style="color:#6f6153;font-size:10px">' +
             CC_DEF.filter((u) => c.comp[u]).map((u) => esc(rot[u] || u) + ' ' + fmtN(c.comp[u])).join(' · ') + '</span>' +
-          '<span style="color:' + (c.viavel ? '#2e7d3a' : '#c23a2c') + '">' + srvClockMs(c.sai) + '</span>' +
-          '<span style="color:#6e5a2a">' + (c.folga > 0 ? fmt(c.folga) : 'tarde') + '</span>' +
+          '<span style="color:' + (c.viavel ? '#2e7d3a' : '#c0483a') + '">' + srvClockMs(c.sai) + '</span>' +
+          '<span style="color:#8a7d6d">' + (c.folga > 0 ? fmt(c.folga) : 'tarde') + '</span>' +
         '</label>').join('')
-        : '<div style="color:#c23a2c;padding:8px;font-size:10px">Nenhuma aldeia sua tem tropa de defesa para este alvo.</div>';
+        : '<div style="color:#c0483a;padding:8px;font-size:10px">Nenhuma aldeia sua tem tropa de defesa para este alvo.</div>';
 
       const msg = ov.querySelector('#cc-sn-msg');
       if (!viaveis.length && cands.length) {
-        msg.style.color = '#c23a2c';
+        msg.style.color = '#c0483a';
         msg.textContent = 'Nenhuma aldeia chega a tempo: a mais rápida sairia ' + fmt(Math.abs(cands[0].folga)) + ' atrás.';
       }
       // Aviso vivo: margem menor que o erro de disparo é o cenário em que o snipe morre no ataque.
@@ -2131,9 +2131,9 @@
       const attFolga = () => {
         const e = erroEstimadoMs(), f = parseInt(folgaEl.value, 10) || 0;
         if (f < e) {
-          folgaAv.innerHTML = '<b style="color:#c23a2c">⚠ menor que o erro medido (±' + e + 'ms) — o apoio pode chegar DEPOIS do ataque e não segurar nada</b>';
+          folgaAv.innerHTML = '<b style="color:#c0483a">⚠ menor que o erro medido (±' + e + 'ms) — o apoio pode chegar DEPOIS do ataque e não segurar nada</b>';
         } else if (p.largura != null && f > p.largura) {
-          folgaAv.innerHTML = '<b style="color:#c23a2c">⚠ maior que a janela (' + p.largura + 'ms) — cairia antes da onda anterior e morreria nela</b>';
+          folgaAv.innerHTML = '<b style="color:#c0483a">⚠ maior que a janela (' + p.largura + 'ms) — cairia antes da onda anterior e morreria nela</b>';
         } else {
           folgaAv.innerHTML = '<span style="color:#2e7d3a">✓ acima do erro medido (±' + e + 'ms)</span>';
         }
@@ -2151,8 +2151,8 @@
       ov.querySelector('#cc-sn-praca').onclick = () => { ccPreencherSnipe(p); ov.remove(); };
       ov.querySelector('#cc-sn-armar').onclick = () => {
         const marcadas = [...lista.querySelectorAll('[data-sn]')].filter((e) => e.checked).map((e) => cands[+e.getAttribute('data-sn')]);
-        if (!marcadas.length) { msg.style.color = '#c23a2c'; msg.textContent = 'Marque ao menos uma aldeia.'; return; }
-        if (!config.cmd.suporteOkAt) { msg.style.color = '#c23a2c'; msg.textContent = 'O apoio ainda não foi verificado neste mundo — abra a praça de reunião uma vez.'; return; }
+        if (!marcadas.length) { msg.style.color = '#c0483a'; msg.textContent = 'Marque ao menos uma aldeia.'; return; }
+        if (!config.cmd.suporteOkAt) { msg.style.color = '#c0483a'; msg.textContent = 'O apoio ainda não foi verificado neste mundo — abra a praça de reunião uma vez.'; return; }
         const al = p.destino.split('|');
         let n = 0;
         marcadas.forEach((c) => { cmdAdicionar('support', al[0], al[1], c.comp, p.chegaEm, c.v.vid); n++; });
@@ -2188,102 +2188,102 @@
       const host = document.querySelector('#content_value') || document.querySelector('#contentContainer') || document.body;
       const d = document.createElement('div');
       d.id = 'cc-painel';
-      d.style.cssText = 'background:linear-gradient(180deg,#e2cd97,#ecdcb2);border:1px solid #b18f4d;border-radius:10px;padding:10px;margin:0 0 12px;color:#6a4e18;font-size:11px';
-      const row = (l, inner) => '<div class="twmgr-row" style="display:flex;align-items:center;gap:6px;margin:3px 0"><span style="min-width:120px;color:#5c4527">' + l + '</span>' + inner + '</div>';
+      d.style.cssText = 'background:linear-gradient(180deg,#fdfaf5,#fffdfa);border:1px solid #e0d6c6;border-radius:10px;padding:10px;margin:0 0 12px;color:#8b5426;font-size:11px';
+      const row = (l, inner) => '<div class="twmgr-row" style="display:flex;align-items:center;gap:6px;margin:3px 0"><span style="min-width:120px;color:#6f6153">' + l + '</span>' + inner + '</div>';
       d.innerHTML =
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
-          '<b style="color:#7d510a;font-size:13px">🚀 Centro de Comando <span style="color:#6e5a2a;font-size:10px;font-weight:400">v' + VERSION + '</span></b>' +
-          '<b id="cc-clock" style="color:#9a6f0e;font-size:16px;font-variant-numeric:tabular-nums">--:--:--.---</b>' +
+          '<b style="color:#a2643a;font-size:13px">🚀 Centro de Comando <span style="color:#8a7d6d;font-size:10px;font-weight:400">v' + VERSION + '</span></b>' +
+          '<b id="cc-clock" style="color:#a2643a;font-size:16px;font-variant-numeric:tabular-nums">--:--:--.---</b>' +
         '</div>' +
-        '<div id="cc-saude" style="font-size:10px;color:#5c4527;margin-bottom:4px"></div>' +
-        '<div id="cc-silencio" style="font-size:10px;color:#9a6f0e;margin-bottom:4px;min-height:12px"></div>' +
+        '<div id="cc-saude" style="font-size:10px;color:#6f6153;margin-bottom:4px"></div>' +
+        '<div id="cc-silencio" style="font-size:10px;color:#a2643a;margin-bottom:4px;min-height:12px"></div>' +
         // Ajuste de precisão: o viés adaptativo (ccMedir) deveria corrigir sozinho, mas dá pra
         // forçar aqui. "Atrasar chegada" positivo = chega mais tarde (corrige quando sai adiantado).
-        '<div style="font-size:10px;color:#6e5a2a;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+        '<div style="font-size:10px;color:#8a7d6d;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
           '<span title="Se os comandos chegam ADIANTADOS, aumente. Se atrasados, use negativo. Some ao viés que o sistema mede sozinho.">Atrasar chegada <input id="cc-atraso" class="twmgr-inp" type="number" step="10" style="width:60px;font-size:10px;padding:1px">ms</span>' +
           '<span style="color:#584526">(+ = mais tarde)</span>' +
           '<span id="cc-vies" style="margin-left:auto"></span>' +
         '</div>' +
         row('Alvo',
           '<input id="cc-alvo" class="twmgr-inp" style="width:130px;font-variant-numeric:tabular-nums" placeholder="478|586">' +
-          '<span id="cc-alvo-ok" style="font-size:10px;color:#6e5a2a"></span>') +
+          '<span id="cc-alvo-ok" style="font-size:10px;color:#8a7d6d"></span>') +
         row('Chegada (servidor)',
           '<input id="cc-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:230px">' +
           '<button id="cc-ch-agora" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="preenche com a hora do servidor + 10 min">+10min</button>' +
           '<button id="cc-ch-cmd" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="copiar o horário de um comando do jogo">📋 de um comando</button>') +
         '<div id="cc-alvo-hist" style="font-size:10px;margin:2px 0 6px;line-height:1.8"></div>' +
         // Comandos do jogo: copiar horário pra coordenar em cima, ou escolher um pra snipar.
-        '<div id="cc-cmds-box" style="display:none;border:1px solid #b18f4d;border-radius:6px;padding:6px;margin:4px 0">' +
+        '<div id="cc-cmds-box" style="display:none;border:1px solid #e0d6c6;border-radius:6px;padding:6px;margin:4px 0">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
             '<span style="font-size:10px">' +
-              '<a id="cc-cmds-in" style="cursor:pointer;color:#7a5710">🛡 chegando em mim</a> · ' +
-              '<a id="cc-cmds-out" style="cursor:pointer;color:#7a5710">⚔ meus em rota</a>' +
+              '<a id="cc-cmds-in" style="cursor:pointer;color:#a2643a">🛡 chegando em mim</a> · ' +
+              '<a id="cc-cmds-out" style="cursor:pointer;color:#a2643a">⚔ meus em rota</a>' +
             '</span>' +
-            '<span style="font-size:10px;color:#6e5a2a">deslocar ' +
+            '<span style="font-size:10px;color:#8a7d6d">deslocar ' +
               '<input id="cc-cmds-off" class="twmgr-inp" type="number" step="10" value="0" style="width:60px;font-size:10px;padding:1px">ms' +
-              ' <a id="cc-cmds-fechar" style="cursor:pointer;color:#c23a2c;margin-left:6px">✕</a></span>' +
+              ' <a id="cc-cmds-fechar" style="cursor:pointer;color:#c0483a;margin-left:6px">✕</a></span>' +
           '</div>' +
-          '<div id="cc-cmds-lista" style="max-height:200px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:6px"></div>' +
+          '<div id="cc-cmds-lista" style="max-height:200px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
         '</div>' +
         // Abas em vez de rádios: cada tipo tem configuração própria, e a aba deixa claro
         // qual conjunto de campos está valendo.
         '<div id="cc-abas" style="display:flex;gap:2px;margin:8px 0 0">' +
           CC_TIPOS.map((t) =>
             '<div class="cc-aba" data-tipo="' + t.id + '" style="flex:1;text-align:center;padding:6px 4px;cursor:pointer;' +
-            'border:1px solid #b18f4d;border-bottom:none;border-radius:6px 6px 0 0;font-size:11px;user-select:none">' +
+            'border:1px solid #e0d6c6;border-bottom:none;border-radius:6px 6px 0 0;font-size:11px;user-select:none">' +
             t.ico + ' ' + t.rot + '</div>').join('') +
         '</div>' +
-        '<div id="cc-aba-corpo" style="border:1px solid #b18f4d;border-radius:0 6px 6px 6px;padding:8px;margin-bottom:8px">' +
-          '<div id="cc-aba-hint" style="font-size:10px;color:#6e5a2a;margin-bottom:6px"></div>' +
+        '<div id="cc-aba-corpo" style="border:1px solid #e0d6c6;border-radius:0 6px 6px 6px;padding:8px;margin-bottom:8px">' +
+          '<div id="cc-aba-hint" style="font-size:10px;color:#8a7d6d;margin-bottom:6px"></div>' +
         // Fake: dezenas de alvos de uma vez, com duas distribuições possíveis.
         '<div id="cc-fake-cfg" style="display:none">' +
-          '<div style="font-size:10px;color:#5c4527;margin:4px 0 2px">Alvos do fake (cole vários)</div>' +
+          '<div style="font-size:10px;color:#6f6153;margin:4px 0 2px">Alvos do fake (cole vários)</div>' +
           '<textarea id="cc-fake-alvos" class="twmgr-inp" style="width:100%;height:54px;font-size:10px" ' +
             'placeholder="478|586 479|587 480|588 …"></textarea>' +
           '<div style="font-size:10px;margin:3px 0">' +
             '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="cc-fakedist" value="rodizio"> rodízio — 1 fake por alvo, alternando as origens</label><br>' +
             '<label style="cursor:pointer"><input type="radio" name="cc-fakedist" value="todos"> todas × todos — cada origem manda 1 fake pra cada alvo</label>' +
           '</div>' +
-          '<div id="cc-fake-previa" style="font-size:10px;color:#9a6f0e;margin-bottom:4px"></div>' +
+          '<div id="cc-fake-previa" style="font-size:10px;color:#a2643a;margin-bottom:4px"></div>' +
         '</div>' +
         '<div id="cc-trem-cfg" style="display:none">' +
           row('Intervalo entre ondas',
             '<input id="cc-trem-gap" class="twmgr-inp" type="number" min="50" max="5000" step="10" value="150" style="width:70px">' +
-            '<span style="color:#6e5a2a">ms</span>' +
-            '<span style="color:#6e5a2a;margin-left:10px">nobres</span>' +
+            '<span style="color:#8a7d6d">ms</span>' +
+            '<span style="color:#8a7d6d;margin-left:10px">nobres</span>' +
             '<input id="cc-trem-n" class="twmgr-inp" type="number" min="1" max="8" value="4" style="width:48px">') +
           '<div style="font-size:10px;margin:4px 0 6px">' +
             '<a id="cc-nt-preset" style="cursor:pointer;color:#2e7d3a">⚡ montar NT (nuke + nobres)</a> · ' +
-            '<a id="cc-nt-dividir" style="cursor:pointer;color:#7a5710">✂ dividir em N ondas</a> · ' +
-            '<a id="cc-nt-nobres" style="cursor:pointer;color:#7a5710">👑 só nobres</a> · ' +
-            '<a id="cc-nt-add" style="cursor:pointer;color:#7a5710">+ onda com a composição atual</a> · ' +
-            '<a id="cc-nt-limpar" style="cursor:pointer;color:#c23a2c">limpar</a>' +
+            '<a id="cc-nt-dividir" style="cursor:pointer;color:#a2643a">✂ dividir em N ondas</a> · ' +
+            '<a id="cc-nt-nobres" style="cursor:pointer;color:#a2643a">👑 só nobres</a> · ' +
+            '<a id="cc-nt-add" style="cursor:pointer;color:#a2643a">+ onda com a composição atual</a> · ' +
+            '<a id="cc-nt-limpar" style="cursor:pointer;color:#c0483a">limpar</a>' +
           '</div>' +
-          '<div style="display:grid;grid-template-columns:24px 92px 1fr 62px 64px;gap:4px;font-size:9px;color:#6e5a2a;padding:0 4px 2px">' +
+          '<div style="display:grid;grid-template-columns:24px 92px 1fr 62px 64px;gap:4px;font-size:9px;color:#8a7d6d;padding:0 4px 2px">' +
             '<span>#</span><span>origem</span><span>tropas</span><span>defasagem</span><span></span></div>' +
-          '<div id="cc-ondas" style="max-height:170px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:6px"></div>' +
-          '<div id="cc-trem-aviso" style="font-size:10px;color:#9a6f0e;margin:4px 0 0"></div>' +
+          '<div id="cc-ondas" style="max-height:170px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+          '<div id="cc-trem-aviso" style="font-size:10px;color:#a2643a;margin:4px 0 0"></div>' +
         '</div>' +
           // Apoio em massa: aparece só quando a aba 🚚 está ativa. Usa as origens marcadas abaixo.
           '<div id="cc-massa-cfg" style="display:none">' +
             '<label style="font-size:10px;display:block">Alvo(s) <span style="color:#584526">(um por linha)</span></label>' +
             '<textarea id="cc-massa-alvos" class="twmgr-inp" style="width:100%;height:36px;font-size:10px" placeholder="500|600"></textarea>' +
             '<label style="font-size:10px;display:block;margin-top:3px;cursor:pointer"><input type="checkbox" id="cc-massa-dividir"> dividir as tropas entre os alvos (senão manda o cheio pra cada)</label>' +
-            '<div style="font-size:9px;color:#6e5a2a;margin:4px 0 2px">Tropas por aldeia — número, <b>50%</b> ou <b>tudo</b>:</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin:4px 0 2px">Tropas por aldeia — número, <b>50%</b> ou <b>tudo</b>:</div>' +
             '<div id="cc-massa-unidades" style="display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px"></div>' +
             '<button id="cc-massa-enviar" class="twmgr-btn twmgr-go" style="width:100%">🚚 Enviar apoio agora</button>' +
             '<div id="cc-massa-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
-            '<div id="cc-massa-rel" style="font-size:10px;margin-top:4px;color:#5c4527;font-family:Consolas,monospace;white-space:pre-wrap;max-height:160px;overflow-y:auto"></div>' +
+            '<div id="cc-massa-rel" style="font-size:10px;margin-top:4px;color:#6f6153;font-family:Consolas,monospace;white-space:pre-wrap;max-height:160px;overflow-y:auto"></div>' +
           '</div>' +
         '</div>' +   // fim de #cc-aba-corpo
         // Tropas digitadas AQUI, não nas caixas do jogo. "tudo" = manda o estoque inteiro daquela origem.
-        '<div id="cc-tropas-sec" style="margin:8px 0 4px;border-top:1px solid #c4a35f;padding-top:6px">' +
+        '<div id="cc-tropas-sec" style="margin:8px 0 4px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
-            '<span data-sec="tropas" style="font-size:10px;color:#6a4e18;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Tropas por origem</span>' +
+            '<span data-sec="tropas" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Tropas por origem</span>' +
             '<span style="font-size:10px">' +
               '<a id="cc-tpl-salvar" style="cursor:pointer;color:#2e7d3a">+ salvar como modelo</a> · ' +
-              '<a id="cc-tpl-limpar" style="cursor:pointer;color:#7a5710">limpar</a> · ' +
-              '<a id="cc-tpl-restaurar" style="cursor:pointer;color:#6e5a2a" title="repõe Tudo/Nobre/Fake">padrão</a>' +
+              '<a id="cc-tpl-limpar" style="cursor:pointer;color:#a2643a">limpar</a> · ' +
+              '<a id="cc-tpl-restaurar" style="cursor:pointer;color:#8a7d6d" title="repõe Tudo/Nobre/Fake">padrão</a>' +
             '</span>' +
           '</div>' +
           '<div data-secbody="tropas">' +
@@ -2294,14 +2294,14 @@
           '</div>' +
         '</div>' +
         // Origens: cada aldeia com distância e tempo já calculados pela unidade mais lenta.
-        '<div style="margin:8px 0 4px;border-top:1px solid #c4a35f;padding-top:6px">' +
+        '<div style="margin:8px 0 4px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
-            '<span data-sec="origens" style="font-size:10px;color:#6a4e18;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Origens</span>' +
+            '<span data-sec="origens" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Origens</span>' +
             '<span style="font-size:10px">' +
-              '<a id="cc-org-todas" style="cursor:pointer;color:#7a5710">todas</a> · ' +
-              '<a id="cc-org-nenhuma" style="cursor:pointer;color:#7a5710">nenhuma</a> · ' +
+              '<a id="cc-org-todas" style="cursor:pointer;color:#a2643a">todas</a> · ' +
+              '<a id="cc-org-nenhuma" style="cursor:pointer;color:#a2643a">nenhuma</a> · ' +
               '<a id="cc-org-viaveis" style="cursor:pointer;color:#2e7d3a" title="marca só as aldeias que têm a tropa pedida E ainda dão tempo de chegar">✓ só as viáveis</a> · ' +
-              '<a id="cc-org-recarregar" style="cursor:pointer;color:#7a5710">↻</a>' +
+              '<a id="cc-org-recarregar" style="cursor:pointer;color:#a2643a">↻</a>' +
             '</span>' +
           '</div>' +
           // "total" conta a tropa que está fora e volta — necessário pra agendar um full
@@ -2311,11 +2311,11 @@
             '<label style="margin-right:10px;cursor:pointer" title="linha &quot;Na Aldeia&quot; do jogo"><input type="radio" name="cc-fonte" value="casa"> na aldeia agora</label>' +
             '<label style="cursor:pointer" title="linha &quot;suas próprias&quot; do jogo: inclui o que está fora e em trânsito"><input type="radio" name="cc-fonte" value="total"> suas próprias (inclui fora/trânsito)</label>' +
           '</div>' +
-          '<div id="cc-vel-aviso" style="font-size:10px;color:#6e5a2a;margin-bottom:3px"></div>' +
-          '<div style="display:grid;grid-template-columns:18px 116px 44px 66px 46px 1fr;gap:6px;font-size:9px;color:#6e5a2a;padding:0 5px 2px">' +
+          '<div id="cc-vel-aviso" style="font-size:10px;color:#8a7d6d;margin-bottom:3px"></div>' +
+          '<div style="display:grid;grid-template-columns:18px 116px 44px 66px 46px 1fr;gap:6px;font-size:9px;color:#8a7d6d;padding:0 5px 2px">' +
             '<span></span><span>aldeia</span><span>dist.</span><span>viagem</span><span>mais lenta</span><span>saída</span></div>' +
-          '<div id="cc-origens" style="max-height:170px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:6px"></div>' +
-          '<div id="cc-resumo" style="font-size:10px;color:#5c4527;margin-top:3px"></div>' +
+          '<div id="cc-origens" style="max-height:170px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+          '<div id="cc-resumo" style="font-size:10px;color:#6f6153;margin-top:3px"></div>' +
           '</div>' +
         '</div>' +
         '<div id="cc-armar-row" style="display:flex;gap:6px;align-items:center">' +
@@ -2325,10 +2325,10 @@
         '</div>' +
         '<div id="cc-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
         '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
-        '<div style="margin-top:8px;border-top:1px solid #c4a35f;padding-top:6px">' +
+        '<div style="margin-top:8px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
-            '<span data-sec="fila" style="font-size:10px;color:#6a4e18;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Fila <span id="cc-fila-n" style="color:#6e5a2a;font-weight:400"></span></span>' +
-            '<span style="font-size:10px;color:#6e5a2a">ordenar por ' +
+            '<span data-sec="fila" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Fila <span id="cc-fila-n" style="color:#8a7d6d;font-weight:400"></span></span>' +
+            '<span style="font-size:10px;color:#8a7d6d">ordenar por ' +
               '<select id="cc-fila-ordem" class="twmgr-inp" style="width:auto;font-size:10px;padding:1px">' +
                 '<option value="chegada">chegada</option><option value="saida">saída</option></select>' +
               ' · passo <input id="cc-passo" class="twmgr-inp" type="number" min="1" step="10" style="width:52px;font-size:10px;padding:1px">ms' +
@@ -2336,13 +2336,13 @@
           '</div>' +
           '<div data-secbody="fila">' +
             '<div style="display:flex;gap:2px;margin-bottom:0">' +
-              '<span class="cc-ftab" data-ftab="envio" style="flex:1;text-align:center;padding:4px;cursor:pointer;font-size:10px;border:1px solid #b18f4d;border-bottom:none;border-radius:4px 4px 0 0">▸ A enviar <span id="cc-ftab-n-envio" style="color:#6e5a2a"></span></span>' +
-              '<span class="cc-ftab" data-ftab="enviados" style="flex:1;text-align:center;padding:4px;cursor:pointer;font-size:10px;border:1px solid #b18f4d;border-bottom:none;border-radius:4px 4px 0 0">✓ Enviados <span id="cc-ftab-n-enviados" style="color:#6e5a2a"></span></span>' +
+              '<span class="cc-ftab" data-ftab="envio" style="flex:1;text-align:center;padding:4px;cursor:pointer;font-size:10px;border:1px solid #e0d6c6;border-bottom:none;border-radius:4px 4px 0 0">▸ A enviar <span id="cc-ftab-n-envio" style="color:#8a7d6d"></span></span>' +
+              '<span class="cc-ftab" data-ftab="enviados" style="flex:1;text-align:center;padding:4px;cursor:pointer;font-size:10px;border:1px solid #e0d6c6;border-bottom:none;border-radius:4px 4px 0 0">✓ Enviados <span id="cc-ftab-n-enviados" style="color:#8a7d6d"></span></span>' +
             '</div>' +
-            '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#6e5a2a;padding:3px 5px 2px;border:1px solid #c4a35f;border-bottom:none">' +
+            '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#8a7d6d;padding:3px 5px 2px;border:1px solid #ece4d8;border-bottom:none">' +
               '<span>tipo</span><span>de</span><span>para</span><span>estado</span><span>sai</span><span>chegada</span><span>falta</span><span></span></div>' +
-            '<div id="cc-fila-envio" style="max-height:210px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:0 0 6px 6px"></div>' +
-            '<div id="cc-fila-enviados" style="display:none;max-height:210px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:0 0 6px 6px"></div>' +
+            '<div id="cc-fila-envio" style="max-height:210px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
+            '<div id="cc-fila-enviados" style="display:none;max-height:210px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
           '</div>' +
         '</div>';
       host.insertBefore(d, host.firstChild);
@@ -2393,9 +2393,9 @@
         // Aba ativa: só ela fica acesa e emendada no corpo.
         document.querySelectorAll('.cc-aba').forEach((el) => {
           const on = el.getAttribute('data-tipo') === tipo;
-          el.style.background = on ? 'linear-gradient(180deg,#dcc78f,#e2cd97)' : '#eeddb6';
-          el.style.color = on ? '#9a6f0e' : '#6e5a2a';
-          el.style.borderBottom = on ? '1px solid #e2cd97' : '1px solid #b18f4d';
+          el.style.background = on ? 'linear-gradient(180deg,#ece4d8,#fdfaf5)' : '#ffffff';
+          el.style.color = on ? '#a2643a' : '#8a7d6d';
+          el.style.borderBottom = on ? '1px solid #fdfaf5' : '1px solid #e0d6c6';
           el.style.marginBottom = on ? '-1px' : '0';
           el.style.fontWeight = on ? '600' : '400';
         });
@@ -2422,7 +2422,7 @@
       _ccAttTipo = attTrem;   // o snipe troca a aba pra Apoio e precisa redesenhar
       document.querySelectorAll('.cc-aba').forEach((el) => {
         el.addEventListener('click', () => { config.cmd.tipo = el.getAttribute('data-tipo'); save(); attTrem(); });
-        el.addEventListener('mouseenter', () => { if (el.getAttribute('data-tipo') !== ccTipo()) el.style.color = '#5c4527'; });
+        el.addEventListener('mouseenter', () => { if (el.getAttribute('data-tipo') !== ccTipo()) el.style.color = '#6f6153'; });
         el.addEventListener('mouseleave', attTrem);
       });
       attTrem();
@@ -2438,7 +2438,7 @@
             const nome = ccNomeAlvo(a.coord), dono = ccDonoAlvo(a.coord);
             ok.textContent = '✓ ' + a.coord + (nome ? ' · ' + nome : '') + (dono ? ' (' + dono + ')' : '');
             ok.style.color = '#2e7d3a';
-          } else { ok.textContent = alvoEl.value ? '✗ formato' : ''; ok.style.color = '#c23a2c'; }
+          } else { ok.textContent = alvoEl.value ? '✗ formato' : ''; ok.style.color = '#c0483a'; }
         }
         if (a) { config.cmd.ultimoAlvo = a.coord; save(); }
         recalc();
@@ -2521,7 +2521,7 @@
         const alvo = ccAlvo(), ch = ccChegadaMs(), comp = ccComposicao();
         const msg = document.getElementById('cc-msg');
         if (!alvo || !ch) {
-          if (msg) { msg.style.color = '#c23a2c'; msg.textContent = 'Preencha o alvo e a chegada primeiro.'; }
+          if (msg) { msg.style.color = '#c0483a'; msg.textContent = 'Preencha o alvo e a chegada primeiro.'; }
           return;
         }
         let ok = 0, semTropa = 0, semTempo = 0;
@@ -2536,7 +2536,7 @@
         });
         save(); ccRenderOrigens();
         if (msg) {
-          msg.style.color = ok ? '#2e7d3a' : '#c23a2c';
+          msg.style.color = ok ? '#2e7d3a' : '#c0483a';
           msg.textContent = ok + ' origem(ns) marcada(s)' +
             (semTropa ? ' · ' + semTropa + ' sem tropa' : '') +
             (semTempo ? ' · ' + semTempo + ' longe demais' : '');

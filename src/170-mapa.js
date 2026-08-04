@@ -187,7 +187,7 @@
     const intel = (config.map && config.map.intel) || {};
     const chaves = Object.keys(intel);
     if (!chaves.length) {
-      el.innerHTML = '<span style="color:#6e5a2a">Sem dados ainda — rode um ciclo do módulo Mapa (ou a Prévia) pra preencher.</span>';
+      el.innerHTML = '<span style="color:#8a7d6d">Sem dados ainda — rode um ciclo do módulo Mapa (ou a Prévia) pra preencher.</span>';
       return;
     }
     const cont = {};
@@ -195,10 +195,10 @@
     const conhecidas = (cont[MAP_INTEL.OK] || 0) + (cont[MAP_INTEL.BL_DEFESA] || 0);
     const pct = Math.round(conhecidas * 100 / chaves.length);
     el.innerHTML =
-      '<div style="color:#9a6f0e;font-weight:700;margin-bottom:2px">' + pct + '% do seu raio explorado <span style="color:#6e5a2a;font-weight:400">(' + conhecidas + ' de ' + chaves.length + ')</span></div>' +
+      '<div style="color:#a2643a;font-weight:700;margin-bottom:2px">' + pct + '% do seu raio explorado <span style="color:#8a7d6d;font-weight:400">(' + conhecidas + ' de ' + chaves.length + ')</span></div>' +
       [1, 2, 3, 4, 5, 6].filter((c) => cont[c]).map((c) =>
         '<div><span style="display:inline-block;width:9px;height:9px;border:2px solid ' + MAP_INTEL_COR[c] + ';margin-right:5px;vertical-align:middle"></span>' +
-        '<span style="color:#5c4527">' + MAP_INTEL_NOME[c] + '</span> <b style="color:#6a4e18">' + cont[c] + '</b></div>').join('');
+        '<span style="color:#6f6153">' + MAP_INTEL_NOME[c] + '</span> <b style="color:#8b5426">' + cont[c] + '</b></div>').join('');
   }
 
   function mapCanvasRedraw() {
@@ -364,7 +364,7 @@
         const bx = px + tw - lw - 4, by = py + th - 12;
         ctx.fillStyle = 'rgba(0,0,0,.75)';
         ctx.fillRect(bx, by, lw + 4, 11);
-        ctx.fillStyle = '#9a6f0e';
+        ctx.fillStyle = '#a2643a';
         ctx.textBaseline = 'top';
         ctx.fillText(label, bx + 2, by + 1);
       }
@@ -445,7 +445,7 @@
       panel.setAttribute('width', '100%');
       panel.style.cssText = 'margin-top:6px;font-size:11px;color:#3b2914;font-family:Verdana,sans-serif';
     } else {
-      panel.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:10000;background:linear-gradient(180deg,#f4e4bc,#6a4e18);border:1px solid #7d510a;border-radius:8px;padding:8px 10px;font-size:11px;color:#3b2914;box-shadow:0 2px 6px rgba(0,0,0,.35);min-width:220px;font-family:Verdana,sans-serif';
+      panel.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:10000;background:linear-gradient(180deg,#f4e4bc,#8b5426);border:1px solid #a2643a;border-radius:8px;padding:8px 10px;font-size:11px;color:#3b2914;box-shadow:0 2px 6px rgba(0,0,0,.35);min-width:220px;font-family:Verdana,sans-serif';
     }
     const check = (id, label, checked) => '<label style="display:flex;align-items:center;gap:6px;margin:2px 0;cursor:pointer"><input id="' + id + '" type="checkbox"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
     const bodyHTML =
@@ -467,14 +467,14 @@
         check('twmgr-map-range', 'Mostrar meu alcance (raio do módulo Mapa)', cfg.showRange) +
         '<div id="twmgr-map-cob-leg" style="font-size:9px;line-height:1.7;margin:2px 0 6px 4px"></div>' +
         check('twmgr-map-dim', 'Escurecer aldeias filtradas (bloco preto)', cfg.dimMode === 'dim') +
-        '<div style="margin-top:6px;border-top:1px dashed #b89a5a;padding-top:6px;font-size:10px;color:#a9843f">' +
+        '<div style="margin-top:6px;border-top:1px dashed #b89a5a;padding-top:6px;font-size:10px;color:#ddd2c0">' +
           '<div id="twmgr-map-counts">—</div>' +
           '<div style="margin-top:4px;display:flex;justify-content:space-between;align-items:center;gap:4px;flex-wrap:wrap">' +
-            '<button id="twmgr-map-reset" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#6a4e18;cursor:pointer;color:#3b2914" title="Mostra tudo, sem overlay: liga todos os toggles, zera pontos, desliga escurecer">🚫 Desativar tudo</button>' +
-            '<button id="twmgr-map-reload" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#6a4e18;cursor:pointer;color:#3b2914">🔄 mapa</button>' +
-            '<button id="twmgr-map-rsv-sync" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#6a4e18;cursor:pointer;color:#3b2914" title="Baixa o planner interno da tribo (screen=ally&mode=reservations) e mostra ⌛Xh nas aldeias reservadas">⌛ sync reservas</button>' +
+            '<button id="twmgr-map-reset" style="padding:2px 6px;font-size:10px;border:1px solid #a2643a;border-radius:3px;background:#8b5426;cursor:pointer;color:#3b2914" title="Mostra tudo, sem overlay: liga todos os toggles, zera pontos, desliga escurecer">🚫 Desativar tudo</button>' +
+            '<button id="twmgr-map-reload" style="padding:2px 6px;font-size:10px;border:1px solid #a2643a;border-radius:3px;background:#8b5426;cursor:pointer;color:#3b2914">🔄 mapa</button>' +
+            '<button id="twmgr-map-rsv-sync" style="padding:2px 6px;font-size:10px;border:1px solid #a2643a;border-radius:3px;background:#8b5426;cursor:pointer;color:#3b2914" title="Baixa o planner interno da tribo (screen=ally&mode=reservations) e mostra ⌛Xh nas aldeias reservadas">⌛ sync reservas</button>' +
           '</div>' +
-          '<div style="margin-top:2px;color:#a9843f;font-size:9px">cache mapa: ' + (cfg.dataCachedAt ? new Date(cfg.dataCachedAt).toLocaleTimeString() : '—') + ' · reservas: ' + (cfg.reservationsAt ? (new Date(cfg.reservationsAt).toLocaleTimeString() + ' (' + Object.keys(cfg.reservations || {}).length + ')') : '—') + '</div>' +
+          '<div style="margin-top:2px;color:#ddd2c0;font-size:9px">cache mapa: ' + (cfg.dataCachedAt ? new Date(cfg.dataCachedAt).toLocaleTimeString() : '—') + ' · reservas: ' + (cfg.reservationsAt ? (new Date(cfg.reservationsAt).toLocaleTimeString() + ' (' + Object.keys(cfg.reservations || {}).length + ')') : '—') + '</div>' +
         '</div>' +
       '</div>';
     if (inline) {
@@ -486,8 +486,8 @@
     } else {
       panel.innerHTML =
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-          '<b style="color:#a9843f">🗺️ TW Manager · Mapa</b>' +
-          '<span id="twmgr-map-collapse" style="cursor:pointer;padding:0 6px;color:#a9843f">' + (cfg.collapsed ? '▲' : '▼') + '</span>' +
+          '<b style="color:#ddd2c0">🗺️ TW Manager · Mapa</b>' +
+          '<span id="twmgr-map-collapse" style="cursor:pointer;padding:0 6px;color:#ddd2c0">' + (cfg.collapsed ? '▲' : '▼') + '</span>' +
         '</div>' + bodyHTML;
       document.body.appendChild(panel);
     }

@@ -214,11 +214,11 @@
     const cont = document.getElementById('twmgr-ob-demand'); if (!cont) return;
     const demand = config.obra.demand || {};
     const keys = Object.keys(demand);
-    if (!keys.length) { cont.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— nada aguardando recurso —</div>'; return; }
+    if (!keys.length) { cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— nada aguardando recurso —</div>'; return; }
     cont.innerHTML = keys.map((vid) => {
       const d = demand[vid];
       const bn = (BUILD_META[d.b] && BUILD_META[d.b].name) || d.b;
-      return '<div style="font-size:10px;color:#5c4527;padding:2px 0;border-bottom:1px solid rgba(0,0,0,.07)">' +
+      return '<div style="font-size:10px;color:#6f6153;padding:2px 0;border-bottom:1px solid rgba(0,0,0,.07)">' +
         esc(d.coord || vid) + ' [' + esc((OBRA_PROFILE_META[d.profile] || {}).name || d.profile) + '] → ' + esc(bn) + ' (' + d.cost.wood + '/' + d.cost.stone + '/' + d.cost.iron + ')</div>';
     }).join('');
   }

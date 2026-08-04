@@ -9,33 +9,33 @@
       else if ((t.nextSendAt || 0) > now) c.textContent = fmt(t.nextSendAt - now);
       else c.textContent = '•••';
     });
-    const g = document.getElementById('twmgr-global'); if (g) { g.textContent = !config.running ? '' : (lockOther() ? '⏸ inativa (outra aba está enviando)' : '● rodando'); g.style.color = lockOther() ? '#c23a2c' : '#2e7d3a'; }
-    const sc = document.getElementById('twmgr-scav-status'); if (sc) { if (!config.scav.running) { sc.textContent = ''; } else if (lockOther()) { sc.textContent = '⏸ outra aba está ativa'; sc.style.color = '#c23a2c'; } else { sc.style.color = '#2e7d3a'; sc.textContent = (config.scav.nextAt || 0) > now ? '● próx. verificação: ' + fmt(config.scav.nextAt - now) : '● verificando…'; } }
-    const fs = document.getElementById('twmgr-farm-status'); if (fs) { if (!config.farm.running) { fs.textContent = ''; } else if (lockOther()) { fs.textContent = '⏸ outra aba está ativa'; fs.style.color = '#c23a2c'; } else { fs.style.color = '#2e7d3a'; fs.textContent = (config.farm.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.farm.nextAt - now) : '● saqueando…'; } }
-    const ws = document.getElementById('twmgr-wall-status'); if (ws) { if (!config.wall.running) { ws.textContent = ''; } else if (lockOther()) { ws.textContent = '⏸ outra aba está ativa'; ws.style.color = '#c23a2c'; } else { ws.style.color = '#2e7d3a'; ws.textContent = (config.wall.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.wall.nextAt - now) : '● quebrando…'; } }
-    const rs = document.getElementById('twmgr-recruit-status'); if (rs) { if (!config.recruit.running) { rs.textContent = ''; } else if (lockOther()) { rs.textContent = '⏸ outra aba está ativa'; rs.style.color = '#c23a2c'; } else { rs.style.color = '#2e7d3a'; rs.textContent = (config.recruit.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.recruit.nextAt - now) : '● recrutando…'; } }
+    const g = document.getElementById('twmgr-global'); if (g) { g.textContent = !config.running ? '' : (lockOther() ? '⏸ inativa (outra aba está enviando)' : '● rodando'); g.style.color = lockOther() ? '#c0483a' : '#2e7d3a'; }
+    const sc = document.getElementById('twmgr-scav-status'); if (sc) { if (!config.scav.running) { sc.textContent = ''; } else if (lockOther()) { sc.textContent = '⏸ outra aba está ativa'; sc.style.color = '#c0483a'; } else { sc.style.color = '#2e7d3a'; sc.textContent = (config.scav.nextAt || 0) > now ? '● próx. verificação: ' + fmt(config.scav.nextAt - now) : '● verificando…'; } }
+    const fs = document.getElementById('twmgr-farm-status'); if (fs) { if (!config.farm.running) { fs.textContent = ''; } else if (lockOther()) { fs.textContent = '⏸ outra aba está ativa'; fs.style.color = '#c0483a'; } else { fs.style.color = '#2e7d3a'; fs.textContent = (config.farm.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.farm.nextAt - now) : '● saqueando…'; } }
+    const ws = document.getElementById('twmgr-wall-status'); if (ws) { if (!config.wall.running) { ws.textContent = ''; } else if (lockOther()) { ws.textContent = '⏸ outra aba está ativa'; ws.style.color = '#c0483a'; } else { ws.style.color = '#2e7d3a'; ws.textContent = (config.wall.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.wall.nextAt - now) : '● quebrando…'; } }
+    const rs = document.getElementById('twmgr-recruit-status'); if (rs) { if (!config.recruit.running) { rs.textContent = ''; } else if (lockOther()) { rs.textContent = '⏸ outra aba está ativa'; rs.style.color = '#c0483a'; } else { rs.style.color = '#2e7d3a'; rs.textContent = (config.recruit.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.recruit.nextAt - now) : '● recrutando…'; } }
     const clk = document.getElementById('twmgr-srvclock'); if (clk) { try { clk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
     MARKET_MODES.forEach((mkKey) => {
       const mk = document.getElementById('twmgr-mk-' + mkKey + '-status'); if (!mk) return;
       const st = config.market.modes[mkKey];
       if (!st.running) { mk.textContent = ''; }
-      else if (lockOther()) { mk.textContent = '⏸ outra aba'; mk.style.color = '#c23a2c'; }
+      else if (lockOther()) { mk.textContent = '⏸ outra aba'; mk.style.color = '#c0483a'; }
       else { mk.style.color = '#2e7d3a'; mk.textContent = (st.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(st.nextAt - now) : '● enviando…'; }
     });
     const bl = document.getElementById('twmgr-bld-status'); if (bl) {
       if (!config.build.running) { bl.textContent = ''; }
-      else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#c23a2c'; }
+      else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#c0483a'; }
       else { bl.style.color = '#2e7d3a'; bl.textContent = (config.build.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.build.nextAt - now) : '● construindo…'; }
     }
     const pq = document.getElementById('twmgr-pq-status'); if (pq) {
       if (!config.research || !config.research.running) { pq.textContent = ''; }
-      else if (lockOther()) { pq.textContent = '⏸ outra aba'; pq.style.color = '#c23a2c'; }
+      else if (lockOther()) { pq.textContent = '⏸ outra aba'; pq.style.color = '#c0483a'; }
       else { pq.style.color = '#2e7d3a'; pq.textContent = (config.research.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.research.nextAt - now) : '● pesquisando…'; }
     }
     if (document.getElementById('twmgr-cards-research')) refreshCards('research');
     const bm = document.getElementById('twmgr-bm-status'); if (bm) {
       if (!config.map || !config.map.running) { bm.textContent = ''; }
-      else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#c23a2c'; }
+      else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#c0483a'; }
       else { bm.style.color = '#2e7d3a'; bm.textContent = (config.map.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.map.nextAt - now) : '● rastreando…'; }
     }
     const plClk = document.getElementById('twmgr-pl-srvclock'); if (plClk) { try { plClk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
@@ -43,7 +43,7 @@
     if (pls) {
       const plAtk = config.planner && plActive();
       if (!plAtk || !plAtk.running) { pls.textContent = ''; }
-      else if (lockOther()) { pls.textContent = '⏸ outra aba'; pls.style.color = '#c23a2c'; }
+      else if (lockOther()) { pls.textContent = '⏸ outra aba'; pls.style.color = '#c0483a'; }
       else {
         const rr = (plAtk.rows || []);
         const pend = rr.filter((r) => r.state === 'armed' || r.state === 'scheduled').length;
@@ -59,7 +59,7 @@
     const pds = document.getElementById('twmgr-pd-status');
     if (pds) {
       if (!config.paladin.running) { pds.textContent = ''; }
-      else if (lockOther()) { pds.textContent = '⏸ outra aba'; pds.style.color = '#c23a2c'; }
+      else if (lockOther()) { pds.textContent = '⏸ outra aba'; pds.style.color = '#c0483a'; }
       else { pds.style.color = '#2e7d3a'; pds.textContent = '● ' + Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]).length + ' aldeia(s) no ciclo'; }
     }
     if (document.getElementById('twmgr-pd-status-list')) renderPaladinStatus();
@@ -162,9 +162,9 @@
       ks.slice(0, 12).map((vid) => {
         const r = f[vid];
         const falta = RES3.filter((k) => r.falta[k]).map((k) => fmtN(r.falta[k]) + ' ' + ({ wood: 'mad', stone: 'arg', iron: 'fer' })[k]).join(' · ');
-        return '<div style="font-size:10px;color:#5c4527;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)">' +
-          '<span style="color:#9a6f0e">' + esc(r.nome) + '</span> <span style="color:#6e5a2a">' + esc(r.opcao) + '</span> — <span style="color:#a5544a">' + falta + '</span></div>';
-      }).join('') + (ks.length > 12 ? '<div style="font-size:9px;color:#6e5a2a;padding:2px 0">…e mais ' + (ks.length - 12) + '</div>' : '');
+        return '<div style="font-size:10px;color:#6f6153;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)">' +
+          '<span style="color:#a2643a">' + esc(r.nome) + '</span> <span style="color:#8a7d6d">' + esc(r.opcao) + '</span> — <span style="color:#a8564a">' + falta + '</span></div>';
+      }).join('') + (ks.length > 12 ? '<div style="font-size:9px;color:#8a7d6d;padding:2px 0">…e mais ' + (ks.length - 12) + '</div>' : '');
   }
 
   function readScavUnits() {

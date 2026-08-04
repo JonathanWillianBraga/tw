@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.18.2
+// @version      11.19.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.18.2';
+  const VERSION = '11.19.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -760,7 +760,7 @@
     Object.keys(mods).forEach(renderModLog);
   }
   function logLineHTML(l) {
-    const c = l.k === 'err' ? '#c23a2c' : l.k === 'ok' ? '#2e7d3a' : '#5c4527';
+    const c = l.k === 'err' ? '#c0483a' : l.k === 'ok' ? '#2e7d3a' : '#6f6153';
     return '<div style="color:' + c + ';border-bottom:1px solid rgba(0,0,0,.07);padding:2px 0">[' + esc(l.t) + '] ' + esc(l.m) + '</div>';
   }
   function readLogArr() { try { return JSON.parse(localStorage.getItem(LOGKEY) || '[]'); } catch (e) { return []; } }
@@ -775,7 +775,7 @@
     const cnt = document.getElementById('twmgr-modlog-count-' + mod);
     const rows = readLogArr().filter((l) => l.mod === mod);
     if (cnt) cnt.textContent = rows.length;
-    if (body) body.innerHTML = rows.length ? rows.map(logLineHTML).join('') : '<div style="color:#6e5a2a;padding:6px;font-size:10px">— sem mensagens ainda —</div>';
+    if (body) body.innerHTML = rows.length ? rows.map(logLineHTML).join('') : '<div style="color:#8a7d6d;padding:6px;font-size:10px">— sem mensagens ainda —</div>';
   }
 
   // ===== Cards de status por módulo =====
@@ -2402,12 +2402,12 @@
     const snap7 = unitsFindSnapshotDaysAgo(7);
     const snap30 = unitsFindSnapshotDaysAgo(30);
     const deltaBlock = (label, snap) => {
-      if (!snap || !snap.force) return '<div style="min-width:110px;color:#6e5a2a;font-size:10px">' + label + ': —</div>';
+      if (!snap || !snap.force) return '<div style="min-width:110px;color:#8a7d6d;font-size:10px">' + label + ': —</div>';
       const dTotal = f.total - (snap.force.total || 0);
       const dAtt = f.att - (snap.force.att || 0);
       const dDef = f.def - (snap.force.def || 0);
       return '<div style="min-width:110px;font-size:10px;line-height:1.4">' +
-        '<div style="color:#a9843f;font-weight:bold">' + label + '</div>' +
+        '<div style="color:#ddd2c0;font-weight:bold">' + label + '</div>' +
         '<div style="color:' + colorFor(dTotal) + '">' + arrowFor(dTotal) + ' tropas ' + fmtSigned(dTotal) + '</div>' +
         '<div style="color:' + colorFor(dAtt) + '">' + arrowFor(dAtt) + ' off ' + fmtSigned(dAtt) + '</div>' +
         '<div style="color:' + colorFor(dDef) + '">' + arrowFor(dDef) + ' def ' + fmtSigned(dDef) + '</div>' +
@@ -2437,16 +2437,16 @@
     // 6) Bloco de resumo + deltas + sparklines + botão CSV.
     const summary = document.createElement('div');
     summary.id = 'twmgr-units-summary';
-    summary.style.cssText = 'margin:6px 0 8px;padding:8px 10px;border:1px solid #7d510a;border-radius:6px;background:linear-gradient(180deg,#f4e4bc,#6a4e18);font-size:12px;color:#3b2914;box-shadow:0 1px 2px rgba(0,0,0,.1)';
+    summary.style.cssText = 'margin:6px 0 8px;padding:8px 10px;border:1px solid #a2643a;border-radius:6px;background:linear-gradient(180deg,#f4e4bc,#8b5426);font-size:12px;color:#3b2914;box-shadow:0 1px 2px rgba(0,0,0,.1)';
     const item = (label, val, big) => '<div style="display:flex;flex-direction:column;align-items:center;min-width:80px"><div style="font-size:' + (big ? '16px' : '13px') + ';font-weight:bold;font-variant-numeric:tabular-nums">' + fmt(val) + '</div><div style="font-size:10px;color:#584526">' + label + '</div></div>';
     const sparkBlock = (label, series, color) => '<div style="display:flex;flex-direction:column;align-items:center;min-width:110px">' +
-      '<div style="font-size:10px;color:#a9843f;font-weight:bold">' + label + ' (' + series.length + 'd)</div>' +
+      '<div style="font-size:10px;color:#ddd2c0;font-weight:bold">' + label + ' (' + series.length + 'd)</div>' +
       unitsSparkline(series, 110, 28, color) +
       '</div>';
     summary.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px">' +
-        '<div style="font-weight:bold;font-size:11px;color:#a9843f">🏰 Resumo (TW Manager) · <span style="font-weight:normal;font-size:10px">' + histKeys.length + ' snapshot' + (histKeys.length === 1 ? '' : 's') + ' no histórico</span></div>' +
-        '<button id="twmgr-units-csv" style="padding:2px 8px;font-size:10px;border:1px solid #7d510a;border-radius:4px;background:#6a4e18;cursor:pointer;color:#3b2914">📥 baixar histórico CSV</button>' +
+        '<div style="font-weight:bold;font-size:11px;color:#ddd2c0">🏰 Resumo (TW Manager) · <span style="font-weight:normal;font-size:10px">' + histKeys.length + ' snapshot' + (histKeys.length === 1 ? '' : 's') + ' no histórico</span></div>' +
+        '<button id="twmgr-units-csv" style="padding:2px 8px;font-size:10px;border:1px solid #a2643a;border-radius:4px;background:#8b5426;cursor:pointer;color:#3b2914">📥 baixar histórico CSV</button>' +
       '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding-bottom:6px;border-bottom:1px dashed #b89a5a">' +
         item('total tropas', f.total, true) +
@@ -2464,10 +2464,10 @@
       '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:12px;padding-top:6px;align-items:center">' +
         '<div style="display:flex;flex-direction:column;align-items:center;min-width:110px">' +
-          '<div style="font-size:10px;color:#a9843f;font-weight:bold">total (hoje ' + seriesToday.length + 'pt)</div>' +
-          unitsSparkline(seriesToday, 110, 28, '#7d510a') +
+          '<div style="font-size:10px;color:#ddd2c0;font-weight:bold">total (hoje ' + seriesToday.length + 'pt)</div>' +
+          unitsSparkline(seriesToday, 110, 28, '#a2643a') +
         '</div>' +
-        sparkBlock('total (30d)', seriesTotal, '#a9843f') +
+        sparkBlock('total (30d)', seriesTotal, '#ddd2c0') +
         sparkBlock('força ⚔️ (30d)', seriesAtt, '#a52020') +
         sparkBlock('def 🛡️ (30d)', seriesDef, '#2f6b2f') +
       '</div>';
@@ -2479,14 +2479,14 @@
     const nCols = table.querySelectorAll('thead th').length;
     const totalBody = document.createElement('tbody');
     totalBody.id = 'twmgr-units-grandtotal';
-    let cellsHtml = '<td style="padding:4px 6px;color:#a9843f">TOTAL GERAL</td><td></td>';
+    let cellsHtml = '<td style="padding:4px 6px;color:#ddd2c0">TOTAL GERAL</td><td></td>';
     colUnits.forEach((unit) => {
       const n = (unit && totals[unit]) || 0;
       cellsHtml += '<td class="unit-item" style="text-align:center">' + (n > 0 ? fmt(n) : '0') + '</td>';
     });
     const emittedCols = 2 + colUnits.length;
     for (let i = emittedCols; i < nCols; i++) cellsHtml += '<td></td>';
-    totalBody.innerHTML = '<tr style="background:linear-gradient(180deg,#f4e4bc,#6a4e18);font-weight:bold;font-size:13px;color:#3b2914;border-top:2px solid #7d510a">' + cellsHtml + '</tr>';
+    totalBody.innerHTML = '<tr style="background:linear-gradient(180deg,#f4e4bc,#8b5426);font-weight:bold;font-size:13px;color:#3b2914;border-top:2px solid #a2643a">' + cellsHtml + '</tr>';
     table.appendChild(totalBody);
   }
 
@@ -2662,7 +2662,7 @@
       unitIcon(u, n) + '<span style="flex:1;font-size:10px">' + n + '</span>' +
       '<input class="twmgr-rt" data-prof="' + prof + '" data-unit="' + u + '" type="number" min="0" placeholder="∞" value="' + (t[u] != null ? t[u] : '') + '" style="width:60px" title="alvo (vazio = contínuo)">' +
       '</div>').join('');
-    return '<div style="font-size:11px;color:#6a4e18;margin:6px 0 2px">' + label + '</div>' + rows;
+    return '<div style="font-size:11px;color:#8b5426;margin:6px 0 2px">' + label + '</div>' + rows;
   }
   let _twGroupsCache = [];
   async function fillGroupSelects() {
@@ -2685,17 +2685,17 @@
       unitIcon(u, n) + '<span style="flex:1;font-size:10px">' + n + '</span>' +
       '<input class="twmgr-rg-t twmgr-inp" data-gid="' + g.id + '" data-unit="' + u + '" type="number" min="0" placeholder="∞" value="' + (t[u] != null ? t[u] : '') + '" style="width:60px" title="alvo (vazio = contínuo)">' +
       '</div>').join('');
-    return '<div class="twmgr-rg-card" data-gid="' + g.id + '" style="border:1px solid #dcc78f;border-radius:6px;padding:6px;margin-bottom:6px">' +
+    return '<div class="twmgr-rg-card" data-gid="' + g.id + '" style="border:1px solid #ece4d8;border-radius:6px;padding:6px;margin-bottom:6px">' +
       '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">' +
       '<input class="twmgr-rg-name twmgr-inp" data-gid="' + g.id + '" type="text" placeholder="nome do perfil" value="' + esc(g.name || '') + '" style="flex:1;font-size:11px">' +
       '<select class="twmgr-rg-grp twmgr-inp" data-gid="' + g.id + '" style="width:130px">' + opts + '</select>' +
-      '<span class="twmgr-rg-rm" data-gid="' + g.id + '" title="remover grupo" style="cursor:pointer;color:#c23a2c;padding:0 4px;font-weight:bold">✕</span>' +
+      '<span class="twmgr-rg-rm" data-gid="' + g.id + '" title="remover grupo" style="cursor:pointer;color:#c0483a;padding:0 4px;font-weight:bold">✕</span>' +
       '</div>' + rows + '</div>';
   }
   function renderRecruitGroups() {
     const box = document.getElementById('twmgr-rg-list'); if (!box) return;
     const groups = config.recruit.groups || [];
-    box.innerHTML = groups.length ? groups.map(recruitGroupCardHTML).join('') : '<div style="color:#6e5a2a;text-align:center;padding:8px;font-size:10px">— nenhum grupo adicional (use o botão abaixo) —</div>';
+    box.innerHTML = groups.length ? groups.map(recruitGroupCardHTML).join('') : '<div style="color:#8a7d6d;text-align:center;padding:8px;font-size:10px">— nenhum grupo adicional (use o botão abaixo) —</div>';
   }
   function bindRecruitGroupsHandlers() {
     const box = document.getElementById('twmgr-rg-list'); if (!box) return;
@@ -3049,7 +3049,7 @@
     vils.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
     cont.innerHTML = vils.map((v) => {
       const distTxt = v.dist != null ? (' · dist ' + v.dist.toFixed(1)) : '';
-      return '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-pl-vil" data-vid="' + v.vid + '"' + (atk.selected[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '<span style="color:#6e5a2a">' + distTxt + '</span></label>';
+      return '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#6f6153;margin:1px 0"><input type="checkbox" class="twmgr-pl-vil" data-vid="' + v.vid + '"' + (atk.selected[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '<span style="color:#8a7d6d">' + distTxt + '</span></label>';
     }).join('');
     cont.querySelectorAll('.twmgr-pl-vil').forEach((cb) => cb.addEventListener('change', () => {
       const vid = cb.getAttribute('data-vid');
@@ -3073,7 +3073,7 @@
     const cont = document.getElementById('twmgr-pl-cards'); if (!cont) return;
     const sel = Object.keys(atk.selected || {}).filter((v) => atk.selected[v]);
     if (!sel.length) {
-      cont.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div>';
+      cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div>';
       return;
     }
     const vilBy = {}; (_plVilCache || []).forEach((v) => { vilBy[v.vid] = v; });
@@ -3090,18 +3090,18 @@
         const arrTxt = baseMs ? fmtArriveLocal(baseMs + (pv.offsetMs || 0)) : '—';
         const grid = UNITS.map(([u, lbl]) => {
           const max = home[u] || 0, cur = (pv.amounts && pv.amounts[u]) || 0;
-          return '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#5c4527"><span style="width:56px">' + unitIcon(u, lbl) + '</span><input class="twmgr-pl-amt" data-vid="' + vid + '" data-widx="' + widx + '" data-u="' + u + '" type="number" min="0" max="' + max + '" value="' + cur + '" style="width:56px" /><span style="color:#6e5a2a">/' + max + '</span></label>';
+          return '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#6f6153"><span style="width:56px">' + unitIcon(u, lbl) + '</span><input class="twmgr-pl-amt" data-vid="' + vid + '" data-widx="' + widx + '" data-u="' + u + '" type="number" min="0" max="' + max + '" value="' + cur + '" style="width:56px" /><span style="color:#8a7d6d">/' + max + '</span></label>';
         }).join('');
-        return '<div style="border-top:1px dashed #dcc78f;padding-top:6px;margin-top:6px">' +
+        return '<div style="border-top:1px dashed #ece4d8;padding-top:6px;margin-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px">' +
-            '<div style="font-size:10px;color:#6e5a2a">Onda ' + (widx + 1) + '</div>' +
+            '<div style="font-size:10px;color:#8a7d6d">Onda ' + (widx + 1) + '</div>' +
             '<div style="display:flex;gap:4px;align-items:center;font-size:10px">' +
               '<select class="twmgr-pl-kind" data-vid="' + vid + '" data-widx="' + widx + '" style="font-size:10px">' + kindSel + '</select>' +
               '<span>off</span><input class="twmgr-pl-off" data-vid="' + vid + '" data-widx="' + widx + '" type="number" value="' + (pv.offsetMs || 0) + '" step="100" style="width:64px;font-size:10px"><span>ms</span>' +
               '<span class="twmgr-pl-wave-del" data-vid="' + vid + '" data-widx="' + widx + '" title="remover onda" style="cursor:pointer;opacity:.7">✕</span>' +
             '</div>' +
           '</div>' +
-          '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">→ chega às <b style="color:#5c4527">' + arrTxt + '</b></div>' +
+          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">→ chega às <b style="color:#6f6153">' + arrTxt + '</b></div>' +
           '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px">' + grid + '</div>' +
           '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">' +
             '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-widx="' + widx + '" data-preset="attack" style="padding:3px 6px;font-size:10px">🧹 all off</button>' +
@@ -3112,10 +3112,10 @@
           '</div>' +
         '</div>';
       }).join('');
-      return '<div style="border:1px solid #dcc78f;border-radius:6px;padding:6px;margin:6px 0">' +
+      return '<div style="border:1px solid #ece4d8;border-radius:6px;padding:6px;margin:6px 0">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px">' +
-          '<div style="font-size:11px;color:#7a5710"><b>' + esc(v.name) + '</b> ' + warnTxt + '</div>' +
-          '<span class="twmgr-pl-wave-add" data-vid="' + vid + '" title="adicionar onda" style="cursor:pointer;font-size:10px;color:#7a5710;border:1px dashed #a9843f;border-radius:4px;padding:2px 6px">+ onda</span>' +
+          '<div style="font-size:11px;color:#a2643a"><b>' + esc(v.name) + '</b> ' + warnTxt + '</div>' +
+          '<span class="twmgr-pl-wave-add" data-vid="' + vid + '" title="adicionar onda" style="cursor:pointer;font-size:10px;color:#a2643a;border:1px dashed #ddd2c0;border-radius:4px;padding:2px 6px">+ onda</span>' +
         '</div>' +
         wavesHTML +
       '</div>';
@@ -3229,13 +3229,13 @@
     const p = config.planner;
     cont.innerHTML = p.attacks.map((atk) => {
       const active = atk.id === p.activeId;
-      return '<div class="twmgr-pl-tab' + (active ? ' active' : '') + '" data-id="' + atk.id + '" style="display:flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;cursor:pointer;font-size:10px;border:1px solid ' + (active ? '#7d510a' : '#dcc78f') + ';background:' + (active ? 'rgba(212,175,55,.15)' : 'transparent') + ';color:#5c4527">' +
+      return '<div class="twmgr-pl-tab' + (active ? ' active' : '') + '" data-id="' + atk.id + '" style="display:flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;cursor:pointer;font-size:10px;border:1px solid ' + (active ? '#a2643a' : '#ece4d8') + ';background:' + (active ? 'rgba(162,100,58,.15)' : 'transparent') + ';color:#6f6153">' +
         '<span class="twmgr-pl-tab-dot" style="color:#2e7d3a;display:' + (atk.running ? 'inline' : 'none') + '">●</span>' +
         '<span class="twmgr-pl-tab-name">' + esc(atk.name) + '</span>' +
         '<span class="twmgr-pl-tab-ren" data-id="' + atk.id + '" title="renomear" style="opacity:.6">✎</span>' +
         '<span class="twmgr-pl-tab-del" data-id="' + atk.id + '" title="remover" style="opacity:.6">✕</span>' +
       '</div>';
-    }).join('') + '<div id="twmgr-pl-tab-add" title="adicionar ataque" style="padding:3px 8px;border-radius:6px;cursor:pointer;font-size:12px;border:1px dashed #a9843f;color:#7a5710">+ ataque</div>';
+    }).join('') + '<div id="twmgr-pl-tab-add" title="adicionar ataque" style="padding:3px 8px;border-radius:6px;cursor:pointer;font-size:12px;border:1px dashed #ddd2c0;color:#a2643a">+ ataque</div>';
     cont.querySelectorAll('.twmgr-pl-tab').forEach((el) => el.addEventListener('click', (e) => {
       if (e.target.classList.contains('twmgr-pl-tab-ren') || e.target.classList.contains('twmgr-pl-tab-del')) return;
       plannerSwitchAttack(el.getAttribute('data-id'));
@@ -3258,10 +3258,10 @@
   }
 
   const PL_STATE_META = {
-    armed:     { label: 'armado',   color: '#6e5a2a' },
-    scheduled: { label: 'agendado', color: '#7a5710' },
+    armed:     { label: 'armado',   color: '#8a7d6d' },
+    scheduled: { label: 'agendado', color: '#a2643a' },
     sent:      { label: 'enviado',  color: '#2e7d3a' },
-    error:     { label: 'erro',     color: '#c23a2c' },
+    error:     { label: 'erro',     color: '#c0483a' },
   };
 
   // Tabela linha-a-linha da fila do ataque ATIVO. Ordenada por sendAt (fallback arriveAt).
@@ -3269,12 +3269,12 @@
     const cont = document.getElementById('twmgr-pl-queue'); if (!cont) return;
     const rows = ((atk && atk.rows) || []).slice().sort((a, b) => (a.sendAt || a.arriveAt || 0) - (b.sendAt || b.arriveAt || 0));
     if (!rows.length) {
-      cont.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— fila vazia. Arme o ataque pra ver as linhas aqui. —</div>';
+      cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— fila vazia. Arme o ataque pra ver as linhas aqui. —</div>';
       return;
     }
     const vilBy = {}; (_plVilCache || []).forEach((v) => { vilBy[v.vid] = v; });
-    const th = 'text-align:left;padding:2px 4px;font-size:9px;color:#6e5a2a;font-weight:normal;border-bottom:1px solid #dcc78f';
-    const td = 'padding:2px 4px;font-size:10px;color:#5c4527;vertical-align:middle';
+    const th = 'text-align:left;padding:2px 4px;font-size:9px;color:#8a7d6d;font-weight:normal;border-bottom:1px solid #ece4d8';
+    const td = 'padding:2px 4px;font-size:10px;color:#6f6153;vertical-align:middle';
     cont.innerHTML =
       '<table style="width:100%;border-collapse:collapse">' +
         '<thead><tr>' +
@@ -3288,7 +3288,7 @@
         '</tr></thead>' +
         '<tbody>' + rows.map((r, i) => {
           const v = vilBy[r.origin] || { name: 'ID ' + r.origin };
-          const meta = PL_STATE_META[r.state] || { label: r.state, color: '#6e5a2a' };
+          const meta = PL_STATE_META[r.state] || { label: r.state, color: '#8a7d6d' };
           const errTitle = r.state === 'error' && r.error ? (' title="' + esc(String(r.error)) + '"') : '';
           const arrTxt = r.arriveAt ? fmtArriveLocal(r.arriveAt) : '—';
           const sendTxt = r.sendAt ? fmtArriveLocal(r.sendAt) : '—';
@@ -3296,9 +3296,9 @@
           const canRemove = r.state === 'sent' || r.state === 'error';
           const actions = canCancel
             ? '<span class="twmgr-pl-queue-cancel" data-id="' + r.id + '" title="cancelar" style="cursor:pointer;color:#c2592c">✕</span>'
-            : (canRemove ? '<span class="twmgr-pl-queue-del" data-id="' + r.id + '" title="remover do histórico" style="cursor:pointer;color:#6e5a2a">🗑</span>' : '');
-          return '<tr style="border-bottom:1px solid #e2cd97">' +
-            '<td style="' + td + ';color:#6e5a2a">' + (i + 1) + '</td>' +
+            : (canRemove ? '<span class="twmgr-pl-queue-del" data-id="' + r.id + '" title="remover do histórico" style="cursor:pointer;color:#8a7d6d">🗑</span>' : '');
+          return '<tr style="border-bottom:1px solid #fdfaf5">' +
+            '<td style="' + td + ';color:#8a7d6d">' + (i + 1) + '</td>' +
             '<td style="' + td + '">' + esc(v.name) + '</td>' +
             '<td style="' + td + '">' + (PL_ICON[r.kind] || '') + '</td>' +
             '<td style="' + td + ';font-family:monospace;font-size:9px">' + arrTxt + '</td>' +
@@ -3509,23 +3509,23 @@
   async function renderBlindagemList() {
     const box = document.getElementById('twmgr-blz-list'); if (!box) return;
     const rows = config.planner.blindagem.rows || [];
-    if (!rows.length) { box.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— sem pedidos. Cole a URL e clique Buscar. —</div>'; return; }
+    if (!rows.length) { box.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— sem pedidos. Cole a URL e clique Buscar. —</div>'; return; }
     let vils = []; try { vils = await getAllVillagesCached(); } catch (e) {}
     const opts = '<option value="">— origem —</option>' + vils.map((v) => '<option value="' + v.vid + '">' + esc(v.name) + '</option>').join('');
     box.innerHTML = rows.map((r) => {
       const s = r.send || { LANC: 0, ESP: 0, SPY: 0, CP: 0 };
       const p = r.ped;
       const originSel = opts.replace('value="' + r.originVid + '"', 'value="' + r.originVid + '" selected');
-      return '<div data-blz-id="' + r.id + '" style="border-bottom:1px dashed #dcc78f;padding:4px 2px;font-size:10px;color:#5c4527">' +
+      return '<div data-blz-id="' + r.id + '" style="border-bottom:1px dashed #ece4d8;padding:4px 2px;font-size:10px;color:#6f6153">' +
         '<div style="display:flex;align-items:center;gap:4px">' +
           '<input type="checkbox" class="blz-chk"' + (r.checked ? ' checked' : '') + '>' +
-          '<b>#' + r.num + '</b> · ' + esc(r.name) + ' <span style="color:#7a5710">(' + r.coord + ')</span>' +
+          '<b>#' + r.num + '</b> · ' + esc(r.name) + ' <span style="color:#a2643a">(' + r.coord + ')</span>' +
         '</div>' +
         '<div style="display:flex;align-items:center;gap:4px;margin-top:2px">' +
-          '<span style="color:#6e5a2a">origem:</span>' +
+          '<span style="color:#8a7d6d">origem:</span>' +
           '<select class="blz-origin" style="flex:1;font-size:10px">' + originSel + '</select>' +
         '</div>' +
-        '<div style="color:#6e5a2a;margin-top:2px">ped: ' + p.LANC + ' LANC / ' + p.ESP + ' ESP / ' + p.SPY + ' SPY / ' + p.CP + ' CP</div>' +
+        '<div style="color:#8a7d6d;margin-top:2px">ped: ' + p.LANC + ' LANC / ' + p.ESP + ' ESP / ' + p.SPY + ' SPY / ' + p.CP + ' CP</div>' +
         '<div style="display:flex;gap:3px;margin-top:2px;flex-wrap:wrap">' +
           '<label style="display:flex;align-items:center;gap:2px">L <input type="number" min="0" class="blz-send" data-u="LANC" value="' + (s.LANC || 0) + '" style="width:52px;font-size:10px"></label>' +
           '<label style="display:flex;align-items:center;gap:2px">E <input type="number" min="0" class="blz-send" data-u="ESP" value="' + (s.ESP || 0) + '" style="width:52px;font-size:10px"></label>' +
@@ -3766,25 +3766,25 @@
   }
   async function renderPaladinVillages() {
     const cont = document.getElementById('twmgr-pd-villages'); if (!cont) return;
-    cont.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">carregando…</div>';
+    cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">carregando…</div>';
     let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
     let knights = null, lastErr = null;
     const order = [CUR_VID].concat(vils.map((v) => v.vid)).filter((v, i, arr) => v && arr.indexOf(v) === i);
     for (const vid of order) { try { knights = await getKnightsData(vid); break; } catch (e) { lastErr = e; } }
-    if (!knights) { cont.innerHTML = '<div style="font-size:10px;color:#c23a2c;padding:6px;text-align:center">Erro ao ler paladinos (' + esc((lastErr && lastErr.message) || String(lastErr)) + ')</div>'; return; }
+    if (!knights) { cont.innerHTML = '<div style="font-size:10px;color:#c0483a;padding:6px;text-align:center">Erro ao ler paladinos (' + esc((lastErr && lastErr.message) || String(lastErr)) + ')</div>'; return; }
     const withKnight = {};
     Object.values(knights).forEach((k) => { if (k && k.home_village) withKnight[String(k.home_village.id)] = true; });
     vils = vils.filter((v) => withKnight[v.vid]);   // só aldeias com paladino entram na lista de seleção
-    if (!vils.length) { cont.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— nenhuma aldeia com paladino —</div>'; return; }
+    if (!vils.length) { cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— nenhuma aldeia com paladino —</div>'; return; }
     const sel = config.paladin.villages || {};
-    cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-pd-vil" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
+    cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#6f6153;margin:1px 0"><input type="checkbox" class="twmgr-pd-vil" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
     cont.querySelectorAll('.twmgr-pd-vil').forEach((cb) => cb.addEventListener('change', readPaladinCfg));
   }
   const PALADIN_STATUS_LABEL = { home: '🟢 livre', training: '⏳ treinando', travel: '🚶 viajando', recruiting: '🐣 recrutando', attack: '⚔️ atacando', attacking: '⚔️ atacando', support: '🛡️ apoiando', 'sem-paladino': '— sem paladino', 'sem-regime-4h': '⚠️ sem regime 4h' };
   function renderPaladinStatus() {
     const cont = document.getElementById('twmgr-pd-status-list'); if (!cont) return;
     const villages = Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]);
-    if (!villages.length) { cont.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— marque aldeias acima —</div>'; return; }
+    if (!villages.length) { cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— marque aldeias acima —</div>'; return; }
     const now = Date.now();
     cont.innerHTML = villages.map((vid) => {
       const st = (config.paladin.state && config.paladin.state[vid]) || {};
@@ -3792,7 +3792,7 @@
       // vez de esconder, já que o código já garante que ele será pulado até ficar livre de novo.
       const label = PALADIN_STATUS_LABEL[st.status] || (st.status ? ('⚔️ ocupado (' + st.status + ')') : '—');
       const rest = st.finishAt && st.finishAt > now ? fmt(st.finishAt - now) : '';
-      return '<div style="display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#5c4527;padding:2px 0;border-bottom:1px solid rgba(0,0,0,.07)">' +
+      return '<div style="display:flex;justify-content:space-between;gap:6px;font-size:10px;color:#6f6153;padding:2px 0;border-bottom:1px solid rgba(0,0,0,.07)">' +
         '<span>' + esc(st.name || ('ID ' + vid)) + (st.level != null ? (' (nv.' + st.level + ')') : '') + '</span>' +
         '<span>' + label + (rest ? ' · ' + rest : '') + '</span>' +
       '</div>';
@@ -4155,7 +4155,7 @@
     let groups = [];
     try { groups = await getGroups(); } catch (e) { pushLog('Cunhagem: erro ao listar grupos: ' + (e.message || e), 'err', 'market'); return; }
     const cur = config.market.cunhagemSourceGroups || [];
-    const rowHtml = (gid, name, checked) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-mk-srcgrp" data-gid="' + gid + '"' + (checked ? ' checked' : '') + '>' + esc(name) + '</label>';
+    const rowHtml = (gid, name, checked) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#6f6153;margin:1px 0"><input type="checkbox" class="twmgr-mk-srcgrp" data-gid="' + gid + '"' + (checked ? ' checked' : '') + '>' + esc(name) + '</label>';
     cont.innerHTML = rowHtml('', 'nenhum (= todas as aldeias, menos as de destino)', !cur.length) +
       groups.map((gr) => rowHtml(gr.id, gr.name, cur.includes(gr.id))).join('');
     // "nenhum" e os grupos específicos são mutuamente exclusivos: marcar "nenhum" desmarca o resto
@@ -4404,7 +4404,7 @@
   function renderBuildPlan() {
     const box = document.getElementById('twmgr-bld-plan'); if (!box) return;
     const plan = bldPlanAtual();
-    if (!plan.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">— lista vazia (use o + abaixo pra adicionar) —</div>'; renderBuildSummary(); return; }
+    if (!plan.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">— lista vazia (use o + abaixo pra adicionar) —</div>'; renderBuildSummary(); return; }
     box.innerHTML = plan.map((it, i) => {
       const meta = BUILD_META[it.b] || { name: it.b, ico: '?', max: 30 };
       const disabled = it.en === false ? ' twmgr-bld-off' : '';
@@ -4447,7 +4447,7 @@
   function renderBuildSummary() {
     const box = document.getElementById('twmgr-bld-sum'); if (!box) return;
     const plan = bldPlanAtual().filter((it) => it.en !== false);
-    if (!plan.length) { box.innerHTML = '<span style="color:#6e5a2a;font-size:10px">— modelo vazio —</span>'; return; }
+    if (!plan.length) { box.innerHTML = '<span style="color:#8a7d6d;font-size:10px">— modelo vazio —</span>'; return; }
     const fim = {};
     plan.forEach((it) => { fim[it.b] = Math.max(fim[it.b] || 0, it.lvl); });
     box.innerHTML = BUILD_KEYS.filter((b) => fim[b]).map((b) => {
@@ -4625,7 +4625,7 @@
     Object.keys(assign).forEach((vid) => { mapa[vid] = { vid: vid, coord: assign[vid].coord, name: assign[vid].name || assign[vid].coord || vid }; });
     _bldPool.forEach((v) => { if (!mapa[v.vid]) mapa[v.vid] = v; });
     const linhas = Object.keys(mapa).sort((a, b) => String(mapa[a].name).localeCompare(String(mapa[b].name), 'pt-BR', { numeric: true }));
-    if (!linhas.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">— clique em ↻ pra carregar suas aldeias —</div>'; return; }
+    if (!linhas.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">— clique em ↻ pra carregar suas aldeias —</div>'; return; }
     box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr>' +
       '<th class="twmgr-tab-ck"><input type="checkbox" id="twmgr-bld-all"></th><th>Aldeia</th><th>Modelo</th><th>Ordens</th><th>Estado</th><th></th>' +
       '</tr></thead><tbody>' +
@@ -4991,7 +4991,7 @@
   function renderResearchOrder() {
     const box = document.getElementById('twmgr-pq-order'); if (!box) return;
     const ordem = pesqOrdemAtual();
-    if (!ordem.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">- ordem vazia (use o + abaixo) -</div>'; return; }
+    if (!ordem.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">- ordem vazia (use o + abaixo) -</div>'; return; }
     box.innerHTML = ordem.map((u, i) => {
       const par = UNITS.find((x) => x[0] === u);
       const nome = par ? par[1] : u;
@@ -5084,7 +5084,7 @@
     Object.keys(assign).forEach((vid) => { mapa[vid] = { vid: vid, coord: assign[vid].coord, name: assign[vid].name || assign[vid].coord || vid }; });
     _pesqPool.forEach((v) => { if (!mapa[v.vid]) mapa[v.vid] = v; });
     const linhas = Object.keys(mapa).sort((a, b) => String(mapa[a].name).localeCompare(String(mapa[b].name), 'pt-BR', { numeric: true }));
-    if (!linhas.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">- clique em &#8635; pra carregar suas aldeias -</div>'; return; }
+    if (!linhas.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">- clique em &#8635; pra carregar suas aldeias -</div>'; return; }
     box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr>' +
       '<th class="twmgr-tab-ck"><input type="checkbox" id="twmgr-pq-all"></th><th>Aldeia</th><th>Modelo</th><th>Estado</th><th></th>' +
       '</tr></thead><tbody>' +
@@ -5389,11 +5389,11 @@
     const cont = document.getElementById('twmgr-ob-demand'); if (!cont) return;
     const demand = config.obra.demand || {};
     const keys = Object.keys(demand);
-    if (!keys.length) { cont.innerHTML = '<div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— nada aguardando recurso —</div>'; return; }
+    if (!keys.length) { cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— nada aguardando recurso —</div>'; return; }
     cont.innerHTML = keys.map((vid) => {
       const d = demand[vid];
       const bn = (BUILD_META[d.b] && BUILD_META[d.b].name) || d.b;
-      return '<div style="font-size:10px;color:#5c4527;padding:2px 0;border-bottom:1px solid rgba(0,0,0,.07)">' +
+      return '<div style="font-size:10px;color:#6f6153;padding:2px 0;border-bottom:1px solid rgba(0,0,0,.07)">' +
         esc(d.coord || vid) + ' [' + esc((OBRA_PROFILE_META[d.profile] || {}).name || d.profile) + '] → ' + esc(bn) + ' (' + d.cost.wood + '/' + d.cost.stone + '/' + d.cost.iron + ')</div>';
     }).join('');
   }
@@ -5588,12 +5588,12 @@
     BL_DEFESA: 6, // blacklist: tem defesa
   };
   const MAP_INTEL_COR = {
-    1: '#2e8b3f',   // verde   — explorado, sei o que tem
-    2: '#a9781a',   // âmbar   — explorei e não vi nada
+    1: '#3f8f52',   // verde   — explorado, sei o que tem
+    2: '#8b5426',   // âmbar   — explorei e não vi nada
     3: '#9e8046',   // cinza   — buraco no meu conhecimento
     4: '#2f6f9e',   // azul    — explorador voando
     5: '#c9722a',   // laranja — perdi tropa
-    6: '#c23a2c',   // vermelho— tem defesa
+    6: '#c0483a',   // vermelho— tem defesa
   };
   const MAP_INTEL_NOME = {
     1: 'explorado', 2: 'explorei, sem info', 3: 'nunca explorado',
@@ -6028,13 +6028,13 @@
     const box = document.getElementById('twmgr-bm-list'); if (!box) return;
     const list = config.map.lastPreview || [];
     const cnt = document.getElementById('twmgr-bm-count'); if (cnt) cnt.textContent = list.length;
-    if (!list.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:8px;font-size:10px">— nenhum alvo detectado —</div>'; return; }
+    if (!list.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:8px;font-size:10px">— nenhum alvo detectado —</div>'; return; }
     const now = Date.now();
     box.innerHTML =
-      '<div style="display:grid;grid-template-columns:60px 34px 44px 1fr 44px;gap:4px;padding:3px 4px;border-bottom:1px solid #b18f4d;font-size:9px;color:#6a4e18;font-weight:600"><span>alvo</span><span style="text-align:right">d</span><span style="text-align:right">pts</span><span>de</span><span style="text-align:right">últ.</span></div>' +
+      '<div style="display:grid;grid-template-columns:60px 34px 44px 1fr 44px;gap:4px;padding:3px 4px;border-bottom:1px solid #e0d6c6;font-size:9px;color:#8b5426;font-weight:600"><span>alvo</span><span style="text-align:right">d</span><span style="text-align:right">pts</span><span>de</span><span style="text-align:right">últ.</span></div>' +
       list.slice(0, 200).map((t) => {
         const last = t.lastAt ? (Math.round((now - t.lastAt) / 86400000) + 'd') : 'novo';
-        return '<div style="display:grid;grid-template-columns:60px 34px 44px 1fr 44px;gap:4px;padding:2px 4px;border-bottom:1px solid rgba(255,255,255,.04);font-size:10px;color:#5c4527"><span style="color:#9a6f0e">' + esc(t.coord) + '</span><span style="text-align:right">' + t.dist + '</span><span style="text-align:right">' + (t.pts || 0) + '</span><span style="color:#6e5a2a;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="de ' + esc(t.srcName || '') + '">' + esc(t.src) + '</span><span style="text-align:right;color:' + (t.lastAt ? '#6e5a2a' : '#2e7d3a') + '">' + last + '</span></div>';
+        return '<div style="display:grid;grid-template-columns:60px 34px 44px 1fr 44px;gap:4px;padding:2px 4px;border-bottom:1px solid rgba(255,255,255,.04);font-size:10px;color:#6f6153"><span style="color:#a2643a">' + esc(t.coord) + '</span><span style="text-align:right">' + t.dist + '</span><span style="text-align:right">' + (t.pts || 0) + '</span><span style="color:#8a7d6d;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="de ' + esc(t.srcName || '') + '">' + esc(t.src) + '</span><span style="text-align:right;color:' + (t.lastAt ? '#8a7d6d' : '#2e7d3a') + '">' + last + '</span></div>';
       }).join('');
   }
   // Qual das três listas está visível. Fica em memória — é preferência de tela, não estado.
@@ -6055,7 +6055,7 @@
     const mapa = qual === 'perda' ? (cfg.blacklistPerda || {}) : (cfg.blacklistDefesa || {});
     const chaves = Object.keys(mapa).sort((a, b) => (mapa[b].at || 0) - (mapa[a].at || 0));
     if (!chaves.length) {
-      box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:14px;font-size:10px">— lista vazia —<br><br>' +
+      box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:14px;font-size:10px">— lista vazia —<br><br>' +
         (qual === 'perda'
           ? 'Entra aqui quem devolveu o saque em <b>vermelho</b> (você perdeu tropa). Sai sozinho quando um saque voltar verde, amarelo ou azul.'
           : 'Entra aqui quem o relatório de exploração mostrou com <b>tropa defensiva</b>. Não sai sozinho — tire na mão quando achar que mudou.') + '</div>';
@@ -6063,18 +6063,18 @@
     }
     const agora = Date.now();
     box.innerHTML =
-      '<div style="display:grid;grid-template-columns:64px 1fr 52px 22px;gap:4px;padding:3px 5px;border-bottom:1px solid #b18f4d;font-size:9px;color:#6a4e18;font-weight:600">' +
+      '<div style="display:grid;grid-template-columns:64px 1fr 52px 22px;gap:4px;padding:3px 5px;border-bottom:1px solid #e0d6c6;font-size:9px;color:#8b5426;font-weight:600">' +
         '<span>alvo</span><span>' + (qual === 'defesa' ? 'defesa vista' : 'motivo') + '</span><span style="text-align:right">há</span><span></span></div>' +
       chaves.map((coord) => {
         const r = mapa[coord];
         const dias = r.at ? Math.round((agora - r.at) / 86400000) : null;
         const quando = dias == null ? '—' : (dias === 0 ? 'hoje' : dias + 'd');
         const meio = qual === 'defesa'
-          ? '<span style="color:#c23a2c">' + (r.defTotal || '?') + ' unidades</span>' + (r.removido ? ' <span style="color:#6e5a2a">· apagado do assistente</span>' : '')
-          : '<span style="color:#6e5a2a">saque voltou vermelho</span>';
-        return '<div style="display:grid;grid-template-columns:64px 1fr 52px 22px;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:10px;color:#5c4527;align-items:center">' +
-          '<span style="color:#9a6f0e">' + esc(coord) + '</span>' + meio +
-          '<span style="text-align:right;color:#6e5a2a">' + quando + '</span>' +
+          ? '<span style="color:#c0483a">' + (r.defTotal || '?') + ' unidades</span>' + (r.removido ? ' <span style="color:#8a7d6d">· apagado do assistente</span>' : '')
+          : '<span style="color:#8a7d6d">saque voltou vermelho</span>';
+        return '<div style="display:grid;grid-template-columns:64px 1fr 52px 22px;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:10px;color:#6f6153;align-items:center">' +
+          '<span style="color:#a2643a">' + esc(coord) + '</span>' + meio +
+          '<span style="text-align:right;color:#8a7d6d">' + quando + '</span>' +
           '<span class="twmgr-del twmgr-bm-unbl" data-coord="' + esc(coord) + '" data-lista="' + qual + '" title="tirar da blacklist">✕</span></div>';
       }).join('');
     box.querySelectorAll('.twmgr-bm-unbl').forEach((el) => el.addEventListener('click', () => {
@@ -6573,33 +6573,33 @@
       else if ((t.nextSendAt || 0) > now) c.textContent = fmt(t.nextSendAt - now);
       else c.textContent = '•••';
     });
-    const g = document.getElementById('twmgr-global'); if (g) { g.textContent = !config.running ? '' : (lockOther() ? '⏸ inativa (outra aba está enviando)' : '● rodando'); g.style.color = lockOther() ? '#c23a2c' : '#2e7d3a'; }
-    const sc = document.getElementById('twmgr-scav-status'); if (sc) { if (!config.scav.running) { sc.textContent = ''; } else if (lockOther()) { sc.textContent = '⏸ outra aba está ativa'; sc.style.color = '#c23a2c'; } else { sc.style.color = '#2e7d3a'; sc.textContent = (config.scav.nextAt || 0) > now ? '● próx. verificação: ' + fmt(config.scav.nextAt - now) : '● verificando…'; } }
-    const fs = document.getElementById('twmgr-farm-status'); if (fs) { if (!config.farm.running) { fs.textContent = ''; } else if (lockOther()) { fs.textContent = '⏸ outra aba está ativa'; fs.style.color = '#c23a2c'; } else { fs.style.color = '#2e7d3a'; fs.textContent = (config.farm.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.farm.nextAt - now) : '● saqueando…'; } }
-    const ws = document.getElementById('twmgr-wall-status'); if (ws) { if (!config.wall.running) { ws.textContent = ''; } else if (lockOther()) { ws.textContent = '⏸ outra aba está ativa'; ws.style.color = '#c23a2c'; } else { ws.style.color = '#2e7d3a'; ws.textContent = (config.wall.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.wall.nextAt - now) : '● quebrando…'; } }
-    const rs = document.getElementById('twmgr-recruit-status'); if (rs) { if (!config.recruit.running) { rs.textContent = ''; } else if (lockOther()) { rs.textContent = '⏸ outra aba está ativa'; rs.style.color = '#c23a2c'; } else { rs.style.color = '#2e7d3a'; rs.textContent = (config.recruit.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.recruit.nextAt - now) : '● recrutando…'; } }
+    const g = document.getElementById('twmgr-global'); if (g) { g.textContent = !config.running ? '' : (lockOther() ? '⏸ inativa (outra aba está enviando)' : '● rodando'); g.style.color = lockOther() ? '#c0483a' : '#2e7d3a'; }
+    const sc = document.getElementById('twmgr-scav-status'); if (sc) { if (!config.scav.running) { sc.textContent = ''; } else if (lockOther()) { sc.textContent = '⏸ outra aba está ativa'; sc.style.color = '#c0483a'; } else { sc.style.color = '#2e7d3a'; sc.textContent = (config.scav.nextAt || 0) > now ? '● próx. verificação: ' + fmt(config.scav.nextAt - now) : '● verificando…'; } }
+    const fs = document.getElementById('twmgr-farm-status'); if (fs) { if (!config.farm.running) { fs.textContent = ''; } else if (lockOther()) { fs.textContent = '⏸ outra aba está ativa'; fs.style.color = '#c0483a'; } else { fs.style.color = '#2e7d3a'; fs.textContent = (config.farm.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.farm.nextAt - now) : '● saqueando…'; } }
+    const ws = document.getElementById('twmgr-wall-status'); if (ws) { if (!config.wall.running) { ws.textContent = ''; } else if (lockOther()) { ws.textContent = '⏸ outra aba está ativa'; ws.style.color = '#c0483a'; } else { ws.style.color = '#2e7d3a'; ws.textContent = (config.wall.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.wall.nextAt - now) : '● quebrando…'; } }
+    const rs = document.getElementById('twmgr-recruit-status'); if (rs) { if (!config.recruit.running) { rs.textContent = ''; } else if (lockOther()) { rs.textContent = '⏸ outra aba está ativa'; rs.style.color = '#c0483a'; } else { rs.style.color = '#2e7d3a'; rs.textContent = (config.recruit.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.recruit.nextAt - now) : '● recrutando…'; } }
     const clk = document.getElementById('twmgr-srvclock'); if (clk) { try { clk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
     MARKET_MODES.forEach((mkKey) => {
       const mk = document.getElementById('twmgr-mk-' + mkKey + '-status'); if (!mk) return;
       const st = config.market.modes[mkKey];
       if (!st.running) { mk.textContent = ''; }
-      else if (lockOther()) { mk.textContent = '⏸ outra aba'; mk.style.color = '#c23a2c'; }
+      else if (lockOther()) { mk.textContent = '⏸ outra aba'; mk.style.color = '#c0483a'; }
       else { mk.style.color = '#2e7d3a'; mk.textContent = (st.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(st.nextAt - now) : '● enviando…'; }
     });
     const bl = document.getElementById('twmgr-bld-status'); if (bl) {
       if (!config.build.running) { bl.textContent = ''; }
-      else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#c23a2c'; }
+      else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#c0483a'; }
       else { bl.style.color = '#2e7d3a'; bl.textContent = (config.build.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.build.nextAt - now) : '● construindo…'; }
     }
     const pq = document.getElementById('twmgr-pq-status'); if (pq) {
       if (!config.research || !config.research.running) { pq.textContent = ''; }
-      else if (lockOther()) { pq.textContent = '⏸ outra aba'; pq.style.color = '#c23a2c'; }
+      else if (lockOther()) { pq.textContent = '⏸ outra aba'; pq.style.color = '#c0483a'; }
       else { pq.style.color = '#2e7d3a'; pq.textContent = (config.research.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.research.nextAt - now) : '● pesquisando…'; }
     }
     if (document.getElementById('twmgr-cards-research')) refreshCards('research');
     const bm = document.getElementById('twmgr-bm-status'); if (bm) {
       if (!config.map || !config.map.running) { bm.textContent = ''; }
-      else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#c23a2c'; }
+      else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#c0483a'; }
       else { bm.style.color = '#2e7d3a'; bm.textContent = (config.map.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.map.nextAt - now) : '● rastreando…'; }
     }
     const plClk = document.getElementById('twmgr-pl-srvclock'); if (plClk) { try { plClk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
@@ -6607,7 +6607,7 @@
     if (pls) {
       const plAtk = config.planner && plActive();
       if (!plAtk || !plAtk.running) { pls.textContent = ''; }
-      else if (lockOther()) { pls.textContent = '⏸ outra aba'; pls.style.color = '#c23a2c'; }
+      else if (lockOther()) { pls.textContent = '⏸ outra aba'; pls.style.color = '#c0483a'; }
       else {
         const rr = (plAtk.rows || []);
         const pend = rr.filter((r) => r.state === 'armed' || r.state === 'scheduled').length;
@@ -6623,7 +6623,7 @@
     const pds = document.getElementById('twmgr-pd-status');
     if (pds) {
       if (!config.paladin.running) { pds.textContent = ''; }
-      else if (lockOther()) { pds.textContent = '⏸ outra aba'; pds.style.color = '#c23a2c'; }
+      else if (lockOther()) { pds.textContent = '⏸ outra aba'; pds.style.color = '#c0483a'; }
       else { pds.style.color = '#2e7d3a'; pds.textContent = '● ' + Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]).length + ' aldeia(s) no ciclo'; }
     }
     if (document.getElementById('twmgr-pd-status-list')) renderPaladinStatus();
@@ -6726,9 +6726,9 @@
       ks.slice(0, 12).map((vid) => {
         const r = f[vid];
         const falta = RES3.filter((k) => r.falta[k]).map((k) => fmtN(r.falta[k]) + ' ' + ({ wood: 'mad', stone: 'arg', iron: 'fer' })[k]).join(' · ');
-        return '<div style="font-size:10px;color:#5c4527;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)">' +
-          '<span style="color:#9a6f0e">' + esc(r.nome) + '</span> <span style="color:#6e5a2a">' + esc(r.opcao) + '</span> — <span style="color:#a5544a">' + falta + '</span></div>';
-      }).join('') + (ks.length > 12 ? '<div style="font-size:9px;color:#6e5a2a;padding:2px 0">…e mais ' + (ks.length - 12) + '</div>' : '');
+        return '<div style="font-size:10px;color:#6f6153;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)">' +
+          '<span style="color:#a2643a">' + esc(r.nome) + '</span> <span style="color:#8a7d6d">' + esc(r.opcao) + '</span> — <span style="color:#a8564a">' + falta + '</span></div>';
+      }).join('') + (ks.length > 12 ? '<div style="font-size:9px;color:#8a7d6d;padding:2px 0">…e mais ' + (ks.length - 12) + '</div>' : '');
   }
 
   function readScavUnits() {
@@ -6810,141 +6810,141 @@
     if (document.getElementById('twmgr-css')) return;
     const s = document.createElement('style'); s.id = 'twmgr-css';
     s.textContent = [
-      "#twmgr-panel{position:fixed;top:12px;right:12px;z-index:99999;width:640px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);display:flex;flex-direction:column;font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#4a3418;background:linear-gradient(160deg,#e2cd97,#ecdcb2);border:1px solid #b8912e;border-radius:12px;box-shadow:0 12px 34px rgba(0,0,0,.6);overflow:hidden}",
+      "#twmgr-panel{position:fixed;top:12px;right:12px;z-index:99999;width:640px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);display:flex;flex-direction:column;font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#463b30;background:linear-gradient(160deg,#fdfaf5,#fffdfa);border:1px solid #e6d9c2;border-radius:12px;box-shadow:0 12px 34px rgba(0,0,0,.6);overflow:hidden}",
       "#twmgr-panel *{box-sizing:border-box}",
       "#twmgr-grip{position:absolute;left:0;top:0;bottom:0;width:7px;cursor:ew-resize;z-index:6}",
       "#twmgr-grip:hover{background:linear-gradient(90deg,rgba(122,87,16,.45),transparent)}",
-      "#twmgr-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;cursor:move;background:linear-gradient(90deg,#6e5015,#9a721c 55%,#caa031);color:#fff;border-bottom:1px solid #8a6a20}",
+      "#twmgr-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;cursor:move;background:#fbf6ee;color:#7a5a32;border-bottom:1px solid #e8d9bf}",
       "#twmgr-head .twmgr-title{font-weight:700;font-size:12px;letter-spacing:.3px;display:flex;align-items:center;gap:6px}",
       "#twmgr-head .twmgr-ver{font-weight:400;font-size:8px;opacity:.75}",
       "#twmgr-head-actions{flex:0 0 auto;display:flex;align-items:center;gap:7px}",
       "#twmgr-min{cursor:pointer;font-size:17px;line-height:1;padding:0 2px;opacity:.85}#twmgr-min:hover{opacity:1}",
       "#twmgr-logbtn,#twmgr-upd-btn{cursor:pointer;font-size:13px;line-height:1;padding:2px 3px;border-radius:5px;opacity:.85;position:relative;transition:.15s}",
       "#twmgr-logbtn:hover,#twmgr-upd-btn:hover{opacity:1;background:rgba(255,255,255,.14)}",
-      "#twmgr-upd-badge{position:absolute;top:-3px;right:-2px;color:#c22a2a;font-size:9px}",
-      ".twmgr-tabs{flex:0 0 auto;display:flex;flex-wrap:nowrap;overflow-x:auto;background:#e6d4a4;border-bottom:1px solid #c4a35f;scrollbar-width:thin}",
-      ".twmgr-tab{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 1px;cursor:pointer;color:#6e5a2f;border-bottom:2px solid transparent;transition:.15s}",
-      ".twmgr-tab:hover{color:#6a4e18;background:rgba(212,175,55,.06)}",
-      ".twmgr-tab.active{color:#a9781a;border-bottom-color:#7d510a;background:rgba(212,175,55,.10)}",
+      "#twmgr-upd-badge{position:absolute;top:-3px;right:-2px;color:#c0483a;font-size:9px}",
+      ".twmgr-tabs{flex:0 0 auto;display:flex;flex-wrap:nowrap;overflow-x:auto;background:#f6f1e8;border-bottom:1px solid #ece4d8;scrollbar-width:thin}",
+      ".twmgr-tab{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 1px;cursor:pointer;color:#8a7d6d;border-bottom:2px solid transparent;transition:.15s}",
+      ".twmgr-tab:hover{color:#8b5426;background:rgba(162,100,58,.06)}",
+      ".twmgr-tab.active{color:#8b5426;border-bottom-color:#a2643a;background:#ffffff}",
       ".twmgr-tab-ico{font-size:12px;line-height:1;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;border:2px solid transparent;transition:.2s}",
       ".twmgr-tab-lbl{font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}",
-      ".twmgr-tab.twmgr-run .twmgr-tab-ico{border-color:#2e8b3f;background:rgba(63,206,84,.15);box-shadow:0 0 9px rgba(63,206,84,.6)}",
+      ".twmgr-tab.twmgr-run .twmgr-tab-ico{border-color:#3f8f52;background:rgba(63,206,84,.15);box-shadow:0 0 9px rgba(63,206,84,.6)}",
       ".twmgr-ui{width:18px;height:18px;vertical-align:middle}",
       ".twmgr-fmtable{width:100%;border-collapse:collapse;font-size:11px}",
-      ".twmgr-fmtable th{font-size:10px;color:#9a6f0e !important;font-weight:700;padding:4px 2px;border-bottom:1px solid #b18f4d;text-transform:uppercase;vertical-align:middle;background:#e6d4a4 !important;background-image:none !important}",
+      ".twmgr-fmtable th{font-size:10px;color:#a2643a !important;font-weight:700;padding:4px 2px;border-bottom:1px solid #e0d6c6;text-transform:uppercase;vertical-align:middle;background:#f6f1e8 !important;background-image:none !important}",
       ".twmgr-fmtable td{vertical-align:middle}",
       ".twmgr-fmtable th:first-child,.twmgr-fmrow td:first-child{text-align:left}",
       ".twmgr-fmtable th:not(:first-child),.twmgr-fmrow td:not(:first-child){width:44px;text-align:center}",
       ".twmgr-fmrow{border-bottom:1px solid rgba(255,255,255,.04)}",
-      ".twmgr-fmrow:hover{background:rgba(212,175,55,.06)}",
+      ".twmgr-fmrow:hover{background:rgba(162,100,58,.06)}",
       ".twmgr-fmck{width:15px;height:15px;cursor:pointer;vertical-align:middle;margin:0}",
       // Tela de edicao sobreposta ao painel. `inset:0` cobre tudo, inclusive a barra de abas.
-      ".twmgr-tela{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;background:linear-gradient(160deg,#e2cd97,#ecdcb2);border-radius:12px;overflow:hidden}",
-      ".twmgr-tela-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;background:linear-gradient(90deg,#6e5015,#9a721c 55%,#caa031);color:#fff;font-weight:700;font-size:12px;border-bottom:1px solid #8a6a20}",
-      ".twmgr-tela-x{cursor:pointer;color:#fff;font-size:15px;line-height:1;opacity:.85;padding:0 2px}",
+      ".twmgr-tela{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;background:linear-gradient(160deg,#fdfaf5,#fffdfa);border-radius:12px;overflow:hidden}",
+      ".twmgr-tela-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;background:#fbf6ee;color:#7a5a32;font-weight:700;font-size:12px;border-bottom:1px solid #e8d9bf}",
+      ".twmgr-tela-x{cursor:pointer;color:#a2643a;font-size:15px;line-height:1;opacity:.85;padding:0 2px}",
       ".twmgr-tela-x:hover{opacity:1}",
       ".twmgr-tela-body{flex:1 1 auto;overflow-y:auto;padding:10px 12px}",
-      ".twmgr-tela-body::-webkit-scrollbar{width:9px}.twmgr-tela-body::-webkit-scrollbar-thumb{background:#b18f4d;border-radius:4px}",
-      ".twmgr-link-tela{cursor:pointer;color:#7d510a;font-size:10px;font-weight:600;text-decoration:none}",
+      ".twmgr-tela-body::-webkit-scrollbar{width:9px}.twmgr-tela-body::-webkit-scrollbar-thumb{background:#e0d6c6;border-radius:4px}",
+      ".twmgr-link-tela{cursor:pointer;color:#a2643a;font-size:10px;font-weight:600;text-decoration:none}",
       ".twmgr-link-tela:hover{text-decoration:underline}",
       ".twmgr-subtabs{display:flex;gap:5px;margin-bottom:9px}",
-      ".twmgr-subtab{flex:1 1 0;min-width:0;display:flex;align-items:center;justify-content:center;gap:4px;padding:6px 4px;font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;border:1px solid #c4a35f;border-radius:8px;background:rgba(0,0,0,.05);color:#6e5a2a;transition:.15s;position:relative}",
-      ".twmgr-subtab:hover{background:rgba(0,0,0,.10);color:#4a3418}",
-      ".twmgr-subtab.active{background:linear-gradient(180deg,#c9a33f,#b18f4d);border-color:#7d510a;color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}",
-      ".twmgr-subtab.twmgr-run::after{content:'';position:absolute;top:3px;right:4px;width:6px;height:6px;border-radius:50%;background:#2e8b3f;box-shadow:0 0 0 2px rgba(46,139,63,.25)}",
+      ".twmgr-subtab{flex:1 1 0;min-width:0;display:flex;align-items:center;justify-content:center;gap:4px;padding:6px 4px;font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;border:1px solid #ece4d8;border-radius:8px;background:rgba(0,0,0,.05);color:#8a7d6d;transition:.15s;position:relative}",
+      ".twmgr-subtab:hover{background:rgba(0,0,0,.10);color:#463b30}",
+      ".twmgr-subtab.active{background:#fff;border-color:#a2643a;color:#8b5426;box-shadow:inset 0 -2px 0 #a2643a}",
+      ".twmgr-subtab.twmgr-run::after{content:'';position:absolute;top:3px;right:4px;width:6px;height:6px;border-radius:50%;background:#3f8f52;box-shadow:0 0 0 2px rgba(46,139,63,.25)}",
       ".twmgr-card-break{flex-basis:100%;height:0}",
       ".twmgr-cards{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}",
-      ".twmgr-card-mini{flex:1 1 0;min-width:66px;background:linear-gradient(165deg,#e6d4a4,#ecdcb2);border:1px solid #b18f4d;border-radius:9px;padding:7px 6px 6px;text-align:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}",
-      // O card de destaque de cada módulo: antes era um ciano inline (#1f8fa0) que não é da paleta
+      ".twmgr-card-mini{flex:1 1 0;min-width:66px;background:linear-gradient(165deg,#f6f1e8,#fffdfa);border:1px solid #e0d6c6;border-radius:9px;padding:7px 6px 6px;text-align:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}",
+      // O card de destaque de cada módulo: antes era um ciano inline (#a2643a) que não é da paleta
       // pergaminho e brigava com o resto. Agora é o mesmo dourado, só mais escuro e com a moldura
       // marcada — destaca pela hierarquia, não por trocar de cor.
-      ".twmgr-card-hl{background:linear-gradient(165deg,#efd9a0,#f6e6bd);border-color:#9a6f0e;box-shadow:inset 0 0 0 1px rgba(154,111,14,.18)}",
-      ".twmgr-card-hl .twmgr-card-v{color:#7d510a;font-size:21px}",
-      ".twmgr-card-hl .twmgr-card-l{color:#5c4527}",      // flex-basis:100% sozinho NÃO forçava linha inteira: o .twmgr-card-mini tem flex:1 1 0, e o
+      ".twmgr-card-hl{background:linear-gradient(165deg,#fdf3e6,#fffaf3);border-color:#a2643a;box-shadow:inset 0 0 0 1px rgba(154,111,14,.18)}",
+      ".twmgr-card-hl .twmgr-card-v{color:#a2643a;font-size:21px}",
+      ".twmgr-card-hl .twmgr-card-l{color:#6f6153}",      // flex-basis:100% sozinho NÃO forçava linha inteira: o .twmgr-card-mini tem flex:1 1 0, e o
       // shrink:1 deixava o card encolher pra caber ao lado dos outros em vez de quebrar a linha.
       // Com shrink:0 ele ocupa a linha de verdade. Estava silenciosamente sem efeito em Coletas e Cadeado.
       ".twmgr-card-wide{flex-basis:100%;flex-shrink:0}",
-      ".twmgr-card-v{font-size:19px;font-weight:800;color:#9a6f0e;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
-      ".twmgr-card-l{font-size:8px;color:#6e5a2f;margin-top:4px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
-      ".twmgr-section{border:1px solid #c4a35f;border-radius:9px;padding:8px 9px;margin-bottom:9px;background:rgba(0,0,0,.14)}",
-      ".twmgr-sec-h{font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#8a6410;margin:-2px 0 6px}",
-      ".twmgr-modlog{margin-top:10px;border-top:1px solid #c4a35f;padding-top:6px}",
-      ".twmgr-modlog-head{cursor:pointer;font-size:10px;color:#5c4527;user-select:none;display:flex;align-items:center;gap:5px}",
-      ".twmgr-modlog-head:hover{color:#a9781a}",
+      ".twmgr-card-v{font-size:19px;font-weight:800;color:#a2643a;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      ".twmgr-card-l{font-size:8px;color:#8a7d6d;margin-top:4px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      ".twmgr-section{border:1px solid #ece4d8;border-radius:9px;padding:8px 9px;margin-bottom:9px;background:rgba(0,0,0,.14)}",
+      ".twmgr-sec-h{font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#8b5426;margin:-2px 0 6px}",
+      ".twmgr-modlog{margin-top:10px;border-top:1px solid #ece4d8;padding-top:6px}",
+      ".twmgr-modlog-head{cursor:pointer;font-size:10px;color:#6f6153;user-select:none;display:flex;align-items:center;gap:5px}",
+      ".twmgr-modlog-head:hover{color:#8b5426}",
       ".twmgr-modlog-body{max-height:180px;overflow-y:auto;margin-top:5px;font-size:10px}",
       ".twmgr-btn.on{box-shadow:0 0 12px rgba(76,200,90,.85),inset 0 0 0 1px rgba(255,255,255,.3)}",
       ".twmgr-btn.dim{opacity:.4 !important;filter:grayscale(.5);cursor:default}",
       "#twmgr-body{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:11px 12px 12px}",
-      "#twmgr-body::-webkit-scrollbar{width:9px}#twmgr-body::-webkit-scrollbar-thumb{background:#b18f4d;border-radius:4px}#twmgr-body::-webkit-scrollbar-track{background:#e6d4a4}",
-      ".twmgr-hint{font-size:10px;color:#5c4527;line-height:1.4;margin-bottom:9px}.twmgr-hint b{color:#6a4e18}",
+      "#twmgr-body::-webkit-scrollbar{width:9px}#twmgr-body::-webkit-scrollbar-thumb{background:#e0d6c6;border-radius:4px}#twmgr-body::-webkit-scrollbar-track{background:#f6f1e8}",
+      ".twmgr-hint{font-size:10px;color:#6f6153;line-height:1.4;margin-bottom:9px}.twmgr-hint b{color:#8b5426}",
       ".twmgr-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px}",
-      ".twmgr-lbl{font-size:10px;color:#5c4527}",
-      ".twmgr-inp{background:#fbf3dc !important;border:1px solid #a9843f !important;color:#4a3418 !important;border-radius:7px !important;padding:5px 7px !important;font-size:11px !important;outline:none !important;transition:.15s}",
-      ".twmgr-inp:focus{border-color:#7d510a !important;box-shadow:0 0 0 2px rgba(212,175,55,.25) !important}",
-      "#twmgr-panel input[type=checkbox]{accent-color:#7d510a;width:15px;height:15px;cursor:pointer;vertical-align:middle}",
+      ".twmgr-lbl{font-size:10px;color:#6f6153}",
+      ".twmgr-inp{background:#ffffff !important;border:1px solid #ddd2c0 !important;color:#463b30 !important;border-radius:7px !important;padding:5px 7px !important;font-size:11px !important;outline:none !important;transition:.15s}",
+      ".twmgr-inp:focus{border-color:#a2643a !important;box-shadow:0 0 0 2px rgba(162,100,58,.25) !important}",
+      "#twmgr-panel input[type=checkbox]{accent-color:#a2643a;width:15px;height:15px;cursor:pointer;vertical-align:middle}",
       ".twmgr-btn{border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:600;cursor:pointer;transition:.15s;color:#fff}",
       ".twmgr-btn:hover{filter:brightness(1.12)}.twmgr-btn:active{transform:translateY(1px)}",
-      ".twmgr-go{background:linear-gradient(180deg,#3bb14a,#2e7d32) !important;color:#fff !important}",
-      ".twmgr-stop{background:linear-gradient(180deg,#c23a2c,#b3271a) !important;color:#fff !important}",
-      ".twmgr-ghost{background:rgba(212,175,55,.10) !important;border:1px solid #a9843f !important;color:#6b4e1e !important}.twmgr-ghost:hover{background:rgba(212,175,55,.2) !important}",
-      ".twmgr-add{width:100%;background:transparent !important;border:1px dashed #a9843f !important;color:#7a5710 !important;border-radius:8px;padding:6px;font-size:11px;font-weight:600;cursor:pointer;margin-bottom:8px}.twmgr-add:hover{background:rgba(212,175,55,.10) !important}",
+      ".twmgr-go{background:linear-gradient(180deg,#6aa877,#4c8f5e) !important;color:#fff !important}",
+      ".twmgr-stop{background:linear-gradient(180deg,#bd6a5e,#a8564a) !important;color:#fff !important}",
+      ".twmgr-ghost{background:#ffffff !important;border:1px solid #ddd2c0 !important;color:#6f6153 !important}.twmgr-ghost:hover{background:#fdf6ec !important}",
+      ".twmgr-add{width:100%;background:transparent !important;border:1px dashed #ddd2c0 !important;color:#a2643a !important;border-radius:8px;padding:6px;font-size:11px;font-weight:600;cursor:pointer;margin-bottom:8px}.twmgr-add:hover{background:#ffffff !important}",
       ".twmgr-actions{display:flex;gap:8px;margin-bottom:7px}.twmgr-actions .twmgr-btn{flex:1}",
-      ".twmgr-cstatus{text-align:center;font-size:10px;font-weight:600;min-height:13px;color:#5c4527}",
-      ".twmgr-card{background:linear-gradient(180deg,#e6d4a4,#eeddb6);border:1px solid #cbb083;border-radius:9px;margin-bottom:7px;overflow:hidden}",
+      ".twmgr-cstatus{text-align:center;font-size:10px;font-weight:600;min-height:13px;color:#6f6153}",
+      ".twmgr-card{background:linear-gradient(180deg,#f6f1e8,#ffffff);border:1px solid #ece4d8;border-radius:9px;margin-bottom:7px;overflow:hidden}",
       ".twmgr-card-head{display:flex;align-items:center;gap:7px;padding:7px 9px}",
       ".twmgr-xy{flex:0 0 76px;width:76px;text-align:center}",
-      ".twmgr-cnt{flex:1;text-align:center;font-size:11px;font-weight:700;color:#9a6f0e;font-variant-numeric:tabular-nums}",
-      ".twmgr-exp,.twmgr-del{cursor:pointer;font-size:12px;width:20px;height:20px;line-height:20px;text-align:center;border-radius:5px;color:#5c4527}",
-      ".twmgr-exp:hover{background:rgba(212,175,55,.15);color:#a9781a}",
-      ".twmgr-del{color:#a5544a}.twmgr-del:hover{background:rgba(231,76,60,.18);color:#c23a2c}",
-      ".twmgr-from{font-size:9px;color:#6e5a2a;padding:0 9px 6px}",
-      ".twmgr-troops{display:none;padding:6px 9px 8px;border-top:1px solid #dcc78f}.twmgr-troops table{width:100%;border-collapse:collapse}",
-      ".twmgr-troops td{padding:2px 3px;font-size:10px;color:#5c4527}.twmgr-qi{width:46px;text-align:center}",
+      ".twmgr-cnt{flex:1;text-align:center;font-size:11px;font-weight:700;color:#a2643a;font-variant-numeric:tabular-nums}",
+      ".twmgr-exp,.twmgr-del{cursor:pointer;font-size:12px;width:20px;height:20px;line-height:20px;text-align:center;border-radius:5px;color:#6f6153}",
+      ".twmgr-exp:hover{background:rgba(162,100,58,.15);color:#8b5426}",
+      ".twmgr-del{color:#a8564a}.twmgr-del:hover{background:rgba(231,76,60,.18);color:#c0483a}",
+      ".twmgr-from{font-size:9px;color:#8a7d6d;padding:0 9px 6px}",
+      ".twmgr-troops{display:none;padding:6px 9px 8px;border-top:1px solid #ece4d8}.twmgr-troops table{width:100%;border-collapse:collapse}",
+      ".twmgr-troops td{padding:2px 3px;font-size:10px;color:#6f6153}.twmgr-qi{width:46px;text-align:center}",
       ".twmgr-units{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px;margin-bottom:9px}",
-      ".twmgr-units label{display:flex;align-items:center;gap:7px;font-size:11px;color:#5c4527;cursor:pointer}",
+      ".twmgr-units label{display:flex;align-items:center;gap:7px;font-size:11px;color:#6f6153;cursor:pointer}",
       ".twmgr-res{display:flex;gap:6px;margin:5px 0 9px}.twmgr-res label{flex:1;display:flex;align-items:center;gap:4px;font-size:13px}.twmgr-res .twmgr-inp{width:100%;font-size:11px !important}",
-      ".twmgr-check{display:flex;align-items:center;gap:8px;font-size:11px;color:#5c4527;margin-bottom:10px;cursor:pointer}",
-      ".twmgr-log{height:150px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;padding:7px 8px;font-family:Consolas,'Courier New',monospace;font-size:10px;line-height:1.45}",
-      ".twmgr-log::-webkit-scrollbar{width:8px}.twmgr-log::-webkit-scrollbar-thumb{background:#b18f4d;border-radius:4px}",
+      ".twmgr-check{display:flex;align-items:center;gap:8px;font-size:11px;color:#6f6153;margin-bottom:10px;cursor:pointer}",
+      ".twmgr-log{height:150px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:8px;padding:7px 8px;font-family:Consolas,'Courier New',monospace;font-size:10px;line-height:1.45}",
+      ".twmgr-log::-webkit-scrollbar{width:8px}.twmgr-log::-webkit-scrollbar-thumb{background:#e0d6c6;border-radius:4px}",
       "#twmgr-panel.twmgr-collapsed{width:auto}",
       "#twmgr-panel.twmgr-collapsed .twmgr-tabs,#twmgr-panel.twmgr-collapsed #twmgr-body{display:none}",
       "#twmgr-panel.twmgr-collapsed #twmgr-head{border-bottom:none}",
-      ".twmgr-dot{width:9px;height:9px;border-radius:50%;background:#a9843f;transition:.2s;flex:0 0 auto}",
-      ".twmgr-dot.on{background:#2e8b3f;box-shadow:0 0 8px #2e8b3f}",
+      ".twmgr-dot{width:9px;height:9px;border-radius:50%;background:#ddd2c0;transition:.2s;flex:0 0 auto}",
+      ".twmgr-dot.on{background:#3f8f52;box-shadow:0 0 8px #3f8f52}",
       ".twmgr-bld-sum{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:5px}",
-      ".twmgr-bld-sumcell{display:inline-flex;align-items:center;gap:2px;background:#e9d8ac;border:1px solid #c4a35f;border-radius:5px;padding:1px 4px;font-size:9px;color:#6a4e18}",
+      ".twmgr-bld-sumcell{display:inline-flex;align-items:center;gap:2px;background:#ffffff;border:1px solid #ece4d8;border-radius:5px;padding:1px 4px;font-size:9px;color:#8b5426}",
       ".twmgr-bld-sumcell img{width:12px;height:12px;vertical-align:middle}",
       // Tabela de aldeias: rola sozinha e nunca alarga o painel — a coluna Aldeia e a que cede.
-      ".twmgr-bld-vils{max-height:230px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px}",
-      ".twmgr-bld-vils::-webkit-scrollbar{width:8px}.twmgr-bld-vils::-webkit-scrollbar-thumb{background:#b18f4d;border-radius:4px}",
+      ".twmgr-bld-vils{max-height:230px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:8px}",
+      ".twmgr-bld-vils::-webkit-scrollbar{width:8px}.twmgr-bld-vils::-webkit-scrollbar-thumb{background:#e0d6c6;border-radius:4px}",
       ".twmgr-bld-tab{width:100%;border-collapse:collapse;font-size:9px;table-layout:fixed}",
-      ".twmgr-bld-tab th{position:sticky;top:0;background:#e6d4a4;color:#5c4527;font-weight:600;text-align:left;padding:3px 4px;border-bottom:1px solid #c4a35f;z-index:1}",
-      ".twmgr-bld-tab td{padding:2px 4px;border-bottom:1px solid #d3b678;color:#4a3418;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".twmgr-bld-tab th{position:sticky;top:0;background:#f6f1e8;color:#6f6153;font-weight:600;text-align:left;padding:3px 4px;border-bottom:1px solid #ece4d8;z-index:1}",
+      ".twmgr-bld-tab td{padding:2px 4px;border-bottom:1px solid #f0e9dd;color:#463b30;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       // Coluna do checkbox: 16px era menos que o proprio checkbox (15px) + o padding da celula,
       // entao ele saia apertado contra o nome da aldeia. Largura propria e sem padding lateral.
       ".twmgr-bld-tab th.twmgr-tab-ck,.twmgr-bld-tab td.twmgr-tab-ck{width:26px;padding-left:2px;padding-right:2px;text-align:center}",
       ".twmgr-bld-tab tr.row_b td{background:rgba(0,0,0,.05)}",
       ".twmgr-bld-tab tr.twmgr-bld-off td{opacity:.55}",
-      ".twmgr-bld-tab a{color:#7d510a;cursor:pointer;text-decoration:none}.twmgr-bld-tab a:hover{text-decoration:underline}",
-      ".twmgr-bld-plan{max-height:260px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;padding:3px}",
-      ".twmgr-bld-plan::-webkit-scrollbar{width:8px}.twmgr-bld-plan::-webkit-scrollbar-thumb{background:#b18f4d;border-radius:4px}",
-      ".twmgr-pq-item{display:grid;grid-template-columns:22px 18px 1fr 18px 18px 18px;align-items:center;gap:5px;padding:4px 5px;border-bottom:1px solid rgba(0,0,0,.06);font-size:11px;color:#4a3418}",
+      ".twmgr-bld-tab a{color:#a2643a;cursor:pointer;text-decoration:none}.twmgr-bld-tab a:hover{text-decoration:underline}",
+      ".twmgr-bld-plan{max-height:260px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:8px;padding:3px}",
+      ".twmgr-bld-plan::-webkit-scrollbar{width:8px}.twmgr-bld-plan::-webkit-scrollbar-thumb{background:#e0d6c6;border-radius:4px}",
+      ".twmgr-pq-item{display:grid;grid-template-columns:22px 18px 1fr 18px 18px 18px;align-items:center;gap:5px;padding:4px 5px;border-bottom:1px solid rgba(0,0,0,.06);font-size:11px;color:#463b30}",
       ".twmgr-pq-item:last-child{border-bottom:none}",
-      ".twmgr-pq-ord{color:#6e5a2a;font-size:9px;text-align:right}",
+      ".twmgr-pq-ord{color:#8a7d6d;font-size:9px;text-align:right}",
       ".twmgr-pq-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".twmgr-pq-up,.twmgr-pq-down,.twmgr-pq-rm{cursor:pointer;text-align:center;font-size:11px;color:#7d510a;opacity:.75}",
+      ".twmgr-pq-up,.twmgr-pq-down,.twmgr-pq-rm{cursor:pointer;text-align:center;font-size:11px;color:#a2643a;opacity:.75}",
       ".twmgr-pq-up:hover,.twmgr-pq-down:hover{opacity:1}",
-      ".twmgr-pq-rm{color:#c23a2c}.twmgr-pq-rm:hover{opacity:1}",
-      ".twmgr-bld-item{display:grid;grid-template-columns:22px 16px 18px 1fr 44px 18px 18px 18px;align-items:center;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:#4a3418}",
+      ".twmgr-pq-rm{color:#c0483a}.twmgr-pq-rm:hover{opacity:1}",
+      ".twmgr-bld-item{display:grid;grid-template-columns:22px 16px 18px 1fr 44px 18px 18px 18px;align-items:center;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:#463b30}",
       ".twmgr-bld-item:last-child{border-bottom:none}",
       ".twmgr-bld-item.twmgr-bld-off{opacity:.42;filter:grayscale(.6)}",
-      ".twmgr-bld-ord{color:#6e5a2a;font-size:9px;text-align:right}",
+      ".twmgr-bld-ord{color:#8a7d6d;font-size:9px;text-align:right}",
       ".twmgr-bld-ico{font-size:14px;text-align:center}",
       ".twmgr-bld-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".twmgr-bld-lvl{width:100% !important;text-align:center;padding:2px 4px !important;font-size:11px !important}",
-      ".twmgr-bld-up,.twmgr-bld-down,.twmgr-bld-rm{cursor:pointer;text-align:center;font-size:11px;color:#5c4527;border-radius:4px;user-select:none;padding:1px 0}",
-      ".twmgr-bld-up:hover,.twmgr-bld-down:hover{background:rgba(212,175,55,.18);color:#a9781a}",
-      ".twmgr-bld-rm{color:#a5544a}.twmgr-bld-rm:hover{background:rgba(231,76,60,.22);color:#c23a2c}",
+      ".twmgr-bld-up,.twmgr-bld-down,.twmgr-bld-rm{cursor:pointer;text-align:center;font-size:11px;color:#6f6153;border-radius:4px;user-select:none;padding:1px 0}",
+      ".twmgr-bld-up:hover,.twmgr-bld-down:hover{background:rgba(162,100,58,.18);color:#8b5426}",
+      ".twmgr-bld-rm{color:#a8564a}.twmgr-bld-rm:hover{background:rgba(231,76,60,.22);color:#c0483a}",
     ].join('');
     document.head.appendChild(s);
   }
@@ -7023,9 +7023,9 @@
             '<button id="twmgr-bld-reset" class="twmgr-btn twmgr-ghost" style="flex:1;font-size:10px">↺ reset padrão</button>' +
             '<button id="twmgr-bld-clear" class="twmgr-btn twmgr-ghost" style="flex:1;font-size:10px">🗑 limpar tudo</button>' +
           '</div>' +
-          '<div style="font-size:9px;color:#6e5a2a;margin:7px 0 3px">Prioridades deste modelo (0 = desligado) — furam a ordem da lista quando disparam:</div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">🌾 Fazenda se sobrar menos de</span><input id="twmgr-bld-farmpct" class="twmgr-inp" type="number" min="0" max="99" value="0" style="width:52px" title="% de população ainda disponível"><span style="font-size:10px;color:#6e5a2a">% da pop.</span></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">📦 Armazém se sobrar menos de</span><input id="twmgr-bld-storagepct" class="twmgr-inp" type="number" min="0" max="99" value="0" style="width:52px" title="% de capacidade de armazenamento ainda livre"><span style="font-size:10px;color:#6e5a2a">% da cap.</span></div>') +
+          '<div style="font-size:9px;color:#8a7d6d;margin:7px 0 3px">Prioridades deste modelo (0 = desligado) — furam a ordem da lista quando disparam:</div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">🌾 Fazenda se sobrar menos de</span><input id="twmgr-bld-farmpct" class="twmgr-inp" type="number" min="0" max="99" value="0" style="width:52px" title="% de população ainda disponível"><span style="font-size:10px;color:#8a7d6d">% da pop.</span></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">📦 Armazém se sobrar menos de</span><input id="twmgr-bld-storagepct" class="twmgr-inp" type="number" min="0" max="99" value="0" style="width:52px" title="% de capacidade de armazenamento ainda livre"><span style="font-size:10px;color:#8a7d6d">% da cap.</span></div>') +
         '</div>' +
       '</div>' +
       '<div id="twmgr-tela-tpl-pq" class="twmgr-tela" style="display:none">' +
@@ -7039,7 +7039,7 @@
             '<button id="twmgr-pq-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
             '<button id="twmgr-pq-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
           '</div>' +
-          '<div style="font-size:9px;color:#6e5a2a;margin:6px 0 3px">Ordem = prioridade. A primeira tropa que ainda falta é a que entra na pesquisa.</div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin:6px 0 3px">Ordem = prioridade. A primeira tropa que ainda falta é a que entra na pesquisa.</div>' +
           '<div id="twmgr-pq-order" class="twmgr-bld-plan"></div>' +
           '<div class="twmgr-row" style="gap:4px;margin-top:6px">' +
             '<select id="twmgr-pq-add" class="twmgr-inp" style="flex:1">' +
@@ -7109,7 +7109,7 @@
         sec('Tropa por ataque',
           '<div class="twmgr-row"><span class="twmgr-lbl">Bárbaro por ataque</span><input id="twmgr-wall-axe" class="twmgr-inp" type="number" min="1" value="80" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Aríete</span><select id="twmgr-wall-mode" class="twmgr-inp" style="width:150px"><option value="auto">auto (pela muralha)</option><option value="fixo">fixo</option></select></div>' +
-          '<div id="twmgr-wall-auto"><div class="twmgr-row"><span class="twmgr-lbl">Aríetes p/ muralha 6</span><input id="twmgr-wall-ramw6" class="twmgr-inp" type="number" min="1" value="24" style="width:66px"></div><div style="font-size:9px;color:#6e5a2a">calibra o resto: muro5≈18 · 4≈13 · 3≈9 · 2≈5 · 1≈3</div></div>' +
+          '<div id="twmgr-wall-auto"><div class="twmgr-row"><span class="twmgr-lbl">Aríetes p/ muralha 6</span><input id="twmgr-wall-ramw6" class="twmgr-inp" type="number" min="1" value="24" style="width:66px"></div><div style="font-size:9px;color:#8a7d6d">calibra o resto: muro5≈18 · 4≈13 · 3≈9 · 2≈5 · 1≈3</div></div>' +
           '<div id="twmgr-wall-fixo" style="display:none"><div class="twmgr-row"><span class="twmgr-lbl">Aríetes por ataque (fixo)</span><input id="twmgr-wall-ramfix" class="twmgr-inp" type="number" min="1" value="20" style="width:66px"></div></div>') +
         sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-wall-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-wall-start" class="twmgr-btn twmgr-go">▶ Quebrar</button><button id="twmgr-wall-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
@@ -7133,10 +7133,10 @@
           '<div class="twmgr-row"><span class="twmgr-lbl">Delay entre envios (ms)</span><input id="twmgr-bm-delay" class="twmgr-inp" type="number" min="0" step="100" value="500" style="width:66px"></div>') +
         sec('Ciclo',
           '<div class="twmgr-row"><span class="twmgr-lbl" title="De quanto em quanto tempo ele relê o mapa e procura bárbaro novo.">Intervalo do ciclo (min)</span><input id="twmgr-bm-ciclo" class="twmgr-inp" type="number" min="5" step="5" value="30" style="width:66px"></div>' +
-          '<div id="twmgr-bm-next" style="font-size:10px;color:#6e5a2a;text-align:right"></div>') +
+          '<div id="twmgr-bm-next" style="font-size:10px;color:#8a7d6d;text-align:right"></div>') +
         sec('Blacklist',
           '<div class="twmgr-row"><span class="twmgr-lbl" title="A partir de quantas unidades de defesa no relatório a aldeia entra na blacklist.">Defesa mínima p/ blacklist</span><input id="twmgr-bm-defmin" class="twmgr-inp" type="number" min="1" value="1" style="width:66px"></div>' +
-          '<label class="twmgr-check" title="Quando uma aldeia entrar na blacklist por DEFESA, apaga os relatórios dela no jogo — o que a tira da listagem do assistente. Não afeta a blacklist de tropa perdida. NÃO TEM DESFAZER: pra voltar, a aldeia teria que reaparecer sozinha na busca do assistente."><input id="twmgr-bm-rmassist" type="checkbox"> Apagar do assistente quem tem defesa <b style="color:#a5544a">(irreversível)</b></label>' +
+          '<label class="twmgr-check" title="Quando uma aldeia entrar na blacklist por DEFESA, apaga os relatórios dela no jogo — o que a tira da listagem do assistente. Não afeta a blacklist de tropa perdida. NÃO TEM DESFAZER: pra voltar, a aldeia teria que reaparecer sozinha na busca do assistente."><input id="twmgr-bm-rmassist" type="checkbox"> Apagar do assistente quem tem defesa <b style="color:#a8564a">(irreversível)</b></label>' +
           '<div class="twmgr-hint" style="margin:0">O Saque já pula quem está em qualquer uma das duas listas, mesmo com essa opção desligada.</div>') +
         '<div class="twmgr-actions"><button id="twmgr-bm-preview" class="twmgr-btn twmgr-ghost">💡 Prévia</button><button id="twmgr-bm-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-bm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-bm-status" class="twmgr-cstatus"></div>' +
@@ -7146,11 +7146,11 @@
           '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="perda" style="flex:1;padding:4px;font-size:10px">💀 Perdi tropa (<span id="twmgr-bm-nperda">0</span>)</button>' +
           '<button class="twmgr-btn twmgr-ghost twmgr-bm-sub" data-sub="defesa" style="flex:1;padding:4px;font-size:10px">🛡️ Tem defesa (<span id="twmgr-bm-ndefesa">0</span>)</button>' +
         '</div>' +
-        '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;margin-top:4px"></div>' +
-        '<div id="twmgr-bm-bl" style="max-height:220px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;margin-top:4px;display:none"></div>' +
+        '<div id="twmgr-bm-list" style="max-height:220px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:8px;margin-top:4px"></div>' +
+        '<div id="twmgr-bm-bl" style="max-height:220px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:8px;margin-top:4px;display:none"></div>' +
         modLog('map') +
         sec('🔒 Cadeado automático',
-          '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">Rastreia bárbaras no raio de TODAS as suas aldeias (a mais perto conta) e tranca (reserva pra tribo) as com pontuação mínima, das mais fortes pras mais fracas. Pula quem tem relatório vermelho no último ataque (checado aldeia por aldeia, cobre até abandonadas). Nunca destrava o que já travou — só soma.</div>' +
+          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Rastreia bárbaras no raio de TODAS as suas aldeias (a mais perto conta) e tranca (reserva pra tribo) as com pontuação mínima, das mais fortes pras mais fracas. Pula quem tem relatório vermelho no último ataque (checado aldeia por aldeia, cobre até abandonadas). Nunca destrava o que já travou — só soma.</div>' +
           cardsDiv('lock') +
           '<div class="twmgr-row"><span class="twmgr-lbl">Raio (campos, X)</span><input id="twmgr-lk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="10" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Pontos mín. (Y)</span><input id="twmgr-lk-pts" class="twmgr-inp" type="number" min="0" value="500" style="width:80px"></div>' +
@@ -7169,7 +7169,7 @@
           '<div style="text-align:right;margin-top:2px"><button id="twmgr-r-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button></div>') +
         sec('Tropas por perfil', recruitProfileHTML('atk', '⚔️ Perfil ATK') + recruitProfileHTML('def', '🛡️ Perfil DEF')) +
         sec('Grupos adicionais',
-          '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">Crie quantos perfis quiser, cada um ligado a um grupo do TW — igual o ATK/DEF acima, mas sem limite de quantidade.</div>' +
+          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Crie quantos perfis quiser, cada um ligado a um grupo do TW — igual o ATK/DEF acima, mas sem limite de quantidade.</div>' +
           '<div id="twmgr-rg-list"></div>' +
           '<button id="twmgr-rg-add" class="twmgr-btn twmgr-ghost" style="width:100%;margin-top:2px">+ Adicionar grupo</button>') +
         sec('Ritmo',
@@ -7184,25 +7184,25 @@
         hint('Mercado: cada modo roda de forma <b>independente</b> — pode ligar quantos quiser ao mesmo tempo (ex.: Equilíbrio + Solidário juntos). <b>Cunhagem</b> junta recurso de grupos de origem em uma ou mais aldeias destino (e pode cunhar moedas de ouro automaticamente nelas); <b>Equilíbrio</b> nivela as aldeias por %; <b>Solidário</b> abastece só o grupo escolhido (que só recebe) com qualquer outra aldeia sua doando.') +
         sec('💰 Cunhagem',
             '<div class="twmgr-row"><span class="twmgr-lbl">Grupos de origem</span></div>' +
-            '<div id="twmgr-mk-srcgroups" style="max-height:100px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px;margin-bottom:6px"></div>' +
+            '<div id="twmgr-mk-srcgroups" style="max-height:100px;overflow-y:auto;border:1px solid #ece4d8;border-radius:6px;padding:4px;margin-bottom:6px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Aldeias destino (1 coord. por linha)</span></div>' +
             '<textarea id="twmgr-mk-destcoords" class="twmgr-inp" style="width:100%;height:52px;margin:2px 0 6px" placeholder="464|604&#10;465|605"></textarea>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Reserva madeira/argila/ferro</span>' +
               '<input id="twmgr-mk-rwood" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px">' +
               '<input id="twmgr-mk-rstone" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px">' +
               '<input id="twmgr-mk-riron" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px"></div>' +
-            '<div class="twmgr-row"><label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#5c4527"><input id="twmgr-mk-automint" type="checkbox">Cunhagem automática (moedas de ouro nas aldeias destino)</label></div>' +
-            '<div class="twmgr-row"><label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#5c4527"><input id="twmgr-mk-stopon" type="checkbox">Parada programada, após</label><input id="twmgr-mk-stophours" class="twmgr-inp" type="number" min="0.1" step="0.5" value="2" style="width:56px"><span class="twmgr-lbl">h</span></div>' +
+            '<div class="twmgr-row"><label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#6f6153"><input id="twmgr-mk-automint" type="checkbox">Cunhagem automática (moedas de ouro nas aldeias destino)</label></div>' +
+            '<div class="twmgr-row"><label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#6f6153"><input id="twmgr-mk-stopon" type="checkbox">Parada programada, após</label><input id="twmgr-mk-stophours" class="twmgr-inp" type="number" min="0.1" step="0.5" value="2" style="width:56px"><span class="twmgr-lbl">h</span></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-cunhagem-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-cunhagem-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
             '<div id="twmgr-mk-cunhagem-status" class="twmgr-cstatus"></div>') +
         sec('⚖️ Equilíbrio',
-            '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">Aldeia acima do limiar doa o excedente pras abaixo, por recurso. Da mais perto primeiro.</div>' +
+            '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Aldeia acima do limiar doa o excedente pras abaixo, por recurso. Da mais perto primeiro.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Encher armazém até (%)</span><input id="twmgr-mk-thr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="15" style="width:56px"></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-equilibrio-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-equilibrio-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
             '<div id="twmgr-mk-equilibrio-status" class="twmgr-cstatus"></div>') +
         sec('🤝 Solidário',
-            '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">Aldeias do grupo escolhido SÓ RECEBEM (nunca doam). Doadora é qualquer OUTRA aldeia sua — testa da mais perto pra mais longe, e pula pra próxima se a mais perto não tiver mercador/recurso suficiente. Doadora só cede acima de "% do recurso mais baixo dela" (protege quem já tá capenga). Se ninguém qualificar, a mais próxima cede só a fatia acima de "% que fica na doadora" mesmo assim (nunca esvazia), pra nunca travar construção/pesquisa numa aldeia nova ou bárbara conquistada.</div>' +
+            '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Aldeias do grupo escolhido SÓ RECEBEM (nunca doam). Doadora é qualquer OUTRA aldeia sua — testa da mais perto pra mais longe, e pula pra próxima se a mais perto não tiver mercador/recurso suficiente. Doadora só cede acima de "% do recurso mais baixo dela" (protege quem já tá capenga). Se ninguém qualificar, a mais próxima cede só a fatia acima de "% que fica na doadora" mesmo assim (nunca esvazia), pra nunca travar construção/pesquisa numa aldeia nova ou bárbara conquistada.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Grupo Solidário</span><select id="twmgr-mk-g-solid" class="twmgr-inp" style="width:140px"></select></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Carente: encher armazém até (%)</span><input id="twmgr-mk-sthr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl" title="Independente do limiar acima — se o limiar de carente for alto (ex.: 85%), esse aqui evita que ninguém nunca qualifique como doador.">Doadora: mín. % de armazém p/ poder doar</span><input id="twmgr-mk-sdonormin" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
@@ -7224,7 +7224,7 @@
             '<button id="twmgr-bld-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
           '</div>' +
           '<div id="twmgr-bld-vils" class="twmgr-bld-vils"></div>' +
-          '<div id="twmgr-bld-vils-info" style="font-size:9px;color:#6e5a2a;text-align:right;margin-top:2px"></div>' +
+          '<div id="twmgr-bld-vils-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>' +
           '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
             '<select id="twmgr-bld-mass-acao" class="twmgr-inp" style="flex:1">' +
               '<option value="apply">Utilizar modelo</option>' +
@@ -7253,7 +7253,7 @@
             '<button id="twmgr-pq-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
           '</div>' +
           '<div id="twmgr-pq-vils" class="twmgr-bld-vils"></div>' +
-          '<div id="twmgr-pq-vils-info" style="font-size:9px;color:#6e5a2a;text-align:right;margin-top:2px"></div>' +
+          '<div id="twmgr-pq-vils-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>' +
           '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
             '<select id="twmgr-pq-mass-acao" class="twmgr-inp" style="flex:1">' +
               '<option value="apply">Utilizar modelo</option>' +
@@ -7280,29 +7280,29 @@
         cardsDiv('planner') +
         sec('Ataques', '<div id="twmgr-pl-attacks" style="display:flex;flex-wrap:wrap;gap:6px"></div>') +
         sec('1. Alvo (do ataque selecionado acima)',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Relógio do servidor</span><b id="twmgr-pl-srvclock" style="color:#9a6f0e">--:--:--</b></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Relógio do servidor</span><b id="twmgr-pl-srvclock" style="color:#a2643a">--:--:--</b></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Coord alvo</span><span><input id="twmgr-pl-target-x" class="twmgr-inp" type="number" min="1" placeholder="x" style="width:56px"> | <input id="twmgr-pl-target-y" class="twmgr-inp" type="number" min="1" placeholder="y" style="width:56px"></span></div>' +
           '<label class="twmgr-lbl">Chegada base (horário do servidor)</label><input id="twmgr-pl-arr" class="twmgr-inp" type="datetime-local" step="1" style="width:100%;margin:2px 0 0">' +
           '<div class="twmgr-row" style="margin-top:6px"><span class="twmgr-lbl">Offset envio (ms)</span><input id="twmgr-pl-offset" class="twmgr-inp" type="number" min="0" value="150" style="width:56px"></div>') +
         sec('2. Aldeias participantes',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Selecione</span><span style="font-size:9px"><a id="twmgr-pl-all" style="cursor:pointer;color:#7a5710">todas</a> · <a id="twmgr-pl-none" style="cursor:pointer;color:#7a5710">nenhuma</a> · <a id="twmgr-pl-load" style="cursor:pointer;color:#7a5710">🔄 carregar tropas</a></span></div>' +
-          '<div id="twmgr-pl-villages" style="max-height:110px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px"></div>') +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Selecione</span><span style="font-size:9px"><a id="twmgr-pl-all" style="cursor:pointer;color:#a2643a">todas</a> · <a id="twmgr-pl-none" style="cursor:pointer;color:#a2643a">nenhuma</a> · <a id="twmgr-pl-load" style="cursor:pointer;color:#a2643a">🔄 carregar tropas</a></span></div>' +
+          '<div id="twmgr-pl-villages" style="max-height:110px;overflow-y:auto;border:1px solid #ece4d8;border-radius:6px;padding:4px"></div>') +
         sec('3. Composição por aldeia (+ onda pra mandar mais de um ataque da mesma aldeia)',
-          '<div id="twmgr-pl-cards"><div style="font-size:10px;color:#6e5a2a;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div></div>') +
+          '<div id="twmgr-pl-cards"><div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div></div>') +
         sec('4. Armar este ataque',
           '<div class="twmgr-actions"><button id="twmgr-pl-start" class="twmgr-btn twmgr-go">▶ Armar este ataque</button><button id="twmgr-pl-stop" class="twmgr-btn twmgr-stop">■ Desarmar</button><button id="twmgr-pl-clear" class="twmgr-btn twmgr-ghost" style="flex:0 0 auto">🗑</button></div>' +
           '<div id="twmgr-pl-status" class="twmgr-cstatus"></div>') +
         sec('5. Fila deste ataque',
-          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:10px;color:#6e5a2a">ordenada por horário de envio</span><button id="twmgr-pl-queue-clear" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="remover enviados e erros do histórico">🗑 limpar histórico</button></div>' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:10px;color:#8a7d6d">ordenada por horário de envio</span><button id="twmgr-pl-queue-clear" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="remover enviados e erros do histórico">🗑 limpar histórico</button></div>' +
           '<div id="twmgr-pl-queue" style="max-height:220px;overflow-y:auto"></div>') +
         sec('Templates',
           '<div class="twmgr-row"><span class="twmgr-lbl">Salvar plano atual</span><span><input id="twmgr-pl-tpl-name" class="twmgr-inp" type="text" placeholder="ex: guerra XYZ" style="width:120px"> <button id="twmgr-pl-tpl-save" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">💾</button></span></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Carregar</span><span><select id="twmgr-pl-tpl-load" class="twmgr-inp" style="width:120px"></select> <button id="twmgr-pl-tpl-apply" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">📂</button> <button id="twmgr-pl-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="apagar">🗑</button></span></div>') +
         sec('🛡️ Blindagem da tribo',
-          '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">Puxa a tabela do tópico, escolhe origem por linha, envia apoios e copia o texto no formato do fórum.</div>' +
+          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Puxa a tabela do tópico, escolhe origem por linha, envia apoios e copia o texto no formato do fórum.</div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">URL do tópico</span><input id="twmgr-blz-url" class="twmgr-inp" type="text" placeholder="https://.../screen=forum&mode=view&thread_id=..." style="flex:1;min-width:180px"></div>' +
-          '<div class="twmgr-actions"><button id="twmgr-blz-fetch" class="twmgr-btn twmgr-ghost">🛡️ Buscar pedidos</button><span id="twmgr-blz-status" style="flex:1;font-size:10px;color:#6e5a2a;padding-top:4px">—</span></div>' +
-          '<div id="twmgr-blz-list" style="max-height:280px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px;margin-top:4px"></div>' +
+          '<div class="twmgr-actions"><button id="twmgr-blz-fetch" class="twmgr-btn twmgr-ghost">🛡️ Buscar pedidos</button><span id="twmgr-blz-status" style="flex:1;font-size:10px;color:#8a7d6d;padding-top:4px">—</span></div>' +
+          '<div id="twmgr-blz-list" style="max-height:280px;overflow-y:auto;border:1px solid #ece4d8;border-radius:6px;padding:4px;margin-top:4px"></div>' +
           '<div class="twmgr-actions" style="margin-top:6px"><button id="twmgr-blz-send" class="twmgr-btn twmgr-go">✉️ Enviar marcados</button></div>') +
         modLog('planner') +
       '</div>' +
@@ -7310,7 +7310,7 @@
         hint('🐴 Treina o(s) Paladino(s) por XP em ciclo — sempre no regime de <b>4h</b> (melhor XP/hora dos 5 disponíveis). Além do check periódico, cada envio arma um timer de precisão pra 4h+30s depois, garantindo reenvio quase imediato.') +
         cardsDiv('paladin') +
         sec('1. Aldeias no ciclo',
-          '<div id="twmgr-pd-villages" style="max-height:130px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px"></div>') +
+          '<div id="twmgr-pd-villages" style="max-height:130px;overflow-y:auto;border:1px solid #ece4d8;border-radius:6px;padding:4px"></div>') +
         sec('2. Verificação periódica',
           '<div class="twmgr-row"><span class="twmgr-lbl" title="Rede de segurança ampla — roda independente do timer de precisão de cada envio.">Nova verificação (min)</span><input id="twmgr-pd-interval" class="twmgr-inp" type="number" min="1" value="240" style="width:66px"></div>') +
         sec('3. Ritmo de envio',
@@ -8420,7 +8420,7 @@
     const intel = (config.map && config.map.intel) || {};
     const chaves = Object.keys(intel);
     if (!chaves.length) {
-      el.innerHTML = '<span style="color:#6e5a2a">Sem dados ainda — rode um ciclo do módulo Mapa (ou a Prévia) pra preencher.</span>';
+      el.innerHTML = '<span style="color:#8a7d6d">Sem dados ainda — rode um ciclo do módulo Mapa (ou a Prévia) pra preencher.</span>';
       return;
     }
     const cont = {};
@@ -8428,10 +8428,10 @@
     const conhecidas = (cont[MAP_INTEL.OK] || 0) + (cont[MAP_INTEL.BL_DEFESA] || 0);
     const pct = Math.round(conhecidas * 100 / chaves.length);
     el.innerHTML =
-      '<div style="color:#9a6f0e;font-weight:700;margin-bottom:2px">' + pct + '% do seu raio explorado <span style="color:#6e5a2a;font-weight:400">(' + conhecidas + ' de ' + chaves.length + ')</span></div>' +
+      '<div style="color:#a2643a;font-weight:700;margin-bottom:2px">' + pct + '% do seu raio explorado <span style="color:#8a7d6d;font-weight:400">(' + conhecidas + ' de ' + chaves.length + ')</span></div>' +
       [1, 2, 3, 4, 5, 6].filter((c) => cont[c]).map((c) =>
         '<div><span style="display:inline-block;width:9px;height:9px;border:2px solid ' + MAP_INTEL_COR[c] + ';margin-right:5px;vertical-align:middle"></span>' +
-        '<span style="color:#5c4527">' + MAP_INTEL_NOME[c] + '</span> <b style="color:#6a4e18">' + cont[c] + '</b></div>').join('');
+        '<span style="color:#6f6153">' + MAP_INTEL_NOME[c] + '</span> <b style="color:#8b5426">' + cont[c] + '</b></div>').join('');
   }
 
   function mapCanvasRedraw() {
@@ -8597,7 +8597,7 @@
         const bx = px + tw - lw - 4, by = py + th - 12;
         ctx.fillStyle = 'rgba(0,0,0,.75)';
         ctx.fillRect(bx, by, lw + 4, 11);
-        ctx.fillStyle = '#9a6f0e';
+        ctx.fillStyle = '#a2643a';
         ctx.textBaseline = 'top';
         ctx.fillText(label, bx + 2, by + 1);
       }
@@ -8678,7 +8678,7 @@
       panel.setAttribute('width', '100%');
       panel.style.cssText = 'margin-top:6px;font-size:11px;color:#3b2914;font-family:Verdana,sans-serif';
     } else {
-      panel.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:10000;background:linear-gradient(180deg,#f4e4bc,#6a4e18);border:1px solid #7d510a;border-radius:8px;padding:8px 10px;font-size:11px;color:#3b2914;box-shadow:0 2px 6px rgba(0,0,0,.35);min-width:220px;font-family:Verdana,sans-serif';
+      panel.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:10000;background:linear-gradient(180deg,#f4e4bc,#8b5426);border:1px solid #a2643a;border-radius:8px;padding:8px 10px;font-size:11px;color:#3b2914;box-shadow:0 2px 6px rgba(0,0,0,.35);min-width:220px;font-family:Verdana,sans-serif';
     }
     const check = (id, label, checked) => '<label style="display:flex;align-items:center;gap:6px;margin:2px 0;cursor:pointer"><input id="' + id + '" type="checkbox"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
     const bodyHTML =
@@ -8700,14 +8700,14 @@
         check('twmgr-map-range', 'Mostrar meu alcance (raio do módulo Mapa)', cfg.showRange) +
         '<div id="twmgr-map-cob-leg" style="font-size:9px;line-height:1.7;margin:2px 0 6px 4px"></div>' +
         check('twmgr-map-dim', 'Escurecer aldeias filtradas (bloco preto)', cfg.dimMode === 'dim') +
-        '<div style="margin-top:6px;border-top:1px dashed #b89a5a;padding-top:6px;font-size:10px;color:#a9843f">' +
+        '<div style="margin-top:6px;border-top:1px dashed #b89a5a;padding-top:6px;font-size:10px;color:#ddd2c0">' +
           '<div id="twmgr-map-counts">—</div>' +
           '<div style="margin-top:4px;display:flex;justify-content:space-between;align-items:center;gap:4px;flex-wrap:wrap">' +
-            '<button id="twmgr-map-reset" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#6a4e18;cursor:pointer;color:#3b2914" title="Mostra tudo, sem overlay: liga todos os toggles, zera pontos, desliga escurecer">🚫 Desativar tudo</button>' +
-            '<button id="twmgr-map-reload" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#6a4e18;cursor:pointer;color:#3b2914">🔄 mapa</button>' +
-            '<button id="twmgr-map-rsv-sync" style="padding:2px 6px;font-size:10px;border:1px solid #7d510a;border-radius:3px;background:#6a4e18;cursor:pointer;color:#3b2914" title="Baixa o planner interno da tribo (screen=ally&mode=reservations) e mostra ⌛Xh nas aldeias reservadas">⌛ sync reservas</button>' +
+            '<button id="twmgr-map-reset" style="padding:2px 6px;font-size:10px;border:1px solid #a2643a;border-radius:3px;background:#8b5426;cursor:pointer;color:#3b2914" title="Mostra tudo, sem overlay: liga todos os toggles, zera pontos, desliga escurecer">🚫 Desativar tudo</button>' +
+            '<button id="twmgr-map-reload" style="padding:2px 6px;font-size:10px;border:1px solid #a2643a;border-radius:3px;background:#8b5426;cursor:pointer;color:#3b2914">🔄 mapa</button>' +
+            '<button id="twmgr-map-rsv-sync" style="padding:2px 6px;font-size:10px;border:1px solid #a2643a;border-radius:3px;background:#8b5426;cursor:pointer;color:#3b2914" title="Baixa o planner interno da tribo (screen=ally&mode=reservations) e mostra ⌛Xh nas aldeias reservadas">⌛ sync reservas</button>' +
           '</div>' +
-          '<div style="margin-top:2px;color:#a9843f;font-size:9px">cache mapa: ' + (cfg.dataCachedAt ? new Date(cfg.dataCachedAt).toLocaleTimeString() : '—') + ' · reservas: ' + (cfg.reservationsAt ? (new Date(cfg.reservationsAt).toLocaleTimeString() + ' (' + Object.keys(cfg.reservations || {}).length + ')') : '—') + '</div>' +
+          '<div style="margin-top:2px;color:#ddd2c0;font-size:9px">cache mapa: ' + (cfg.dataCachedAt ? new Date(cfg.dataCachedAt).toLocaleTimeString() : '—') + ' · reservas: ' + (cfg.reservationsAt ? (new Date(cfg.reservationsAt).toLocaleTimeString() + ' (' + Object.keys(cfg.reservations || {}).length + ')') : '—') + '</div>' +
         '</div>' +
       '</div>';
     if (inline) {
@@ -8719,8 +8719,8 @@
     } else {
       panel.innerHTML =
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-          '<b style="color:#a9843f">🗺️ TW Manager · Mapa</b>' +
-          '<span id="twmgr-map-collapse" style="cursor:pointer;padding:0 6px;color:#a9843f">' + (cfg.collapsed ? '▲' : '▼') + '</span>' +
+          '<b style="color:#ddd2c0">🗺️ TW Manager · Mapa</b>' +
+          '<span id="twmgr-map-collapse" style="cursor:pointer;padding:0 6px;color:#ddd2c0">' + (cfg.collapsed ? '▲' : '▼') + '</span>' +
         '</div>' + bodyHTML;
       document.body.appendChild(panel);
     }
@@ -9006,7 +9006,7 @@
       // Somados em quadratura: são fontes independentes, somar linearmente exageraria.
       return Math.round(Math.sqrt(jitterRede * jitterRede + jitterTimer * jitterTimer + relogio * relogio));
     }
-    function erroCor(ms) { return ms < 50 ? '#2e7d3a' : (ms < 150 ? '#9a6f0e' : '#c23a2c'); }
+    function erroCor(ms) { return ms < 50 ? '#2e7d3a' : (ms < 150 ? '#a2643a' : '#c0483a'); }
 
     // ==================== MODO SILÊNCIO ====================
     // Reserva a linha em volta de um disparo coordenado: congela os outros módulos pra que nenhum
@@ -9612,30 +9612,30 @@
                     '</b> · apoio: <b>' + (bS ? esc(bS.name || bS.id) : 'ausente') + '</b>');
         if (bS && bS.name && bS.name !== config.cmd.suporteParam) {
           config.cmd.suporteParam = bS.name; save();
-          linhas.push('<span style="color:#9a6f0e">parâmetro do apoio ajustado para "' + esc(bS.name) + '"</span>');
+          linhas.push('<span style="color:#a2643a">parâmetro do apoio ajustado para "' + esc(bS.name) + '"</span>');
         }
         // 2) Confirma 1 lanceiro para OUTRA aldeia sua (não dá pra atacar aldeia própria).
         const minhas = await getAllVillages();
         const destino = minhas.filter((v) => String(v.vid) !== String(CUR_VID) && v.coord)[0];
-        if (!destino) { linhas.push('<span style="color:#c23a2c">preciso de ao menos 2 aldeias suas pra testar</span>'); return diz(linhas.join('<br>')); }
+        if (!destino) { linhas.push('<span style="color:#c0483a">preciso de ao menos 2 aldeias suas pra testar</span>'); return diz(linhas.join('<br>')); }
         const [dx, dy] = destino.coord.split('|');
         const p = await cmdPrepare(CUR_VID, dx, dy, { spear: 1 }, 'support');
         const ok = (p.tipoDetectado === 'support');
-        linhas.push('confirm em ' + esc(destino.coord) + ' → tipo <b style="color:' + (ok ? '#2e7d3a' : '#c23a2c') + '">' +
+        linhas.push('confirm em ' + esc(destino.coord) + ' → tipo <b style="color:' + (ok ? '#2e7d3a' : '#c0483a') + '">' +
                     esc(p.tipoDetectado) + '</b> · duração ' + (p.dur ? fmt(p.dur * 1000) : '?'));
-        linhas.push('<span style="font-size:9px;color:#6e5a2a">campos: ' + esc(Object.keys(p.params).join(', ').slice(0, 200)) + '</span>');
+        linhas.push('<span style="font-size:9px;color:#8a7d6d">campos: ' + esc(Object.keys(p.params).join(', ').slice(0, 200)) + '</span>');
         if (ok) {
           config.cmd.suporteOkAt = Date.now(); save();
           linhas.push('<span style="color:#2e7d3a">✔ apoio liberado (nada foi enviado)</span>');
         } else {
-          linhas.push('<span style="color:#c23a2c">✖ apoio NÃO liberado — o servidor não confirmou como apoio</span>');
+          linhas.push('<span style="color:#c0483a">✖ apoio NÃO liberado — o servidor não confirmou como apoio</span>');
         }
         pushLog('Verificação de apoio: tipo "' + p.tipoDetectado + '".', ok ? 'ok' : 'err', 'cmd');
         // Falhando, o aviso aparece mesmo no modo silencioso — senão o Apoio trava sem explicação.
         if (!ok && out) out.innerHTML = linhas.join('<br>');
         return ok;
       } catch (e) {
-        linhas.push('<span style="color:#c23a2c">verificação de apoio falhou: ' + esc(e.message || e) + '</span>');
+        linhas.push('<span style="color:#c0483a">verificação de apoio falhou: ' + esc(e.message || e) + '</span>');
         if (out) out.innerHTML = linhas.join('<br>');
         return false;
       }
@@ -9709,7 +9709,7 @@
       }
       console.log(txt);
       if (msg) {
-        msg.style.color = ok ? '#2e7d3a' : '#9a6f0e';
+        msg.style.color = ok ? '#2e7d3a' : '#a2643a';
         msg.textContent = ok ? 'Diagnóstico copiado — é só colar aqui no chat.'
                              : 'Não consegui copiar; o relatório saiu no console (F12).';
       }
@@ -9827,25 +9827,25 @@
     async function ccCmdsRender(qual, forcar) {
       _ccCmdsQual = qual || _ccCmdsQual;
       const box = document.getElementById('cc-cmds-lista'); if (!box) return;
-      box.innerHTML = '<div style="color:#6e5a2a;padding:6px;font-size:10px">lendo…</div>';
+      box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">lendo…</div>';
       let L = [];
       try { L = await ccLerComandos(_ccCmdsQual, !!forcar); }
-      catch (e) { box.innerHTML = '<div style="color:#c23a2c;padding:6px;font-size:10px">' + esc(e.message || e) + '</div>'; return; }
-      if (!L.length) { box.innerHTML = '<div style="color:#6e5a2a;padding:6px;font-size:10px">— nenhum —</div>'; return; }
+      catch (e) { box.innerHTML = '<div style="color:#c0483a;padding:6px;font-size:10px">' + esc(e.message || e) + '</div>'; return; }
+      if (!L.length) { box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhum —</div>'; return; }
       const agora = srvNowP(), ehIn = (_ccCmdsQual === 'incoming');
       box.innerHTML = L.slice(0, 60).map((c, i) => {
         const jan = ehIn ? ccJanelaSnipe(L, i) : null;
         return '<div style="display:grid;grid-template-columns:1fr 78px 62px 96px;gap:4px;align-items:center;' +
                'padding:2px 5px;border-bottom:1px solid rgba(0,0,0,.07);font-size:10px">' +
-          '<span style="color:#5c4527;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.tipo) + '">' +
-            esc((c.origem || '?') + ' → ' + (c.destino || '?')) + (c.jogador ? ' <span style="color:#6e5a2a">' + esc(c.jogador) + '</span>' : '') + '</span>' +
-          '<span style="color:' + (c.temMs ? '#7a5710' : '#9a6f0e') + '" title="' + (c.temMs ? 'com milésimos' : 'sem milésimos — margem de 1s') + '">' +
+          '<span style="color:#6f6153;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.tipo) + '">' +
+            esc((c.origem || '?') + ' → ' + (c.destino || '?')) + (c.jogador ? ' <span style="color:#8a7d6d">' + esc(c.jogador) + '</span>' : '') + '</span>' +
+          '<span style="color:' + (c.temMs ? '#a2643a' : '#a2643a') + '" title="' + (c.temMs ? 'com milésimos' : 'sem milésimos — margem de 1s') + '">' +
             srvClockMs(c.chega) + '</span>' +
-          '<span style="color:#6e5a2a">' + (c.chega > agora ? fmt(c.chega - agora) : '—') + '</span>' +
+          '<span style="color:#8a7d6d">' + (c.chega > agora ? fmt(c.chega - agora) : '—') + '</span>' +
           '<span style="text-align:right;white-space:nowrap">' +
             '<a data-usar="' + i + '" style="cursor:pointer;color:#2e7d3a" title="usar este horário">📋 usar</a>' +
             (ehIn ? ' <a data-snipe="' + i + '" style="cursor:pointer;color:' +
-                    (ccSnipeViavel(jan) ? '#1f6fb2' : '#c23a2c') + '" title="' +
+                    (ccSnipeViavel(jan) ? '#1f6fb2' : '#c0483a') + '" title="' +
                     ccSnipeTitulo(jan) +
                     '">🎯 snipe</a>' : '') +
           '</span>' +
@@ -9862,7 +9862,7 @@
         const i = +el.getAttribute('data-snipe'), c = L[i], jan = ccJanelaSnipe(L, i);
         const m = document.getElementById('cc-msg');
         if (!ccSnipeViavel(jan)) {
-          if (m) { m.style.color = '#c23a2c'; m.textContent = ccSnipeTitulo(jan); }
+          if (m) { m.style.color = '#c0483a'; m.textContent = ccSnipeTitulo(jan); }
           return;
         }
         // Mira no FIM da janela: colado ao ataque, mas antes dele.
@@ -9883,8 +9883,8 @@
       const grade = document.getElementById('cc-tropas-grade'); if (!grade) return;
       const antes = ccComposicao();   // preserva o que já estava digitado ao reconstruir
       grade.innerHTML = ccUnidadesUI().map(([u, n]) =>
-        '<div data-un="' + u + '" style="flex:1 1 62px;min-width:56px;text-align:center;background:#eeddb6;' +
-        'border:1px solid #c4a35f;border-radius:6px;padding:3px 2px">' +
+        '<div data-un="' + u + '" style="flex:1 1 62px;min-width:56px;text-align:center;background:#ffffff;' +
+        'border:1px solid #ece4d8;border-radius:6px;padding:3px 2px">' +
           '<div data-maxbtn="' + u + '" title="' + esc(n) + ' — clique para mandar TUDO" ' +
                'style="cursor:pointer;height:18px;line-height:18px;border-radius:4px">' + unitIcon(u, n) + '</div>' +
           '<input id="cc-u-' + u + '" class="twmgr-inp cc-un" type="number" min="0" ' +
@@ -9922,9 +9922,9 @@
         const inp = document.getElementById('cc-u-' + u);
         if (!cel || !btn) return;
         const max = chk && chk.checked, tem = inp && (parseInt(inp.value, 10) > 0);
-        cel.style.borderColor = max ? '#7d510a' : (tem ? '#7a6438' : '#c4a35f');
-        cel.style.background = max ? '#e2cd97' : '#eeddb6';
-        btn.style.background = max ? 'rgba(212,175,55,.22)' : 'transparent';
+        cel.style.borderColor = max ? '#a2643a' : (tem ? '#7a6438' : '#ece4d8');
+        cel.style.background = max ? '#fdfaf5' : '#ffffff';
+        btn.style.background = max ? 'rgba(162,100,58,.22)' : 'transparent';
         if (inp) inp.placeholder = max ? 'tudo' : '0';
       });
     }
@@ -9951,13 +9951,13 @@
       const M = ccModelos();
       box.innerHTML = M.length ? M.map((m) =>
         '<span data-mod="' + m.id + '" title="' + esc(ccModeloTxt(m)) + '" ' +
-        'style="display:inline-flex;align-items:center;gap:3px;background:#eeddb6;border:1px solid #b18f4d;' +
-        'border-radius:10px;padding:2px 4px 2px 8px;font-size:10px;color:#7a5710;cursor:pointer">' +
+        'style="display:inline-flex;align-items:center;gap:3px;background:#ffffff;border:1px solid #e0d6c6;' +
+        'border-radius:10px;padding:2px 4px 2px 8px;font-size:10px;color:#a2643a;cursor:pointer">' +
           esc(m.nome) +
-          '<a data-mod-rn="' + m.id + '" title="renomear" style="color:#6e5a2a;padding:0 1px">✎</a>' +
-          '<a data-mod-rm="' + m.id + '" title="apagar" style="color:#c23a2c;padding:0 2px">✕</a>' +
+          '<a data-mod-rn="' + m.id + '" title="renomear" style="color:#8a7d6d;padding:0 1px">✎</a>' +
+          '<a data-mod-rm="' + m.id + '" title="apagar" style="color:#c0483a;padding:0 2px">✕</a>' +
         '</span>').join('')
-        : '<span style="font-size:10px;color:#6e5a2a">sem modelos — monte a composição e clique em "salvar como modelo"</span>';
+        : '<span style="font-size:10px;color:#8a7d6d">sem modelos — monte a composição e clique em "salvar como modelo"</span>';
       box.querySelectorAll('[data-mod]').forEach((el) => el.onclick = (ev) => {
         if (ev.target.hasAttribute('data-mod-rm') || ev.target.hasAttribute('data-mod-rn')) return;
         const m = ccModelos().find((z) => z.id === el.getAttribute('data-mod'));
@@ -9980,7 +9980,7 @@
       const comp = ccComposicao();
       const msg = document.getElementById('cc-msg');
       if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) {
-        if (msg) { msg.style.color = '#c23a2c'; msg.textContent = 'Preencha as tropas antes de salvar o modelo.'; }
+        if (msg) { msg.style.color = '#c0483a'; msg.textContent = 'Preencha as tropas antes de salvar o modelo.'; }
         return;
       }
       let nome = null;
@@ -10013,22 +10013,22 @@
       const box = document.getElementById('cc-ondas'); if (!box) return;
       const O = ccOndas();
       if (!O.length) {
-        box.innerHTML = '<div style="color:#6e5a2a;padding:6px;font-size:10px">— nenhuma onda. Use um atalho acima ou monte a composição e clique em "+ onda". —</div>';
+        box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma onda. Use um atalho acima ou monte a composição e clique em "+ onda". —</div>';
         ccOndasAviso(); return;
       }
       const opts = CCVILAS.map((v) => '<option value="' + v.vid + '">' + esc(v.coord || v.vid) + (v.nome ? ' · ' + esc(v.nome) : '') + '</option>').join('');
       box.innerHTML = O.map((o, i) =>
         '<div style="display:grid;grid-template-columns:24px 92px 1fr 62px 64px;gap:4px;align-items:center;padding:3px 4px;border-bottom:1px solid rgba(0,0,0,.07);font-size:10px">' +
-          '<span style="color:#9a6f0e">' + (i + 1) + '</span>' +
+          '<span style="color:#a2643a">' + (i + 1) + '</span>' +
           '<select data-onda-org="' + o.id + '" class="twmgr-inp" style="width:100%;font-size:9px;padding:1px">' +
             '<option value="">(1ª marcada)</option>' + opts + '</select>' +
-          '<span style="color:#5c4527;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(ccOndaTxt(o)) + '">' + esc(ccOndaTxt(o)) + '</span>' +
+          '<span style="color:#6f6153;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(ccOndaTxt(o)) + '">' + esc(ccOndaTxt(o)) + '</span>' +
           '<input data-onda-off="' + o.id + '" class="twmgr-inp" type="number" step="10" style="width:100%;font-size:9px;padding:1px" value="' + ccOndaOffset(o, i) + '">' +
           '<span style="text-align:right;white-space:nowrap">' +
-            '<a data-onda-up="' + o.id + '" style="cursor:pointer;color:#7a5710" title="subir">▲</a> ' +
-            '<a data-onda-dn="' + o.id + '" style="cursor:pointer;color:#7a5710" title="descer">▼</a> ' +
+            '<a data-onda-up="' + o.id + '" style="cursor:pointer;color:#a2643a" title="subir">▲</a> ' +
+            '<a data-onda-dn="' + o.id + '" style="cursor:pointer;color:#a2643a" title="descer">▼</a> ' +
             '<a data-onda-ed="' + o.id + '" style="cursor:pointer;color:#2e7d3a" title="carregar nas caixas de tropa">✎</a> ' +
-            '<a data-onda-rm="' + o.id + '" style="cursor:pointer;color:#c23a2c" title="remover">✕</a>' +
+            '<a data-onda-rm="' + o.id + '" style="cursor:pointer;color:#c0483a" title="remover">✕</a>' +
           '</span>' +
         '</div>').join('');
       O.forEach((o) => {
@@ -10081,7 +10081,7 @@
       const n = Math.max(1, Math.min(8, parseInt((document.getElementById('cc-trem-n') || {}).value, 10) || 4));
       if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) {
         const m = document.getElementById('cc-msg');
-        if (m) { m.style.color = '#c23a2c'; m.textContent = 'Monte primeiro a composição do NUKE nas caixas de tropa.'; }
+        if (m) { m.style.color = '#c0483a'; m.textContent = 'Monte primeiro a composição do NUKE nas caixas de tropa.'; }
         return;
       }
       // Onda 1 = o nuke que está nas caixas (sem nobre); depois, 1 nobre por onda.
@@ -10096,11 +10096,11 @@
       const n = Math.max(2, Math.min(8, parseInt((document.getElementById('cc-trem-n') || {}).value, 10) || 4));
       const m = document.getElementById('cc-msg');
       if (Object.keys(comp.max).length) {
-        if (m) { m.style.color = '#c23a2c'; m.textContent = 'Pra dividir, use quantidades exatas — "tudo" não dá pra repartir sem saber o estoque da origem.'; }
+        if (m) { m.style.color = '#c0483a'; m.textContent = 'Pra dividir, use quantidades exatas — "tudo" não dá pra repartir sem saber o estoque da origem.'; }
         return;
       }
       if (!Object.keys(comp.amounts).length) {
-        if (m) { m.style.color = '#c23a2c'; m.textContent = 'Preencha as tropas que serão divididas.'; }
+        if (m) { m.style.color = '#c0483a'; m.textContent = 'Preencha as tropas que serão divididas.'; }
         return;
       }
       // Divide igual e joga o resto nas primeiras ondas (4000/3 -> 1334,1333,1333).
@@ -10159,7 +10159,7 @@
     // apoio/ataque de várias aldeias pousar junto.
     function ccArmar() {
       const msg = document.getElementById('cc-msg');
-      const dizer = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c23a2c'; } };
+      const dizer = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c0483a'; } };
       const tipo = ccTipo();
 
       const arriveAt0 = ccChegadaMs();
@@ -10204,7 +10204,7 @@
         if (!armados) return dizer('Nenhuma onda armada. ' + (pulados.length ? pulados.join(', ') : ''));
         return dizer(armados + ' onda(s) armada(s), a 1ª chegando ' + srvClockMs(arriveAt) +
                      (pulados.length ? ' · pulada(s): ' + pulados.join(', ') : ''),
-                     pulados.length ? '#9a6f0e' : '#2e7d3a');
+                     pulados.length ? '#a2643a' : '#2e7d3a');
       }
 
       let armados = 0, pulados = [];
@@ -10226,7 +10226,7 @@
       dizer(armados + ' comando(s) armado(s) chegando ' + srvClockMs(arriveAt) +
             (semTropaAgora ? ' · ' + semTropaAgora + ' sem a tropa completa agora (confere no preparo)' : '') +
             (pulados.length ? ' · pulados: ' + pulados.join(', ') : ''),
-            semTropaAgora ? '#9a6f0e' : '#2e7d3a');
+            semTropaAgora ? '#a2643a' : '#2e7d3a');
     }
 
     // ---- Apoio em massa ----
@@ -10284,7 +10284,7 @@
     async function ccMassaEnviar() {
       const msg = document.getElementById('cc-massa-msg');
       const rel = document.getElementById('cc-massa-rel');
-      const diz = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c23a2c'; } };
+      const diz = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c0483a'; } };
       if (!config.cmd.suporteOkAt) return diz('O apoio ainda não foi verificado neste mundo — deixe a praça aberta alguns segundos e tente de novo.');
       const alvos = ((document.getElementById('cc-massa-alvos') || {}).value || '').split(/\n/)
         .map((s) => { const m = s.match(/(\d{1,3})\s*\|\s*(\d{1,3})/); return m ? { x: m[1], y: m[2] } : null; })
@@ -10299,7 +10299,7 @@
 
       const rotU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]).filter((u) => u !== 'snob');
       const rotNome = {}; UNITS.forEach(([u, n]) => { rotNome[u] = n; });
-      diz('Enviando… (não feche a praça)', '#5c4527'); if (rel) rel.textContent = '';
+      diz('Enviando… (não feche a praça)', '#6f6153'); if (rel) rel.textContent = '';
       const linhas = []; const totais = {}; let enviados = 0, falhas = 0;
       for (const v of marcadas) {
         const resolvido = ccMassaResolver(spec, v.avail);
@@ -10325,7 +10325,7 @@
       const header = 'ordem: ' + rotU.map((u) => rotNome[u] || u).join('/');
       const total = 'TOTAL: ' + rotU.map((u) => totais[u] || 0).join('/');
       if (rel) rel.textContent = header + '\n' + linhas.join('\n') + '\n────────\n' + total;
-      diz(enviados + ' apoio(s) enviado(s)' + (falhas ? ' · ' + falhas + ' falha(s)' : '') + '.', falhas ? '#9a6f0e' : '#2e7d3a');
+      diz(enviados + ' apoio(s) enviado(s)' + (falhas ? ' · ' + falhas + ' falha(s)' : '') + '.', falhas ? '#a2643a' : '#2e7d3a');
       pushLog('🚚 Apoio em massa: ' + enviados + ' envio(s)' + (falhas ? ', ' + falhas + ' falha(s)' : '') + '.', falhas ? 'err' : 'ok', 'cmd');
     }
 
@@ -10391,7 +10391,7 @@
       cont.innerHTML = '<span style="color:#584526">recentes:</span> ' + h.map((x) => {
         const nome = ccNomeAlvo(x.coord), dono = ccDonoAlvo(x.coord);
         const rot = x.coord + (nome ? ' ' + nome : '') + (dono ? ' (' + dono + ')' : '');
-        return '<a class="cc-hist-a" data-coord="' + x.coord + '" style="cursor:pointer;color:#7a5710;margin-right:2px" title="' + esc(rot) + '">' + esc(x.coord) + '</a>';
+        return '<a class="cc-hist-a" data-coord="' + x.coord + '" style="cursor:pointer;color:#a2643a;margin-right:2px" title="' + esc(rot) + '">' + esc(x.coord) + '</a>';
       }).join(' · ');
       cont.querySelectorAll('.cc-hist-a').forEach((el) => el.onclick = () => {
         const al = document.getElementById('cc-alvo'); if (al) { al.value = el.getAttribute('data-coord'); al.dispatchEvent(new Event('input')); }
@@ -10412,7 +10412,7 @@
     let CCVILAS = [];
     async function ccCarregarOrigens(forcar) {
       const cont = document.getElementById('cc-origens');
-      if (cont && !CCVILAS.length) cont.innerHTML = '<div style="color:#6e5a2a;padding:6px;font-size:10px">carregando aldeias…</div>';
+      if (cont && !CCVILAS.length) cont.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">carregando aldeias…</div>';
       try {
         await ccMundo(false);
         const tropas = await ccTropasTodasAldeias(forcar);
@@ -10457,10 +10457,10 @@
       cont.innerHTML = linhas.map((L) => {
         const v = L.v, on = !!sel[v.vid];
         let sit, cor;
-        if (!L.temTropa) { sit = '⚠ sem tropa'; cor = '#c23a2c'; }
-        else if (L.daTempo === false) { sit = '⚠ longe demais'; cor = '#c23a2c'; }
+        if (!L.temTropa) { sit = '⚠ sem tropa'; cor = '#c0483a'; }
+        else if (L.daTempo === false) { sit = '⚠ longe demais'; cor = '#c0483a'; }
         else if (L.t != null && ch) { sit = 'sai ' + srvClockMs(ch - L.t); cor = '#2e7d3a'; }
-        else { sit = ''; cor = '#6e5a2a'; }
+        else { sit = ''; cor = '#8a7d6d'; }
         // Estoque por unidade. Mostra o número em uso e, entre parênteses, o que está fora/voltando —
         // assim dá pra ver a diferença sem precisar alternar a fonte.
         const listaU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
@@ -10474,24 +10474,24 @@
           const extra = (foraT && (config.cmd.fonteTropa || 'casa') === 'casa')
             ? '<span style="color:#1f6fb2">+' + fmtN(foraT) + '</span>' : '';
           return '<span title="' + esc(rot) + (foraT ? ' · ' + fmtN(foraT) + ' fora/voltando' : '') +
-                 '" style="color:' + (falta ? '#c23a2c' : pedida ? '#9a6f0e' : '#584526') + '">' +
+                 '" style="color:' + (falta ? '#c0483a' : pedida ? '#a2643a' : '#584526') + '">' +
                  unitIcon(u, rot) + fmtN(q) + extra + '</span>';
         }).filter(Boolean).join(' ');
         return '<label style="display:block;padding:3px 5px;border-bottom:1px solid rgba(0,0,0,.07);cursor:pointer">' +
           '<span style="display:grid;grid-template-columns:18px 116px 44px 66px 46px 1fr;gap:6px;align-items:center;font-size:10px">' +
             '<input type="checkbox" data-cc-org="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
             '<span style="overflow:hidden" title="' + esc((v.nome || '') + ' ' + (v.coord || '')) + '">' +
-              '<span style="color:#7a5710;white-space:nowrap">' + esc(v.coord || v.vid) + '</span>' +
-              (v.nome ? '<span style="display:block;color:#6e5a2f;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(v.nome) + '</span>' : '') +
+              '<span style="color:#a2643a;white-space:nowrap">' + esc(v.coord || v.vid) + '</span>' +
+              (v.nome ? '<span style="display:block;color:#8a7d6d;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(v.nome) + '</span>' : '') +
             '</span>' +
-            '<span style="color:#6e5a2a">' + (L.d == null ? '—' : L.d.toFixed(1) + ' c') + '</span>' +
-            '<span style="color:#5c4527">' + (L.t == null ? '—' : fmt(L.t)) + '</span>' +
-            '<span style="color:#6e5a2a" title="unidade mais lenta que sai desta aldeia">' + (L.lenta ? esc(rotUn[L.lenta] || L.lenta) : '—') + '</span>' +
+            '<span style="color:#8a7d6d">' + (L.d == null ? '—' : L.d.toFixed(1) + ' c') + '</span>' +
+            '<span style="color:#6f6153">' + (L.t == null ? '—' : fmt(L.t)) + '</span>' +
+            '<span style="color:#8a7d6d" title="unidade mais lenta que sai desta aldeia">' + (L.lenta ? esc(rotUn[L.lenta] || L.lenta) : '—') + '</span>' +
             '<span style="color:' + cor + '">' + sit + '</span>' +
           '</span>' +
           (tropas ? '<span style="display:block;font-size:9px;margin:1px 0 0 24px;line-height:1.5">' + tropas + '</span>' : '') +
         '</label>';
-      }).join('') || '<div style="color:#6e5a2a;padding:6px;font-size:10px">— nenhuma aldeia —</div>';
+      }).join('') || '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma aldeia —</div>';
 
       cont.querySelectorAll('[data-cc-org]').forEach((el) => {
         el.onchange = () => {
@@ -10510,9 +10510,9 @@
         const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
         const txtLenta = lentas.length === 1 ? ('<b>' + esc(rot[lentas[0]] || lentas[0]) + '</b>')
                        : lentas.length ? '<b>varia por aldeia</b>' : '<b>—</b>';
-        av.innerHTML = !temComp ? '<span style="color:#6e5a2a">digite as tropas pra ver os tempos</span>'
+        av.innerHTML = !temComp ? '<span style="color:#8a7d6d">digite as tropas pra ver os tempos</span>'
           : ('unidade mais lenta: ' + txtLenta + ' · mundo ' + (m.speed || 1) + '×/' + (m.unitSpeed || 1) + '×' +
-             (m.confiavel ? '' : ' · <span style="color:#9a6f0e">velocidades de reserva (o servidor confirma no preparo)</span>'));
+             (m.confiavel ? '' : ' · <span style="color:#a2643a">velocidades de reserva (o servidor confirma no preparo)</span>'));
       }
       ccResumo();
     }
@@ -10529,7 +10529,7 @@
                    (ch ? ' · chegando ' + srvClockMs(ch) : '');
       // O trem sai todo da mesma aldeia; avisar aqui evita a surpresa só na hora de armar.
       if (ccTipo() === 'nobre' && n !== 1) {
-        el.innerHTML = esc(base) + ' · <b style="color:#9a6f0e">o trem exige exatamente 1 origem</b>';
+        el.innerHTML = esc(base) + ' · <b style="color:#a2643a">o trem exige exatamente 1 origem</b>';
         return;
       }
       el.textContent = base;
@@ -10579,10 +10579,10 @@
       if (bd) bd.style.display = (q === 'enviados') ? 'block' : 'none';
       document.querySelectorAll('.cc-ftab').forEach((el) => {
         const on = el.getAttribute('data-ftab') === q;
-        el.style.background = on ? '#e9d8ac' : '#eeddb6';
-        el.style.color = on ? '#9a6f0e' : '#6e5a2a';
+        el.style.background = on ? '#ffffff' : '#ffffff';
+        el.style.color = on ? '#a2643a' : '#8a7d6d';
         el.style.fontWeight = on ? '600' : '400';
-        el.style.borderBottom = on ? '1px solid #e9d8ac' : '1px solid #c4a35f';
+        el.style.borderBottom = on ? '1px solid #ffffff' : '1px solid #ece4d8';
       });
     }
     // Resumo das tropas em TEXTO puro (pra title/tooltip): "50 Expl., 1000 Lanc."
@@ -10617,7 +10617,7 @@
       }
       const agora = serverNow();
       const passo = Math.max(1, config.cmd.passoMs || 50);
-      const corDe = { novo: '#5c4527', preparado: '#9a6f0e', armado: '#2e7d3a', enviado: '#2e7d3a', erro: '#c23a2c', abortado: '#6e5a2a' };
+      const corDe = { novo: '#6f6153', preparado: '#a2643a', armado: '#2e7d3a', enviado: '#2e7d3a', erro: '#c0483a', abortado: '#8a7d6d' };
       const linha = (c) => {
         // "falta" = quanto falta pra SAIR (não pra chegar). Preparado, sendAt é a saída exata;
         // antes disso estima pela viagem local (arriveAt − tempo de viagem).
@@ -10632,36 +10632,36 @@
         const rot = { support: 'apoio', fake: 'fake', nobre: 'nobre' }[c.tipo] || 'ataque';
         // Horário de saída: já confirmado pelo servidor (c.sendAt) ou, antes do preparo,
         // a estimativa local. A estimativa aparece com "~" pra não passar por certeza.
-        let saiTxt = '—', saiCor = '#6e5a2a';
+        let saiTxt = '—', saiCor = '#8a7d6d';
         if (c.sendAt) { saiTxt = srvClockMs(c.sendAt); saiCor = '#2e7d3a'; }
         else {
           const est = ccEstimaDeComando(c);
-          if (est != null && c.arriveAt) { saiTxt = '~' + srvClockMs(c.arriveAt - est); saiCor = '#5c4527'; }
+          if (est != null && c.arriveAt) { saiTxt = '~' + srvClockMs(c.arriveAt - est); saiCor = '#6f6153'; }
         }
         return '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;align-items:center;padding:3px 5px;border-bottom:1px solid rgba(0,0,0,.07);font-size:10px">' +
           '<span style="color:' + (c.tipo === 'support' ? '#1f6fb2' : '#b5602f') + '">' + rot + (c.ondas ? ' ' + c.onda + '/' + c.ondas : '') + '</span>' +
-          '<span style="color:#6e5a2a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(orgNome || String(org)) + '">' +
+          '<span style="color:#8a7d6d;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(orgNome || String(org)) + '">' +
             esc(String(org)) + (orgNome ? '<br><span style="color:#584526">' + esc(orgNome) + '</span>' : '') + '</span>' +
-          '<span style="color:#7a5710;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(alvoNome || (c.x + '|' + c.y)) + '">' +
-            esc(c.x + '|' + c.y) + (alvoNome ? '<br><span style="color:#6e5a2a">' + esc(alvoNome) + '</span>' : '') + '</span>' +
-          '<span style="color:' + (corDe[c.state] || '#5c4527') + '">' + esc(c.state) + (c.erro ? ' · ' + esc(c.erro.slice(0, 40)) : '') + '</span>' +
+          '<span style="color:#a2643a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(alvoNome || (c.x + '|' + c.y)) + '">' +
+            esc(c.x + '|' + c.y) + (alvoNome ? '<br><span style="color:#8a7d6d">' + esc(alvoNome) + '</span>' : '') + '</span>' +
+          '<span style="color:' + (corDe[c.state] || '#6f6153') + '">' + esc(c.state) + (c.erro ? ' · ' + esc(c.erro.slice(0, 40)) : '') + '</span>' +
           '<span style="color:' + saiCor + '" title="horário de saída">' + saiTxt + '</span>' +
-          '<span style="color:#5c4527">' + (c.arriveAt ? srvClockMs(c.arriveAt) : '—') + '</span>' +
-          '<span style="text-align:right;color:' + (dev ? erroCor(Math.abs(c.desvioMs)) : '#6e5a2a') + '">' + (dev || (falta > 0 ? fmt(falta) : '—')) + '</span>' +
+          '<span style="color:#6f6153">' + (c.arriveAt ? srvClockMs(c.arriveAt) : '—') + '</span>' +
+          '<span style="text-align:right;color:' + (dev ? erroCor(Math.abs(c.desvioMs)) : '#8a7d6d') + '">' + (dev || (falta > 0 ? fmt(falta) : '—')) + '</span>' +
           (c.state === 'novo' || c.state === 'preparado' || c.state === 'armado'
-            ? '<span data-cc-ab="' + c.id + '" style="cursor:pointer;color:#c23a2c" title="abortar">✕</span>' : '<span></span>') +
+            ? '<span data-cc-ab="' + c.id + '" style="cursor:pointer;color:#c0483a" title="abortar">✕</span>' : '<span></span>') +
           // Tropas que saem neste comando — largura total, pra não espremer a grade.
-          '<span style="grid-column:1/-1;font-size:9px;color:#6e5a2f;margin:1px 0 0 46px;line-height:1.6">' +
+          '<span style="grid-column:1/-1;font-size:9px;color:#8a7d6d;margin:1px 0 0 46px;line-height:1.6">' +
             (ccTropaResumo(c.amounts) || '<span style="color:#584526">— sem tropa —</span>') + '</span>' +
           // Ajuste fino: mexe na CHEGADA e o horário de saída se recalcula sozinho.
           // Some depois que o comando entra no disparo, quando mudar já não é seguro.
           (ccEditavel(c)
-            ? '<span style="grid-column:1/-1;text-align:right;font-size:9px;color:#6e5a2a;padding-top:1px">' +
-                '<a data-aj="' + c.id + '" data-d="' + (-passo * 10) + '" style="cursor:pointer;color:#7a5710" title="−' + (passo * 10) + 'ms">≪</a> ' +
-                '<a data-aj="' + c.id + '" data-d="' + (-passo) + '" style="cursor:pointer;color:#7a5710" title="−' + passo + 'ms">‹</a> ' +
+            ? '<span style="grid-column:1/-1;text-align:right;font-size:9px;color:#8a7d6d;padding-top:1px">' +
+                '<a data-aj="' + c.id + '" data-d="' + (-passo * 10) + '" style="cursor:pointer;color:#a2643a" title="−' + (passo * 10) + 'ms">≪</a> ' +
+                '<a data-aj="' + c.id + '" data-d="' + (-passo) + '" style="cursor:pointer;color:#a2643a" title="−' + passo + 'ms">‹</a> ' +
                 '<span style="color:#584526">ajuste</span> ' +
-                '<a data-aj="' + c.id + '" data-d="' + passo + '" style="cursor:pointer;color:#7a5710" title="+' + passo + 'ms">›</a> ' +
-                '<a data-aj="' + c.id + '" data-d="' + (passo * 10) + '" style="cursor:pointer;color:#7a5710" title="+' + (passo * 10) + 'ms">≫</a>' +
+                '<a data-aj="' + c.id + '" data-d="' + passo + '" style="cursor:pointer;color:#a2643a" title="+' + passo + 'ms">›</a> ' +
+                '<a data-aj="' + c.id + '" data-d="' + (passo * 10) + '" style="cursor:pointer;color:#a2643a" title="+' + (passo * 10) + 'ms">≫</a>' +
                 ' &nbsp;<a data-sw="' + c.id + '" data-dir="-1" style="cursor:pointer;color:#2e7d3a" title="trocar de lugar com o de cima">▲</a>' +
                 ' <a data-sw="' + c.id + '" data-dir="1" style="cursor:pointer;color:#2e7d3a" title="trocar de lugar com o de baixo">▼</a>' +
               '</span>'
@@ -10672,7 +10672,7 @@
       const ordenada = ccFilaOrdenada();
       const envio = ordenada.filter(ehEnvio);
       const feitos = ordenada.filter((c) => !ehEnvio(c));
-      const vazio = (t) => '<div style="color:#6e5a2a;padding:6px;font-size:10px">' + t + '</div>';
+      const vazio = (t) => '<div style="color:#8a7d6d;padding:6px;font-size:10px">' + t + '</div>';
       bEnvio.innerHTML = envio.length ? envio.map(linha).join('') : vazio('— nada a enviar —');
       bEnv.innerHTML = feitos.length ? feitos.map(linha).join('') : vazio('— nada enviado ainda —');
       const ne = document.getElementById('cc-ftab-n-envio'); if (ne) ne.textContent = '(' + envio.length + ')';
@@ -10704,9 +10704,9 @@
           'aba <b>' + (document.hidden ? 'em 2º plano' : 'visível') + '</b>',
         ];
         // Sem o oscilador ativo, uma aba escondida perde centenas de ms. O usuário precisa ver isso.
-        if (document.hidden && !awakeAtivo()) partes.push('<b style="color:#c23a2c">antichoke inativo — clique em Armar</b>');
-        if (Math.abs(CLK.driftMs || 0) > 50) partes.push('<b style="color:#9a6f0e">relógio oscilando ' + Math.round(CLK.driftMs) + 'ms</b>');
-        if (!window.Timing) partes.push('<b style="color:#c23a2c">sem relógio do jogo!</b>');
+        if (document.hidden && !awakeAtivo()) partes.push('<b style="color:#c0483a">antichoke inativo — clique em Armar</b>');
+        if (Math.abs(CLK.driftMs || 0) > 50) partes.push('<b style="color:#a2643a">relógio oscilando ' + Math.round(CLK.driftMs) + 'ms</b>');
+        if (!window.Timing) partes.push('<b style="color:#c0483a">sem relógio do jogo!</b>');
         st.innerHTML = partes.join(' · ');
       }
       // Viés medido pelo laço fechado (ccMedir). Se ficar em "—" depois de vários envios, a
@@ -10714,7 +10714,7 @@
       const vi = document.getElementById('cc-vies');
       if (vi) {
         const k = (config.cmd && config.cmd.calib) || {};
-        vi.innerHTML = 'viés <b style="color:' + (k.n ? '#2e7d3a' : '#6e5a2a') + '">' +
+        vi.innerHTML = 'viés <b style="color:' + (k.n ? '#2e7d3a' : '#8a7d6d') + '">' +
           (k.n ? (k.biasMs > 0 ? '+' : '') + Math.round(k.biasMs || 0) + 'ms' : '—') + '</b>' +
           (k.n ? ' (' + k.n + ' amostra' + (k.n > 1 ? 's' : '') + ')' : ' <span style="color:#584526">(não calibrou)</span>');
       }
@@ -10823,13 +10823,13 @@
         // Tropas só no hover (title da linha), pra manter one-liner.
         tr.title = 'Agendado na Central · ' + ccTropaTxt(c.amounts) + (saiEm ? ' · sai ' + srvClockMs(saiEm) : '');
         let html = '';
-        for (let i = 0; i < nc; i++) html += '<td style="padding:4px 6px;white-space:nowrap;color:#7d510a">' +
+        for (let i = 0; i < nc; i++) html += '<td style="padding:4px 6px;white-space:nowrap;color:#a2643a">' +
           (i === 0
             ? '🕒 <b>' + esc(rot) + ' agendado</b> → ' + esc(c.x + '|' + c.y) + (nome ? ' ' + esc(nome) : '') +
               (saiEm ? ' <span style="color:#a98a4a">· sai ' + srvClockMs(saiEm) + '</span>' : '')
             : i === nc - 2 ? srvClockMs(c.arriveAt)
             : i === nc - 1 ? '<span class="cc-ov-falta" data-arr="' + c.arriveAt + '"></span>' +
-                '<a href="#" class="cc-ov-x" data-id="' + c.id + '" title="cancelar comando agendado" style="color:#c23a2c;font-weight:bold;margin-left:8px;text-decoration:none">✕</a>'
+                '<a href="#" class="cc-ov-x" data-id="' + c.id + '" title="cancelar comando agendado" style="color:#c0483a;font-weight:bold;margin-left:8px;text-decoration:none">✕</a>'
             : '') + '</td>';
         tr.innerHTML = html;
         let ref = null;
@@ -10893,18 +10893,18 @@
       ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:99999;display:flex;' +
                          'align-items:center;justify-content:center';
       ov.innerHTML =
-        '<div style="background:linear-gradient(180deg,#e2cd97,#ecdcb2);border:1px solid #b18f4d;border-radius:10px;' +
-             'padding:12px;width:min(680px,94vw);max-height:86vh;overflow:auto;color:#6a4e18;font-size:11px">' +
+        '<div style="background:linear-gradient(180deg,#fdfaf5,#fffdfa);border:1px solid #e0d6c6;border-radius:10px;' +
+             'padding:12px;width:min(680px,94vw);max-height:86vh;overflow:auto;color:#8b5426;font-size:11px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-            '<b style="color:#7d510a;font-size:13px">🎯 Snipe em ' + esc(p.destino || '?') + '</b>' +
-            '<a id="cc-sn-x" style="cursor:pointer;color:#c23a2c;font-size:14px">✕</a>' +
+            '<b style="color:#a2643a;font-size:13px">🎯 Snipe em ' + esc(p.destino || '?') + '</b>' +
+            '<a id="cc-sn-x" style="cursor:pointer;color:#c0483a;font-size:14px">✕</a>' +
           '</div>' +
-          '<div style="font-size:10px;color:#5c4527;margin-bottom:4px">' +
+          '<div style="font-size:10px;color:#6f6153;margin-bottom:4px">' +
             'O ataque pousa às <b style="color:#c2593a">' + srvClockMs(p.base) + '</b> · ' +
             'o apoio chega às <b style="color:#2e7d3a">' + srvClockMs(p.chegaEm) + '</b>' +
             ' (<b>' + ccFolgaSnipe() + 'ms antes</b>)' +
             (p.largura != null ? ' · janela de <b>' + p.largura + 'ms</b> desde a onda anterior' : ' · sem onda anterior conhecida') +
-            (p.exato ? '' : ' · <b style="color:#9a6f0e">chegada sem milésimos: 1s de incerteza</b>') +
+            (p.exato ? '' : ' · <b style="color:#a2643a">chegada sem milésimos: 1s de incerteza</b>') +
           '</div>' +
           // A margem precisa ser maior que o erro de disparo: se o apoio atrasar mais que ela,
           // pousa DEPOIS do ataque e não serve pra nada.
@@ -10914,7 +10914,7 @@
             '<span id="cc-sn-folga-av"></span>' +
           '</div>' +
           (viaveis.length
-            ? '<div style="display:grid;grid-template-columns:20px 96px 1fr 74px 70px;gap:6px;font-size:9px;color:#6e5a2a;padding:0 4px 3px">' +
+            ? '<div style="display:grid;grid-template-columns:20px 96px 1fr 74px 70px;gap:6px;font-size:9px;color:#8a7d6d;padding:0 4px 3px">' +
                 '<span></span><span>aldeia</span><span>tropas de defesa</span><span>sai às</span><span>folga</span></div>'
             : '') +
           '<div id="cc-sn-lista"></div>' +
@@ -10931,17 +10931,17 @@
         '<label style="display:grid;grid-template-columns:20px 96px 1fr 74px 70px;gap:6px;align-items:center;' +
         'padding:3px 4px;border-bottom:1px solid rgba(0,0,0,.07);' + (c.viavel ? '' : 'opacity:.45;') + '">' +
           '<input type="checkbox" data-sn="' + i + '"' + (c.viavel && i === 0 ? ' checked' : '') + (c.viavel ? '' : ' disabled') + '>' +
-          '<span style="color:#7a5710">' + esc(c.v.coord) + '</span>' +
-          '<span style="color:#5c4527;font-size:10px">' +
+          '<span style="color:#a2643a">' + esc(c.v.coord) + '</span>' +
+          '<span style="color:#6f6153;font-size:10px">' +
             CC_DEF.filter((u) => c.comp[u]).map((u) => esc(rot[u] || u) + ' ' + fmtN(c.comp[u])).join(' · ') + '</span>' +
-          '<span style="color:' + (c.viavel ? '#2e7d3a' : '#c23a2c') + '">' + srvClockMs(c.sai) + '</span>' +
-          '<span style="color:#6e5a2a">' + (c.folga > 0 ? fmt(c.folga) : 'tarde') + '</span>' +
+          '<span style="color:' + (c.viavel ? '#2e7d3a' : '#c0483a') + '">' + srvClockMs(c.sai) + '</span>' +
+          '<span style="color:#8a7d6d">' + (c.folga > 0 ? fmt(c.folga) : 'tarde') + '</span>' +
         '</label>').join('')
-        : '<div style="color:#c23a2c;padding:8px;font-size:10px">Nenhuma aldeia sua tem tropa de defesa para este alvo.</div>';
+        : '<div style="color:#c0483a;padding:8px;font-size:10px">Nenhuma aldeia sua tem tropa de defesa para este alvo.</div>';
 
       const msg = ov.querySelector('#cc-sn-msg');
       if (!viaveis.length && cands.length) {
-        msg.style.color = '#c23a2c';
+        msg.style.color = '#c0483a';
         msg.textContent = 'Nenhuma aldeia chega a tempo: a mais rápida sairia ' + fmt(Math.abs(cands[0].folga)) + ' atrás.';
       }
       // Aviso vivo: margem menor que o erro de disparo é o cenário em que o snipe morre no ataque.
@@ -10949,9 +10949,9 @@
       const attFolga = () => {
         const e = erroEstimadoMs(), f = parseInt(folgaEl.value, 10) || 0;
         if (f < e) {
-          folgaAv.innerHTML = '<b style="color:#c23a2c">⚠ menor que o erro medido (±' + e + 'ms) — o apoio pode chegar DEPOIS do ataque e não segurar nada</b>';
+          folgaAv.innerHTML = '<b style="color:#c0483a">⚠ menor que o erro medido (±' + e + 'ms) — o apoio pode chegar DEPOIS do ataque e não segurar nada</b>';
         } else if (p.largura != null && f > p.largura) {
-          folgaAv.innerHTML = '<b style="color:#c23a2c">⚠ maior que a janela (' + p.largura + 'ms) — cairia antes da onda anterior e morreria nela</b>';
+          folgaAv.innerHTML = '<b style="color:#c0483a">⚠ maior que a janela (' + p.largura + 'ms) — cairia antes da onda anterior e morreria nela</b>';
         } else {
           folgaAv.innerHTML = '<span style="color:#2e7d3a">✓ acima do erro medido (±' + e + 'ms)</span>';
         }
@@ -10969,8 +10969,8 @@
       ov.querySelector('#cc-sn-praca').onclick = () => { ccPreencherSnipe(p); ov.remove(); };
       ov.querySelector('#cc-sn-armar').onclick = () => {
         const marcadas = [...lista.querySelectorAll('[data-sn]')].filter((e) => e.checked).map((e) => cands[+e.getAttribute('data-sn')]);
-        if (!marcadas.length) { msg.style.color = '#c23a2c'; msg.textContent = 'Marque ao menos uma aldeia.'; return; }
-        if (!config.cmd.suporteOkAt) { msg.style.color = '#c23a2c'; msg.textContent = 'O apoio ainda não foi verificado neste mundo — abra a praça de reunião uma vez.'; return; }
+        if (!marcadas.length) { msg.style.color = '#c0483a'; msg.textContent = 'Marque ao menos uma aldeia.'; return; }
+        if (!config.cmd.suporteOkAt) { msg.style.color = '#c0483a'; msg.textContent = 'O apoio ainda não foi verificado neste mundo — abra a praça de reunião uma vez.'; return; }
         const al = p.destino.split('|');
         let n = 0;
         marcadas.forEach((c) => { cmdAdicionar('support', al[0], al[1], c.comp, p.chegaEm, c.v.vid); n++; });
@@ -11006,102 +11006,102 @@
       const host = document.querySelector('#content_value') || document.querySelector('#contentContainer') || document.body;
       const d = document.createElement('div');
       d.id = 'cc-painel';
-      d.style.cssText = 'background:linear-gradient(180deg,#e2cd97,#ecdcb2);border:1px solid #b18f4d;border-radius:10px;padding:10px;margin:0 0 12px;color:#6a4e18;font-size:11px';
-      const row = (l, inner) => '<div class="twmgr-row" style="display:flex;align-items:center;gap:6px;margin:3px 0"><span style="min-width:120px;color:#5c4527">' + l + '</span>' + inner + '</div>';
+      d.style.cssText = 'background:linear-gradient(180deg,#fdfaf5,#fffdfa);border:1px solid #e0d6c6;border-radius:10px;padding:10px;margin:0 0 12px;color:#8b5426;font-size:11px';
+      const row = (l, inner) => '<div class="twmgr-row" style="display:flex;align-items:center;gap:6px;margin:3px 0"><span style="min-width:120px;color:#6f6153">' + l + '</span>' + inner + '</div>';
       d.innerHTML =
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
-          '<b style="color:#7d510a;font-size:13px">🚀 Centro de Comando <span style="color:#6e5a2a;font-size:10px;font-weight:400">v' + VERSION + '</span></b>' +
-          '<b id="cc-clock" style="color:#9a6f0e;font-size:16px;font-variant-numeric:tabular-nums">--:--:--.---</b>' +
+          '<b style="color:#a2643a;font-size:13px">🚀 Centro de Comando <span style="color:#8a7d6d;font-size:10px;font-weight:400">v' + VERSION + '</span></b>' +
+          '<b id="cc-clock" style="color:#a2643a;font-size:16px;font-variant-numeric:tabular-nums">--:--:--.---</b>' +
         '</div>' +
-        '<div id="cc-saude" style="font-size:10px;color:#5c4527;margin-bottom:4px"></div>' +
-        '<div id="cc-silencio" style="font-size:10px;color:#9a6f0e;margin-bottom:4px;min-height:12px"></div>' +
+        '<div id="cc-saude" style="font-size:10px;color:#6f6153;margin-bottom:4px"></div>' +
+        '<div id="cc-silencio" style="font-size:10px;color:#a2643a;margin-bottom:4px;min-height:12px"></div>' +
         // Ajuste de precisão: o viés adaptativo (ccMedir) deveria corrigir sozinho, mas dá pra
         // forçar aqui. "Atrasar chegada" positivo = chega mais tarde (corrige quando sai adiantado).
-        '<div style="font-size:10px;color:#6e5a2a;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+        '<div style="font-size:10px;color:#8a7d6d;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
           '<span title="Se os comandos chegam ADIANTADOS, aumente. Se atrasados, use negativo. Some ao viés que o sistema mede sozinho.">Atrasar chegada <input id="cc-atraso" class="twmgr-inp" type="number" step="10" style="width:60px;font-size:10px;padding:1px">ms</span>' +
           '<span style="color:#584526">(+ = mais tarde)</span>' +
           '<span id="cc-vies" style="margin-left:auto"></span>' +
         '</div>' +
         row('Alvo',
           '<input id="cc-alvo" class="twmgr-inp" style="width:130px;font-variant-numeric:tabular-nums" placeholder="478|586">' +
-          '<span id="cc-alvo-ok" style="font-size:10px;color:#6e5a2a"></span>') +
+          '<span id="cc-alvo-ok" style="font-size:10px;color:#8a7d6d"></span>') +
         row('Chegada (servidor)',
           '<input id="cc-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:230px">' +
           '<button id="cc-ch-agora" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="preenche com a hora do servidor + 10 min">+10min</button>' +
           '<button id="cc-ch-cmd" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="copiar o horário de um comando do jogo">📋 de um comando</button>') +
         '<div id="cc-alvo-hist" style="font-size:10px;margin:2px 0 6px;line-height:1.8"></div>' +
         // Comandos do jogo: copiar horário pra coordenar em cima, ou escolher um pra snipar.
-        '<div id="cc-cmds-box" style="display:none;border:1px solid #b18f4d;border-radius:6px;padding:6px;margin:4px 0">' +
+        '<div id="cc-cmds-box" style="display:none;border:1px solid #e0d6c6;border-radius:6px;padding:6px;margin:4px 0">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
             '<span style="font-size:10px">' +
-              '<a id="cc-cmds-in" style="cursor:pointer;color:#7a5710">🛡 chegando em mim</a> · ' +
-              '<a id="cc-cmds-out" style="cursor:pointer;color:#7a5710">⚔ meus em rota</a>' +
+              '<a id="cc-cmds-in" style="cursor:pointer;color:#a2643a">🛡 chegando em mim</a> · ' +
+              '<a id="cc-cmds-out" style="cursor:pointer;color:#a2643a">⚔ meus em rota</a>' +
             '</span>' +
-            '<span style="font-size:10px;color:#6e5a2a">deslocar ' +
+            '<span style="font-size:10px;color:#8a7d6d">deslocar ' +
               '<input id="cc-cmds-off" class="twmgr-inp" type="number" step="10" value="0" style="width:60px;font-size:10px;padding:1px">ms' +
-              ' <a id="cc-cmds-fechar" style="cursor:pointer;color:#c23a2c;margin-left:6px">✕</a></span>' +
+              ' <a id="cc-cmds-fechar" style="cursor:pointer;color:#c0483a;margin-left:6px">✕</a></span>' +
           '</div>' +
-          '<div id="cc-cmds-lista" style="max-height:200px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:6px"></div>' +
+          '<div id="cc-cmds-lista" style="max-height:200px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
         '</div>' +
         // Abas em vez de rádios: cada tipo tem configuração própria, e a aba deixa claro
         // qual conjunto de campos está valendo.
         '<div id="cc-abas" style="display:flex;gap:2px;margin:8px 0 0">' +
           CC_TIPOS.map((t) =>
             '<div class="cc-aba" data-tipo="' + t.id + '" style="flex:1;text-align:center;padding:6px 4px;cursor:pointer;' +
-            'border:1px solid #b18f4d;border-bottom:none;border-radius:6px 6px 0 0;font-size:11px;user-select:none">' +
+            'border:1px solid #e0d6c6;border-bottom:none;border-radius:6px 6px 0 0;font-size:11px;user-select:none">' +
             t.ico + ' ' + t.rot + '</div>').join('') +
         '</div>' +
-        '<div id="cc-aba-corpo" style="border:1px solid #b18f4d;border-radius:0 6px 6px 6px;padding:8px;margin-bottom:8px">' +
-          '<div id="cc-aba-hint" style="font-size:10px;color:#6e5a2a;margin-bottom:6px"></div>' +
+        '<div id="cc-aba-corpo" style="border:1px solid #e0d6c6;border-radius:0 6px 6px 6px;padding:8px;margin-bottom:8px">' +
+          '<div id="cc-aba-hint" style="font-size:10px;color:#8a7d6d;margin-bottom:6px"></div>' +
         // Fake: dezenas de alvos de uma vez, com duas distribuições possíveis.
         '<div id="cc-fake-cfg" style="display:none">' +
-          '<div style="font-size:10px;color:#5c4527;margin:4px 0 2px">Alvos do fake (cole vários)</div>' +
+          '<div style="font-size:10px;color:#6f6153;margin:4px 0 2px">Alvos do fake (cole vários)</div>' +
           '<textarea id="cc-fake-alvos" class="twmgr-inp" style="width:100%;height:54px;font-size:10px" ' +
             'placeholder="478|586 479|587 480|588 …"></textarea>' +
           '<div style="font-size:10px;margin:3px 0">' +
             '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="cc-fakedist" value="rodizio"> rodízio — 1 fake por alvo, alternando as origens</label><br>' +
             '<label style="cursor:pointer"><input type="radio" name="cc-fakedist" value="todos"> todas × todos — cada origem manda 1 fake pra cada alvo</label>' +
           '</div>' +
-          '<div id="cc-fake-previa" style="font-size:10px;color:#9a6f0e;margin-bottom:4px"></div>' +
+          '<div id="cc-fake-previa" style="font-size:10px;color:#a2643a;margin-bottom:4px"></div>' +
         '</div>' +
         '<div id="cc-trem-cfg" style="display:none">' +
           row('Intervalo entre ondas',
             '<input id="cc-trem-gap" class="twmgr-inp" type="number" min="50" max="5000" step="10" value="150" style="width:70px">' +
-            '<span style="color:#6e5a2a">ms</span>' +
-            '<span style="color:#6e5a2a;margin-left:10px">nobres</span>' +
+            '<span style="color:#8a7d6d">ms</span>' +
+            '<span style="color:#8a7d6d;margin-left:10px">nobres</span>' +
             '<input id="cc-trem-n" class="twmgr-inp" type="number" min="1" max="8" value="4" style="width:48px">') +
           '<div style="font-size:10px;margin:4px 0 6px">' +
             '<a id="cc-nt-preset" style="cursor:pointer;color:#2e7d3a">⚡ montar NT (nuke + nobres)</a> · ' +
-            '<a id="cc-nt-dividir" style="cursor:pointer;color:#7a5710">✂ dividir em N ondas</a> · ' +
-            '<a id="cc-nt-nobres" style="cursor:pointer;color:#7a5710">👑 só nobres</a> · ' +
-            '<a id="cc-nt-add" style="cursor:pointer;color:#7a5710">+ onda com a composição atual</a> · ' +
-            '<a id="cc-nt-limpar" style="cursor:pointer;color:#c23a2c">limpar</a>' +
+            '<a id="cc-nt-dividir" style="cursor:pointer;color:#a2643a">✂ dividir em N ondas</a> · ' +
+            '<a id="cc-nt-nobres" style="cursor:pointer;color:#a2643a">👑 só nobres</a> · ' +
+            '<a id="cc-nt-add" style="cursor:pointer;color:#a2643a">+ onda com a composição atual</a> · ' +
+            '<a id="cc-nt-limpar" style="cursor:pointer;color:#c0483a">limpar</a>' +
           '</div>' +
-          '<div style="display:grid;grid-template-columns:24px 92px 1fr 62px 64px;gap:4px;font-size:9px;color:#6e5a2a;padding:0 4px 2px">' +
+          '<div style="display:grid;grid-template-columns:24px 92px 1fr 62px 64px;gap:4px;font-size:9px;color:#8a7d6d;padding:0 4px 2px">' +
             '<span>#</span><span>origem</span><span>tropas</span><span>defasagem</span><span></span></div>' +
-          '<div id="cc-ondas" style="max-height:170px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:6px"></div>' +
-          '<div id="cc-trem-aviso" style="font-size:10px;color:#9a6f0e;margin:4px 0 0"></div>' +
+          '<div id="cc-ondas" style="max-height:170px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+          '<div id="cc-trem-aviso" style="font-size:10px;color:#a2643a;margin:4px 0 0"></div>' +
         '</div>' +
           // Apoio em massa: aparece só quando a aba 🚚 está ativa. Usa as origens marcadas abaixo.
           '<div id="cc-massa-cfg" style="display:none">' +
             '<label style="font-size:10px;display:block">Alvo(s) <span style="color:#584526">(um por linha)</span></label>' +
             '<textarea id="cc-massa-alvos" class="twmgr-inp" style="width:100%;height:36px;font-size:10px" placeholder="500|600"></textarea>' +
             '<label style="font-size:10px;display:block;margin-top:3px;cursor:pointer"><input type="checkbox" id="cc-massa-dividir"> dividir as tropas entre os alvos (senão manda o cheio pra cada)</label>' +
-            '<div style="font-size:9px;color:#6e5a2a;margin:4px 0 2px">Tropas por aldeia — número, <b>50%</b> ou <b>tudo</b>:</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin:4px 0 2px">Tropas por aldeia — número, <b>50%</b> ou <b>tudo</b>:</div>' +
             '<div id="cc-massa-unidades" style="display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px"></div>' +
             '<button id="cc-massa-enviar" class="twmgr-btn twmgr-go" style="width:100%">🚚 Enviar apoio agora</button>' +
             '<div id="cc-massa-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
-            '<div id="cc-massa-rel" style="font-size:10px;margin-top:4px;color:#5c4527;font-family:Consolas,monospace;white-space:pre-wrap;max-height:160px;overflow-y:auto"></div>' +
+            '<div id="cc-massa-rel" style="font-size:10px;margin-top:4px;color:#6f6153;font-family:Consolas,monospace;white-space:pre-wrap;max-height:160px;overflow-y:auto"></div>' +
           '</div>' +
         '</div>' +   // fim de #cc-aba-corpo
         // Tropas digitadas AQUI, não nas caixas do jogo. "tudo" = manda o estoque inteiro daquela origem.
-        '<div id="cc-tropas-sec" style="margin:8px 0 4px;border-top:1px solid #c4a35f;padding-top:6px">' +
+        '<div id="cc-tropas-sec" style="margin:8px 0 4px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
-            '<span data-sec="tropas" style="font-size:10px;color:#6a4e18;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Tropas por origem</span>' +
+            '<span data-sec="tropas" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Tropas por origem</span>' +
             '<span style="font-size:10px">' +
               '<a id="cc-tpl-salvar" style="cursor:pointer;color:#2e7d3a">+ salvar como modelo</a> · ' +
-              '<a id="cc-tpl-limpar" style="cursor:pointer;color:#7a5710">limpar</a> · ' +
-              '<a id="cc-tpl-restaurar" style="cursor:pointer;color:#6e5a2a" title="repõe Tudo/Nobre/Fake">padrão</a>' +
+              '<a id="cc-tpl-limpar" style="cursor:pointer;color:#a2643a">limpar</a> · ' +
+              '<a id="cc-tpl-restaurar" style="cursor:pointer;color:#8a7d6d" title="repõe Tudo/Nobre/Fake">padrão</a>' +
             '</span>' +
           '</div>' +
           '<div data-secbody="tropas">' +
@@ -11112,14 +11112,14 @@
           '</div>' +
         '</div>' +
         // Origens: cada aldeia com distância e tempo já calculados pela unidade mais lenta.
-        '<div style="margin:8px 0 4px;border-top:1px solid #c4a35f;padding-top:6px">' +
+        '<div style="margin:8px 0 4px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
-            '<span data-sec="origens" style="font-size:10px;color:#6a4e18;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Origens</span>' +
+            '<span data-sec="origens" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Origens</span>' +
             '<span style="font-size:10px">' +
-              '<a id="cc-org-todas" style="cursor:pointer;color:#7a5710">todas</a> · ' +
-              '<a id="cc-org-nenhuma" style="cursor:pointer;color:#7a5710">nenhuma</a> · ' +
+              '<a id="cc-org-todas" style="cursor:pointer;color:#a2643a">todas</a> · ' +
+              '<a id="cc-org-nenhuma" style="cursor:pointer;color:#a2643a">nenhuma</a> · ' +
               '<a id="cc-org-viaveis" style="cursor:pointer;color:#2e7d3a" title="marca só as aldeias que têm a tropa pedida E ainda dão tempo de chegar">✓ só as viáveis</a> · ' +
-              '<a id="cc-org-recarregar" style="cursor:pointer;color:#7a5710">↻</a>' +
+              '<a id="cc-org-recarregar" style="cursor:pointer;color:#a2643a">↻</a>' +
             '</span>' +
           '</div>' +
           // "total" conta a tropa que está fora e volta — necessário pra agendar um full
@@ -11129,11 +11129,11 @@
             '<label style="margin-right:10px;cursor:pointer" title="linha &quot;Na Aldeia&quot; do jogo"><input type="radio" name="cc-fonte" value="casa"> na aldeia agora</label>' +
             '<label style="cursor:pointer" title="linha &quot;suas próprias&quot; do jogo: inclui o que está fora e em trânsito"><input type="radio" name="cc-fonte" value="total"> suas próprias (inclui fora/trânsito)</label>' +
           '</div>' +
-          '<div id="cc-vel-aviso" style="font-size:10px;color:#6e5a2a;margin-bottom:3px"></div>' +
-          '<div style="display:grid;grid-template-columns:18px 116px 44px 66px 46px 1fr;gap:6px;font-size:9px;color:#6e5a2a;padding:0 5px 2px">' +
+          '<div id="cc-vel-aviso" style="font-size:10px;color:#8a7d6d;margin-bottom:3px"></div>' +
+          '<div style="display:grid;grid-template-columns:18px 116px 44px 66px 46px 1fr;gap:6px;font-size:9px;color:#8a7d6d;padding:0 5px 2px">' +
             '<span></span><span>aldeia</span><span>dist.</span><span>viagem</span><span>mais lenta</span><span>saída</span></div>' +
-          '<div id="cc-origens" style="max-height:170px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:6px"></div>' +
-          '<div id="cc-resumo" style="font-size:10px;color:#5c4527;margin-top:3px"></div>' +
+          '<div id="cc-origens" style="max-height:170px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+          '<div id="cc-resumo" style="font-size:10px;color:#6f6153;margin-top:3px"></div>' +
           '</div>' +
         '</div>' +
         '<div id="cc-armar-row" style="display:flex;gap:6px;align-items:center">' +
@@ -11143,10 +11143,10 @@
         '</div>' +
         '<div id="cc-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
         '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
-        '<div style="margin-top:8px;border-top:1px solid #c4a35f;padding-top:6px">' +
+        '<div style="margin-top:8px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
-            '<span data-sec="fila" style="font-size:10px;color:#6a4e18;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Fila <span id="cc-fila-n" style="color:#6e5a2a;font-weight:400"></span></span>' +
-            '<span style="font-size:10px;color:#6e5a2a">ordenar por ' +
+            '<span data-sec="fila" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Fila <span id="cc-fila-n" style="color:#8a7d6d;font-weight:400"></span></span>' +
+            '<span style="font-size:10px;color:#8a7d6d">ordenar por ' +
               '<select id="cc-fila-ordem" class="twmgr-inp" style="width:auto;font-size:10px;padding:1px">' +
                 '<option value="chegada">chegada</option><option value="saida">saída</option></select>' +
               ' · passo <input id="cc-passo" class="twmgr-inp" type="number" min="1" step="10" style="width:52px;font-size:10px;padding:1px">ms' +
@@ -11154,13 +11154,13 @@
           '</div>' +
           '<div data-secbody="fila">' +
             '<div style="display:flex;gap:2px;margin-bottom:0">' +
-              '<span class="cc-ftab" data-ftab="envio" style="flex:1;text-align:center;padding:4px;cursor:pointer;font-size:10px;border:1px solid #b18f4d;border-bottom:none;border-radius:4px 4px 0 0">▸ A enviar <span id="cc-ftab-n-envio" style="color:#6e5a2a"></span></span>' +
-              '<span class="cc-ftab" data-ftab="enviados" style="flex:1;text-align:center;padding:4px;cursor:pointer;font-size:10px;border:1px solid #b18f4d;border-bottom:none;border-radius:4px 4px 0 0">✓ Enviados <span id="cc-ftab-n-enviados" style="color:#6e5a2a"></span></span>' +
+              '<span class="cc-ftab" data-ftab="envio" style="flex:1;text-align:center;padding:4px;cursor:pointer;font-size:10px;border:1px solid #e0d6c6;border-bottom:none;border-radius:4px 4px 0 0">▸ A enviar <span id="cc-ftab-n-envio" style="color:#8a7d6d"></span></span>' +
+              '<span class="cc-ftab" data-ftab="enviados" style="flex:1;text-align:center;padding:4px;cursor:pointer;font-size:10px;border:1px solid #e0d6c6;border-bottom:none;border-radius:4px 4px 0 0">✓ Enviados <span id="cc-ftab-n-enviados" style="color:#8a7d6d"></span></span>' +
             '</div>' +
-            '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#6e5a2a;padding:3px 5px 2px;border:1px solid #c4a35f;border-bottom:none">' +
+            '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;font-size:9px;color:#8a7d6d;padding:3px 5px 2px;border:1px solid #ece4d8;border-bottom:none">' +
               '<span>tipo</span><span>de</span><span>para</span><span>estado</span><span>sai</span><span>chegada</span><span>falta</span><span></span></div>' +
-            '<div id="cc-fila-envio" style="max-height:210px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:0 0 6px 6px"></div>' +
-            '<div id="cc-fila-enviados" style="display:none;max-height:210px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:0 0 6px 6px"></div>' +
+            '<div id="cc-fila-envio" style="max-height:210px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
+            '<div id="cc-fila-enviados" style="display:none;max-height:210px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
           '</div>' +
         '</div>';
       host.insertBefore(d, host.firstChild);
@@ -11211,9 +11211,9 @@
         // Aba ativa: só ela fica acesa e emendada no corpo.
         document.querySelectorAll('.cc-aba').forEach((el) => {
           const on = el.getAttribute('data-tipo') === tipo;
-          el.style.background = on ? 'linear-gradient(180deg,#dcc78f,#e2cd97)' : '#eeddb6';
-          el.style.color = on ? '#9a6f0e' : '#6e5a2a';
-          el.style.borderBottom = on ? '1px solid #e2cd97' : '1px solid #b18f4d';
+          el.style.background = on ? 'linear-gradient(180deg,#ece4d8,#fdfaf5)' : '#ffffff';
+          el.style.color = on ? '#a2643a' : '#8a7d6d';
+          el.style.borderBottom = on ? '1px solid #fdfaf5' : '1px solid #e0d6c6';
           el.style.marginBottom = on ? '-1px' : '0';
           el.style.fontWeight = on ? '600' : '400';
         });
@@ -11240,7 +11240,7 @@
       _ccAttTipo = attTrem;   // o snipe troca a aba pra Apoio e precisa redesenhar
       document.querySelectorAll('.cc-aba').forEach((el) => {
         el.addEventListener('click', () => { config.cmd.tipo = el.getAttribute('data-tipo'); save(); attTrem(); });
-        el.addEventListener('mouseenter', () => { if (el.getAttribute('data-tipo') !== ccTipo()) el.style.color = '#5c4527'; });
+        el.addEventListener('mouseenter', () => { if (el.getAttribute('data-tipo') !== ccTipo()) el.style.color = '#6f6153'; });
         el.addEventListener('mouseleave', attTrem);
       });
       attTrem();
@@ -11256,7 +11256,7 @@
             const nome = ccNomeAlvo(a.coord), dono = ccDonoAlvo(a.coord);
             ok.textContent = '✓ ' + a.coord + (nome ? ' · ' + nome : '') + (dono ? ' (' + dono + ')' : '');
             ok.style.color = '#2e7d3a';
-          } else { ok.textContent = alvoEl.value ? '✗ formato' : ''; ok.style.color = '#c23a2c'; }
+          } else { ok.textContent = alvoEl.value ? '✗ formato' : ''; ok.style.color = '#c0483a'; }
         }
         if (a) { config.cmd.ultimoAlvo = a.coord; save(); }
         recalc();
@@ -11339,7 +11339,7 @@
         const alvo = ccAlvo(), ch = ccChegadaMs(), comp = ccComposicao();
         const msg = document.getElementById('cc-msg');
         if (!alvo || !ch) {
-          if (msg) { msg.style.color = '#c23a2c'; msg.textContent = 'Preencha o alvo e a chegada primeiro.'; }
+          if (msg) { msg.style.color = '#c0483a'; msg.textContent = 'Preencha o alvo e a chegada primeiro.'; }
           return;
         }
         let ok = 0, semTropa = 0, semTempo = 0;
@@ -11354,7 +11354,7 @@
         });
         save(); ccRenderOrigens();
         if (msg) {
-          msg.style.color = ok ? '#2e7d3a' : '#c23a2c';
+          msg.style.color = ok ? '#2e7d3a' : '#c0483a';
           msg.textContent = ok + ' origem(ns) marcada(s)' +
             (semTropa ? ' · ' + semTropa + ' sem tropa' : '') +
             (semTempo ? ' · ' + semTempo + ' longe demais' : '');
@@ -12738,17 +12738,17 @@
     s.textContent = [
       "#twmgr-ccpg{position:fixed;inset:0;z-index:100001;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.62)}",
       "#twmgr-ccpg.on{display:flex}",
-      "#twmgr-ccbox{width:min(1080px,94vw);max-height:88vh;display:flex;flex-direction:column;font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#4a3418;background:linear-gradient(160deg,#e2cd97,#ecdcb2);border:1px solid #b8912e;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.7);overflow:hidden}",
+      "#twmgr-ccbox{width:min(1080px,94vw);max-height:88vh;display:flex;flex-direction:column;font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#463b30;background:linear-gradient(160deg,#fdfaf5,#fffdfa);border:1px solid #e6d9c2;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.7);overflow:hidden}",
       "#twmgr-ccbox *{box-sizing:border-box}",
-      "#twmgr-cchead{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:linear-gradient(90deg,#6e5015,#9a721c 55%,#caa031);color:#fff;border-bottom:1px solid #8a6a20}",
+      "#twmgr-cchead{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:linear-gradient(90deg,#fbf6ee,#fdfaf5 55%,#fbf6ee);color:#fff;border-bottom:1px solid #e8d9bf}",
       "#twmgr-cchead .t{font-weight:700;font-size:13px;letter-spacing:.3px}",
       "#twmgr-ccx{cursor:pointer;font-size:19px;line-height:1;padding:0 4px;opacity:.85}#twmgr-ccx:hover{opacity:1}",
       "#twmgr-ccbody{flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px 14px 14px}",
-      "#twmgr-ccbody::-webkit-scrollbar{width:9px}#twmgr-ccbody::-webkit-scrollbar-thumb{background:#b18f4d;border-radius:4px}",
+      "#twmgr-ccbody::-webkit-scrollbar{width:9px}#twmgr-ccbody::-webkit-scrollbar-thumb{background:#e0d6c6;border-radius:4px}",
       ".twmgr-cct{width:100%;border-collapse:collapse;font-size:11px}",
-      ".twmgr-cct th{font-size:9px;color:#9a6f0e;font-weight:700;padding:5px 6px;border-bottom:1px solid #b18f4d;text-transform:uppercase;text-align:left;letter-spacing:.4px}",
+      ".twmgr-cct th{font-size:9px;color:#a2643a;font-weight:700;padding:5px 6px;border-bottom:1px solid #e0d6c6;text-transform:uppercase;text-align:left;letter-spacing:.4px}",
       ".twmgr-cct td{padding:5px 6px;border-bottom:1px solid rgba(0,0,0,.07);vertical-align:middle}",
-      ".twmgr-cct tr:hover td{background:rgba(212,175,55,.05)}",
+      ".twmgr-cct tr:hover td{background:rgba(162,100,58,.05)}",
       ".twmgr-ccst{font-size:9px;font-weight:700;padding:2px 7px;border-radius:99px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}",
       ".twmgr-ccst.armado{background:rgba(90,140,220,.18);color:#3f6091;border:1px solid #3f6091}",
       // As cores seguem duas familias, e isso nao e enfeite: azul/verde = no rumo,
@@ -12759,18 +12759,18 @@
       ".twmgr-ccst.preparado{background:rgba(70,190,190,.15);color:#1f8f8f;border:1px solid #2f7d7d}",
       // Bem mais claro que 'incerto', que e ambar: 'disparando' e o instante em que o
       // POST esta no ar, e brilho maior le como "acontecendo agora".
-      ".twmgr-ccst.disparando{background:rgba(255,170,70,.26);color:#6b4e1e;border:1px solid #d68a2a}",
+      ".twmgr-ccst.disparando{background:rgba(255,170,70,.26);color:#6f6153;border:1px solid #d68a2a}",
       ".twmgr-ccst.enviado{background:rgba(63,206,84,.15);color:#2e7d3a;border:1px solid #2f7d3a}",
-      ".twmgr-ccst.incerto{background:rgba(230,150,40,.16);color:#a9781a;border:1px dashed #c98a22}",
-      ".twmgr-ccst.falhou,.twmgr-ccst.perdido{background:rgba(231,76,60,.16);color:#c23a2c;border:1px solid #9c3a2c}",
-      ".twmgr-cccd{font-variant-numeric:tabular-nums;font-weight:700;color:#9a6f0e;font-family:Consolas,'Courier New',monospace}",
+      ".twmgr-ccst.incerto{background:rgba(230,150,40,.16);color:#8b5426;border:1px dashed #c98a22}",
+      ".twmgr-ccst.falhou,.twmgr-ccst.perdido{background:rgba(231,76,60,.16);color:#c0483a;border:1px solid #9c3a2c}",
+      ".twmgr-cccd{font-variant-numeric:tabular-nums;font-weight:700;color:#a2643a;font-family:Consolas,'Courier New',monospace}",
       ".twmgr-cccd.perto{color:#c2592c}",
       ".twmgr-ccmet{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:11px}",
-      ".twmgr-ccm{flex:1 1 0;min-width:96px;background:linear-gradient(165deg,#e6d4a4,#ecdcb2);border:1px solid #b18f4d;border-radius:9px;padding:8px 7px;text-align:center}",
-      ".twmgr-ccm .v{font-size:18px;font-weight:800;color:#9a6f0e;line-height:1;font-variant-numeric:tabular-nums}",
-      ".twmgr-ccm .l{font-size:8px;color:#6e5a2f;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}",
-      ".twmgr-ccm.ruim .v{color:#c23a2c}", ".twmgr-ccm.bom .v{color:#2e7d3a}",
-      ".twmgr-ccvazio{text-align:center;color:#6e5a2a;font-size:11px;padding:22px 0}",
+      ".twmgr-ccm{flex:1 1 0;min-width:96px;background:linear-gradient(165deg,#f6f1e8,#fffdfa);border:1px solid #e0d6c6;border-radius:9px;padding:8px 7px;text-align:center}",
+      ".twmgr-ccm .v{font-size:18px;font-weight:800;color:#a2643a;line-height:1;font-variant-numeric:tabular-nums}",
+      ".twmgr-ccm .l{font-size:8px;color:#8a7d6d;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}",
+      ".twmgr-ccm.ruim .v{color:#c0483a}", ".twmgr-ccm.bom .v{color:#2e7d3a}",
+      ".twmgr-ccvazio{text-align:center;color:#8a7d6d;font-size:11px;padding:22px 0}",
       "#twmgr-ccpg-btn{cursor:pointer;font-size:13px;line-height:1;padding:2px 3px;border-radius:5px;opacity:.85;transition:.15s}",
       "#twmgr-ccpg-btn:hover{opacity:1;background:rgba(255,255,255,.14)}",
     ].join('');
@@ -12817,7 +12817,7 @@
             // sua conexão, não do código. Eu tinha tudo isto como constante fixa, sem
             // escape nenhum se o estimador errasse — e ele errou duas vezes nos testes.
             '<details id="twmgr-ccconf" class="twmgr-section" style="margin-bottom:11px">' +
-              '<summary style="cursor:pointer;font-size:10px;color:#8a6410;font-weight:700;letter-spacing:.5px;text-transform:uppercase">⚙ Ajuste de precisão</summary>' +
+              '<summary style="cursor:pointer;font-size:10px;color:#8b5426;font-weight:700;letter-spacing:.5px;text-transform:uppercase">⚙ Ajuste de precisão</summary>' +
               '<div style="margin-top:9px">' +
                 '<div class="twmgr-row"><span class="twmgr-lbl" title="Adaptativo mede o atraso dos últimos comandos e ajusta sozinho. Fixo usa o valor que você digitar — use se o adaptativo não convergir.">Modo</span>' +
                   '<select id="twmgr-cc-modo" class="twmgr-inp" style="width:190px"><option value="adaptativo">Adaptativo (ele mede)</option><option value="fixo">Fixo (você define)</option></select></div>' +
@@ -12830,15 +12830,15 @@
                 '<div class="twmgr-hint" style="margin:6px 0 0">O modo adaptativo só aprende com envios em que a <b>própria espera</b> acertou (erro de escada abaixo de ' + CC.GUARDA_DERIVA_MS + 'ms). Amostra ruim é descartada em vez de envenenar a média — o log avisa quando isso acontece.</div>' +
               '</div>' +
             '</details>' +
-            '<div id="twmgr-cctest" class="twmgr-section" style="display:none;margin-bottom:11px;border:1px solid #7d510a;border-radius:6px;padding:9px 11px;background:#e6d4a4">' +
-              '<div style="font-size:10px;color:#8a6410;font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">🧪 Teste de disparo</div>' +
+            '<div id="twmgr-cctest" class="twmgr-section" style="display:none;margin-bottom:11px;border:1px solid #a2643a;border-radius:6px;padding:9px 11px;background:#f6f1e8">' +
+              '<div style="font-size:10px;color:#8b5426;font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">🧪 Teste de disparo</div>' +
               '<div class="twmgr-row"><span class="twmgr-lbl" title="quantas aldeias suas disparam nesta onda, cada uma mira a mesma bárbara">Nº de aldeias</span><input id="twmgr-ct-n" class="twmgr-inp" type="number" min="1" max="8" value="3" style="width:80px"></div>' +
               '<div class="twmgr-row"><span class="twmgr-lbl" title="espaçamento pedido entre disparos consecutivos">Gap (ms)</span><input id="twmgr-ct-gap" class="twmgr-inp" type="number" min="100" step="10" value="150" style="width:80px"></div>' +
               '<div class="twmgr-row"><span class="twmgr-lbl" title="daqui a quantos segundos a onda começa a sair">Sair daqui a (s)</span><input id="twmgr-ct-s" class="twmgr-inp" type="number" min="8" value="20" style="width:80px"></div>' +
               '<div class="twmgr-row"><span class="twmgr-lbl" title="MARCADO: envia 5 exploradores de verdade a uma bárbara (eles espionam e voltam sozinhos). DESMARCADO: só simula — o motor roda mas nada sai.">Envio real (5 explor.)</span><input id="twmgr-ct-real" type="checkbox"></div>' +
               '<div style="display:flex;gap:9px;align-items:center;margin-top:9px">' +
                 '<button id="twmgr-ct-run" class="twmgr-btn" style="padding:4px 14px">Rodar teste</button>' +
-                '<span id="twmgr-ct-msg" style="font-size:10px;color:#6e5a2a"></span></div>' +
+                '<span id="twmgr-ct-msg" style="font-size:10px;color:#8a7d6d"></span></div>' +
             '</div>' +
             '<div id="twmgr-ccfila"></div>' +
           '</div>' +
@@ -12860,7 +12860,7 @@
       document.getElementById('twmgr-ct-run').addEventListener('click', async (ev) => {
         const b = ev.currentTarget, msg = document.getElementById('twmgr-ct-msg');
         const real = document.getElementById('twmgr-ct-real').checked;
-        b.disabled = true; b.textContent = 'montando…'; msg.style.color = '#6e5a2a'; msg.textContent = 'lendo aldeias e mapa…';
+        b.disabled = true; b.textContent = 'montando…'; msg.style.color = '#8a7d6d'; msg.textContent = 'lendo aldeias e mapa…';
         try {
           const plano = await ccTeste({
             nOrigens: parseInt(document.getElementById('twmgr-ct-n').value, 10) || 3,
@@ -12871,7 +12871,7 @@
           msg.style.color = '#2d6a2f';
           msg.textContent = (real ? 'REAL' : 'simulação') + ': ' + plano.origens.length + ' aldeia(s) → bárbara ' +
             plano.alvo.x + '|' + plano.alvo.y + ' (dist ' + plano.dist + '). Acompanhe na fila; o resumo cai no log.';
-        } catch (e) { msg.style.color = '#a5544a'; msg.textContent = String(e.message || e); }
+        } catch (e) { msg.style.color = '#a8564a'; msg.textContent = String(e.message || e); }
         b.disabled = false; b.textContent = 'Rodar teste';
       });
       document.addEventListener('keydown', (e) => { if (e.key === 'Escape') ccFecharPagina(); });
@@ -12951,7 +12951,7 @@
           '<td><span class="twmgr-ccst ' + c.state + '">' + c.state + '</span></td>' +
           '<td class="twmgr-cccd' + (vivo && falta != null && falta < 60000 ? ' perto' : '') + '">' + (vivo ? ccFmtFalta(falta) : '—') + '</td>' +
           '<td>' + (c.kind === 'support' ? '🛡️' : '⚔️') + ' <b>' + c.origin + '</b> → ' + c.x + '|' + c.y +
-            '<div style="font-size:9px;color:#6e5a2a">' + ccResumoTropa(c.amounts) + (c.erro ? ' · <span style="color:#a5544a">' + c.erro + '</span>' : '') + '</div></td>' +
+            '<div style="font-size:9px;color:#8a7d6d">' + ccResumoTropa(c.amounts) + (c.erro ? ' · <span style="color:#a8564a">' + c.erro + '</span>' : '') + '</div></td>' +
           '<td>' + ccFmtHora(c.sendAt) + '</td>' +
           '<td>' + ccFmtHora(chega) + '</td>' +
           // Mostra o erro REAL (chegada publicada pelo jogo) quando já conferido; enquanto
@@ -13018,9 +13018,9 @@
     const cel = (u) => '<td style="text-align:center;padding:2px 3px">';
     const box = document.createElement('div');
     box.id = 'twmgr-ccq';
-    box.style.cssText = 'margin:10px 0;border:1px solid #7d510a;border-radius:6px;background:#f4e4bc;color:#3b2914;font-size:11px;overflow:hidden';
+    box.style.cssText = 'margin:10px 0;border:1px solid #a2643a;border-radius:6px;background:#f4e4bc;color:#3b2914;font-size:11px;overflow:hidden';
     box.innerHTML =
-      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;background:linear-gradient(180deg,#e3c88b,#d3b26a);border-bottom:1px solid #7d510a;font-weight:700">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;background:linear-gradient(180deg,#e3c88b,#d3b26a);border-bottom:1px solid #a2643a;font-weight:700">' +
         '<span>🎯 Agendador rápido — Central de Comando</span>' +
         '<span><a href="javascript:void(0)" id="twmgr-ccq-fila" style="font-weight:400;margin-right:10px">ver fila</a><span id="twmgr-ccq-tog" style="cursor:pointer">▾</span></span></div>' +
       '<div id="twmgr-ccq-body" style="padding:8px 10px">' +
@@ -13036,7 +13036,7 @@
             ccUnidades().map(([u]) => cel(u) + '<input class="twmgr-ccq-qtd" data-u="' + u + '" type="number" min="0" value="0" style="width:42px;text-align:center;font-size:11px"></td>').join('') + '</tr>' +
           '<tr><td style="font-size:10px;color:#5c4321;padding:2px 4px" title="manda tudo que houver, menos o mínimo">Tudo</td>' +
             ccUnidades().map(([u]) => cel(u) + '<input class="twmgr-ccq-all" data-u="' + u + '" type="checkbox"></td>').join('') + '</tr>' +
-          '<tr style="border-top:1px solid #a9843f"><td style="font-size:10px;color:#5c4321;padding:2px 4px">Disponível</td>' +
+          '<tr style="border-top:1px solid #ddd2c0"><td style="font-size:10px;color:#5c4321;padding:2px 4px">Disponível</td>' +
             ccUnidades().map(([u]) => cel(u) + '<span class="twmgr-ccq-av" data-u="' + u + '" style="font-size:10px;color:#584526">' + (disp[u] || 0) + '</span></td>').join('') + '</tr>' +
         '</tbody></table></div>' +
         '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">' +
@@ -13068,7 +13068,7 @@
         const u = ck.getAttribute('data-u');
         const inp = box.querySelector('.twmgr-ccq-qtd[data-u="' + u + '"]');
         inp.disabled = ck.checked;
-        inp.style.background = ck.checked ? '#5c4527' : '';
+        inp.style.background = ck.checked ? '#6f6153' : '';
         if (ck.checked) {
           const min = parseInt(box.querySelector('.twmgr-ccq-min[data-u="' + u + '"]').value, 10) || 0;
           inp.value = Math.max(0, (disp[u] || 0) - min);

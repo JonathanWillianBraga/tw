@@ -18,6 +18,14 @@
   // error_resources. Entao nao da pra saber de antemao se a pesquisa vai passar: a unica fonte de
   // verdade e TENTAR e ler a resposta do servidor. Este classificador traduz a resposta em algo
   // acionavel; o texto cru vai pro log quando nao reconheco, pra dar pra ajustar sem chutar.
+  // Predio que cada pesquisa exige (canonico do Tribal Wars). Serve pra transformar
+  // "falta predio" num recado acionavel: o usuario precisa saber QUAL predio subir.
+  const PESQ_PREDIO = {
+    spear: 'Quartel', sword: 'Quartel', axe: 'Quartel', archer: 'Quartel',
+    spy: 'Estabulo', light: 'Estabulo', marcher: 'Estabulo', heavy: 'Estabulo',
+    ram: 'Oficina', catapult: 'Oficina',
+  };
+
   function pesqClassificarErro(msg) {
     // Regex de proposito SEM ACENTO: comparo contra a mensagem em minusculas com os acentos
     // removidos. Classe de caractere com acento dentro de fonte gerada por script e um convite a
@@ -131,9 +139,14 @@
     return { enviou: enviou, total: mandado, motivo: enviou ? null : 'nenhuma fonte com excedente no alcance' };
   }
 
+  // Trava de reentrancia: `researchStart` chama o tick direto, e o agendamento tambem. Clicar
+  // Iniciar com um ciclo em voo fazia DOIS lacos concorrentes na mesma conta -- no log real deu
+  // linha duplicada pra mesma aldeia no mesmo segundo, e o mesmo POST tentado duas vezes.
+  let _pesqEmVoo = false;
   async function researchTick() {
     clearTimeout(researchTimer);
     if (!config.research.running) return;
+    if (_pesqEmVoo) { researchTimer = setTimeout(researchTick, 5000); return; }
     if (lockOther()) { researchTimer = setTimeout(researchTick, 5000); return; }
     if (captchaBlocked()) { researchTimer = setTimeout(researchTick, 30000); return; }
     claimLock();
@@ -153,6 +166,10 @@
     if (config.research.feedOn) { try { todas = await getAllVillagesCached(); } catch (e) {} }
     const cacheFonte = {};
 
+    _pesqEmVoo = true;
+    // Agregado do ciclo: tropa travada -> quantas aldeias. Vira UMA linha no fim, em vez de uma
+    // por aldeia (44 aldeias davam ~60 linhas de log por ciclo).
+    const travadasPorTropa = {};
     let pesquisadas = 0, abastecidas = 0, completas = 0, semPredio = 0, andando = 0;
     for (const vid of ativas) {
       { const pare = devoParar('research'); if (pare) { pushLog('Pesquisa: ciclo interrompido - ' + pare + '.', '', 'research'); break; } }
@@ -193,7 +210,7 @@
         if (tipo === 'predio') {
           // Lembra o bloqueio: sem isso sao N POSTs recusados por ciclo, pra sempre.
           bloqueios[tech] = now; travadas++;
-          pushLog(rotulo + ': ' + nomeTropa(tech) + ' sem requisito (falta predio) - pulando pra proxima da ordem.', '', 'research');
+          travadasPorTropa[tech] = (travadasPorTropa[tech] || 0) + 1;
           await sleep(250);
           continue;
         }
@@ -221,9 +238,19 @@
       completas: completas, andando: andando, semPredio: semPredio,
     };
     config.research.nextAt = now + Math.max(60, config.research.interval || 900) * 1000;
+    _pesqEmVoo = false;
     save();
     renderResearchVillages();
     refreshCards('research');
+    // Uma linha por tropa travada, com o predio que resolve. Ex.: "Ariete travada em 14 aldeia(s)
+    // - falta Oficina". Nao repete nos ciclos seguintes: o bloqueio segura por blockTtlH horas.
+    Object.keys(travadasPorTropa).forEach((tech) => {
+      const nome = (UNITS.find((x) => x[0] === tech) || [])[1] || tech;
+      const predio = PESQ_PREDIO[tech];
+      pushLog('Pesquisa: ' + nome + ' travada em ' + travadasPorTropa[tech] + ' aldeia(s)' +
+              (predio ? ' - falta ' + predio + ' (suba em Construcoes)' : ' - falta predio') +
+              '. Nao insisto nas proximas ' + (config.research.blockTtlH || 6) + 'h.', '', 'research');
+    });
     pushLog('Pesquisa: ciclo concluido - ' + pesquisadas + ' iniciada(s), ' + abastecidas + ' abastecida(s), ' +
             completas + ' sem nada a fazer' + (semPredio ? ', ' + semPredio + ' com item travado por requisito' : '') +
             '. Proximo em ' + Math.round((config.research.interval || 900) / 60) + ' min.', 'ok', 'research');

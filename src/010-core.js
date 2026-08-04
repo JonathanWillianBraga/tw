@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.19.0
+// @version      11.20.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.19.0';
+  const VERSION = '11.20.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -183,7 +183,7 @@
   // nível de cima, porque são parâmetros de CADA modo específico, não estado de execução.
   const MARKET_MODES = ['cunhagem', 'equilibrio', 'solidario'];
   const MARKET_MODE_LABEL = { cunhagem: 'Cunhagem', equilibrio: 'Equilíbrio', solidario: 'Solidário' };
-  const defMarketModeState = () => ({ running: false, nextAt: 0, stats: {}, stopAt: 0 });
+  const defMarketModeState = () => ({ running: false, nextAt: 0, stats: {}, stopAt: 0, totalCoins: 0 });
   const defMarket = () => ({
     modes: { cunhagem: defMarketModeState(), equilibrio: defMarketModeState(), solidario: defMarketModeState() },
     interval: 600, destCoords: [], reserveWood: 0, reserveStone: 0, reserveIron: 0,
@@ -447,6 +447,7 @@
     }
     MARKET_MODES.forEach((k) => { if (!c.market.modes[k]) c.market.modes[k] = defMarketModeState(); });
     if (c.market.modes.cunhar) delete c.market.modes.cunhar;
+    if (c.market.modes.cunhagem && c.market.modes.cunhagem.totalCoins == null) c.market.modes.cunhagem.totalCoins = 0;
     // Migração: Cunhagem trocou coordenada única + checkbox + reserva única por grupos do
     // TW + múltiplos destinos + reserva por recurso, e absorveu o antigo modo "Cunhar" (agora
     // é o toggle "cunhagem automática"). Não dá pra converter checkbox -> grupo automaticamente,

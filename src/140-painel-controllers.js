@@ -22,6 +22,7 @@
       else if (lockOther()) { mk.textContent = '⏸ outra aba'; mk.style.color = '#c0483a'; }
       else { mk.style.color = '#2e7d3a'; mk.textContent = (st.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(st.nextAt - now) : '● enviando…'; }
     });
+    const mkCoins = document.getElementById('twmgr-mk-cunhagem-coins'); if (mkCoins) mkCoins.textContent = '🪙 Total cunhado: ' + fmtN(config.market.modes.cunhagem.totalCoins || 0) + ' moeda(s)';
     const bl = document.getElementById('twmgr-bld-status'); if (bl) {
       if (!config.build.running) { bl.textContent = ''; }
       else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#c0483a'; }

@@ -86,10 +86,9 @@
     let vils = [];
     try { vils = await getAllVillagesCached(); } catch (e) { pushLog('Cunhagem: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
 
-    // doadoras elegíveis = união dos grupos de origem, menos união dos grupos excluídos
+    // doadoras elegíveis = união dos grupos de origem (vazio = todas as aldeias, menos as de destino)
     const srcGroups = config.market.cunhagemSourceGroups || [];
-    const excGroups = config.market.cunhagemExcludeGroups || [];
-    const srcSet = {}, excSet = {};
+    const srcSet = {};
     if (srcGroups.length) {
       for (const gid of srcGroups) {
         try { (await getVillagesInGroup(gid)).forEach((v) => { srcSet[v.vid] = true; }); }
@@ -98,16 +97,12 @@
     } else {
       vils.forEach((v) => { srcSet[v.vid] = true; });   // "nenhum" grupo de origem selecionado = todas as aldeias
     }
-    for (const gid of excGroups) {
-      try { (await getVillagesInGroup(gid)).forEach((v) => { excSet[v.vid] = true; }); }
-      catch (e) { pushLog('Cunhagem: erro ao listar grupo excluído ' + gid + ' (' + (e.message || e) + ').', 'err', 'market'); }
-    }
     const destSet = {}; vils.forEach((v) => { if (v.coord && destCoords.includes(v.coord)) destSet[v.vid] = true; });
 
     let count = 0; const tot = { wood: 0, stone: 0, iron: 0 };
     for (const v of vils) {
       { const pare = devoParar('market'); if (pare) { pushLog('Cunhagem: interrompida — ' + pare + '.', '', 'market'); break; } }
-      if (!srcSet[v.vid] || excSet[v.vid]) continue;
+      if (!srcSet[v.vid]) continue;
       if (destSet[v.vid]) continue;   // nunca doa pra si mesma se também for destino
       if (!v.coord) continue;
       const coord = destCoords.map((c) => ({ c: c, d: coordDist(v.coord, c) })).sort((a, b) => a.d - b.d)[0].c;   // destino mais perto
@@ -355,31 +350,20 @@
     sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((gr) => '<option value="' + gr.id + '"' + (String(cur) === String(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
   }
   async function renderMarketCunhagemGroups() {
-    const contSrc = document.getElementById('twmgr-mk-srcgroups'), contExc = document.getElementById('twmgr-mk-excgroups');
-    if (!contSrc && !contExc) return;
+    const cont = document.getElementById('twmgr-mk-srcgroups'); if (!cont) return;
     let groups = [];
     try { groups = await getGroups(); } catch (e) { pushLog('Cunhagem: erro ao listar grupos: ' + (e.message || e), 'err', 'market'); return; }
-    const curSrc = config.market.cunhagemSourceGroups || [], curExc = config.market.cunhagemExcludeGroups || [];
-    const rowHtml = (cls, gid, name, checked) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="' + cls + '" data-gid="' + gid + '"' + (checked ? ' checked' : '') + '>' + esc(name) + '</label>';
-    // checkbox "nenhum" e as demais são mutuamente exclusivas: marcar "nenhum" desmarca o resto (= todas as
-    // aldeias, sem filtro de grupo), e marcar qualquer grupo específico desmarca "nenhum".
-    const bindExclusivity = (cont, cls) => {
-      cont.querySelectorAll('.' + cls).forEach((cb) => cb.addEventListener('change', () => {
-        if (cb.getAttribute('data-gid') === '') { if (cb.checked) cont.querySelectorAll('.' + cls).forEach((o) => { if (o !== cb) o.checked = false; }); }
-        else if (cb.checked) { const none = cont.querySelector('.' + cls + '[data-gid=""]'); if (none) none.checked = false; }
-        readMarketCfg();
-      }));
-    };
-    if (contSrc) {
-      contSrc.innerHTML = rowHtml('twmgr-mk-srcgrp', '', 'nenhum (= todas as aldeias)', !curSrc.length) +
-        groups.map((gr) => rowHtml('twmgr-mk-srcgrp', gr.id, gr.name, curSrc.includes(gr.id))).join('');
-      bindExclusivity(contSrc, 'twmgr-mk-srcgrp');
-    }
-    if (contExc) {
-      contExc.innerHTML = rowHtml('twmgr-mk-excgrp', '', 'nenhum (= não exclui nada)', !curExc.length) +
-        groups.map((gr) => rowHtml('twmgr-mk-excgrp', gr.id, gr.name, curExc.includes(gr.id))).join('');
-      bindExclusivity(contExc, 'twmgr-mk-excgrp');
-    }
+    const cur = config.market.cunhagemSourceGroups || [];
+    const rowHtml = (gid, name, checked) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-mk-srcgrp" data-gid="' + gid + '"' + (checked ? ' checked' : '') + '>' + esc(name) + '</label>';
+    cont.innerHTML = rowHtml('', 'nenhum (= todas as aldeias, menos as de destino)', !cur.length) +
+      groups.map((gr) => rowHtml(gr.id, gr.name, cur.includes(gr.id))).join('');
+    // "nenhum" e os grupos específicos são mutuamente exclusivos: marcar "nenhum" desmarca o resto
+    // (= todas as aldeias), e marcar qualquer grupo específico desmarca "nenhum".
+    cont.querySelectorAll('.twmgr-mk-srcgrp').forEach((cb) => cb.addEventListener('change', () => {
+      if (cb.getAttribute('data-gid') === '') { if (cb.checked) cont.querySelectorAll('.twmgr-mk-srcgrp').forEach((o) => { if (o !== cb) o.checked = false; }); }
+      else if (cb.checked) { const none = cont.querySelector('.twmgr-mk-srcgrp[data-gid=""]'); if (none) none.checked = false; }
+      readMarketCfg();
+    }));
   }
   function readMarketCfg() {
     const c = config.market, g = (id) => document.getElementById(id);
@@ -391,7 +375,6 @@
     if (g('twmgr-mk-stophours')) c.cunhagemStopHours = Math.max(0.1, parseFloat((g('twmgr-mk-stophours').value || '').replace(',', '.')) || 2);
     if (g('twmgr-mk-automint')) c.autoMint = g('twmgr-mk-automint').checked;
     if (g('twmgr-mk-srcgroups')) c.cunhagemSourceGroups = Array.from(document.querySelectorAll('.twmgr-mk-srcgrp:checked')).map((cb) => cb.getAttribute('data-gid')).filter(Boolean);
-    if (g('twmgr-mk-excgroups')) c.cunhagemExcludeGroups = Array.from(document.querySelectorAll('.twmgr-mk-excgrp:checked')).map((cb) => cb.getAttribute('data-gid')).filter(Boolean);
     if (g('twmgr-mk-int')) c.interval = Math.max(1, parseInt(g('twmgr-mk-int').value, 10) || 10) * 60;
     if (g('twmgr-mk-thr')) c.thresholdPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-thr').value, 10) || 50));
     if (g('twmgr-mk-dist')) c.maxDist = Math.max(1, parseFloat((g('twmgr-mk-dist').value || '').replace(',', '.')) || 15);

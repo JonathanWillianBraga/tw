@@ -235,8 +235,6 @@
         sec('💰 Cunhagem',
             '<div class="twmgr-row"><span class="twmgr-lbl">Grupos de origem</span></div>' +
             '<div id="twmgr-mk-srcgroups" style="max-height:100px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px;margin-bottom:6px"></div>' +
-            '<div class="twmgr-row"><span class="twmgr-lbl">Grupos excluídos</span></div>' +
-            '<div id="twmgr-mk-excgroups" style="max-height:100px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px;margin-bottom:6px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Aldeias destino (1 coord. por linha)</span></div>' +
             '<textarea id="twmgr-mk-destcoords" class="twmgr-inp" style="width:100%;height:52px;margin:2px 0 6px" placeholder="464|604&#10;465|605"></textarea>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Reserva madeira/argila/ferro</span>' +

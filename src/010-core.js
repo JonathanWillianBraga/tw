@@ -184,7 +184,7 @@
   const defMarket = () => ({
     modes: { cunhagem: defMarketModeState(), equilibrio: defMarketModeState(), solidario: defMarketModeState() },
     interval: 600, destCoords: [], reserveWood: 0, reserveStone: 0, reserveIron: 0,
-    cunhagemSourceGroups: [], cunhagemExcludeGroups: [], cunhagemStopEnabled: false, cunhagemStopHours: 2, autoMint: false,
+    cunhagemSourceGroups: [], cunhagemStopEnabled: false, cunhagemStopHours: 2, autoMint: false,
     thresholdPct: 50, maxDist: 15,
     groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {},
   });
@@ -457,17 +457,17 @@
       c.market.destCoords = c.market.destCoord ? [c.market.destCoord] : [];
       const oldReserve = c.market.reserve || 0;
       c.market.reserveWood = oldReserve; c.market.reserveStone = oldReserve; c.market.reserveIron = oldReserve;
-      c.market.cunhagemSourceGroups = []; c.market.cunhagemExcludeGroups = [];
+      c.market.cunhagemSourceGroups = [];
       c.market.cunhagemStopEnabled = false; c.market.cunhagemStopHours = 2; c.market.autoMint = false;
       if (c.market.sources || c.market.mintSources) pushLog('Cunhagem foi reformulada (grupos + múltiplos destinos) — configure as origens de novo na aba Mercado.', '', 'market');
       delete c.market.destCoord; delete c.market.reserve; delete c.market.sources; delete c.market.mintSources;
     }
+    if (c.market.cunhagemExcludeGroups) delete c.market.cunhagemExcludeGroups;   // feature removida: grupos excluídos
     if (c.market.interval == null) c.market.interval = 600;
     if (c.market.reserveWood == null) c.market.reserveWood = 0;
     if (c.market.reserveStone == null) c.market.reserveStone = 0;
     if (c.market.reserveIron == null) c.market.reserveIron = 0;
     if (!Array.isArray(c.market.cunhagemSourceGroups)) c.market.cunhagemSourceGroups = [];
-    if (!Array.isArray(c.market.cunhagemExcludeGroups)) c.market.cunhagemExcludeGroups = [];
     if (c.market.cunhagemStopEnabled == null) c.market.cunhagemStopEnabled = false;
     if (c.market.cunhagemStopHours == null) c.market.cunhagemStopHours = 2;
     if (c.market.autoMint == null) c.market.autoMint = false;

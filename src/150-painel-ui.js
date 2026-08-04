@@ -108,6 +108,13 @@
       ".twmgr-bld-tab a{color:#7d510a;cursor:pointer;text-decoration:none}.twmgr-bld-tab a:hover{text-decoration:underline}",
       ".twmgr-bld-plan{max-height:260px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;padding:3px}",
       ".twmgr-bld-plan::-webkit-scrollbar{width:8px}.twmgr-bld-plan::-webkit-scrollbar-thumb{background:#b18f4d;border-radius:4px}",
+      ".twmgr-pq-item{display:grid;grid-template-columns:22px 18px 1fr 18px 18px 18px;align-items:center;gap:5px;padding:4px 5px;border-bottom:1px solid rgba(0,0,0,.06);font-size:11px;color:#4a3418}",
+      ".twmgr-pq-item:last-child{border-bottom:none}",
+      ".twmgr-pq-ord{color:#6e5a2a;font-size:9px;text-align:right}",
+      ".twmgr-pq-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".twmgr-pq-up,.twmgr-pq-down,.twmgr-pq-rm{cursor:pointer;text-align:center;font-size:11px;color:#7d510a;opacity:.75}",
+      ".twmgr-pq-up:hover,.twmgr-pq-down:hover{opacity:1}",
+      ".twmgr-pq-rm{color:#c23a2c}.twmgr-pq-rm:hover{opacity:1}",
       ".twmgr-bld-item{display:grid;grid-template-columns:22px 16px 18px 1fr 44px 18px 18px 18px;align-items:center;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:#4a3418}",
       ".twmgr-bld-item:last-child{border-bottom:none}",
       ".twmgr-bld-item.twmgr-bld-off{opacity:.42;filter:grayscale(.6)}",
@@ -123,7 +130,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'recruit', 'market', 'build', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
+    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -166,7 +173,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
@@ -383,6 +390,53 @@
         '<div class="twmgr-actions"><button id="twmgr-bld-start" class="twmgr-btn twmgr-go">▶ Construir</button><button id="twmgr-bld-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-bld-status" class="twmgr-cstatus"></div>' +
         modLog('build') +
+      '</div>' +
+      '<div id="twmgr-tab-research" style="display:none">' +
+        hint('⚗️ Modelo de <b>prioridade de pesquisa</b> aplicado por aldeia. Se faltar recurso, puxa da aldeia mais próxima que tenha excedente.') +
+        cardsDiv('research') +
+        sec('Gerenciar pesquisas da aldeia',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<span class="twmgr-lbl" style="flex:0 0 auto">Grupo</span>' +
+            '<select id="twmgr-pq-group" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-pq-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
+          '</div>' +
+          '<div id="twmgr-pq-vils" class="twmgr-bld-vils"></div>' +
+          '<div id="twmgr-pq-vils-info" style="font-size:9px;color:#6e5a2a;text-align:right;margin-top:2px"></div>' +
+          '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
+            '<select id="twmgr-pq-mass-acao" class="twmgr-inp" style="flex:1">' +
+              '<option value="apply">Utilizar modelo</option>' +
+              '<option value="pause">Pausar</option>' +
+              '<option value="resume">Retomar</option>' +
+              '<option value="remove">Remover</option>' +
+            '</select>' +
+            '<select id="twmgr-pq-mass-tpl" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-pq-mass-go" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">✓</button>' +
+          '</div>') +
+        sec('Gerenciar modelos',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<select id="twmgr-pq-tpl" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-pq-tpl-new" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="criar modelo">✚</button>' +
+            '<button id="twmgr-pq-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
+            '<button id="twmgr-pq-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
+          '</div>' +
+          '<div style="font-size:9px;color:#6e5a2a;margin:6px 0 3px">Ordem = prioridade. A primeira tropa que ainda falta é a que entra na pesquisa.</div>' +
+          '<div id="twmgr-pq-order" class="twmgr-bld-plan"></div>' +
+          '<div class="twmgr-row" style="gap:4px;margin-top:6px">' +
+            '<select id="twmgr-pq-add" class="twmgr-inp" style="flex:1">' +
+              UNITS.filter((par) => par[0] !== 'knight' && par[0] !== 'snob').map((par) => '<option value="' + par[0] + '">' + par[1] + '</option>').join('') +
+            '</select>' +
+            '<button id="twmgr-pq-add-btn" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">+</button>' +
+          '</div>' +
+          '<div style="margin-top:4px"><button id="twmgr-pq-reset" class="twmgr-btn twmgr-ghost" style="width:100%;font-size:10px">↺ ordem padrão</button></div>') +
+        sec('Abastecimento quando falta recurso',
+          '<label class="twmgr-check" title="Puxa da aldeia mais próxima que tenha excedente"><input id="twmgr-pq-feed" type="checkbox"> Pedir recurso pra pesquisar</label>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Reserva na fonte (%)</span><input id="twmgr-pq-reserve" class="twmgr-inp" type="number" min="0" max="90" value="40" style="width:56px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Dist. máx. da fonte (campos)</span><input id="twmgr-pq-dist" class="twmgr-inp" type="number" min="1" value="20" style="width:56px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Usado só quando a tela não informa o custo da pesquisa">Sem custo na tela: encher até (%)</span><input id="twmgr-pq-fill" class="twmgr-inp" type="number" min="10" max="100" value="60" style="width:56px"></div>') +
+        sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-pq-int" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
+        '<div class="twmgr-actions"><button id="twmgr-pq-start" class="twmgr-btn twmgr-go">▶ Pesquisar</button><button id="twmgr-pq-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+        '<div id="twmgr-pq-status" class="twmgr-cstatus"></div>' +
+        modLog('research') +
       '</div>' +
       '<div id="twmgr-tab-planner" style="display:none">' +
         hint('🎯 Coordenado: monte vários ataques independentes — cada um com seu próprio alvo, aldeias e tropas — e arme cada um separadamente (o botão libera um novo ataque em branco assim que você arma). Cada aldeia pode mandar <b>várias ondas</b> (+ onda) dentro do mesmo ataque. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
@@ -712,6 +766,31 @@
     bldRenderTplSelect();
     bldSwitchProf(_bldActiveProf);
     renderBuildVillages();
+    // ---- Pesquisa ----
+    document.getElementById('twmgr-pq-tpl').addEventListener('change', (e) => pesqSwitchTpl(e.target.value));
+    document.getElementById('twmgr-pq-tpl-new').addEventListener('click', pesqNovoModelo);
+    document.getElementById('twmgr-pq-tpl-ren').addEventListener('click', pesqRenomearModelo);
+    document.getElementById('twmgr-pq-tpl-del').addEventListener('click', pesqApagarModelo);
+    document.getElementById('twmgr-pq-add-btn').addEventListener('click', pesqAddUnidade);
+    document.getElementById('twmgr-pq-reset').addEventListener('click', pesqResetOrdem);
+    document.getElementById('twmgr-pq-group').addEventListener('change', (e) => { config.research.filterGroup = e.target.value; save(); pesqCarregarAldeias(); });
+    document.getElementById('twmgr-pq-vil-reload').addEventListener('click', pesqCarregarAldeias);
+    document.getElementById('twmgr-pq-mass-go').addEventListener('click', pesqAcaoEmMassa);
+    document.getElementById('twmgr-pq-feed').checked = config.research.feedOn !== false;
+    document.getElementById('twmgr-pq-reserve').value = config.research.feedReserve != null ? config.research.feedReserve : 40;
+    document.getElementById('twmgr-pq-dist').value = config.research.feedMaxDist != null ? config.research.feedMaxDist : 20;
+    document.getElementById('twmgr-pq-fill').value = config.research.feedFillPct != null ? config.research.feedFillPct : 60;
+    document.getElementById('twmgr-pq-int').value = Math.round((config.research.interval || 900) / 60);
+    ['twmgr-pq-feed', 'twmgr-pq-reserve', 'twmgr-pq-dist', 'twmgr-pq-fill', 'twmgr-pq-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readResearchCfg); });
+    bindResearchOrderHandlers();
+    bindResearchVillageHandlers();
+    pesqRenderTplSelect();
+    pesqSwitchTpl(_pesqTplAtivo);
+    renderResearchVillages();
+    document.getElementById('twmgr-pq-start').addEventListener('click', researchStart);
+    document.getElementById('twmgr-pq-stop').addEventListener('click', researchStop);
+    setResearchStatus(config.research.running);
+
     document.getElementById('twmgr-bld-start').addEventListener('click', buildStart);
     document.getElementById('twmgr-bld-stop').addEventListener('click', buildStop);
     setBuildStatus(config.build.running);
@@ -764,7 +843,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'research', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -816,6 +895,7 @@
     if (config.recruit.running) { rlog('Recrutar retomado.', 'recruit'); retomar(scheduleRecruit); }
     MARKET_MODES.forEach((mkKey) => { if (config.market.modes[mkKey].running) { rlog('Mercado (' + MARKET_MODE_LABEL[mkKey] + ') retomado.', 'market'); retomar(() => scheduleMarket(mkKey)); } });
     if (config.build.running) { rlog('Construções retomado.', 'build'); retomar(scheduleBuild); }
+    if (config.research && config.research.running) { rlog('Pesquisa retomada.', 'research'); retomar(scheduleResearch); }
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); retomar(scheduleMap); }
     if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); retomar(etiquetaTick); }
     if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); retomar(scheduleLock); }

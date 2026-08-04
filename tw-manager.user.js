@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.16.0
+// @version      11.17.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.16.0';
+  const VERSION = '11.17.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -195,6 +195,18 @@
   // (templates) + atribuição POR ALDEIA (villages: vid -> {tpl, paused, coord, name, done, total}).
   // `plans` (atk/def) ficou só como semente da migração — quem manda agora é `templates`.
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, templates: {}, villages: {}, filterGroup: '', demand: {} });
+  // Ordem sugerida de pesquisa pra quem nunca montou um modelo: explorador cedo (revela alvo pro
+  // Saque), depois o pacote de ataque, depois defesa. É só um ponto de partida — o usuário reordena.
+  const PESQ_ORDEM_PADRAO = ['spy', 'axe', 'light', 'ram', 'spear', 'sword', 'heavy', 'catapult'];
+  // Pesquisa — modelos de PRIORIDADE (ordem de tropas) aplicados por aldeia, no molde do
+  // "Gerente de conta → Pesquisa". Quando falta recurso, puxa da aldeia mais próxima que tenha
+  // excedente (acima de feedReserve% do armazém dela), respeitando feedMaxDist campos.
+  const defResearch = () => ({
+    running: false, nextAt: 0, interval: 900,
+    templates: {}, villages: {}, filterGroup: '',
+    feedOn: true, feedReserve: 40, feedMaxDist: 20, feedFillPct: 60,
+    stats: {},
+  });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
   const defMap = () => ({
     running: false, nextAt: 0,
@@ -345,7 +357,7 @@
     nextAt: 0,
     demand: {},              // { [vid]: { b, cost, coord, profile } }
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), market: defMarket(), build: defBuild(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), market: defMarket(), build: defBuild(), research: defResearch(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -500,6 +512,29 @@
     });
     if (c.build.filterGroup == null) c.build.filterGroup = '';
     delete c.build.atkTpl; delete c.build.defTpl;
+    if (!c.research) c.research = defResearch();
+    if (!c.research.templates || typeof c.research.templates !== 'object') c.research.templates = {};
+    if (!Object.keys(c.research.templates).length) c.research.templates = { padrao: { name: 'Padrão', order: PESQ_ORDEM_PADRAO.slice() } };
+    Object.keys(c.research.templates).forEach((id) => {
+      const t = c.research.templates[id];
+      if (!t || typeof t !== 'object') { delete c.research.templates[id]; return; }
+      t.name = String(t.name || id).slice(0, 40);
+      // só tropa que existe neste mundo, sem repetida (a ordem é uma lista de prioridade, não um multiset)
+      const vistas = {};
+      t.order = (Array.isArray(t.order) ? t.order : []).filter((u) => UNITS.some((x) => x[0] === u) && !vistas[u] && (vistas[u] = 1));
+    });
+    if (!c.research.villages || typeof c.research.villages !== 'object') c.research.villages = {};
+    Object.keys(c.research.villages).forEach((vid) => {
+      const a = c.research.villages[vid];
+      if (!a || typeof a !== 'object' || !c.research.templates[a.tpl]) { delete c.research.villages[vid]; return; }
+      a.paused = !!a.paused;
+    });
+    if (c.research.filterGroup == null) c.research.filterGroup = '';
+    if (c.research.interval == null) c.research.interval = 900;
+    if (c.research.feedOn == null) c.research.feedOn = true;
+    if (c.research.feedReserve == null) c.research.feedReserve = 40;
+    if (c.research.feedMaxDist == null) c.research.feedMaxDist = 20;
+    if (c.research.feedFillPct == null) c.research.feedFillPct = 60;
     if (!c.map) c.map = defMap();
     // Reformulação do Mapa: de one-shot pra ciclo contínuo, com base de conhecimento e
     // blacklists. Campos novos entram sem apagar o que já existe.
@@ -653,12 +688,12 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, buildTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, buildTimer = null, researchTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
   const marketTimers = { cunhagem: null, equilibrio: null, solidario: null, cunhar: null };   // 1 timer por modo — rodam de forma independente
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
   function anyMarketRunning() { return !!(config.market && config.market.modes && MARKET_MODES.some((k) => config.market.modes[k] && config.market.modes[k].running)); }
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || anyMarketRunning() || (config.build && config.build.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || anyMarketRunning() || (config.build && config.build.running) || (config.research && config.research.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.
@@ -782,6 +817,14 @@
       const s = (config.build.stats || {}), as = config.build.villages || {};
       const pausadas = Object.keys(as).filter((v) => as[v].paused).length;
       arr = [{ v: fmtN(s.villages), l: 'aldeias construindo', hl: true }, { v: fmtN(pausadas), l: 'pausadas' }];
+    } else if (mod === 'research') {
+      const s = (config.research && config.research.stats) || {};
+      arr = [
+        { v: fmtN(s.villages), l: 'aldeias pesquisando', hl: true },
+        { v: fmtN(s.completas), l: 'modelo completo' },
+        { v: fmtN(s.andando), l: 'pesquisa em curso' },
+        { v: fmtN(s.abastecidas), l: 'abastecidas (últ. ciclo)' },
+      ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});
       // O card "no alcance" mostrava s.mapped, que é barbCount: os bárbaros do MUNDO INTEIRO que
@@ -2621,7 +2664,7 @@
     let groups = [];
     try { groups = await getGroups(); } catch (e) { pushLog('Recrutar: erro ao listar grupos: ' + (e.message || e), 'err'); return; }
     _twGroupsCache = groups;
-    [['twmgr-r-gatk', config.recruit.groupAtk], ['twmgr-r-gdef', config.recruit.groupDef], ['twmgr-bm-group', config.map && config.map.group], ['twmgr-farm-group', config.farm && config.farm.group], ['twmgr-bld-group', config.build && config.build.filterGroup]].forEach(([id, cur]) => {
+    [['twmgr-r-gatk', config.recruit.groupAtk], ['twmgr-r-gdef', config.recruit.groupDef], ['twmgr-bm-group', config.map && config.map.group], ['twmgr-farm-group', config.farm && config.farm.group], ['twmgr-bld-group', config.build && config.build.filterGroup], ['twmgr-pq-group', config.research && config.research.filterGroup]].forEach(([id, cur]) => {
       const sel = document.getElementById(id); if (!sel) return;
       sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((g) => '<option value="' + g.id + '"' + (String(cur) === String(g.id) ? ' selected' : '') + '>' + esc(g.name) + '</option>').join('');
     });
@@ -4658,6 +4701,441 @@
   }
   function buildStop() { readBuildCfg(); config.build.running = false; save(); clearTimeout(buildTimer); setBuildStatus(false); pushLog('Construções parado.', '', 'build'); }
 
+  // ==================== PESQUISA (modelos de prioridade aplicados por aldeia) ====================
+  // Espelha o "Gerente de conta -> Pesquisa" do jogo (screen=am_research) e funciona SEM Premium:
+  // N modelos nomeados, cada um com uma ORDEM de tropas, atribuidos por aldeia. A cada ciclo, para
+  // cada aldeia gerenciada, anda a ordem do modelo e pesquisa a primeira tropa que ainda falta.
+  //
+  // Reusa o que ja estava provado, em vez de reimplementar:
+  //   getSmithTechs/smithResearch  (085-obra) -- endpoint do Ferreiro confirmado ao vivo via DevTools
+  //   getMarketState/sendMarketResources (075-mercado) -- transferencia em 2 etapas
+  //   fieldDist (100-barbaros-mapa), getVillagesInGroup/getAllVillagesCached (030/040)
+  // Sao funcoes hoisted no mesmo escopo (ver CLAUDE.md), entao a ordem dos arquivos nao importa.
+
+  // PESQ_ORDEM_PADRAO vive no 010-core: o normalizador do config (`let config = load()`) roda na
+  // avaliação do 010, antes deste arquivo — const declarada aqui cairia em TDZ e derrubaria tudo.
+
+  // O jogo nao expoe o custo da pesquisa num campo estavel de BuildingSmith.techs (o Obra so usa
+  // level/can_research/error_buildings, que sao os confirmados). Tento varias formas conhecidas e,
+  // se nenhuma bater, devolvo null -- quem chama trata como "custo desconhecido" e cai no modo de
+  // abastecimento por porcentagem, em vez de pedir um numero inventado.
+  function pesqCustoDaTech(t) {
+    if (!t || typeof t !== 'object') return null;
+    const num = (v) => { const n = parseInt(v, 10); return isNaN(n) ? null : n; };
+    // forma 1: campos soltos na raiz
+    let w = num(t.wood), s = num(t.stone), i = num(t.iron);
+    if (w != null && s != null && i != null) return { wood: w, stone: s, iron: i };
+    // forma 2: objeto aninhado (cost / costs / resources)
+    for (const k of ['cost', 'costs', 'resources', 'res']) {
+      const o = t[k];
+      if (o && typeof o === 'object') {
+        w = num(o.wood); s = num(o.stone); i = num(o.iron);
+        if (w != null && s != null && i != null) return { wood: w, stone: s, iron: i };
+      }
+    }
+    return null;
+  }
+
+  // Estado de pesquisa de uma aldeia, na ordem do modelo. Devolve o que fazer AGORA:
+  //   {acao:'pesquisar', tech}        -- da pra mandar
+  //   {acao:'recurso', tech, custo}   -- falta recurso (custo pode ser null = desconhecido)
+  //   {acao:'predio', tech}           -- falta Ferreiro/Estabulo/Oficina; nao e problema meu
+  //   {acao:'andando'}                -- ja tem pesquisa em curso nessa aldeia
+  //   {acao:'completo'}               -- modelo inteiro pesquisado
+  function pesqDecidir(techs, ordem) {
+    for (const tech of ordem) {
+      const t = techs[tech];
+      if (!t) continue;                                   // tropa que nao existe neste mundo
+      const nivel = +t.level || 0;
+      const maxNivel = +t.max_level || 1;                  // mundo de pesquisa simples = 1 nivel
+      if (nivel >= maxNivel) continue;                     // essa ja esta pronta -> proxima da ordem
+      if (t.error_buildings) return { acao: 'predio', tech: tech };
+      if (t.can_research) return { acao: 'pesquisar', tech: tech };
+      // Nem pronta nem liberada: ou falta recurso, ou ja tem pesquisa em andamento. O campo de
+      // "em andamento" nao esta confirmado, entao uso o custo como desempate quando ele existe.
+      const custo = pesqCustoDaTech(t);
+      if (t.error_resources || t.error_res) return { acao: 'recurso', tech: tech, custo: custo };
+      return { acao: 'andando' };
+    }
+    return { acao: 'completo' };
+  }
+
+  // Puxa recurso da aldeia mais PROXIMA que tem excedente. "Excedente" = acima de
+  // config.research.feedReserve% do armazem dela -- a mesma ideia do Solidario do Mercado, mas aqui
+  // o alvo e um valor exato (o custo da pesquisa) em vez de um limiar, quando o custo e conhecido.
+  async function pesqAbastecer(alvo, custo, fontes, cacheFonte) {
+    const cm = (alvo.coord || '').match(/(\d+)\|(\d+)/);
+    if (!cm) return { enviou: false, motivo: 'aldeia sem coordenada' };
+    const ax = +cm[1], ay = +cm[2];
+
+    let ms; try { ms = await getMarketState(alvo.vid); } catch (e) { return { enviou: false, motivo: 'nao li o mercado do destino' }; }
+    if (!ms.storage) return { enviou: false, motivo: 'armazem do destino ilegivel' };
+
+    // Quanto falta. Sem custo conhecido, enche ate feedFillPct% do armazem (modo porcentagem).
+    let falta;
+    if (custo) {
+      falta = {
+        wood: Math.max(0, (custo.wood || 0) - ms.wood),
+        stone: Math.max(0, (custo.stone || 0) - ms.stone),
+        iron: Math.max(0, (custo.iron || 0) - ms.iron),
+      };
+    } else {
+      const teto = ms.storage * ((config.research.feedFillPct != null ? config.research.feedFillPct : 60) / 100);
+      falta = {
+        wood: Math.max(0, teto - ms.wood),
+        stone: Math.max(0, teto - ms.stone),
+        iron: Math.max(0, teto - ms.iron),
+      };
+    }
+    // Nunca pede mais do que cabe no armazem (senao transborda e o recurso vira lixo).
+    ['wood', 'stone', 'iron'].forEach((r) => { falta[r] = Math.floor(Math.min(falta[r], Math.max(0, ms.storage - ms[r]))); });
+    if (falta.wood + falta.stone + falta.iron <= 0) return { enviou: false, motivo: 'nada faltando' };
+
+    const maxDist = config.research.feedMaxDist != null ? config.research.feedMaxDist : 20;
+    const perto = fontes
+      .map((f) => { const c = (f.coord || '').match(/(\d+)\|(\d+)/); return c ? { f: f, d: fieldDist(+c[1], +c[2], ax, ay) } : null; })
+      .filter((o) => o && o.f.vid !== alvo.vid && o.d <= maxDist)
+      .sort((a, b) => a.d - b.d);
+    if (!perto.length) return { enviou: false, motivo: 'nenhuma aldeia dentro de ' + maxDist + ' campos' };
+
+    const reservaPct = (config.research.feedReserve != null ? config.research.feedReserve : 40) / 100;
+    let enviou = false, mandado = 0;
+    for (const o of perto) {
+      if (falta.wood + falta.stone + falta.iron <= 0) break;
+      const fv = o.f;
+      let fs = cacheFonte[fv.vid];
+      if (!fs) {
+        try { fs = cacheFonte[fv.vid] = await getMarketState(fv.vid); }
+        catch (e) { cacheFonte[fv.vid] = { capacity: 0, storage: 0 }; continue; }
+      }
+      if (!fs.capacity || !fs.storage) continue;
+      const piso = fs.storage * reservaPct;   // o excedente e o que passa da reserva
+      const pode = {
+        wood: Math.max(0, fs.wood - piso), stone: Math.max(0, fs.stone - piso), iron: Math.max(0, fs.iron - piso),
+      };
+      let amt = {
+        wood: Math.floor(Math.min(falta.wood, pode.wood)),
+        stone: Math.floor(Math.min(falta.stone, pode.stone)),
+        iron: Math.floor(Math.min(falta.iron, pode.iron)),
+      };
+      let tot = amt.wood + amt.stone + amt.iron;
+      if (tot <= 0) continue;
+      // Cabe nos mercadores? Se nao, manda proporcional -- o resto sai da proxima fonte/ciclo.
+      if (tot > fs.capacity) {
+        const f = fs.capacity / tot;
+        amt = { wood: Math.floor(amt.wood * f), stone: Math.floor(amt.stone * f), iron: Math.floor(amt.iron * f) };
+        tot = amt.wood + amt.stone + amt.iron;
+      }
+      if (tot <= 0) continue;
+      try {
+        await sendMarketResources(fv.vid, alvo.coord, amt);
+        enviou = true; mandado += tot;
+        pushLog('Pesquisa (abastece): ' + (fv.name || fv.coord) + ' -> ' + (alvo.name || alvo.coord) +
+                ' (' + amt.wood + '/' + amt.stone + '/' + amt.iron + ', ' + (Math.round(o.d * 10) / 10) + ' campos)', 'ok', 'research');
+        // Desconta na memoria pra nao prometer o mesmo recurso duas vezes no mesmo ciclo.
+        fs.wood -= amt.wood; fs.stone -= amt.stone; fs.iron -= amt.iron;
+        fs.capacity -= tot;
+        falta.wood -= amt.wood; falta.stone -= amt.stone; falta.iron -= amt.iron;
+      } catch (e) { /* alvo/erro -> tenta a proxima fonte */ }
+      await sleep(250);
+    }
+    return { enviou: enviou, total: mandado, motivo: enviou ? null : 'nenhuma fonte com excedente no alcance' };
+  }
+
+  async function researchTick() {
+    clearTimeout(researchTimer);
+    if (!config.research.running) return;
+    if (lockOther()) { researchTimer = setTimeout(researchTick, 5000); return; }
+    if (captchaBlocked()) { researchTimer = setTimeout(researchTick, 30000); return; }
+    claimLock();
+    const now = Date.now();
+    if ((config.research.nextAt || 0) > now) { scheduleResearch(); return; }
+
+    const assign = config.research.villages || {};
+    const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.research.templates[assign[v].tpl]);
+    if (!ativas.length) {
+      pushLog('Pesquisa: nenhuma aldeia ativa - carregue a lista, marque as aldeias e aplique um modelo.', '', 'research');
+      config.research.nextAt = now + 300000; save(); scheduleResearch(); return;
+    }
+
+    // Fontes de recurso pro abastecimento = todas as aldeias da conta. Uma aldeia gerenciada tambem
+    // pode doar (se estiver acima da reserva), porque pesquisa de uma nao concorre com a da outra.
+    let todas = [];
+    if (config.research.feedOn) { try { todas = await getAllVillagesCached(); } catch (e) {} }
+    const cacheFonte = {};
+
+    let pesquisadas = 0, abastecidas = 0, completas = 0, semPredio = 0, andando = 0;
+    for (const vid of ativas) {
+      { const pare = devoParar('research'); if (pare) { pushLog('Pesquisa: ciclo interrompido - ' + pare + '.', '', 'research'); break; } }
+      const alvo = assign[vid];
+      const modelo = config.research.templates[alvo.tpl] || {};
+      const ordem = (modelo.order || []).filter((u) => u);
+      const rotulo = alvo.name || alvo.coord || vid;
+      if (!ordem.length) { pushLog('Pesquisa: o modelo "' + (modelo.name || alvo.tpl) + '" esta vazio.', '', 'research'); continue; }
+
+      let techs;
+      try { techs = await getSmithTechs(vid); }
+      catch (e) {
+        // Ferreiro nivel 0 nao tem BuildingSmith.techs -- e situacao normal, nao erro do script.
+        pushLog('Pesquisa em ' + rotulo + ': ' + (e.message || e), '', 'research');
+        continue;
+      }
+
+      const d = pesqDecidir(techs, ordem);
+      const nomeTropa = (t) => { const u = UNITS.find((x) => x[0] === t); return u ? u[1] : t; };
+
+      if (d.acao === 'completo') { completas++; continue; }
+      if (d.acao === 'andando') { andando++; continue; }
+      if (d.acao === 'predio') {
+        semPredio++;
+        pushLog(rotulo + ': ' + nomeTropa(d.tech) + ' travada por predio (Ferreiro/Estabulo/Oficina) - resolva em Construcoes.', '', 'research');
+        continue;
+      }
+      if (d.acao === 'pesquisar') {
+        try {
+          await smithResearch(vid, d.tech);
+          pesquisadas++;
+          pushLog('Pesquisa: ' + rotulo + ' -> ' + nomeTropa(d.tech) + ' iniciada.', 'ok', 'research');
+        } catch (e) { pushLog('Pesquisa em ' + rotulo + ': ' + (e.message || e), 'err', 'research'); }
+        await sleep(300);
+        continue;
+      }
+      // falta recurso
+      if (!config.research.feedOn) {
+        pushLog(rotulo + ': sem recurso p/ ' + nomeTropa(d.tech) + ' (abastecimento desligado).', '', 'research');
+        continue;
+      }
+      const r = await pesqAbastecer({ vid: vid, coord: alvo.coord, name: alvo.name }, d.custo, todas, cacheFonte);
+      if (r.enviou) {
+        abastecidas++;
+        if (!d.custo) pushLog(rotulo + ': custo da pesquisa nao veio na tela, enchi por porcentagem.', '', 'research');
+      } else {
+        pushLog(rotulo + ': sem recurso p/ ' + nomeTropa(d.tech) + ' e nao consegui abastecer (' + r.motivo + ').', '', 'research');
+      }
+      await sleep(300);
+    }
+
+    config.research.stats = {
+      villages: ativas.length, pesquisadas: pesquisadas, abastecidas: abastecidas,
+      completas: completas, andando: andando, semPredio: semPredio,
+    };
+    config.research.nextAt = now + Math.max(60, config.research.interval || 900) * 1000;
+    save();
+    renderResearchVillages();
+    refreshCards('research');
+    pushLog('Pesquisa: ciclo concluido - ' + pesquisadas + ' iniciada(s), ' + abastecidas + ' abastecida(s), ' +
+            completas + ' completa(s). Proximo em ' + Math.round((config.research.interval || 900) / 60) + ' min.', 'ok', 'research');
+    scheduleResearch();
+  }
+  function scheduleResearch() {
+    clearTimeout(researchTimer);
+    if (!config.research.running) return;
+    researchTimer = setTimeout(researchTick, Math.min(Math.max((config.research.nextAt || 0) - Date.now(), 1000), 60000));
+  }
+
+  // ===== Modelos =====
+  let _pesqTplAtivo = 'padrao';
+  function pesqTplIds() { return Object.keys(config.research.templates || {}); }
+  function pesqTpl(id) { return (config.research.templates || {})[id || _pesqTplAtivo] || null; }
+  function pesqOrdemAtual() {
+    const t = pesqTpl(); if (t) return (t.order = t.order || []);
+    const ids = pesqTplIds(); if (!ids.length) return [];
+    _pesqTplAtivo = ids[0]; return (config.research.templates[ids[0]].order = config.research.templates[ids[0]].order || []);
+  }
+  function pesqRenderTplSelect() {
+    const sel = document.getElementById('twmgr-pq-tpl'); if (!sel) return;
+    const ids = pesqTplIds();
+    sel.innerHTML = ids.map((id) => '<option value="' + esc(id) + '">' + esc(config.research.templates[id].name) + ' (' + (config.research.templates[id].order || []).length + ')</option>').join('');
+    if (ids.indexOf(_pesqTplAtivo) < 0 && ids.length) _pesqTplAtivo = ids[0];
+    sel.value = _pesqTplAtivo;
+    const mass = document.getElementById('twmgr-pq-mass-tpl');
+    if (mass) { const antes = mass.value; mass.innerHTML = sel.innerHTML; if (ids.indexOf(antes) >= 0) mass.value = antes; }
+  }
+  function renderResearchOrder() {
+    const box = document.getElementById('twmgr-pq-order'); if (!box) return;
+    const ordem = pesqOrdemAtual();
+    if (!ordem.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">- ordem vazia (use o + abaixo) -</div>'; return; }
+    box.innerHTML = ordem.map((u, i) => {
+      const par = UNITS.find((x) => x[0] === u);
+      const nome = par ? par[1] : u;
+      return '<div class="twmgr-pq-item" data-i="' + i + '">' +
+        '<span class="twmgr-pq-ord">' + (i + 1) + '.</span>' +
+        '<span class="twmgr-pq-ico">' + unitIcon(u, nome) + '</span>' +
+        '<span class="twmgr-pq-name">' + esc(nome) + '</span>' +
+        '<span class="twmgr-pq-up" data-i="' + i + '" title="subir prioridade">&#9650;</span>' +
+        '<span class="twmgr-pq-down" data-i="' + i + '" title="descer prioridade">&#9660;</span>' +
+        '<span class="twmgr-pq-rm" data-i="' + i + '" title="remover">&#10005;</span>' +
+        '</div>';
+    }).join('');
+  }
+  function bindResearchOrderHandlers() {
+    const box = document.getElementById('twmgr-pq-order'); if (!box) return;
+    box.addEventListener('click', (e) => {
+      const el = e.target; const i = parseInt(el.getAttribute('data-i'), 10);
+      const ordem = pesqOrdemAtual(); if (isNaN(i) || !ordem.length) return;
+      if (el.classList.contains('twmgr-pq-up') && i > 0) { const t = ordem[i - 1]; ordem[i - 1] = ordem[i]; ordem[i] = t; }
+      else if (el.classList.contains('twmgr-pq-down') && i < ordem.length - 1) { const t = ordem[i + 1]; ordem[i + 1] = ordem[i]; ordem[i] = t; }
+      else if (el.classList.contains('twmgr-pq-rm')) { ordem.splice(i, 1); }
+      else return;
+      save(); renderResearchOrder(); pesqRenderTplSelect();
+    });
+  }
+  function pesqAddUnidade() {
+    const sel = document.getElementById('twmgr-pq-add'); if (!sel) return;
+    const u = sel.value; const ordem = pesqOrdemAtual();
+    if (ordem.indexOf(u) >= 0) { alert('Essa tropa ja esta na ordem.'); return; }
+    ordem.push(u); save(); renderResearchOrder(); pesqRenderTplSelect();
+  }
+  function pesqNovoModelo() {
+    const nome = (prompt('Nome do novo modelo de pesquisa:', '') || '').trim();
+    if (!nome) return;
+    const copiar = confirm('Copiar a ordem do modelo "' + (pesqTpl() ? pesqTpl().name : '') + '"?\n\nOK = copiar   -   Cancelar = vazio');
+    const id = 'pq' + Date.now().toString(36);
+    config.research.templates[id] = { name: nome.slice(0, 40), order: copiar && pesqTpl() ? pesqOrdemAtual().slice() : [] };
+    _pesqTplAtivo = id;
+    save(); pesqRenderTplSelect(); renderResearchOrder(); renderResearchVillages();
+    pushLog('Modelo de pesquisa "' + nome + '" criado.', 'ok', 'research');
+  }
+  function pesqRenomearModelo() {
+    const t = pesqTpl(); if (!t) return;
+    const nome = (prompt('Novo nome:', t.name) || '').trim(); if (!nome) return;
+    t.name = nome.slice(0, 40); save(); pesqRenderTplSelect(); renderResearchVillages();
+  }
+  function pesqApagarModelo() {
+    const t = pesqTpl(); if (!t) return;
+    if (pesqTplIds().length < 2) { alert('Precisa sobrar pelo menos um modelo.'); return; }
+    const usando = Object.keys(config.research.villages).filter((v) => config.research.villages[v].tpl === _pesqTplAtivo);
+    if (!confirm('Apagar o modelo "' + t.name + '"?' + (usando.length ? '\n\n' + usando.length + ' aldeia(s) usam ele e vao sair da tabela.' : ''))) return;
+    usando.forEach((v) => { delete config.research.villages[v]; });
+    delete config.research.templates[_pesqTplAtivo];
+    _pesqTplAtivo = pesqTplIds()[0];
+    save(); pesqRenderTplSelect(); renderResearchOrder(); renderResearchVillages();
+  }
+  function pesqSwitchTpl(id) {
+    if (!pesqTpl(id)) return;
+    _pesqTplAtivo = id;
+    const sel = document.getElementById('twmgr-pq-tpl'); if (sel) sel.value = id;
+    renderResearchOrder();
+  }
+  function pesqResetOrdem() {
+    const t = pesqTpl(); if (!t) return;
+    if (!confirm('Resetar a ordem do modelo "' + t.name + '" pro padrao do script?')) return;
+    t.order = PESQ_ORDEM_PADRAO.filter((u) => UNITS.some((x) => x[0] === u));
+    save(); renderResearchOrder(); pesqRenderTplSelect();
+  }
+
+  // ===== Tabela de aldeias =====
+  let _pesqPool = [];
+  async function pesqCarregarAldeias() {
+    const btn = document.getElementById('twmgr-pq-vil-reload');
+    if (btn) btn.textContent = '...';
+    try {
+      const gid = config.research.filterGroup || '';
+      const vs = gid ? await getVillagesInGroup(gid) : await getAllVillagesCached();
+      _pesqPool = (vs || []).map((v) => ({ vid: String(v.vid), coord: v.coord || null, name: v.name || v.coord || String(v.vid) }));
+      pushLog('Pesquisa: ' + _pesqPool.length + ' aldeia(s) carregadas' + (gid ? ' do grupo selecionado' : '') + '.', '', 'research');
+    } catch (e) {
+      pushLog('Pesquisa: erro ao carregar as aldeias (' + (e.message || e) + ').', 'err', 'research');
+    }
+    if (btn) btn.textContent = '↻';
+    renderResearchVillages();
+  }
+  function renderResearchVillages() {
+    const box = document.getElementById('twmgr-pq-vils'); if (!box) return;
+    const assign = config.research.villages || {}, tpls = config.research.templates || {};
+    const mapa = {};
+    Object.keys(assign).forEach((vid) => { mapa[vid] = { vid: vid, coord: assign[vid].coord, name: assign[vid].name || assign[vid].coord || vid }; });
+    _pesqPool.forEach((v) => { if (!mapa[v.vid]) mapa[v.vid] = v; });
+    const linhas = Object.keys(mapa).sort((a, b) => String(mapa[a].name).localeCompare(String(mapa[b].name), 'pt-BR', { numeric: true }));
+    if (!linhas.length) { box.innerHTML = '<div style="color:#6e5a2a;text-align:center;padding:10px;font-size:10px">- clique em &#8635; pra carregar suas aldeias -</div>'; return; }
+    box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr>' +
+      '<th style="width:16px"><input type="checkbox" id="twmgr-pq-all"></th><th>Aldeia</th><th>Modelo</th><th>Estado</th><th></th>' +
+      '</tr></thead><tbody>' +
+      linhas.map((vid, i) => {
+        const v = mapa[vid], a = assign[vid];
+        const tplNome = a && tpls[a.tpl] ? esc(tpls[a.tpl].name) : '<span style="color:#8a7340">-</span>';
+        const estado = !a ? '<span style="color:#8a7340">sem gerencia</span>'
+          : a.paused ? 'Pausado ( <a class="twmgr-pq-tog" data-vid="' + vid + '">Retomar</a> )'
+          : 'Ativo ( <a class="twmgr-pq-tog" data-vid="' + vid + '">Pausar</a> )';
+        const rm = a ? '<a class="twmgr-pq-vrm" data-vid="' + vid + '" title="tirar da gestao">Remover</a>' : '';
+        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + (a ? '' : ' twmgr-bld-off') + '">' +
+          '<td><input type="checkbox" class="twmgr-pq-vsel" data-vid="' + vid + '"></td>' +
+          '<td title="' + esc(v.name) + '">' + esc(v.name) + '</td>' +
+          '<td>' + tplNome + '</td><td>' + estado + '</td><td>' + rm + '</td></tr>';
+      }).join('') + '</tbody></table>';
+    const cnt = Object.keys(assign).length, pausadas = Object.keys(assign).filter((v) => assign[v].paused).length;
+    const rod = document.getElementById('twmgr-pq-vils-info');
+    if (rod) rod.textContent = cnt + ' gerenciada(s)' + (pausadas ? ' - ' + pausadas + ' pausada(s)' : '') + ' - ' + linhas.length + ' na lista';
+  }
+  function pesqAcaoEmMassa() {
+    const acao = document.getElementById('twmgr-pq-mass-acao').value;
+    const tplId = document.getElementById('twmgr-pq-mass-tpl').value;
+    const vids = Array.prototype.slice.call(document.querySelectorAll('.twmgr-pq-vsel:checked')).map((el) => el.getAttribute('data-vid'));
+    if (!vids.length) { alert('Marque pelo menos uma aldeia.'); return; }
+    const assign = config.research.villages;
+    const pool = {}; _pesqPool.forEach((v) => { pool[v.vid] = v; });
+    let n = 0;
+    vids.forEach((vid) => {
+      if (acao === 'apply') {
+        if (!config.research.templates[tplId]) return;
+        const base = assign[vid] || pool[vid] || {};
+        assign[vid] = { tpl: tplId, paused: false, coord: base.coord || null, name: base.name || base.coord || vid };
+        n++;
+      } else if (!assign[vid]) { return; }
+      else if (acao === 'pause') { assign[vid].paused = true; n++; }
+      else if (acao === 'resume') { assign[vid].paused = false; n++; }
+      else if (acao === 'remove') { delete assign[vid]; n++; }
+    });
+    config.research.stats = config.research.stats || {};
+    config.research.stats.villages = Object.keys(assign).filter((v) => !assign[v].paused).length;
+    save(); renderResearchVillages(); refreshCards('research');
+    const rot = { apply: 'modelo aplicado em', pause: 'pausada(s):', resume: 'retomada(s):', remove: 'removida(s) da gestao:' }[acao];
+    pushLog('Pesquisa: ' + rot + ' ' + n + ' aldeia(s).', 'ok', 'research');
+  }
+  function bindResearchVillageHandlers() {
+    const box = document.getElementById('twmgr-pq-vils'); if (!box) return;
+    box.addEventListener('click', (e) => {
+      const el = e.target, vid = el.getAttribute && el.getAttribute('data-vid');
+      if (el.id === 'twmgr-pq-all' || !vid) return;
+      if (el.classList.contains('twmgr-pq-tog')) {
+        const a = config.research.villages[vid]; if (!a) return;
+        a.paused = !a.paused; save(); renderResearchVillages(); refreshCards('research');
+      } else if (el.classList.contains('twmgr-pq-vrm')) {
+        delete config.research.villages[vid]; save(); renderResearchVillages(); refreshCards('research');
+      }
+    });
+    box.addEventListener('change', (e) => {
+      if (e.target.id !== 'twmgr-pq-all') return;
+      const on = e.target.checked;
+      document.querySelectorAll('.twmgr-pq-vsel').forEach((el) => { el.checked = on; });
+    });
+  }
+
+  function readResearchCfg() {
+    const c = config.research, g = (id) => document.getElementById(id);
+    if (g('twmgr-pq-int')) c.interval = Math.max(1, parseInt(g('twmgr-pq-int').value, 10) || 15) * 60;
+    if (g('twmgr-pq-feed')) c.feedOn = g('twmgr-pq-feed').checked;
+    if (g('twmgr-pq-reserve')) c.feedReserve = Math.max(0, Math.min(90, parseInt(g('twmgr-pq-reserve').value, 10) || 40));
+    if (g('twmgr-pq-dist')) c.feedMaxDist = Math.max(1, parseInt(g('twmgr-pq-dist').value, 10) || 20);
+    if (g('twmgr-pq-fill')) c.feedFillPct = Math.max(10, Math.min(100, parseInt(g('twmgr-pq-fill').value, 10) || 60));
+    save();
+  }
+  function setResearchStatus(on) { setBtnState('twmgr-pq-start', 'twmgr-pq-stop', on, '● Pesquisando', '▶ Pesquisar'); }
+  function researchStart() {
+    readResearchCfg();
+    const assign = config.research.villages || {};
+    const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.research.templates[assign[v].tpl]);
+    if (!ativas.length) { pushLog('Pesquisa: nenhuma aldeia ativa - carregue a lista, marque e aplique um modelo.', 'err', 'research'); return; }
+    config.research.running = true; config.research.nextAt = 0; save();
+    setResearchStatus(true);
+    pushLog('Pesquisa iniciada - ' + ativas.length + ' aldeia(s) em ' + pesqTplIds().length + ' modelo(s).', 'ok', 'research');
+    researchTick();
+  }
+  function researchStop() {
+    readResearchCfg(); config.research.running = false; save();
+    clearTimeout(researchTimer); setResearchStatus(false);
+    pushLog('Pesquisa parada.', '', 'research');
+  }
   // ==================== OBRA (construção por perfil, via grupos nativos do TW) ====================
   // Diferente do Construções (que é por aldeia, cadastrada à mão), aqui cada aldeia entra no fluxo
   // automaticamente ao ser colocada num dos 5 grupos do jogo — nenhum cadastro manual extra.
@@ -6076,6 +6554,12 @@
       else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#c23a2c'; }
       else { bl.style.color = '#2e7d3a'; bl.textContent = (config.build.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.build.nextAt - now) : '● construindo…'; }
     }
+    const pq = document.getElementById('twmgr-pq-status'); if (pq) {
+      if (!config.research || !config.research.running) { pq.textContent = ''; }
+      else if (lockOther()) { pq.textContent = '⏸ outra aba'; pq.style.color = '#c23a2c'; }
+      else { pq.style.color = '#2e7d3a'; pq.textContent = (config.research.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.research.nextAt - now) : '● pesquisando…'; }
+    }
+    if (document.getElementById('twmgr-cards-research')) refreshCards('research');
     const bm = document.getElementById('twmgr-bm-status'); if (bm) {
       if (!config.map || !config.map.running) { bm.textContent = ''; }
       else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#c23a2c'; }
@@ -6126,6 +6610,7 @@
     ring('twmgr-btab-recruit', config.recruit.running);
     ring('twmgr-btab-market', anyMarketRunning());
     ring('twmgr-btab-build', config.build.running);
+    ring('twmgr-btab-research', config.research && config.research.running);
     ring('twmgr-btab-planner', config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running));
     ring('twmgr-btab-paladin', config.paladin && config.paladin.running);
     ring('twmgr-btab-obra', config.obra && config.obra.running);
@@ -6394,6 +6879,13 @@
       ".twmgr-bld-tab a{color:#7d510a;cursor:pointer;text-decoration:none}.twmgr-bld-tab a:hover{text-decoration:underline}",
       ".twmgr-bld-plan{max-height:260px;overflow-y:auto;background:#e9d8ac;border:1px solid #c4a35f;border-radius:8px;padding:3px}",
       ".twmgr-bld-plan::-webkit-scrollbar{width:8px}.twmgr-bld-plan::-webkit-scrollbar-thumb{background:#b18f4d;border-radius:4px}",
+      ".twmgr-pq-item{display:grid;grid-template-columns:22px 18px 1fr 18px 18px 18px;align-items:center;gap:5px;padding:4px 5px;border-bottom:1px solid rgba(0,0,0,.06);font-size:11px;color:#4a3418}",
+      ".twmgr-pq-item:last-child{border-bottom:none}",
+      ".twmgr-pq-ord{color:#6e5a2a;font-size:9px;text-align:right}",
+      ".twmgr-pq-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".twmgr-pq-up,.twmgr-pq-down,.twmgr-pq-rm{cursor:pointer;text-align:center;font-size:11px;color:#7d510a;opacity:.75}",
+      ".twmgr-pq-up:hover,.twmgr-pq-down:hover{opacity:1}",
+      ".twmgr-pq-rm{color:#c23a2c}.twmgr-pq-rm:hover{opacity:1}",
       ".twmgr-bld-item{display:grid;grid-template-columns:22px 16px 18px 1fr 44px 18px 18px 18px;align-items:center;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:#4a3418}",
       ".twmgr-bld-item:last-child{border-bottom:none}",
       ".twmgr-bld-item.twmgr-bld-off{opacity:.42;filter:grayscale(.6)}",
@@ -6409,7 +6901,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'recruit', 'market', 'build', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
+    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -6452,7 +6944,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
         hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
@@ -6669,6 +7161,53 @@
         '<div class="twmgr-actions"><button id="twmgr-bld-start" class="twmgr-btn twmgr-go">▶ Construir</button><button id="twmgr-bld-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-bld-status" class="twmgr-cstatus"></div>' +
         modLog('build') +
+      '</div>' +
+      '<div id="twmgr-tab-research" style="display:none">' +
+        hint('⚗️ Modelo de <b>prioridade de pesquisa</b> aplicado por aldeia. Se faltar recurso, puxa da aldeia mais próxima que tenha excedente.') +
+        cardsDiv('research') +
+        sec('Gerenciar pesquisas da aldeia',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<span class="twmgr-lbl" style="flex:0 0 auto">Grupo</span>' +
+            '<select id="twmgr-pq-group" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-pq-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
+          '</div>' +
+          '<div id="twmgr-pq-vils" class="twmgr-bld-vils"></div>' +
+          '<div id="twmgr-pq-vils-info" style="font-size:9px;color:#6e5a2a;text-align:right;margin-top:2px"></div>' +
+          '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
+            '<select id="twmgr-pq-mass-acao" class="twmgr-inp" style="flex:1">' +
+              '<option value="apply">Utilizar modelo</option>' +
+              '<option value="pause">Pausar</option>' +
+              '<option value="resume">Retomar</option>' +
+              '<option value="remove">Remover</option>' +
+            '</select>' +
+            '<select id="twmgr-pq-mass-tpl" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-pq-mass-go" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">✓</button>' +
+          '</div>') +
+        sec('Gerenciar modelos',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<select id="twmgr-pq-tpl" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-pq-tpl-new" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="criar modelo">✚</button>' +
+            '<button id="twmgr-pq-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
+            '<button id="twmgr-pq-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
+          '</div>' +
+          '<div style="font-size:9px;color:#6e5a2a;margin:6px 0 3px">Ordem = prioridade. A primeira tropa que ainda falta é a que entra na pesquisa.</div>' +
+          '<div id="twmgr-pq-order" class="twmgr-bld-plan"></div>' +
+          '<div class="twmgr-row" style="gap:4px;margin-top:6px">' +
+            '<select id="twmgr-pq-add" class="twmgr-inp" style="flex:1">' +
+              UNITS.filter((par) => par[0] !== 'knight' && par[0] !== 'snob').map((par) => '<option value="' + par[0] + '">' + par[1] + '</option>').join('') +
+            '</select>' +
+            '<button id="twmgr-pq-add-btn" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">+</button>' +
+          '</div>' +
+          '<div style="margin-top:4px"><button id="twmgr-pq-reset" class="twmgr-btn twmgr-ghost" style="width:100%;font-size:10px">↺ ordem padrão</button></div>') +
+        sec('Abastecimento quando falta recurso',
+          '<label class="twmgr-check" title="Puxa da aldeia mais próxima que tenha excedente"><input id="twmgr-pq-feed" type="checkbox"> Pedir recurso pra pesquisar</label>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Reserva na fonte (%)</span><input id="twmgr-pq-reserve" class="twmgr-inp" type="number" min="0" max="90" value="40" style="width:56px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Dist. máx. da fonte (campos)</span><input id="twmgr-pq-dist" class="twmgr-inp" type="number" min="1" value="20" style="width:56px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Usado só quando a tela não informa o custo da pesquisa">Sem custo na tela: encher até (%)</span><input id="twmgr-pq-fill" class="twmgr-inp" type="number" min="10" max="100" value="60" style="width:56px"></div>') +
+        sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-pq-int" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
+        '<div class="twmgr-actions"><button id="twmgr-pq-start" class="twmgr-btn twmgr-go">▶ Pesquisar</button><button id="twmgr-pq-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+        '<div id="twmgr-pq-status" class="twmgr-cstatus"></div>' +
+        modLog('research') +
       '</div>' +
       '<div id="twmgr-tab-planner" style="display:none">' +
         hint('🎯 Coordenado: monte vários ataques independentes — cada um com seu próprio alvo, aldeias e tropas — e arme cada um separadamente (o botão libera um novo ataque em branco assim que você arma). Cada aldeia pode mandar <b>várias ondas</b> (+ onda) dentro do mesmo ataque. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
@@ -6998,6 +7537,31 @@
     bldRenderTplSelect();
     bldSwitchProf(_bldActiveProf);
     renderBuildVillages();
+    // ---- Pesquisa ----
+    document.getElementById('twmgr-pq-tpl').addEventListener('change', (e) => pesqSwitchTpl(e.target.value));
+    document.getElementById('twmgr-pq-tpl-new').addEventListener('click', pesqNovoModelo);
+    document.getElementById('twmgr-pq-tpl-ren').addEventListener('click', pesqRenomearModelo);
+    document.getElementById('twmgr-pq-tpl-del').addEventListener('click', pesqApagarModelo);
+    document.getElementById('twmgr-pq-add-btn').addEventListener('click', pesqAddUnidade);
+    document.getElementById('twmgr-pq-reset').addEventListener('click', pesqResetOrdem);
+    document.getElementById('twmgr-pq-group').addEventListener('change', (e) => { config.research.filterGroup = e.target.value; save(); pesqCarregarAldeias(); });
+    document.getElementById('twmgr-pq-vil-reload').addEventListener('click', pesqCarregarAldeias);
+    document.getElementById('twmgr-pq-mass-go').addEventListener('click', pesqAcaoEmMassa);
+    document.getElementById('twmgr-pq-feed').checked = config.research.feedOn !== false;
+    document.getElementById('twmgr-pq-reserve').value = config.research.feedReserve != null ? config.research.feedReserve : 40;
+    document.getElementById('twmgr-pq-dist').value = config.research.feedMaxDist != null ? config.research.feedMaxDist : 20;
+    document.getElementById('twmgr-pq-fill').value = config.research.feedFillPct != null ? config.research.feedFillPct : 60;
+    document.getElementById('twmgr-pq-int').value = Math.round((config.research.interval || 900) / 60);
+    ['twmgr-pq-feed', 'twmgr-pq-reserve', 'twmgr-pq-dist', 'twmgr-pq-fill', 'twmgr-pq-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readResearchCfg); });
+    bindResearchOrderHandlers();
+    bindResearchVillageHandlers();
+    pesqRenderTplSelect();
+    pesqSwitchTpl(_pesqTplAtivo);
+    renderResearchVillages();
+    document.getElementById('twmgr-pq-start').addEventListener('click', researchStart);
+    document.getElementById('twmgr-pq-stop').addEventListener('click', researchStop);
+    setResearchStatus(config.research.running);
+
     document.getElementById('twmgr-bld-start').addEventListener('click', buildStart);
     document.getElementById('twmgr-bld-stop').addEventListener('click', buildStop);
     setBuildStatus(config.build.running);
@@ -7050,7 +7614,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'research', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -7102,6 +7666,7 @@
     if (config.recruit.running) { rlog('Recrutar retomado.', 'recruit'); retomar(scheduleRecruit); }
     MARKET_MODES.forEach((mkKey) => { if (config.market.modes[mkKey].running) { rlog('Mercado (' + MARKET_MODE_LABEL[mkKey] + ') retomado.', 'market'); retomar(() => scheduleMarket(mkKey)); } });
     if (config.build.running) { rlog('Construções retomado.', 'build'); retomar(scheduleBuild); }
+    if (config.research && config.research.running) { rlog('Pesquisa retomada.', 'research'); retomar(scheduleResearch); }
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); retomar(scheduleMap); }
     if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); retomar(etiquetaTick); }
     if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); retomar(scheduleLock); }

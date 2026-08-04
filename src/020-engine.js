@@ -42,6 +42,14 @@
       const s = (config.build.stats || {}), as = config.build.villages || {};
       const pausadas = Object.keys(as).filter((v) => as[v].paused).length;
       arr = [{ v: fmtN(s.villages), l: 'aldeias construindo', hl: true }, { v: fmtN(pausadas), l: 'pausadas' }];
+    } else if (mod === 'research') {
+      const s = (config.research && config.research.stats) || {};
+      arr = [
+        { v: fmtN(s.villages), l: 'aldeias pesquisando', hl: true },
+        { v: fmtN(s.completas), l: 'modelo completo' },
+        { v: fmtN(s.andando), l: 'pesquisa em curso' },
+        { v: fmtN(s.abastecidas), l: 'abastecidas (últ. ciclo)' },
+      ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});
       // O card "no alcance" mostrava s.mapped, que é barbCount: os bárbaros do MUNDO INTEIRO que

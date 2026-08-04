@@ -27,6 +27,12 @@
       else if (lockOther()) { bl.textContent = '⏸ outra aba'; bl.style.color = '#c23a2c'; }
       else { bl.style.color = '#2e7d3a'; bl.textContent = (config.build.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.build.nextAt - now) : '● construindo…'; }
     }
+    const pq = document.getElementById('twmgr-pq-status'); if (pq) {
+      if (!config.research || !config.research.running) { pq.textContent = ''; }
+      else if (lockOther()) { pq.textContent = '⏸ outra aba'; pq.style.color = '#c23a2c'; }
+      else { pq.style.color = '#2e7d3a'; pq.textContent = (config.research.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.research.nextAt - now) : '● pesquisando…'; }
+    }
+    if (document.getElementById('twmgr-cards-research')) refreshCards('research');
     const bm = document.getElementById('twmgr-bm-status'); if (bm) {
       if (!config.map || !config.map.running) { bm.textContent = ''; }
       else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#c23a2c'; }
@@ -77,6 +83,7 @@
     ring('twmgr-btab-recruit', config.recruit.running);
     ring('twmgr-btab-market', anyMarketRunning());
     ring('twmgr-btab-build', config.build.running);
+    ring('twmgr-btab-research', config.research && config.research.running);
     ring('twmgr-btab-planner', config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running));
     ring('twmgr-btab-paladin', config.paladin && config.paladin.running);
     ring('twmgr-btab-obra', config.obra && config.obra.running);

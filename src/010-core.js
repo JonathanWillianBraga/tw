@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.17.1
+// @version      11.17.2
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.17.1';
+  const VERSION = '11.17.2';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -205,6 +205,7 @@
     running: false, nextAt: 0, interval: 900,
     templates: {}, villages: {}, filterGroup: '',
     feedOn: true, feedReserve: 40, feedMaxDist: 20, feedFillPct: 60,
+    blocked: {}, blockTtlH: 6,   // pesquisa recusada por requisito: nao insiste por N horas
     stats: {},
   });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
@@ -535,6 +536,10 @@
     if (c.research.feedReserve == null) c.research.feedReserve = 40;
     if (c.research.feedMaxDist == null) c.research.feedMaxDist = 20;
     if (c.research.feedFillPct == null) c.research.feedFillPct = 60;
+    if (!c.research.blocked || typeof c.research.blocked !== 'object') c.research.blocked = {};
+    if (c.research.blockTtlH == null) c.research.blockTtlH = 6;
+    // Bloqueio de aldeia que saiu da gestão não serve pra nada e cresceria pra sempre.
+    Object.keys(c.research.blocked).forEach((vid) => { if (!c.research.villages[vid]) delete c.research.blocked[vid]; });
     if (!c.map) c.map = defMap();
     // Reformulação do Mapa: de one-shot pra ciclo contínuo, com base de conhecimento e
     // blacklists. Campos novos entram sem apagar o que já existe.

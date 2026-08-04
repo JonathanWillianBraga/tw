@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.17.1
+// @version      11.17.2
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.17.1';
+  const VERSION = '11.17.2';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -205,6 +205,7 @@
     running: false, nextAt: 0, interval: 900,
     templates: {}, villages: {}, filterGroup: '',
     feedOn: true, feedReserve: 40, feedMaxDist: 20, feedFillPct: 60,
+    blocked: {}, blockTtlH: 6,   // pesquisa recusada por requisito: nao insiste por N horas
     stats: {},
   });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
@@ -535,6 +536,10 @@
     if (c.research.feedReserve == null) c.research.feedReserve = 40;
     if (c.research.feedMaxDist == null) c.research.feedMaxDist = 20;
     if (c.research.feedFillPct == null) c.research.feedFillPct = 60;
+    if (!c.research.blocked || typeof c.research.blocked !== 'object') c.research.blocked = {};
+    if (c.research.blockTtlH == null) c.research.blockTtlH = 6;
+    // Bloqueio de aldeia que saiu da gestão não serve pra nada e cresceria pra sempre.
+    Object.keys(c.research.blocked).forEach((vid) => { if (!c.research.villages[vid]) delete c.research.blocked[vid]; });
     if (!c.map) c.map = defMap();
     // Reformulação do Mapa: de one-shot pra ciclo contínuo, com base de conhecimento e
     // blacklists. Campos novos entram sem apagar o que já existe.
@@ -4722,28 +4727,41 @@
   // verdade e TENTAR e ler a resposta do servidor. Este classificador traduz a resposta em algo
   // acionavel; o texto cru vai pro log quando nao reconheco, pra dar pra ajustar sem chutar.
   function pesqClassificarErro(msg) {
-    const m = String(msg || '').toLowerCase();
-    if (/recurso|mat[eu00e9]ria|insufficient|n[u00e3a]o tem o suficiente|suficiente/.test(m)) return 'recurso';
-    if (/edif[u00edi]cio|requisito|ferreiro|est[u00e1a]bulo|oficina|building/.test(m)) return 'predio';
-    if (/andamento|em curso|already|j[u00e1a] est/.test(m)) return 'andando';
+    // Regex de proposito SEM ACENTO: comparo contra a mensagem em minusculas com os acentos
+    // removidos. Classe de caractere com acento dentro de fonte gerada por script e um convite a
+    // escape mal escrito -- ja aconteceu aqui (saiu [u00edi] em vez de [ii]) e o classificador
+    // silenciosamente parou de reconhecer as mensagens acentuadas do jogo.
+    const m = String(msg || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    // Texto real do br141: "Requerimentos necessarios nao atingidos" (Ariete sem Oficina).
+    if (/requerimento|requisito|edificio|ferreiro|estabulo|oficina|building/.test(m)) return 'predio';
+    if (/recurso|materia|insufficient|suficiente/.test(m)) return 'recurso';
+    if (/andamento|em curso|already|ja esta/.test(m)) return 'andando';
     return 'desconhecido';
   }
 
-  // Proxima tropa a pesquisar, na ordem do modelo. So dois campos bastam e ambos existem de
-  // verdade: `level` (nivel atual) e `level_highest` (teto). `error_level` e o jeito do jogo dizer
-  // "nao ha nivel a subir aqui" -- em mundo de pesquisa simples ele vem true no que ja esta
-  // pesquisado. Devolve {acao:'tentar', tech} ou {acao:'completo'}.
-  function pesqDecidir(techs, ordem) {
+  // Candidatas a pesquisar, NA ORDEM do modelo. Dois campos bastam e ambos existem de verdade:
+  // `level` (nivel atual) e `level_highest` (teto). `error_level` e o jeito do jogo dizer "nao ha
+  // nivel a subir aqui".
+  //
+  // Devolve LISTA, nao a primeira: um item travado por requisito (Ariete sem Oficina, p.ex.) nao
+  // pode parar a ordem inteira -- prioridade significa "se essa nao da, tenta a proxima". Sem isso
+  // a aldeia ficava presa no Ariete pra sempre e nunca pesquisava Lanc./Espad./C.pes.
+  function pesqCandidatos(techs, ordem, bloqueios, agora) {
+    const ttl = Math.max(1, config.research.blockTtlH || 6) * 3600 * 1000;
+    const out = [];
     for (const tech of ordem) {
       const t = techs[tech];
-      if (!t) continue;                                  // tropa que nao existe neste mundo
+      if (!t) continue;                                   // tropa que nao existe neste mundo
       const nivel = parseInt(t.level, 10) || 0;
       const teto = parseInt(t.level_highest, 10) || parseInt(t.max_level, 10) || 1;
-      if (nivel >= teto) continue;                        // ja no maximo -> proxima da ordem
+      if (nivel >= teto) continue;                        // ja no maximo
       if (t.error_level) continue;                        // o jogo diz que nao ha nivel a subir
-      return { acao: 'tentar', tech: tech };
+      // Recusada por requisito faz pouco tempo? Nao insiste -- predio nao nasce em 15 min. O TTL
+      // existe pra ela voltar a ser tentada depois que o Construcoes tiver subido a Oficina.
+      if (bloqueios[tech] && (agora - bloqueios[tech]) < ttl) continue;
+      out.push(tech);
     }
-    return { acao: 'completo' };
+    return out;
   }
 
   // Puxa recurso da aldeia mais PROXIMA que tem excedente. "Excedente" = acima de
@@ -4860,41 +4878,49 @@
         continue;
       }
 
-      const d = pesqDecidir(techs, ordem);
       const nomeTropa = (t) => { const u = UNITS.find((x) => x[0] === t); return u ? u[1] : t; };
-
-      if (d.acao === 'completo') { completas++; continue; }
+      config.research.blocked = config.research.blocked || {};
+      const bloqueios = config.research.blocked[vid] = config.research.blocked[vid] || {};
+      const candidatas = pesqCandidatos(techs, ordem, bloqueios, now);
+      if (!candidatas.length) { completas++; continue; }   // tudo pesquisado, ou o resto esta travado
 
       // Nao existe campo dizendo se da pra pesquisar agora: tenta e le a resposta do servidor.
-      let erro = null;
-      try {
-        await smithResearch(vid, d.tech);
-        pesquisadas++;
-        pushLog('Pesquisa: ' + rotulo + ' -> ' + nomeTropa(d.tech) + ' iniciada.', 'ok', 'research');
-        await sleep(300);
-        continue;
-      } catch (e) { erro = e.message || String(e); }
+      // Anda a lista ate uma passar; requisito nao atendido apenas pula pra proxima da ordem.
+      let feito = false, faltouRecurso = null, travadas = 0;
+      for (const tech of candidatas) {
+        let erro = null;
+        try {
+          await smithResearch(vid, tech);
+          pesquisadas++; feito = true;
+          delete bloqueios[tech];
+          pushLog('Pesquisa: ' + rotulo + ' -> ' + nomeTropa(tech) + ' iniciada.', 'ok', 'research');
+          break;
+        } catch (e) { erro = e.message || String(e); }
 
-      const tipo = pesqClassificarErro(erro);
-      if (tipo === 'predio') {
-        semPredio++;
-        pushLog(rotulo + ': ' + nomeTropa(d.tech) + ' travada por predio (Ferreiro/Estabulo/Oficina) - resolva em Construcoes.', '', 'research');
-        continue;
-      }
-      if (tipo === 'andando') { andando++; continue; }
-      if (tipo === 'desconhecido') {
+        const tipo = pesqClassificarErro(erro);
+        if (tipo === 'predio') {
+          // Lembra o bloqueio: sem isso sao N POSTs recusados por ciclo, pra sempre.
+          bloqueios[tech] = now; travadas++;
+          pushLog(rotulo + ': ' + nomeTropa(tech) + ' sem requisito (falta predio) - pulando pra proxima da ordem.', '', 'research');
+          await sleep(250);
+          continue;
+        }
+        if (tipo === 'andando') { andando++; feito = true; break; }   // ja tem pesquisa em curso nesta aldeia
+        if (tipo === 'recurso') { faltouRecurso = tech; break; }      // recurso e por aldeia, nao por tropa
         // Nao invento significado: mostro a resposta crua pra dar pra ajustar o classificador.
-        pushLog('Pesquisa em ' + rotulo + ' (' + nomeTropa(d.tech) + '): resposta nao reconhecida - ' + erro, 'err', 'research');
-        continue;
+        pushLog('Pesquisa em ' + rotulo + ' (' + nomeTropa(tech) + '): resposta nao reconhecida - ' + erro, 'err', 'research');
+        break;
       }
-      // falta recurso
+      if (travadas) semPredio++;
+      if (feito || !faltouRecurso) { await sleep(300); continue; }
+
       if (!config.research.feedOn) {
-        pushLog(rotulo + ': sem recurso p/ ' + nomeTropa(d.tech) + ' (abastecimento desligado).', '', 'research');
-        continue;
+        pushLog(rotulo + ': sem recurso p/ ' + nomeTropa(faltouRecurso) + ' (abastecimento desligado).', '', 'research');
+        await sleep(300); continue;
       }
       const r = await pesqAbastecer({ vid: vid, coord: alvo.coord, name: alvo.name }, todas, cacheFonte);
       if (r.enviou) abastecidas++;
-      else pushLog(rotulo + ': sem recurso p/ ' + nomeTropa(d.tech) + ' e nao consegui abastecer (' + r.motivo + ').', '', 'research');
+      else pushLog(rotulo + ': sem recurso p/ ' + nomeTropa(faltouRecurso) + ' e nao consegui abastecer (' + r.motivo + ').', '', 'research');
       await sleep(300);
     }
 
@@ -4907,7 +4933,8 @@
     renderResearchVillages();
     refreshCards('research');
     pushLog('Pesquisa: ciclo concluido - ' + pesquisadas + ' iniciada(s), ' + abastecidas + ' abastecida(s), ' +
-            completas + ' completa(s). Proximo em ' + Math.round((config.research.interval || 900) / 60) + ' min.', 'ok', 'research');
+            completas + ' sem nada a fazer' + (semPredio ? ', ' + semPredio + ' com item travado por requisito' : '') +
+            '. Proximo em ' + Math.round((config.research.interval || 900) / 60) + ' min.', 'ok', 'research');
     scheduleResearch();
   }
   function scheduleResearch() {

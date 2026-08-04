@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.22.0
+// @version      11.23.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.22.0';
+  const VERSION = '11.23.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -10003,11 +10003,15 @@
 
     // ==================== OPERAÇÃO ====================
     // O ALVO é o container: cada um tem coordenada, horário de chegada da 1ª onda e uma
-    // LISTA ORDENADA de ondas. Cada onda é uma aldeia + tropas digitadas à mão. A ordem da
-    // lista manda: a onda i chega em `base + i*gap`, salvo quando o horário foi calibrado
-    // à mão (offsetMs deixa de ser null). Terminado um alvo, cria-se o próximo e repete.
+    // LISTA ORDENADA de ondas. Cada onda é uma aldeia + tropas digitadas à mão.
+    //
+    // Defasagem: só ondas DA MESMA ALDEIA precisam de espaçamento entre si (é o mesmo
+    // jogo/conta enviando mais de um comando — nuke e trem de nobre, por exemplo). Ondas de
+    // aldeias diferentes têm a viagem calculada cada uma pela sua origem, então todas miram
+    // o horário de chegada normal (o mesmo, ou o calibrado à mão), sem gap artificial entre
+    // elas. "Dividir" quebra uma onda em N da MESMA aldeia — essas sim saem espaçadas.
     function ccOpCfg() {
-      const c = (config.cmd.op = config.cmd.op || { gapMs: 100, ativo: null, alvos: [] });
+      const c = (config.cmd.op = config.cmd.op || { gapMs: 100, ativo: null, grupo: '', alvos: [] });
       if (c.gapMs == null) c.gapMs = 100;
       if (!Array.isArray(c.alvos)) c.alvos = [];
       return c;
@@ -10027,11 +10031,6 @@
       c.ativo = c.alvos.length ? c.alvos[0].id : null;
       save(); ccOpRender();
     }
-    // Defasagem efetiva da onda: a calibrada à mão, ou a automática pela posição.
-    function ccOpOffset(a, i) {
-      const o = a.ondas[i];
-      return (o && o.offsetMs != null) ? o.offsetMs : i * ccOpCfg().gapMs;
-    }
     function ccOpChegadaBase(a) { return a ? arrivalToServerMs(a.chegadaLocal || '') || 0 : 0; }
     function ccOpOndaAdd(vid) {
       const a = ccOpAtivo(); if (!a) return;
@@ -10047,8 +10046,92 @@
       a.ondas.forEach((z) => { z.offsetMs = null; });
       save(); ccOpRender();
     }
-    // Soma o que cada aldeia manda em TODAS as ondas deste alvo e compara com o estoque.
-    // É o caso "a mesma aldeia manda o nuke e depois o nobre" — que estoura calado no preparo.
+    // Quebra uma onda em N ondas da MESMA aldeia. Por padrão divide a tropa igualmente (resto
+    // pras primeiras); cada uma fica com seus próprios campos, editáveis livremente depois —
+    // "dividir" é só o ponto de partida, não uma amarra.
+    function ccOpOndaDividir(id, n) {
+      const a = ccOpAtivo(); if (!a) return;
+      const i = a.ondas.findIndex((z) => z.id === id); if (i < 0) return;
+      const o = a.ondas[i];
+      n = Math.max(2, Math.min(20, parseInt(n, 10) || 2));
+      const partes = [];
+      for (let k = 0; k < n; k++) {
+        const amounts = {};
+        Object.keys(o.amounts || {}).forEach((u) => {
+          const tot = o.amounts[u], base = Math.floor(tot / n), resto = tot % n;
+          const q = base + (k < resto ? 1 : 0);
+          if (q > 0) amounts[u] = q;
+        });
+        partes.push({ id: genId(), vid: o.vid, tipo: o.tipo, amounts: amounts, offsetMs: null });
+      }
+      a.ondas.splice(i, 1, ...partes);
+      save(); ccOpRender();
+    }
+    // Offset efetivo de CADA onda: automático = posição entre as ondas DA MESMA aldeia (gap
+    // ms entre a 1ª, 2ª, 3ª... dela); calibrado à mão sobrescreve. Ondas de aldeias diferentes
+    // começam todas em offset 0 (o horário de chegada normal do alvo).
+    function ccOpCalcularOffsets(a) {
+      const gap = ccOpCfg().gapMs, cont = {}, map = {};
+      (a.ondas || []).forEach((o) => {
+        const n = cont[o.vid] || 0; cont[o.vid] = n + 1;
+        map[o.id] = (o.offsetMs != null) ? o.offsetMs : n * gap;
+      });
+      return map;
+    }
+
+    // ---- Filtro de grupo na lista de aldeias da Operação (independente do filtro do Ataque/Apoio) ----
+    let _ccOpGrupoVidsSet = null;
+    async function ccOpAplicarFiltroGrupo() {
+      const gid = ccOpCfg().grupo || '';
+      if (!gid) { _ccOpGrupoVidsSet = null; ccOpRender(); return; }
+      try {
+        const vs = await getVillagesInGroup(gid);
+        _ccOpGrupoVidsSet = new Set(vs.map((x) => String(x.vid)));
+      } catch (e) {
+        _ccOpGrupoVidsSet = null;
+        pushLog('Operação: não consegui filtrar pelo grupo (' + (e.message || e) + ').', 'err', 'cmd');
+      }
+      ccOpRender();
+    }
+    async function ccOpCarregarGrupos() {
+      const sel = document.getElementById('cc-op-grupo'); if (!sel) return;
+      let grupos = []; try { grupos = await getGroups(); } catch (e) { /* sem grupos: fica só "Todas" */ }
+      const cur = ccOpCfg().grupo || '';
+      sel.innerHTML = '<option value="">Todas as aldeias</option>' +
+        grupos.map((g) => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('');
+      sel.value = cur;
+      if (cur) ccOpAplicarFiltroGrupo();
+    }
+
+    // Tropa disponível de uma aldeia PRA OPERAÇÃO: total (casa+fora+trânsito — inclui o que
+    // está saqueando/farmando, que volta sozinho) MENOS o que está apoiando outra aldeia
+    // agora (fora) MENOS o que o Coordenado já reservou (config.reservations, escrito só por
+    // ele) MENOS o que a própria Operação já comprometeu em QUALQUER onda, de QUALQUER alvo
+    // (senão dava pra "gastar" a mesma tropa duas vezes só trocando de aba/alvo).
+    function ccOpComprometidoTudo(vid) {
+      const acc = {};
+      ccOpCfg().alvos.forEach((al) => (al.ondas || []).forEach((o) => {
+        if (String(o.vid) !== String(vid)) return;
+        Object.keys(o.amounts || {}).forEach((u) => { acc[u] = (acc[u] || 0) + (o.amounts[u] || 0); });
+      }));
+      return acc;
+    }
+    function ccOpDisponivel(vid) {
+      const v = CCVILAS.find((z) => String(z.vid) === String(vid));
+      if (!v) return {};
+      const minhas = v.minhas || v.avail || {};
+      const fora = v.fora || {};
+      const resPlanner = (config.reservations || {})[String(vid)] || {};
+      const resOp = ccOpComprometidoTudo(vid);
+      const out = {};
+      (CC_UNIDADES_MUNDO || UNITS.map((u) => u[0])).forEach((u) => {
+        out[u] = Math.max(0, (minhas[u] || 0) - (fora[u] || 0) - (resPlanner[u] || 0) - (resOp[u] || 0));
+      });
+      return out;
+    }
+    // Resumo por aldeia: soma o que ela manda em TODAS as ondas DESTE alvo e compara com o
+    // que ainda sobrava pra ela na Operação inteira (incluindo o que ESTA onda já usa, senão
+    // toda aldeia com onda pareceria estourada consigo mesma).
     function ccOpResumo(a) {
       const porVid = {};
       (a.ondas || []).forEach((o) => {
@@ -10060,7 +10143,16 @@
       Object.keys(porVid).forEach((vid) => {
         const v = CCVILAS.find((z) => String(z.vid) === String(vid));
         const nome = v ? ((v.nome ? v.nome + ' ' : '') + (v.coord || vid)) : vid;
-        const falta = Object.keys(porVid[vid]).filter((u) => porVid[vid][u] > ((v && v.avail && v.avail[u]) || 0));
+        const minhas = (v && v.minhas) || {};
+        const fora = (v && v.fora) || {};
+        const resPlanner = (config.reservations || {})[String(vid)] || {};
+        // "sobra" = total menos apoio-fora menos Coordenado menos TODAS as ondas da Operação
+        // que NÃO são de nenhum alvo (ou seja, o compromisso já soma este alvo também).
+        const compTudo = ccOpComprometidoTudo(vid);
+        const falta = Object.keys(porVid[vid]).filter((u) => {
+          const tetoTotal = Math.max(0, (minhas[u] || 0) - (fora[u] || 0) - (resPlanner[u] || 0));
+          return compTudo[u] > tetoTotal;
+        });
         const tot = Object.keys(porVid[vid]).reduce((s, u) => s + porVid[vid][u], 0);
         linhas.push('<span style="color:' + (falta.length ? '#c0483a' : '#6f6153') + '" title="' +
           esc(falta.length ? 'falta: ' + falta.map((u) => rot[u] || u).join(', ') : 'cabe no estoque') + '">' +
@@ -10092,7 +10184,11 @@
       }
       // ---- aldeias participantes ----
       const alvoP = ccCoordParse(a.coord);
-      const vilas = CCVILAS.slice().sort((x, y) => {
+      const rotUn = {}; UNITS.forEach(([u, n]) => { rotUn[u] = n; });
+      const listaU0 = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
+      let vilas = CCVILAS.slice();
+      if (_ccOpGrupoVidsSet) vilas = vilas.filter((v) => _ccOpGrupoVidsSet.has(String(v.vid)));
+      vilas.sort((x, y) => {
         const dx = (alvoP && x.x != null) ? fieldDist(x.x, x.y, +alvoP.x, +alvoP.y) : 1e9;
         const dy = (alvoP && y.x != null) ? fieldDist(y.x, y.y, +alvoP.x, +alvoP.y) : 1e9;
         return dx - dy;
@@ -10101,14 +10197,20 @@
         const on = !!a.vids[v.vid];
         const d = (alvoP && v.x != null) ? fieldDist(v.x, v.y, +alvoP.x, +alvoP.y) : null;
         const n = (a.ondas || []).filter((o) => String(o.vid) === String(v.vid)).length;
-        return '<div style="display:grid;grid-template-columns:18px 1fr 52px 62px;gap:6px;align-items:center;padding:2px 5px;border-bottom:1px solid rgba(0,0,0,.05);font-size:10px">' +
-          '<input type="checkbox" class="cc-op-v" data-vid="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
-          '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' +
-            (v.nome ? '<b style="color:#584526">' + esc(v.nome) + '</b> ' : '') +
-            '<span style="color:#a2643a">' + esc(v.coord || v.vid) + '</span>' +
-            (n ? '<span style="color:#8a7d6d"> · ' + n + ' onda(s)</span>' : '') + '</span>' +
-          '<span style="color:#8a7d6d">' + (d == null ? '—' : d.toFixed(1) + ' c') + '</span>' +
-          (on ? '<a class="cc-op-add-onda" data-vid="' + v.vid + '" href="#" style="color:#2e7d3a;font-size:9px">+ onda</a>' : '<span></span>') +
+        const disp = ccOpDisponivel(v.vid);
+        const tropas = listaU0.filter((u) => disp[u] > 0)
+          .map((u) => '<span title="' + esc(rotUn[u] || u) + ' — sobra pra novos compromissos">' + unitIcon(u, rotUn[u] || u) + fmtN(disp[u]) + '</span>').join(' ');
+        return '<div style="padding:2px 5px;border-bottom:1px solid rgba(0,0,0,.05);font-size:10px">' +
+          '<div style="display:grid;grid-template-columns:18px 1fr 52px 62px;gap:6px;align-items:center">' +
+            '<input type="checkbox" class="cc-op-v" data-vid="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
+            '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' +
+              (v.nome ? '<b style="color:#584526">' + esc(v.nome) + '</b> ' : '') +
+              '<span style="color:#a2643a">' + esc(v.coord || v.vid) + '</span>' +
+              (n ? '<span style="color:#8a7d6d"> · ' + n + ' onda(s)</span>' : '') + '</span>' +
+            '<span style="color:#8a7d6d">' + (d == null ? '—' : d.toFixed(1) + ' c') + '</span>' +
+            (on ? '<a class="cc-op-add-onda" data-vid="' + v.vid + '" href="#" style="color:#2e7d3a;font-size:9px">+ onda</a>' : '<span></span>') +
+          '</div>' +
+          (tropas ? '<div style="margin:1px 0 0 24px;line-height:1.5">' + tropas + '</div>' : '') +
         '</div>';
       }).join('') || '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma aldeia —</div>';
       boxV.querySelectorAll('.cc-op-v').forEach((el) => el.onchange = () => {
@@ -10123,23 +10225,31 @@
 
       // ---- ondas (a lista ordenada) ----
       const base = ccOpChegadaBase(a);
+      const offsets = ccOpCalcularOffsets(a);
       const listaU = ccUnidadesUI();
       boxO.innerHTML = (a.ondas || []).length ? a.ondas.map((o, i) => {
         const v = CCVILAS.find((z) => String(z.vid) === String(o.vid));
         const nome = v ? ((v.nome ? v.nome + ' ' : '') + (v.coord || o.vid)) : o.vid;
-        const chega = base ? base + ccOpOffset(a, i) : 0;
+        const chega = base ? base + offsets[o.id] : 0;
         const manual = (o.offsetMs != null);
+        // Saída: pela unidade mais lenta DESTA onda, na distância real origem→alvo.
+        const tViagem = (v && v.x != null && alvoP) ? ccTempoViagemMs(v.x, v.y, alvoP.x, alvoP.y, o.amounts) : null;
+        const sai = (chega && tViagem != null) ? chega - tViagem : null;
+        // Disponível pra ESTA caixa = sobra geral + o que esta própria onda já usa dessa unidade
+        // (senão a onda pareceria não poder nem manter o que ela mesma já tem).
+        const dispBase = ccOpDisponivel(o.vid);
         const campos = listaU.map(([u, rot]) => {
-          const disp = (v && v.avail && v.avail[u]) || 0;
-          return '<label style="display:flex;flex-direction:column;align-items:center;gap:1px" title="' + esc(rot) + ' — disponível ' + fmtN(disp) + '">' +
+          const meu = (o.amounts && o.amounts[u]) || 0;
+          const disp = (dispBase[u] || 0) + meu;
+          return '<label style="display:flex;flex-direction:column;align-items:center;gap:1px" title="' + esc(rot) + ' — sobra ' + fmtN(disp) + ' pra esta onda">' +
             unitIcon(u, rot) +
             '<input class="cc-op-amt" data-id="' + o.id + '" data-u="' + u + '" type="number" min="0" placeholder="0" ' +
-              'value="' + ((o.amounts && o.amounts[u]) || '') + '" style="width:40px;padding:1px;text-align:center;font-size:10px">' +
+              'value="' + (meu || '') + '" style="width:40px;padding:1px;text-align:center;font-size:10px">' +
             '<span style="font-size:8px;color:#8a7d6d">' + fmtN(disp) + '</span>' +
           '</label>';
         }).join('');
         return '<div style="border-bottom:1px solid rgba(0,0,0,.07);padding:4px 5px">' +
-          '<div style="display:grid;grid-template-columns:18px 1fr 70px 96px 46px;gap:5px;align-items:center;font-size:10px">' +
+          '<div style="display:grid;grid-template-columns:18px 1fr 70px 84px 46px;gap:5px;align-items:center;font-size:10px">' +
             '<span style="color:#a2643a">' + (i + 1) + '</span>' +
             '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + esc(nome) + '</span>' +
             '<select class="cc-op-tipo twmgr-inp" data-id="' + o.id + '" style="font-size:9px;padding:1px">' +
@@ -10153,6 +10263,13 @@
               '<a class="cc-op-dn" data-id="' + o.id + '" href="#" style="color:#a2643a" title="descer">▼</a> ' +
               '<a class="cc-op-rm" data-id="' + o.id + '" href="#" style="color:#c0483a" title="remover">✕</a></span>' +
           '</div>' +
+          '<div style="margin:2px 0 0 23px;font-size:9px;color:#8a7d6d">' +
+            'sai <b style="color:#6f6153">' + (sai ? srvClockMs(sai) : '—') + '</b>' +
+            (tViagem == null ? ' <span style="color:#a2643a">(digite tropa pra calcular)</span>' : '') +
+            ' <span style="margin-left:8px">dividir em</span> ' +
+            '<input class="cc-op-divn" data-id="' + o.id + '" type="number" min="2" max="20" value="2" style="width:32px;padding:0 2px;font-size:9px">' +
+            ' <a class="cc-op-div" data-id="' + o.id + '" href="#" style="color:#2e7d3a">✂ dividir</a>' +
+          '</div>' +
           '<div style="display:flex;flex-wrap:wrap;gap:4px;margin:3px 0 0 23px">' + campos + '</div>' +
         '</div>';
       }).join('') : '<div style="color:#8a7d6d;padding:6px;font-size:10px">— marque uma aldeia acima pra criar a 1ª onda —</div>';
@@ -10162,7 +10279,7 @@
         const n = parseInt(el.value, 10) || 0;
         o.amounts = o.amounts || {};
         if (n > 0) o.amounts[el.getAttribute('data-u')] = n; else delete o.amounts[el.getAttribute('data-u')];
-        save(); if (boxR) boxR.innerHTML = ccOpResumo(a);
+        save(); ccOpRender();   // reflete no "sai" (unidade mais lenta pode mudar) e nos totais
       });
       boxO.querySelectorAll('.cc-op-tipo').forEach((el) => el.onchange = () => {
         const o = a.ondas.find((z) => z.id === el.getAttribute('data-id')); if (!o) return;
@@ -10185,6 +10302,12 @@
         a.ondas = a.ondas.filter((z) => z.id !== el.getAttribute('data-id'));
         save(); ccOpRender();
       });
+      boxO.querySelectorAll('.cc-op-div').forEach((el) => el.onclick = (ev) => {
+        ev.preventDefault();
+        const id = el.getAttribute('data-id');
+        const nEl = boxO.querySelector('.cc-op-divn[data-id="' + id + '"]');
+        ccOpOndaDividir(id, nEl ? nEl.value : 2);
+      });
       if (boxR) boxR.innerHTML = ccOpResumo(a);
     }
     // Arma TODAS as ondas do alvo ativo, cada uma com o seu horário. O disparo em si é o
@@ -10201,6 +10324,7 @@
       if (apoio && !config.cmd.suporteOkAt) {
         return dizer('Tem onda de apoio, mas o parâmetro de apoio ainda não foi confirmado neste mundo.');
       }
+      const offsets = ccOpCalcularOffsets(a);
       let armados = 0; const pulados = [];
       a.ondas.forEach((o, i) => {
         const rotO = 'onda ' + (i + 1);
@@ -10209,7 +10333,7 @@
         const amounts = {};
         Object.keys(o.amounts || {}).forEach((u) => { if (o.amounts[u] > 0) amounts[u] = o.amounts[u]; });
         if (!Object.keys(amounts).length) { pulados.push(rotO + ' (sem tropa)'); return; }
-        const chega = base + ccOpOffset(a, i);
+        const chega = base + offsets[o.id];
         const t = (v.x != null) ? ccTempoViagemMs(v.x, v.y, alvoP.x, alvoP.y, amounts) : null;
         if (t != null && (chega - t) <= srvNowP()) { pulados.push(rotO + ' (longe demais)'); return; }
         cmdAdicionar(o.tipo === 'support' ? 'support' : 'attack', alvoP.x, alvoP.y, amounts, chega, v.vid);
@@ -11243,8 +11367,12 @@
             '<input id="cc-op-gap" class="twmgr-inp" type="number" min="50" step="10" style="width:60px;font-size:10px;padding:1px">' +
             '<span style="font-size:10px;color:#8a7d6d">ms</span>' +
           '</div>' +
-          '<div style="font-size:9px;color:#6f6153;margin-bottom:2px">Aldeias deste alvo <span style="color:#8a7d6d">— marque e use <b>+ onda</b></span></div>' +
-          '<div id="cc-op-vilas" style="max-height:120px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px;margin-bottom:6px"></div>' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">' +
+            '<span style="font-size:9px;color:#6f6153">Aldeias deste alvo <span style="color:#8a7d6d">— marque e use <b>+ onda</b></span></span>' +
+            '<span style="font-size:9px;color:#6f6153">grupo ' +
+              '<select id="cc-op-grupo" class="twmgr-inp" style="width:110px;font-size:9px;padding:1px"><option value="">todas</option></select></span>' +
+          '</div>' +
+          '<div id="cc-op-vilas" style="max-height:150px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px;margin-bottom:6px"></div>' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">' +
             '<span style="font-size:9px;color:#6f6153">Ondas <span style="color:#8a7d6d">(ordem de chegada)</span></span>' +
             '<a id="cc-op-limpar" style="cursor:pointer;color:#c0483a;font-size:9px">limpar ondas</a>' +
@@ -11352,6 +11480,10 @@
       });
       document.getElementById('cc-op-novo').onclick = ccOpAlvoNovo;
       document.getElementById('cc-op-del').onclick = ccOpAlvoDel;
+      document.getElementById('cc-op-grupo').addEventListener('change', (e) => {
+        ccOpCfg().grupo = e.target.value; save(); ccOpAplicarFiltroGrupo();
+      });
+      ccOpCarregarGrupos();
       document.getElementById('cc-op-coord').addEventListener('change', (e) => {
         const a = ccOpAtivo(); if (!a) return;
         const p = ccCoordParse(e.target.value);

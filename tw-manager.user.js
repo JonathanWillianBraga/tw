@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.12.0
+// @version      11.13.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.12.0';
+  const VERSION = '11.13.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -178,12 +178,14 @@
   // exemplo) — por isso running/nextAt/stats vivem por modo, dentro de "modes". Os campos de
   // configuração (destCoord, reserve, thresholdPct, solidario* etc.) continuam compartilhados no
   // nível de cima, porque são parâmetros de CADA modo específico, não estado de execução.
-  const MARKET_MODES = ['cunhagem', 'equilibrio', 'solidario', 'cunhar'];
-  const MARKET_MODE_LABEL = { cunhagem: 'Cunhagem', equilibrio: 'Equilíbrio', solidario: 'Solidário', cunhar: 'Cunhar' };
-  const defMarketModeState = () => ({ running: false, nextAt: 0, stats: {} });
+  const MARKET_MODES = ['cunhagem', 'equilibrio', 'solidario'];
+  const MARKET_MODE_LABEL = { cunhagem: 'Cunhagem', equilibrio: 'Equilíbrio', solidario: 'Solidário' };
+  const defMarketModeState = () => ({ running: false, nextAt: 0, stats: {}, stopAt: 0 });
   const defMarket = () => ({
-    modes: { cunhagem: defMarketModeState(), equilibrio: defMarketModeState(), solidario: defMarketModeState(), cunhar: defMarketModeState() },
-    interval: 600, destCoord: '', reserve: 0, sources: {}, mintSources: {}, thresholdPct: 50, maxDist: 15,
+    modes: { cunhagem: defMarketModeState(), equilibrio: defMarketModeState(), solidario: defMarketModeState() },
+    interval: 600, destCoords: [], reserveWood: 0, reserveStone: 0, reserveIron: 0,
+    cunhagemSourceGroups: [], cunhagemExcludeGroups: [], cunhagemStopEnabled: false, cunhagemStopHours: 2, autoMint: false,
+    thresholdPct: 50, maxDist: 15,
     groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {},
   });
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
@@ -446,11 +448,29 @@
       delete c.market.running; delete c.market.mode; delete c.market.nextAt; delete c.market.stats;
     }
     MARKET_MODES.forEach((k) => { if (!c.market.modes[k]) c.market.modes[k] = defMarketModeState(); });
+    if (c.market.modes.cunhar) delete c.market.modes.cunhar;
+    // Migração: Cunhagem trocou coordenada única + checkbox + reserva única por grupos do
+    // TW + múltiplos destinos + reserva por recurso, e absorveu o antigo modo "Cunhar" (agora
+    // é o toggle "cunhagem automática"). Não dá pra converter checkbox -> grupo automaticamente,
+    // então as seleções antigas de origem somem e o usuário precisa escolher os grupos de novo.
+    if (!Array.isArray(c.market.destCoords)) {
+      c.market.destCoords = c.market.destCoord ? [c.market.destCoord] : [];
+      const oldReserve = c.market.reserve || 0;
+      c.market.reserveWood = oldReserve; c.market.reserveStone = oldReserve; c.market.reserveIron = oldReserve;
+      c.market.cunhagemSourceGroups = []; c.market.cunhagemExcludeGroups = [];
+      c.market.cunhagemStopEnabled = false; c.market.cunhagemStopHours = 2; c.market.autoMint = false;
+      if (c.market.sources || c.market.mintSources) pushLog('Cunhagem foi reformulada (grupos + múltiplos destinos) — configure as origens de novo na aba Mercado.', '', 'market');
+      delete c.market.destCoord; delete c.market.reserve; delete c.market.sources; delete c.market.mintSources;
+    }
     if (c.market.interval == null) c.market.interval = 600;
-    if (c.market.reserve == null) c.market.reserve = 0;
-    if (!c.market.sources) c.market.sources = {};
-    if (!c.market.mintSources) c.market.mintSources = {};
-    if (c.market.destCoord == null) c.market.destCoord = '';
+    if (c.market.reserveWood == null) c.market.reserveWood = 0;
+    if (c.market.reserveStone == null) c.market.reserveStone = 0;
+    if (c.market.reserveIron == null) c.market.reserveIron = 0;
+    if (!Array.isArray(c.market.cunhagemSourceGroups)) c.market.cunhagemSourceGroups = [];
+    if (!Array.isArray(c.market.cunhagemExcludeGroups)) c.market.cunhagemExcludeGroups = [];
+    if (c.market.cunhagemStopEnabled == null) c.market.cunhagemStopEnabled = false;
+    if (c.market.cunhagemStopHours == null) c.market.cunhagemStopHours = 2;
+    if (c.market.autoMint == null) c.market.autoMint = false;
     if (c.market.thresholdPct == null) c.market.thresholdPct = 50;
     if (c.market.maxDist == null) c.market.maxDist = 15;
     if (c.market.groupSolidario == null) c.market.groupSolidario = '';
@@ -786,13 +806,14 @@
         { v: fmtN(sent), l: 'enviados' }, { v: fmtN(err), l: 'erros' },
       ];
     } else if (mod === 'market') {
-      // Soma os 4 modos — podem estar rodando ao mesmo tempo agora, então o card é um agregado.
-      const s = { sending: 0, receiving: 0, wood: 0, stone: 0, iron: 0 };
-      MARKET_MODES.forEach((k) => { const ms = (config.market.modes[k] && config.market.modes[k].stats) || {}; s.sending += ms.sending || 0; s.receiving += ms.receiving || 0; s.wood += ms.wood || 0; s.stone += ms.stone || 0; s.iron += ms.iron || 0; });
+      // Soma os modos — podem estar rodando ao mesmo tempo agora, então o card é um agregado.
+      const s = { sending: 0, receiving: 0, wood: 0, stone: 0, iron: 0, coins: 0 };
+      MARKET_MODES.forEach((k) => { const ms = (config.market.modes[k] && config.market.modes[k].stats) || {}; s.sending += ms.sending || 0; s.receiving += ms.receiving || 0; s.wood += ms.wood || 0; s.stone += ms.stone || 0; s.iron += ms.iron || 0; s.coins += ms.coins || 0; });
       arr = [
         { v: fmtN(s.sending), l: 'enviando', hl: true },
         { v: fmtN(s.receiving), l: 'recebendo' },
         { v: fmtN(s.wood), l: 'madeira' }, { v: fmtN(s.stone), l: 'argila' }, { v: fmtN(s.iron), l: 'ferro' },
+        { v: fmtN(s.coins), l: 'moedas' },
       ];
     } else if (mod === 'build') {
       const s = (config.build.stats || {});
@@ -3908,7 +3929,7 @@
   }
   function balancedSplit(totalCapacity, avail, reserve) {
     const keys = ['wood', 'stone', 'iron'];
-    const cap = {}; keys.forEach((k) => { cap[k] = Math.max(0, (avail[k] || 0) - reserve); });
+    const cap = {}; keys.forEach((k) => { cap[k] = Math.max(0, (avail[k] || 0) - (reserve[k] || 0)); });
     const alloc = { wood: 0, stone: 0, iron: 0 };
     let remaining = totalCapacity;
     let active = keys.filter((k) => cap[k] > 0);
@@ -3949,7 +3970,7 @@
     if (/alvo v[aá]lido/i.test(t2)) throw new Error('alvo inválido (confira a coordenada)');
     return dur && dur > 0 ? dur : null;
   }
-  const MARKET_PASS = { cunhagem: () => cunhagemPass(), equilibrio: () => equilibrioPass(), solidario: () => solidarioPass(), cunhar: () => cunharPass() };
+  const MARKET_PASS = { cunhagem: () => cunhagemPass(), equilibrio: () => equilibrioPass(), solidario: () => solidarioPass() };
   async function marketTick(modeKey) {
     clearTimeout(marketTimers[modeKey]);
     const st = config.market.modes[modeKey];
@@ -3958,6 +3979,13 @@
     if (captchaBlocked()) { marketTimers[modeKey] = setTimeout(() => marketTick(modeKey), 30000); return; }
     claimLock();
     const now = Date.now();
+    if (st.stopAt && now >= st.stopAt) {
+      st.running = false; st.stopAt = 0; save();
+      clearTimeout(marketTimers[modeKey]);
+      setMarketStatus(modeKey, false);
+      pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + '): parada programada atingida — desligado automaticamente.', 'ok', 'market');
+      return;
+    }
     if ((st.nextAt || 0) > now) { scheduleMarket(modeKey); return; }
     try { await MARKET_PASS[modeKey](); }
     catch (e) { pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + '): erro no ciclo (' + (e.message || e) + ').', 'err', 'market'); }
@@ -3970,16 +3998,38 @@
   function scheduleMarket(modeKey) { clearTimeout(marketTimers[modeKey]); const st = config.market.modes[modeKey]; if (!st.running) return; marketTimers[modeKey] = setTimeout(() => marketTick(modeKey), Math.min(Math.max((st.nextAt || 0) - Date.now(), 1000), 60000)); }
 
   async function cunhagemPass() {
-    const coord = config.market.destCoord || '';
-    const reserve = Math.max(0, config.market.reserve || 0);
+    const destCoords = (config.market.destCoords || []).filter(Boolean);
+    if (!destCoords.length) { pushLog('Cunhagem: nenhum destino configurado.', 'err', 'market'); return; }
+    const reserve = {
+      wood: Math.max(0, config.market.reserveWood || 0),
+      stone: Math.max(0, config.market.reserveStone || 0),
+      iron: Math.max(0, config.market.reserveIron || 0),
+    };
     let vils = [];
     try { vils = await getAllVillagesCached(); } catch (e) { pushLog('Cunhagem: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
-    const sel = config.market.sources || {};
+
+    // doadoras elegíveis = união dos grupos de origem, menos união dos grupos excluídos
+    const srcGroups = config.market.cunhagemSourceGroups || [];
+    const excGroups = config.market.cunhagemExcludeGroups || [];
+    if (!srcGroups.length) { pushLog('Cunhagem: nenhum grupo de origem configurado.', 'err', 'market'); return; }
+    const srcSet = {}, excSet = {};
+    for (const gid of srcGroups) {
+      try { (await getVillagesInGroup(gid)).forEach((v) => { srcSet[v.vid] = true; }); }
+      catch (e) { pushLog('Cunhagem: erro ao listar grupo ' + gid + ' (' + (e.message || e) + ').', 'err', 'market'); }
+    }
+    for (const gid of excGroups) {
+      try { (await getVillagesInGroup(gid)).forEach((v) => { excSet[v.vid] = true; }); }
+      catch (e) { pushLog('Cunhagem: erro ao listar grupo excluído ' + gid + ' (' + (e.message || e) + ').', 'err', 'market'); }
+    }
+    const destSet = {}; vils.forEach((v) => { if (v.coord && destCoords.includes(v.coord)) destSet[v.vid] = true; });
+
     let count = 0; const tot = { wood: 0, stone: 0, iron: 0 };
     for (const v of vils) {
       { const pare = devoParar('market'); if (pare) { pushLog('Cunhagem: interrompida — ' + pare + '.', '', 'market'); break; } }
-      if (!sel[v.vid]) continue;
-      if (v.coord && v.coord === coord) continue;   // pula destino pela coordenada
+      if (!srcSet[v.vid] || excSet[v.vid]) continue;
+      if (destSet[v.vid]) continue;   // nunca doa pra si mesma se também for destino
+      if (!v.coord) continue;
+      const coord = destCoords.map((c) => ({ c: c, d: coordDist(v.coord, c) })).sort((a, b) => a.d - b.d)[0].c;   // destino mais perto
       let state;
       try { state = await getMarketState(v.vid); } catch (e) { pushLog('Cunhagem em ' + v.name + ': erro ao ler o mercado (' + (e.message || e) + ').', 'err', 'market'); continue; }
       if (!state.capacity) continue;
@@ -3992,8 +4042,22 @@
         await sleep(400 + Math.floor(Math.random() * 400));
       } catch (e) { pushLog('Cunhagem em ' + v.name + ': ' + (e.message || e), 'err', 'market'); }
     }
-    config.market.modes.cunhagem.stats = { sending: count, receiving: coord ? 1 : 0, wood: tot.wood, stone: tot.stone, iron: tot.iron };
-    pushLog('Cunhagem: ciclo concluído — ' + count + ' aldeia(s) enviaram recurso.', 'ok', 'market');
+
+    let coins = 0, mintCount = 0;
+    if (config.market.autoMint) {
+      const destVils = vils.filter((v) => destSet[v.vid]);
+      for (const v of destVils) {
+        { const pare = devoParar('market'); if (pare) { pushLog('Cunhagem: cunhagem automática interrompida — ' + pare + '.', '', 'market'); break; } }
+        try {
+          const r = await mintCoins(v.vid);
+          if (r.minted > 0) { mintCount++; coins += r.minted; pushLog('Cunhagem: ' + v.name + ' cunhou ' + r.minted + ' moeda(s).', 'ok', 'market'); }
+        } catch (e) { pushLog('Cunhagem automática em ' + v.name + ': ' + (e.message || e), 'err', 'market'); }
+        await sleep(400 + Math.floor(Math.random() * 400));
+      }
+    }
+
+    config.market.modes.cunhagem.stats = { sending: count, receiving: destCoords.length, wood: tot.wood, stone: tot.stone, iron: tot.iron, coins: coins };
+    pushLog('Cunhagem: ciclo concluído — ' + count + ' aldeia(s) enviaram recurso' + (config.market.autoMint ? ', ' + coins + ' moeda(s) cunhada(s) em ' + mintCount + ' aldeia(s)' : '') + '.', 'ok', 'market');
   }
 
   // ---- Cunhar moedas de ouro (Academia / screen=snob) ----
@@ -4033,25 +4097,6 @@
     try { const d = new DOMParser().parseFromString(t, 'text/html'); const eb = d.querySelector('.error_box'); if (eb && (eb.textContent || '').trim()) throw new Error('recusado: ' + eb.textContent.trim().replace(/\s+/g, ' ').slice(0, 80)); } catch (e) { if (/^recusado:/.test(e.message)) throw e; }
     return { minted: n, res: st.resNow };
   }
-  async function cunharPass() {
-    let vils = [];
-    try { vils = await getAllVillagesCached(); } catch (e) { pushLog('Cunhar: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
-    const sel = config.market.mintSources || {};
-    let count = 0, coins = 0;
-    for (const v of vils) {
-      { const pare = devoParar('market'); if (pare) { pushLog('Cunhar: interrompido — ' + pare + '.', '', 'market'); break; } }
-      if (!sel[v.vid]) continue;
-      try {
-        const r = await mintCoins(v.vid);
-        if (r.minted > 0) { count++; coins += r.minted; pushLog('Cunhar: ' + v.name + ' cunhou ' + r.minted + ' moeda(s).', 'ok', 'market'); }
-        else pushLog('Cunhar: ' + v.name + ' — recurso insuficiente p/ 1 moeda.', '', 'market');
-      } catch (e) { pushLog('Cunhar em ' + v.name + ': ' + (e.message || e), 'err', 'market'); }
-      await sleep(400 + Math.floor(Math.random() * 400));
-    }
-    config.market.modes.cunhar.stats = { sending: count, receiving: 0, wood: coins, stone: 0, iron: 0 };
-    pushLog('Cunhar: ciclo concluído — ' + coins + ' moeda(s) em ' + count + ' aldeia(s).', 'ok', 'market');
-  }
-
   function coordDist(a, b) { const pa = a.split('|').map(Number), pb = b.split('|').map(Number); return Math.sqrt((pa[0] - pb[0]) * (pa[0] - pb[0]) + (pa[1] - pb[1]) * (pa[1] - pb[1])); }
   async function equilibrioPass() {
     let vils = [];
@@ -4221,20 +4266,6 @@
     save();
     pushLog('Solidário: ciclo concluído — ' + sent + ' transferência(s), limiar ' + Math.round(pct * 100) + '%.', 'ok', 'market');
   }
-  async function renderMarketSources() {
-    const cont = document.getElementById('twmgr-mk-sources'); if (!cont) return;
-    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
-    const sel = config.market.sources || {};
-    cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-mk-src" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
-    cont.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.addEventListener('change', readMarketCfg));
-  }
-  async function renderMintSources() {
-    const cont = document.getElementById('twmgr-mk-mint-sources'); if (!cont) return;
-    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
-    const sel = config.market.mintSources || {};
-    cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-mk-mint" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
-    cont.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.addEventListener('change', readMarketCfg));
-  }
   async function fillMarketSolidarioGroupSelect() {
     const sel = document.getElementById('twmgr-mk-g-solid'); if (!sel) return;
     let groups = [];
@@ -4242,10 +4273,26 @@
     const cur = config.market.groupSolidario;
     sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((gr) => '<option value="' + gr.id + '"' + (String(cur) === String(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
   }
+  async function fillMarketCunhagemGroupSelects() {
+    const selSrc = document.getElementById('twmgr-mk-srcgroups'), selExc = document.getElementById('twmgr-mk-excgroups');
+    if (!selSrc && !selExc) return;
+    let groups = [];
+    try { groups = await getGroups(); } catch (e) { pushLog('Cunhagem: erro ao listar grupos: ' + (e.message || e), 'err', 'market'); return; }
+    const curSrc = config.market.cunhagemSourceGroups || [], curExc = config.market.cunhagemExcludeGroups || [];
+    if (selSrc) selSrc.innerHTML = groups.map((gr) => '<option value="' + gr.id + '"' + (curSrc.includes(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
+    if (selExc) selExc.innerHTML = groups.map((gr) => '<option value="' + gr.id + '"' + (curExc.includes(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
+  }
   function readMarketCfg() {
     const c = config.market, g = (id) => document.getElementById(id);
-    if (g('twmgr-mk-coord')) c.destCoord = g('twmgr-mk-coord').value.trim();
-    if (g('twmgr-mk-reserve')) c.reserve = Math.max(0, parseInt(g('twmgr-mk-reserve').value, 10) || 0);
+    if (g('twmgr-mk-destcoords')) c.destCoords = g('twmgr-mk-destcoords').value.split(/\s+/).map((s) => s.trim()).filter((s) => /^\d+\|\d+$/.test(s));
+    if (g('twmgr-mk-rwood')) c.reserveWood = Math.max(0, parseInt(g('twmgr-mk-rwood').value, 10) || 0);
+    if (g('twmgr-mk-rstone')) c.reserveStone = Math.max(0, parseInt(g('twmgr-mk-rstone').value, 10) || 0);
+    if (g('twmgr-mk-riron')) c.reserveIron = Math.max(0, parseInt(g('twmgr-mk-riron').value, 10) || 0);
+    if (g('twmgr-mk-stopon')) c.cunhagemStopEnabled = g('twmgr-mk-stopon').checked;
+    if (g('twmgr-mk-stophours')) c.cunhagemStopHours = Math.max(0.1, parseFloat((g('twmgr-mk-stophours').value || '').replace(',', '.')) || 2);
+    if (g('twmgr-mk-automint')) c.autoMint = g('twmgr-mk-automint').checked;
+    if (g('twmgr-mk-srcgroups')) c.cunhagemSourceGroups = Array.from(g('twmgr-mk-srcgroups').selectedOptions).map((o) => o.value);
+    if (g('twmgr-mk-excgroups')) c.cunhagemExcludeGroups = Array.from(g('twmgr-mk-excgroups').selectedOptions).map((o) => o.value);
     if (g('twmgr-mk-int')) c.interval = Math.max(1, parseInt(g('twmgr-mk-int').value, 10) || 10) * 60;
     if (g('twmgr-mk-thr')) c.thresholdPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-thr').value, 10) || 50));
     if (g('twmgr-mk-dist')) c.maxDist = Math.max(1, parseFloat((g('twmgr-mk-dist').value || '').replace(',', '.')) || 15);
@@ -4255,26 +4302,24 @@
     if (g('twmgr-mk-sgargalo')) c.solidarioGargaloKeepPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-sgargalo').value, 10) || 90));
     if (g('twmgr-mk-sdist')) c.solidarioMaxDist = Math.max(1, parseFloat((g('twmgr-mk-sdist').value || '').replace(',', '.')) || 20);
     if (g('twmgr-mk-g-solid')) c.groupSolidario = g('twmgr-mk-g-solid').value;
-    const src = {}; document.querySelectorAll('.twmgr-mk-src').forEach((cb) => { if (cb.checked) src[cb.getAttribute('data-vid')] = true; }); c.sources = src;
-    const mint = {}; document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => { if (cb.checked) mint[cb.getAttribute('data-vid')] = true; }); c.mintSources = mint;
     save();
   }
   function setMarketStatus(modeKey, on) { setBtnState('twmgr-mk-' + modeKey + '-start', 'twmgr-mk-' + modeKey + '-stop', on, '● Enviando', '▶ Enviar'); }
   const MARKET_START_MSG = {
     equilibrio: () => 'Equilíbrio iniciado — limiar ' + config.market.thresholdPct + '% do armazém, distância ≤ ' + config.market.maxDist + '.',
     solidario: () => 'Solidário iniciado — grupo ' + config.market.groupSolidario + ', limiar ' + config.market.solidarioThresholdPct + '% do armazém, distância ≤ ' + config.market.solidarioMaxDist + '.',
-    cunhar: () => 'Cunhar iniciado — cunhando o máximo nas aldeias marcadas a cada ' + Math.round((config.market.interval || 600) / 60) + ' min.',
-    cunhagem: () => 'Cunhagem iniciada — destino ' + config.market.destCoord + ', deixa ' + config.market.reserve + ' de cada recurso.',
+    cunhagem: () => 'Cunhagem iniciada — ' + config.market.destCoords.length + ' destino(s), reserva ' + config.market.reserveWood + '/' + config.market.reserveStone + '/' + config.market.reserveIron + ' (mad/arg/fer)' + (config.market.autoMint ? ', cunhagem automática ligada' : '') + (config.market.cunhagemStopEnabled ? ', parada em ' + config.market.cunhagemStopHours + 'h' : '') + '.',
   };
   function marketStart(modeKey) {
     readMarketCfg();
     if (modeKey === 'cunhagem') {
-      if (!/^\d+\s*\|\s*\d+$/.test(config.market.destCoord || '')) { pushLog('Cunhagem: coordenada de destino inválida (ex.: 464|604).', 'err', 'market'); return; }
-      if (!Object.values(config.market.sources).some(Boolean)) { pushLog('Cunhagem: selecione ao menos 1 aldeia de origem.', 'err', 'market'); return; }
+      if (!config.market.destCoords.length) { pushLog('Cunhagem: configure ao menos 1 destino válido (ex.: 464|604).', 'err', 'market'); return; }
+      if (!config.market.cunhagemSourceGroups.length) { pushLog('Cunhagem: selecione ao menos 1 grupo de origem.', 'err', 'market'); return; }
     }
-    if (modeKey === 'cunhar' && !Object.values(config.market.mintSources).some(Boolean)) { pushLog('Cunhar: selecione ao menos 1 aldeia pra cunhar.', 'err', 'market'); return; }
     if (modeKey === 'solidario' && !config.market.groupSolidario) { pushLog('Solidário: selecione um grupo.', 'err', 'market'); return; }
-    config.market.modes[modeKey].running = true; config.market.modes[modeKey].nextAt = 0; save();
+    config.market.modes[modeKey].running = true; config.market.modes[modeKey].nextAt = 0;
+    config.market.modes[modeKey].stopAt = (modeKey === 'cunhagem' && config.market.cunhagemStopEnabled) ? Date.now() + config.market.cunhagemStopHours * 3600000 : 0;
+    save();
     setMarketStatus(modeKey, true);
     pushLog(MARKET_START_MSG[modeKey](), 'ok', 'market');
     marketTick(modeKey);
@@ -6528,13 +6573,19 @@
         modLog('fakes') +
       '</div>' +
       '<div id="twmgr-tab-market" style="display:none">' +
-        hint('Mercado: cada modo roda de forma <b>independente</b> — pode ligar quantos quiser ao mesmo tempo (ex.: Equilíbrio + Solidário juntos). <b>Cunhagem</b> junta recurso num destino; <b>Equilíbrio</b> nivela as aldeias por %; <b>Solidário</b> abastece só o grupo escolhido (que só recebe) com qualquer outra aldeia sua doando; <b>Cunhar</b> cunha moedas de ouro nas aldeias marcadas.') +
+        hint('Mercado: cada modo roda de forma <b>independente</b> — pode ligar quantos quiser ao mesmo tempo (ex.: Equilíbrio + Solidário juntos). <b>Cunhagem</b> junta recurso de grupos de origem em uma ou mais aldeias destino (e pode cunhar moedas de ouro automaticamente nelas); <b>Equilíbrio</b> nivela as aldeias por %; <b>Solidário</b> abastece só o grupo escolhido (que só recebe) com qualquer outra aldeia sua doando.') +
         cardsDiv('market') +
         sec('💰 Cunhagem',
-            '<div class="twmgr-row"><span class="twmgr-lbl">Coordenada destino</span><input id="twmgr-mk-coord" class="twmgr-inp" type="text" placeholder="464|604" style="width:90px"></div>' +
-            '<div class="twmgr-row"><span class="twmgr-lbl">Deixar mínimo (cada rec.)</span><input id="twmgr-mk-reserve" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:72px"></div>' +
-            '<div class="twmgr-row"><span class="twmgr-lbl">Aldeias de origem</span><span style="font-size:9px"><a id="twmgr-mk-all" style="cursor:pointer;color:#7a5710">todas</a> · <a id="twmgr-mk-none" style="cursor:pointer;color:#7a5710">nenhuma</a></span></div>' +
-            '<div id="twmgr-mk-sources" style="max-height:120px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px"></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl">Grupos de origem</span><select id="twmgr-mk-srcgroups" class="twmgr-inp" multiple style="width:160px;height:70px"></select></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl">Grupos excluídos</span><select id="twmgr-mk-excgroups" class="twmgr-inp" multiple style="width:160px;height:70px"></select></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl">Aldeias destino (1 coord. por linha)</span></div>' +
+            '<textarea id="twmgr-mk-destcoords" class="twmgr-inp" style="width:100%;height:52px;margin:2px 0 6px" placeholder="464|604&#10;465|605"></textarea>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl">Reserva madeira/argila/ferro</span>' +
+              '<input id="twmgr-mk-rwood" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px">' +
+              '<input id="twmgr-mk-rstone" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px">' +
+              '<input id="twmgr-mk-riron" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px"></div>' +
+            '<div class="twmgr-row"><label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#5c4527"><input id="twmgr-mk-automint" type="checkbox">Cunhagem automática (moedas de ouro nas aldeias destino)</label></div>' +
+            '<div class="twmgr-row"><label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#5c4527"><input id="twmgr-mk-stopon" type="checkbox">Parada programada, após</label><input id="twmgr-mk-stophours" class="twmgr-inp" type="number" min="0.1" step="0.5" value="2" style="width:56px"><span class="twmgr-lbl">h</span></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-cunhagem-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-cunhagem-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
             '<div id="twmgr-mk-cunhagem-status" class="twmgr-cstatus"></div>') +
         sec('⚖️ Equilíbrio',
@@ -6553,12 +6604,6 @@
             '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-sdist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:56px"></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-solidario-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-solidario-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
             '<div id="twmgr-mk-solidario-status" class="twmgr-cstatus"></div>') +
-        sec('🪙 Cunhar moedas de ouro',
-            '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">Cunha o máximo de moedas na Academia das aldeias marcadas, todo ciclo. Não transfere recurso.</div>' +
-            '<div class="twmgr-row"><span class="twmgr-lbl">Aldeias que cunham</span><span style="font-size:9px"><a id="twmgr-mk-mint-all" style="cursor:pointer;color:#7a5710">todas</a> · <a id="twmgr-mk-mint-none" style="cursor:pointer;color:#7a5710">nenhuma</a></span></div>' +
-            '<div id="twmgr-mk-mint-sources" style="max-height:120px;overflow-y:auto;border:1px solid #dcc78f;border-radius:6px;padding:4px"></div>' +
-            '<div class="twmgr-actions"><button id="twmgr-mk-cunhar-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-cunhar-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
-            '<div id="twmgr-mk-cunhar-status" class="twmgr-cstatus"></div>') +
         sec('Ritmo (compartilhado pelos modos ligados)', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-mk-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         modLog('market') +
       '</div>' +
@@ -6948,8 +6993,13 @@
     document.getElementById('twmgr-ob-stop').addEventListener('click', obraStop);
     setObraStatus(config.obra.running);
 
-    document.getElementById('twmgr-mk-coord').value = config.market.destCoord || '';
-    document.getElementById('twmgr-mk-reserve').value = config.market.reserve || 0;
+    document.getElementById('twmgr-mk-destcoords').value = (config.market.destCoords || []).join('\n');
+    document.getElementById('twmgr-mk-rwood').value = config.market.reserveWood || 0;
+    document.getElementById('twmgr-mk-rstone').value = config.market.reserveStone || 0;
+    document.getElementById('twmgr-mk-riron').value = config.market.reserveIron || 0;
+    document.getElementById('twmgr-mk-automint').checked = !!config.market.autoMint;
+    document.getElementById('twmgr-mk-stopon').checked = !!config.market.cunhagemStopEnabled;
+    document.getElementById('twmgr-mk-stophours').value = config.market.cunhagemStopHours != null ? config.market.cunhagemStopHours : 2;
     document.getElementById('twmgr-mk-int').value = Math.round((config.market.interval || 600) / 60);
     document.getElementById('twmgr-mk-thr').value = config.market.thresholdPct != null ? config.market.thresholdPct : 50;
     document.getElementById('twmgr-mk-dist').value = config.market.maxDist != null ? config.market.maxDist : 15;
@@ -6958,14 +7008,9 @@
     document.getElementById('twmgr-mk-sdonor').value = config.market.solidarioDonorPct != null ? config.market.solidarioDonorPct : 50;
     document.getElementById('twmgr-mk-sgargalo').value = config.market.solidarioGargaloKeepPct != null ? config.market.solidarioGargaloKeepPct : 90;
     document.getElementById('twmgr-mk-sdist').value = config.market.solidarioMaxDist != null ? config.market.solidarioMaxDist : 20;
-    renderMarketSources();
-    renderMintSources();
+    fillMarketCunhagemGroupSelects();
     fillMarketSolidarioGroupSelect();
-    document.getElementById('twmgr-mk-all').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.checked = true); readMarketCfg(); });
-    document.getElementById('twmgr-mk-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.checked = false); readMarketCfg(); });
-    document.getElementById('twmgr-mk-mint-all').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.checked = true); readMarketCfg(); });
-    document.getElementById('twmgr-mk-mint-none').addEventListener('click', () => { document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.checked = false); readMarketCfg(); });
-    ['twmgr-mk-coord', 'twmgr-mk-reserve', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
+    ['twmgr-mk-destcoords', 'twmgr-mk-rwood', 'twmgr-mk-rstone', 'twmgr-mk-riron', 'twmgr-mk-automint', 'twmgr-mk-stopon', 'twmgr-mk-stophours', 'twmgr-mk-srcgroups', 'twmgr-mk-excgroups', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
     // Cada modo tem seu próprio par Iniciar/Parar — rodam independentes, pode ligar vários ao mesmo tempo.
     MARKET_MODES.forEach((mkKey) => {
       document.getElementById('twmgr-mk-' + mkKey + '-start').addEventListener('click', () => marketStart(mkKey));

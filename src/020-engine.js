@@ -60,13 +60,14 @@
         { v: fmtN(sent), l: 'enviados' }, { v: fmtN(err), l: 'erros' },
       ];
     } else if (mod === 'market') {
-      // Soma os 4 modos — podem estar rodando ao mesmo tempo agora, então o card é um agregado.
-      const s = { sending: 0, receiving: 0, wood: 0, stone: 0, iron: 0 };
-      MARKET_MODES.forEach((k) => { const ms = (config.market.modes[k] && config.market.modes[k].stats) || {}; s.sending += ms.sending || 0; s.receiving += ms.receiving || 0; s.wood += ms.wood || 0; s.stone += ms.stone || 0; s.iron += ms.iron || 0; });
+      // Soma os modos — podem estar rodando ao mesmo tempo agora, então o card é um agregado.
+      const s = { sending: 0, receiving: 0, wood: 0, stone: 0, iron: 0, coins: 0 };
+      MARKET_MODES.forEach((k) => { const ms = (config.market.modes[k] && config.market.modes[k].stats) || {}; s.sending += ms.sending || 0; s.receiving += ms.receiving || 0; s.wood += ms.wood || 0; s.stone += ms.stone || 0; s.iron += ms.iron || 0; s.coins += ms.coins || 0; });
       arr = [
         { v: fmtN(s.sending), l: 'enviando', hl: true },
         { v: fmtN(s.receiving), l: 'recebendo' },
         { v: fmtN(s.wood), l: 'madeira' }, { v: fmtN(s.stone), l: 'argila' }, { v: fmtN(s.iron), l: 'ferro' },
+        { v: fmtN(s.coins), l: 'moedas' },
       ];
     } else if (mod === 'build') {
       const s = (config.build.stats || {});

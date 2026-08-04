@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.12.0
+// @version      11.13.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.12.0';
+  const VERSION = '11.13.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -178,12 +178,14 @@
   // exemplo) — por isso running/nextAt/stats vivem por modo, dentro de "modes". Os campos de
   // configuração (destCoord, reserve, thresholdPct, solidario* etc.) continuam compartilhados no
   // nível de cima, porque são parâmetros de CADA modo específico, não estado de execução.
-  const MARKET_MODES = ['cunhagem', 'equilibrio', 'solidario', 'cunhar'];
-  const MARKET_MODE_LABEL = { cunhagem: 'Cunhagem', equilibrio: 'Equilíbrio', solidario: 'Solidário', cunhar: 'Cunhar' };
-  const defMarketModeState = () => ({ running: false, nextAt: 0, stats: {} });
+  const MARKET_MODES = ['cunhagem', 'equilibrio', 'solidario'];
+  const MARKET_MODE_LABEL = { cunhagem: 'Cunhagem', equilibrio: 'Equilíbrio', solidario: 'Solidário' };
+  const defMarketModeState = () => ({ running: false, nextAt: 0, stats: {}, stopAt: 0 });
   const defMarket = () => ({
-    modes: { cunhagem: defMarketModeState(), equilibrio: defMarketModeState(), solidario: defMarketModeState(), cunhar: defMarketModeState() },
-    interval: 600, destCoord: '', reserve: 0, sources: {}, mintSources: {}, thresholdPct: 50, maxDist: 15,
+    modes: { cunhagem: defMarketModeState(), equilibrio: defMarketModeState(), solidario: defMarketModeState() },
+    interval: 600, destCoords: [], reserveWood: 0, reserveStone: 0, reserveIron: 0,
+    cunhagemSourceGroups: [], cunhagemExcludeGroups: [], cunhagemStopEnabled: false, cunhagemStopHours: 2, autoMint: false,
+    thresholdPct: 50, maxDist: 15,
     groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {},
   });
   const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, demand: {} });
@@ -446,11 +448,29 @@
       delete c.market.running; delete c.market.mode; delete c.market.nextAt; delete c.market.stats;
     }
     MARKET_MODES.forEach((k) => { if (!c.market.modes[k]) c.market.modes[k] = defMarketModeState(); });
+    if (c.market.modes.cunhar) delete c.market.modes.cunhar;
+    // Migração: Cunhagem trocou coordenada única + checkbox + reserva única por grupos do
+    // TW + múltiplos destinos + reserva por recurso, e absorveu o antigo modo "Cunhar" (agora
+    // é o toggle "cunhagem automática"). Não dá pra converter checkbox -> grupo automaticamente,
+    // então as seleções antigas de origem somem e o usuário precisa escolher os grupos de novo.
+    if (!Array.isArray(c.market.destCoords)) {
+      c.market.destCoords = c.market.destCoord ? [c.market.destCoord] : [];
+      const oldReserve = c.market.reserve || 0;
+      c.market.reserveWood = oldReserve; c.market.reserveStone = oldReserve; c.market.reserveIron = oldReserve;
+      c.market.cunhagemSourceGroups = []; c.market.cunhagemExcludeGroups = [];
+      c.market.cunhagemStopEnabled = false; c.market.cunhagemStopHours = 2; c.market.autoMint = false;
+      if (c.market.sources || c.market.mintSources) pushLog('Cunhagem foi reformulada (grupos + múltiplos destinos) — configure as origens de novo na aba Mercado.', '', 'market');
+      delete c.market.destCoord; delete c.market.reserve; delete c.market.sources; delete c.market.mintSources;
+    }
     if (c.market.interval == null) c.market.interval = 600;
-    if (c.market.reserve == null) c.market.reserve = 0;
-    if (!c.market.sources) c.market.sources = {};
-    if (!c.market.mintSources) c.market.mintSources = {};
-    if (c.market.destCoord == null) c.market.destCoord = '';
+    if (c.market.reserveWood == null) c.market.reserveWood = 0;
+    if (c.market.reserveStone == null) c.market.reserveStone = 0;
+    if (c.market.reserveIron == null) c.market.reserveIron = 0;
+    if (!Array.isArray(c.market.cunhagemSourceGroups)) c.market.cunhagemSourceGroups = [];
+    if (!Array.isArray(c.market.cunhagemExcludeGroups)) c.market.cunhagemExcludeGroups = [];
+    if (c.market.cunhagemStopEnabled == null) c.market.cunhagemStopEnabled = false;
+    if (c.market.cunhagemStopHours == null) c.market.cunhagemStopHours = 2;
+    if (c.market.autoMint == null) c.market.autoMint = false;
     if (c.market.thresholdPct == null) c.market.thresholdPct = 50;
     if (c.market.maxDist == null) c.market.maxDist = 15;
     if (c.market.groupSolidario == null) c.market.groupSolidario = '';

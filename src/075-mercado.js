@@ -7,7 +7,7 @@
   }
   function balancedSplit(totalCapacity, avail, reserve) {
     const keys = ['wood', 'stone', 'iron'];
-    const cap = {}; keys.forEach((k) => { cap[k] = Math.max(0, (avail[k] || 0) - reserve); });
+    const cap = {}; keys.forEach((k) => { cap[k] = Math.max(0, (avail[k] || 0) - (reserve[k] || 0)); });
     const alloc = { wood: 0, stone: 0, iron: 0 };
     let remaining = totalCapacity;
     let active = keys.filter((k) => cap[k] > 0);
@@ -48,7 +48,7 @@
     if (/alvo v[aá]lido/i.test(t2)) throw new Error('alvo inválido (confira a coordenada)');
     return dur && dur > 0 ? dur : null;
   }
-  const MARKET_PASS = { cunhagem: () => cunhagemPass(), equilibrio: () => equilibrioPass(), solidario: () => solidarioPass(), cunhar: () => cunharPass() };
+  const MARKET_PASS = { cunhagem: () => cunhagemPass(), equilibrio: () => equilibrioPass(), solidario: () => solidarioPass() };
   async function marketTick(modeKey) {
     clearTimeout(marketTimers[modeKey]);
     const st = config.market.modes[modeKey];
@@ -57,6 +57,13 @@
     if (captchaBlocked()) { marketTimers[modeKey] = setTimeout(() => marketTick(modeKey), 30000); return; }
     claimLock();
     const now = Date.now();
+    if (st.stopAt && now >= st.stopAt) {
+      st.running = false; st.stopAt = 0; save();
+      clearTimeout(marketTimers[modeKey]);
+      setMarketStatus(modeKey, false);
+      pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + '): parada programada atingida — desligado automaticamente.', 'ok', 'market');
+      return;
+    }
     if ((st.nextAt || 0) > now) { scheduleMarket(modeKey); return; }
     try { await MARKET_PASS[modeKey](); }
     catch (e) { pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + '): erro no ciclo (' + (e.message || e) + ').', 'err', 'market'); }
@@ -69,16 +76,38 @@
   function scheduleMarket(modeKey) { clearTimeout(marketTimers[modeKey]); const st = config.market.modes[modeKey]; if (!st.running) return; marketTimers[modeKey] = setTimeout(() => marketTick(modeKey), Math.min(Math.max((st.nextAt || 0) - Date.now(), 1000), 60000)); }
 
   async function cunhagemPass() {
-    const coord = config.market.destCoord || '';
-    const reserve = Math.max(0, config.market.reserve || 0);
+    const destCoords = (config.market.destCoords || []).filter(Boolean);
+    if (!destCoords.length) { pushLog('Cunhagem: nenhum destino configurado.', 'err', 'market'); return; }
+    const reserve = {
+      wood: Math.max(0, config.market.reserveWood || 0),
+      stone: Math.max(0, config.market.reserveStone || 0),
+      iron: Math.max(0, config.market.reserveIron || 0),
+    };
     let vils = [];
     try { vils = await getAllVillagesCached(); } catch (e) { pushLog('Cunhagem: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
-    const sel = config.market.sources || {};
+
+    // doadoras elegíveis = união dos grupos de origem, menos união dos grupos excluídos
+    const srcGroups = config.market.cunhagemSourceGroups || [];
+    const excGroups = config.market.cunhagemExcludeGroups || [];
+    if (!srcGroups.length) { pushLog('Cunhagem: nenhum grupo de origem configurado.', 'err', 'market'); return; }
+    const srcSet = {}, excSet = {};
+    for (const gid of srcGroups) {
+      try { (await getVillagesInGroup(gid)).forEach((v) => { srcSet[v.vid] = true; }); }
+      catch (e) { pushLog('Cunhagem: erro ao listar grupo ' + gid + ' (' + (e.message || e) + ').', 'err', 'market'); }
+    }
+    for (const gid of excGroups) {
+      try { (await getVillagesInGroup(gid)).forEach((v) => { excSet[v.vid] = true; }); }
+      catch (e) { pushLog('Cunhagem: erro ao listar grupo excluído ' + gid + ' (' + (e.message || e) + ').', 'err', 'market'); }
+    }
+    const destSet = {}; vils.forEach((v) => { if (v.coord && destCoords.includes(v.coord)) destSet[v.vid] = true; });
+
     let count = 0; const tot = { wood: 0, stone: 0, iron: 0 };
     for (const v of vils) {
       { const pare = devoParar('market'); if (pare) { pushLog('Cunhagem: interrompida — ' + pare + '.', '', 'market'); break; } }
-      if (!sel[v.vid]) continue;
-      if (v.coord && v.coord === coord) continue;   // pula destino pela coordenada
+      if (!srcSet[v.vid] || excSet[v.vid]) continue;
+      if (destSet[v.vid]) continue;   // nunca doa pra si mesma se também for destino
+      if (!v.coord) continue;
+      const coord = destCoords.map((c) => ({ c: c, d: coordDist(v.coord, c) })).sort((a, b) => a.d - b.d)[0].c;   // destino mais perto
       let state;
       try { state = await getMarketState(v.vid); } catch (e) { pushLog('Cunhagem em ' + v.name + ': erro ao ler o mercado (' + (e.message || e) + ').', 'err', 'market'); continue; }
       if (!state.capacity) continue;
@@ -91,8 +120,22 @@
         await sleep(400 + Math.floor(Math.random() * 400));
       } catch (e) { pushLog('Cunhagem em ' + v.name + ': ' + (e.message || e), 'err', 'market'); }
     }
-    config.market.modes.cunhagem.stats = { sending: count, receiving: coord ? 1 : 0, wood: tot.wood, stone: tot.stone, iron: tot.iron };
-    pushLog('Cunhagem: ciclo concluído — ' + count + ' aldeia(s) enviaram recurso.', 'ok', 'market');
+
+    let coins = 0, mintCount = 0;
+    if (config.market.autoMint) {
+      const destVils = vils.filter((v) => destSet[v.vid]);
+      for (const v of destVils) {
+        { const pare = devoParar('market'); if (pare) { pushLog('Cunhagem: cunhagem automática interrompida — ' + pare + '.', '', 'market'); break; } }
+        try {
+          const r = await mintCoins(v.vid);
+          if (r.minted > 0) { mintCount++; coins += r.minted; pushLog('Cunhagem: ' + v.name + ' cunhou ' + r.minted + ' moeda(s).', 'ok', 'market'); }
+        } catch (e) { pushLog('Cunhagem automática em ' + v.name + ': ' + (e.message || e), 'err', 'market'); }
+        await sleep(400 + Math.floor(Math.random() * 400));
+      }
+    }
+
+    config.market.modes.cunhagem.stats = { sending: count, receiving: destCoords.length, wood: tot.wood, stone: tot.stone, iron: tot.iron, coins: coins };
+    pushLog('Cunhagem: ciclo concluído — ' + count + ' aldeia(s) enviaram recurso' + (config.market.autoMint ? ', ' + coins + ' moeda(s) cunhada(s) em ' + mintCount + ' aldeia(s)' : '') + '.', 'ok', 'market');
   }
 
   // ---- Cunhar moedas de ouro (Academia / screen=snob) ----
@@ -132,25 +175,6 @@
     try { const d = new DOMParser().parseFromString(t, 'text/html'); const eb = d.querySelector('.error_box'); if (eb && (eb.textContent || '').trim()) throw new Error('recusado: ' + eb.textContent.trim().replace(/\s+/g, ' ').slice(0, 80)); } catch (e) { if (/^recusado:/.test(e.message)) throw e; }
     return { minted: n, res: st.resNow };
   }
-  async function cunharPass() {
-    let vils = [];
-    try { vils = await getAllVillagesCached(); } catch (e) { pushLog('Cunhar: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
-    const sel = config.market.mintSources || {};
-    let count = 0, coins = 0;
-    for (const v of vils) {
-      { const pare = devoParar('market'); if (pare) { pushLog('Cunhar: interrompido — ' + pare + '.', '', 'market'); break; } }
-      if (!sel[v.vid]) continue;
-      try {
-        const r = await mintCoins(v.vid);
-        if (r.minted > 0) { count++; coins += r.minted; pushLog('Cunhar: ' + v.name + ' cunhou ' + r.minted + ' moeda(s).', 'ok', 'market'); }
-        else pushLog('Cunhar: ' + v.name + ' — recurso insuficiente p/ 1 moeda.', '', 'market');
-      } catch (e) { pushLog('Cunhar em ' + v.name + ': ' + (e.message || e), 'err', 'market'); }
-      await sleep(400 + Math.floor(Math.random() * 400));
-    }
-    config.market.modes.cunhar.stats = { sending: count, receiving: 0, wood: coins, stone: 0, iron: 0 };
-    pushLog('Cunhar: ciclo concluído — ' + coins + ' moeda(s) em ' + count + ' aldeia(s).', 'ok', 'market');
-  }
-
   function coordDist(a, b) { const pa = a.split('|').map(Number), pb = b.split('|').map(Number); return Math.sqrt((pa[0] - pb[0]) * (pa[0] - pb[0]) + (pa[1] - pb[1]) * (pa[1] - pb[1])); }
   async function equilibrioPass() {
     let vils = [];
@@ -320,20 +344,6 @@
     save();
     pushLog('Solidário: ciclo concluído — ' + sent + ' transferência(s), limiar ' + Math.round(pct * 100) + '%.', 'ok', 'market');
   }
-  async function renderMarketSources() {
-    const cont = document.getElementById('twmgr-mk-sources'); if (!cont) return;
-    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
-    const sel = config.market.sources || {};
-    cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-mk-src" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
-    cont.querySelectorAll('.twmgr-mk-src').forEach((cb) => cb.addEventListener('change', readMarketCfg));
-  }
-  async function renderMintSources() {
-    const cont = document.getElementById('twmgr-mk-mint-sources'); if (!cont) return;
-    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
-    const sel = config.market.mintSources || {};
-    cont.innerHTML = vils.map((v) => '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#5c4527;margin:1px 0"><input type="checkbox" class="twmgr-mk-mint" data-vid="' + v.vid + '"' + (sel[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '</label>').join('');
-    cont.querySelectorAll('.twmgr-mk-mint').forEach((cb) => cb.addEventListener('change', readMarketCfg));
-  }
   async function fillMarketSolidarioGroupSelect() {
     const sel = document.getElementById('twmgr-mk-g-solid'); if (!sel) return;
     let groups = [];
@@ -341,10 +351,26 @@
     const cur = config.market.groupSolidario;
     sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((gr) => '<option value="' + gr.id + '"' + (String(cur) === String(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
   }
+  async function fillMarketCunhagemGroupSelects() {
+    const selSrc = document.getElementById('twmgr-mk-srcgroups'), selExc = document.getElementById('twmgr-mk-excgroups');
+    if (!selSrc && !selExc) return;
+    let groups = [];
+    try { groups = await getGroups(); } catch (e) { pushLog('Cunhagem: erro ao listar grupos: ' + (e.message || e), 'err', 'market'); return; }
+    const curSrc = config.market.cunhagemSourceGroups || [], curExc = config.market.cunhagemExcludeGroups || [];
+    if (selSrc) selSrc.innerHTML = groups.map((gr) => '<option value="' + gr.id + '"' + (curSrc.includes(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
+    if (selExc) selExc.innerHTML = groups.map((gr) => '<option value="' + gr.id + '"' + (curExc.includes(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
+  }
   function readMarketCfg() {
     const c = config.market, g = (id) => document.getElementById(id);
-    if (g('twmgr-mk-coord')) c.destCoord = g('twmgr-mk-coord').value.trim();
-    if (g('twmgr-mk-reserve')) c.reserve = Math.max(0, parseInt(g('twmgr-mk-reserve').value, 10) || 0);
+    if (g('twmgr-mk-destcoords')) c.destCoords = g('twmgr-mk-destcoords').value.split(/\s+/).map((s) => s.trim()).filter((s) => /^\d+\|\d+$/.test(s));
+    if (g('twmgr-mk-rwood')) c.reserveWood = Math.max(0, parseInt(g('twmgr-mk-rwood').value, 10) || 0);
+    if (g('twmgr-mk-rstone')) c.reserveStone = Math.max(0, parseInt(g('twmgr-mk-rstone').value, 10) || 0);
+    if (g('twmgr-mk-riron')) c.reserveIron = Math.max(0, parseInt(g('twmgr-mk-riron').value, 10) || 0);
+    if (g('twmgr-mk-stopon')) c.cunhagemStopEnabled = g('twmgr-mk-stopon').checked;
+    if (g('twmgr-mk-stophours')) c.cunhagemStopHours = Math.max(0.1, parseFloat((g('twmgr-mk-stophours').value || '').replace(',', '.')) || 2);
+    if (g('twmgr-mk-automint')) c.autoMint = g('twmgr-mk-automint').checked;
+    if (g('twmgr-mk-srcgroups')) c.cunhagemSourceGroups = Array.from(g('twmgr-mk-srcgroups').selectedOptions).map((o) => o.value);
+    if (g('twmgr-mk-excgroups')) c.cunhagemExcludeGroups = Array.from(g('twmgr-mk-excgroups').selectedOptions).map((o) => o.value);
     if (g('twmgr-mk-int')) c.interval = Math.max(1, parseInt(g('twmgr-mk-int').value, 10) || 10) * 60;
     if (g('twmgr-mk-thr')) c.thresholdPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-thr').value, 10) || 50));
     if (g('twmgr-mk-dist')) c.maxDist = Math.max(1, parseFloat((g('twmgr-mk-dist').value || '').replace(',', '.')) || 15);
@@ -354,26 +380,24 @@
     if (g('twmgr-mk-sgargalo')) c.solidarioGargaloKeepPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-sgargalo').value, 10) || 90));
     if (g('twmgr-mk-sdist')) c.solidarioMaxDist = Math.max(1, parseFloat((g('twmgr-mk-sdist').value || '').replace(',', '.')) || 20);
     if (g('twmgr-mk-g-solid')) c.groupSolidario = g('twmgr-mk-g-solid').value;
-    const src = {}; document.querySelectorAll('.twmgr-mk-src').forEach((cb) => { if (cb.checked) src[cb.getAttribute('data-vid')] = true; }); c.sources = src;
-    const mint = {}; document.querySelectorAll('.twmgr-mk-mint').forEach((cb) => { if (cb.checked) mint[cb.getAttribute('data-vid')] = true; }); c.mintSources = mint;
     save();
   }
   function setMarketStatus(modeKey, on) { setBtnState('twmgr-mk-' + modeKey + '-start', 'twmgr-mk-' + modeKey + '-stop', on, '● Enviando', '▶ Enviar'); }
   const MARKET_START_MSG = {
     equilibrio: () => 'Equilíbrio iniciado — limiar ' + config.market.thresholdPct + '% do armazém, distância ≤ ' + config.market.maxDist + '.',
     solidario: () => 'Solidário iniciado — grupo ' + config.market.groupSolidario + ', limiar ' + config.market.solidarioThresholdPct + '% do armazém, distância ≤ ' + config.market.solidarioMaxDist + '.',
-    cunhar: () => 'Cunhar iniciado — cunhando o máximo nas aldeias marcadas a cada ' + Math.round((config.market.interval || 600) / 60) + ' min.',
-    cunhagem: () => 'Cunhagem iniciada — destino ' + config.market.destCoord + ', deixa ' + config.market.reserve + ' de cada recurso.',
+    cunhagem: () => 'Cunhagem iniciada — ' + config.market.destCoords.length + ' destino(s), reserva ' + config.market.reserveWood + '/' + config.market.reserveStone + '/' + config.market.reserveIron + ' (mad/arg/fer)' + (config.market.autoMint ? ', cunhagem automática ligada' : '') + (config.market.cunhagemStopEnabled ? ', parada em ' + config.market.cunhagemStopHours + 'h' : '') + '.',
   };
   function marketStart(modeKey) {
     readMarketCfg();
     if (modeKey === 'cunhagem') {
-      if (!/^\d+\s*\|\s*\d+$/.test(config.market.destCoord || '')) { pushLog('Cunhagem: coordenada de destino inválida (ex.: 464|604).', 'err', 'market'); return; }
-      if (!Object.values(config.market.sources).some(Boolean)) { pushLog('Cunhagem: selecione ao menos 1 aldeia de origem.', 'err', 'market'); return; }
+      if (!config.market.destCoords.length) { pushLog('Cunhagem: configure ao menos 1 destino válido (ex.: 464|604).', 'err', 'market'); return; }
+      if (!config.market.cunhagemSourceGroups.length) { pushLog('Cunhagem: selecione ao menos 1 grupo de origem.', 'err', 'market'); return; }
     }
-    if (modeKey === 'cunhar' && !Object.values(config.market.mintSources).some(Boolean)) { pushLog('Cunhar: selecione ao menos 1 aldeia pra cunhar.', 'err', 'market'); return; }
     if (modeKey === 'solidario' && !config.market.groupSolidario) { pushLog('Solidário: selecione um grupo.', 'err', 'market'); return; }
-    config.market.modes[modeKey].running = true; config.market.modes[modeKey].nextAt = 0; save();
+    config.market.modes[modeKey].running = true; config.market.modes[modeKey].nextAt = 0;
+    config.market.modes[modeKey].stopAt = (modeKey === 'cunhagem' && config.market.cunhagemStopEnabled) ? Date.now() + config.market.cunhagemStopHours * 3600000 : 0;
+    save();
     setMarketStatus(modeKey, true);
     pushLog(MARKET_START_MSG[modeKey](), 'ok', 'market');
     marketTick(modeKey);

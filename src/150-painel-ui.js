@@ -432,7 +432,7 @@
           '<label class="twmgr-check" title="Puxa da aldeia mais próxima que tenha excedente"><input id="twmgr-pq-feed" type="checkbox"> Pedir recurso pra pesquisar</label>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Reserva na fonte (%)</span><input id="twmgr-pq-reserve" class="twmgr-inp" type="number" min="0" max="90" value="40" style="width:56px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Dist. máx. da fonte (campos)</span><input id="twmgr-pq-dist" class="twmgr-inp" type="number" min="1" value="20" style="width:56px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl" title="Usado só quando a tela não informa o custo da pesquisa">Sem custo na tela: encher até (%)</span><input id="twmgr-pq-fill" class="twmgr-inp" type="number" min="10" max="100" value="60" style="width:56px"></div>') +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="A tela do Ferreiro não informa o custo da pesquisa, então enche os três recursos até esse % do armazém">Encher a aldeia até (%)</span><input id="twmgr-pq-fill" class="twmgr-inp" type="number" min="10" max="100" value="60" style="width:56px"></div>') +
         sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-pq-int" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-pq-start" class="twmgr-btn twmgr-go">▶ Pesquisar</button><button id="twmgr-pq-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-pq-status" class="twmgr-cstatus"></div>' +

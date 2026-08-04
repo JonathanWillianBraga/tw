@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.17.0
+// @version      11.17.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.17.0';
+  const VERSION = '11.17.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
@@ -4715,55 +4715,41 @@
   // PESQ_ORDEM_PADRAO vive no 010-core: o normalizador do config (`let config = load()`) roda na
   // avaliação do 010, antes deste arquivo — const declarada aqui cairia em TDZ e derrubaria tudo.
 
-  // O jogo nao expoe o custo da pesquisa num campo estavel de BuildingSmith.techs (o Obra so usa
-  // level/can_research/error_buildings, que sao os confirmados). Tento varias formas conhecidas e,
-  // se nenhuma bater, devolvo null -- quem chama trata como "custo desconhecido" e cai no modo de
-  // abastecimento por porcentagem, em vez de pedir um numero inventado.
-  function pesqCustoDaTech(t) {
-    if (!t || typeof t !== 'object') return null;
-    const num = (v) => { const n = parseInt(v, 10); return isNaN(n) ? null : n; };
-    // forma 1: campos soltos na raiz
-    let w = num(t.wood), s = num(t.stone), i = num(t.iron);
-    if (w != null && s != null && i != null) return { wood: w, stone: s, iron: i };
-    // forma 2: objeto aninhado (cost / costs / resources)
-    for (const k of ['cost', 'costs', 'resources', 'res']) {
-      const o = t[k];
-      if (o && typeof o === 'object') {
-        w = num(o.wood); s = num(o.stone); i = num(o.iron);
-        if (w != null && s != null && i != null) return { wood: w, stone: s, iron: i };
-      }
-    }
-    return null;
+  // CONFIRMADO no console (br141): BuildingSmith.techs.available[unidade] tem SO estes campos --
+  //   id, name, level, level_after, level_highest, downgrades, error_level, image_state, image
+  // Ou seja: NAO existe can_research, NAO existe error_buildings, e NAO existe custo nem
+  // error_resources. Entao nao da pra saber de antemao se a pesquisa vai passar: a unica fonte de
+  // verdade e TENTAR e ler a resposta do servidor. Este classificador traduz a resposta em algo
+  // acionavel; o texto cru vai pro log quando nao reconheco, pra dar pra ajustar sem chutar.
+  function pesqClassificarErro(msg) {
+    const m = String(msg || '').toLowerCase();
+    if (/recurso|mat[eu00e9]ria|insufficient|n[u00e3a]o tem o suficiente|suficiente/.test(m)) return 'recurso';
+    if (/edif[u00edi]cio|requisito|ferreiro|est[u00e1a]bulo|oficina|building/.test(m)) return 'predio';
+    if (/andamento|em curso|already|j[u00e1a] est/.test(m)) return 'andando';
+    return 'desconhecido';
   }
 
-  // Estado de pesquisa de uma aldeia, na ordem do modelo. Devolve o que fazer AGORA:
-  //   {acao:'pesquisar', tech}        -- da pra mandar
-  //   {acao:'recurso', tech, custo}   -- falta recurso (custo pode ser null = desconhecido)
-  //   {acao:'predio', tech}           -- falta Ferreiro/Estabulo/Oficina; nao e problema meu
-  //   {acao:'andando'}                -- ja tem pesquisa em curso nessa aldeia
-  //   {acao:'completo'}               -- modelo inteiro pesquisado
+  // Proxima tropa a pesquisar, na ordem do modelo. So dois campos bastam e ambos existem de
+  // verdade: `level` (nivel atual) e `level_highest` (teto). `error_level` e o jeito do jogo dizer
+  // "nao ha nivel a subir aqui" -- em mundo de pesquisa simples ele vem true no que ja esta
+  // pesquisado. Devolve {acao:'tentar', tech} ou {acao:'completo'}.
   function pesqDecidir(techs, ordem) {
     for (const tech of ordem) {
       const t = techs[tech];
-      if (!t) continue;                                   // tropa que nao existe neste mundo
-      const nivel = +t.level || 0;
-      const maxNivel = +t.max_level || 1;                  // mundo de pesquisa simples = 1 nivel
-      if (nivel >= maxNivel) continue;                     // essa ja esta pronta -> proxima da ordem
-      if (t.error_buildings) return { acao: 'predio', tech: tech };
-      if (t.can_research) return { acao: 'pesquisar', tech: tech };
-      // Nem pronta nem liberada: ou falta recurso, ou ja tem pesquisa em andamento. O campo de
-      // "em andamento" nao esta confirmado, entao uso o custo como desempate quando ele existe.
-      const custo = pesqCustoDaTech(t);
-      if (t.error_resources || t.error_res) return { acao: 'recurso', tech: tech, custo: custo };
-      return { acao: 'andando' };
+      if (!t) continue;                                  // tropa que nao existe neste mundo
+      const nivel = parseInt(t.level, 10) || 0;
+      const teto = parseInt(t.level_highest, 10) || parseInt(t.max_level, 10) || 1;
+      if (nivel >= teto) continue;                        // ja no maximo -> proxima da ordem
+      if (t.error_level) continue;                        // o jogo diz que nao ha nivel a subir
+      return { acao: 'tentar', tech: tech };
     }
     return { acao: 'completo' };
   }
 
   // Puxa recurso da aldeia mais PROXIMA que tem excedente. "Excedente" = acima de
   // config.research.feedReserve% do armazem dela -- a mesma ideia do Solidario do Mercado, mas aqui
-  // o alvo e um valor exato (o custo da pesquisa) em vez de um limiar, quando o custo e conhecido.
-  async function pesqAbastecer(alvo, custo, fontes, cacheFonte) {
+  // o gatilho e uma pesquisa que o servidor recusou por falta de recurso, nao um limiar periodico.
+  async function pesqAbastecer(alvo, fontes, cacheFonte) {
     const cm = (alvo.coord || '').match(/(\d+)\|(\d+)/);
     if (!cm) return { enviou: false, motivo: 'aldeia sem coordenada' };
     const ax = +cm[1], ay = +cm[2];
@@ -4771,22 +4757,15 @@
     let ms; try { ms = await getMarketState(alvo.vid); } catch (e) { return { enviou: false, motivo: 'nao li o mercado do destino' }; }
     if (!ms.storage) return { enviou: false, motivo: 'armazem do destino ilegivel' };
 
-    // Quanto falta. Sem custo conhecido, enche ate feedFillPct% do armazem (modo porcentagem).
-    let falta;
-    if (custo) {
-      falta = {
-        wood: Math.max(0, (custo.wood || 0) - ms.wood),
-        stone: Math.max(0, (custo.stone || 0) - ms.stone),
-        iron: Math.max(0, (custo.iron || 0) - ms.iron),
-      };
-    } else {
-      const teto = ms.storage * ((config.research.feedFillPct != null ? config.research.feedFillPct : 60) / 100);
-      falta = {
-        wood: Math.max(0, teto - ms.wood),
-        stone: Math.max(0, teto - ms.stone),
-        iron: Math.max(0, teto - ms.iron),
-      };
-    }
+    // A tela do Ferreiro nao informa o custo da pesquisa (conferido ao vivo), entao nao da pra
+    // pedir o valor exato: enche os tres recursos ate feedFillPct% do armazem e deixa o proximo
+    // ciclo tentar de novo. Pedir demais nao machuca -- o teto abaixo impede transbordo.
+    const teto = ms.storage * ((config.research.feedFillPct != null ? config.research.feedFillPct : 60) / 100);
+    const falta = {
+      wood: Math.max(0, teto - ms.wood),
+      stone: Math.max(0, teto - ms.stone),
+      iron: Math.max(0, teto - ms.iron),
+    };
     // Nunca pede mais do que cabe no armazem (senao transborda e o recurso vira lixo).
     ['wood', 'stone', 'iron'].forEach((r) => { falta[r] = Math.floor(Math.min(falta[r], Math.max(0, ms.storage - ms[r]))); });
     if (falta.wood + falta.stone + falta.iron <= 0) return { enviou: false, motivo: 'nada faltando' };
@@ -4885,19 +4864,27 @@
       const nomeTropa = (t) => { const u = UNITS.find((x) => x[0] === t); return u ? u[1] : t; };
 
       if (d.acao === 'completo') { completas++; continue; }
-      if (d.acao === 'andando') { andando++; continue; }
-      if (d.acao === 'predio') {
+
+      // Nao existe campo dizendo se da pra pesquisar agora: tenta e le a resposta do servidor.
+      let erro = null;
+      try {
+        await smithResearch(vid, d.tech);
+        pesquisadas++;
+        pushLog('Pesquisa: ' + rotulo + ' -> ' + nomeTropa(d.tech) + ' iniciada.', 'ok', 'research');
+        await sleep(300);
+        continue;
+      } catch (e) { erro = e.message || String(e); }
+
+      const tipo = pesqClassificarErro(erro);
+      if (tipo === 'predio') {
         semPredio++;
         pushLog(rotulo + ': ' + nomeTropa(d.tech) + ' travada por predio (Ferreiro/Estabulo/Oficina) - resolva em Construcoes.', '', 'research');
         continue;
       }
-      if (d.acao === 'pesquisar') {
-        try {
-          await smithResearch(vid, d.tech);
-          pesquisadas++;
-          pushLog('Pesquisa: ' + rotulo + ' -> ' + nomeTropa(d.tech) + ' iniciada.', 'ok', 'research');
-        } catch (e) { pushLog('Pesquisa em ' + rotulo + ': ' + (e.message || e), 'err', 'research'); }
-        await sleep(300);
+      if (tipo === 'andando') { andando++; continue; }
+      if (tipo === 'desconhecido') {
+        // Nao invento significado: mostro a resposta crua pra dar pra ajustar o classificador.
+        pushLog('Pesquisa em ' + rotulo + ' (' + nomeTropa(d.tech) + '): resposta nao reconhecida - ' + erro, 'err', 'research');
         continue;
       }
       // falta recurso
@@ -4905,13 +4892,9 @@
         pushLog(rotulo + ': sem recurso p/ ' + nomeTropa(d.tech) + ' (abastecimento desligado).', '', 'research');
         continue;
       }
-      const r = await pesqAbastecer({ vid: vid, coord: alvo.coord, name: alvo.name }, d.custo, todas, cacheFonte);
-      if (r.enviou) {
-        abastecidas++;
-        if (!d.custo) pushLog(rotulo + ': custo da pesquisa nao veio na tela, enchi por porcentagem.', '', 'research');
-      } else {
-        pushLog(rotulo + ': sem recurso p/ ' + nomeTropa(d.tech) + ' e nao consegui abastecer (' + r.motivo + ').', '', 'research');
-      }
+      const r = await pesqAbastecer({ vid: vid, coord: alvo.coord, name: alvo.name }, todas, cacheFonte);
+      if (r.enviou) abastecidas++;
+      else pushLog(rotulo + ': sem recurso p/ ' + nomeTropa(d.tech) + ' e nao consegui abastecer (' + r.motivo + ').', '', 'research');
       await sleep(300);
     }
 
@@ -7203,7 +7186,7 @@
           '<label class="twmgr-check" title="Puxa da aldeia mais próxima que tenha excedente"><input id="twmgr-pq-feed" type="checkbox"> Pedir recurso pra pesquisar</label>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Reserva na fonte (%)</span><input id="twmgr-pq-reserve" class="twmgr-inp" type="number" min="0" max="90" value="40" style="width:56px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Dist. máx. da fonte (campos)</span><input id="twmgr-pq-dist" class="twmgr-inp" type="number" min="1" value="20" style="width:56px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl" title="Usado só quando a tela não informa o custo da pesquisa">Sem custo na tela: encher até (%)</span><input id="twmgr-pq-fill" class="twmgr-inp" type="number" min="10" max="100" value="60" style="width:56px"></div>') +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="A tela do Ferreiro não informa o custo da pesquisa, então enche os três recursos até esse % do armazém">Encher a aldeia até (%)</span><input id="twmgr-pq-fill" class="twmgr-inp" type="number" min="10" max="100" value="60" style="width:56px"></div>') +
         sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-pq-int" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-pq-start" class="twmgr-btn twmgr-go">▶ Pesquisar</button><button id="twmgr-pq-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-pq-status" class="twmgr-cstatus"></div>' +

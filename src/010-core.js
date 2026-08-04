@@ -2,7 +2,7 @@
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
 
-// @version      11.20.0
+// @version      11.21.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,7 +127,7 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.20.0';
+  const VERSION = '11.21.0';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';

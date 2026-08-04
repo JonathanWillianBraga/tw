@@ -714,7 +714,7 @@
     const CC_TIPOS = [
       { id: 'attack',  ico: '⚔', rot: 'Ataque',  hint: 'Um ataque por origem marcada, todos chegando no mesmo instante.' },
       { id: 'support', ico: '🛡', rot: 'Apoio',   hint: 'Apoio de várias aldeias pousando junto no mesmo alvo.' },
-      { id: 'nobre',   ico: '👑', rot: 'Operação', hint: 'Plano com várias levas: cada uma com alvo, origem, composição e ordem de chegada próprias. Monte em massa a partir das origens marcadas.' },
+      { id: 'op',      ico: '🎯', rot: 'Operação', hint: 'Um alvo por vez: escolha as aldeias, crie ondas (cada nova entra 100ms depois da anterior), ordene e calibre os horários. Depois passe pro próximo alvo.' },
       { id: 'fake',    ico: '🎭', rot: 'Fake',    hint: 'Vários alvos de uma vez; o alvo único acima é ignorado.' },
       { id: 'massa',   ico: '🚚', rot: 'Apoio massa', hint: 'Apoio das origens marcadas pro(s) alvo(s), disparado AGORA (não agenda). Em cada unidade: número, 50% ou tudo.' },
     ];
@@ -1129,7 +1129,6 @@
       return p.join(', ') || '(vazio)';
     }
     function ccModelosRender() {
-      ccOpModelosSelect();   // a criação em massa da Operação escolhe pelo mesmo conjunto
       const box = document.getElementById('cc-modelos'); if (!box) return;
       const M = ccModelos();
       box.innerHTML = M.length ? M.map((m) =>
@@ -1178,233 +1177,232 @@
       if (msg) { msg.style.color = '#2e7d3a'; msg.textContent = 'Modelo "' + nome + '" ' + (existe ? 'atualizado' : 'salvo') + '.'; }
     }
 
-    // ---- Editor de ondas (NT / divisão) ----
-    function ccOndas() { return (config.cmd.ondas = config.cmd.ondas || []); }
-    function ccGap() { return Math.max(50, parseInt((document.getElementById('cc-trem-gap') || {}).value, 10) || 150); }
-    function ccOndaNova(amounts, max, origem, alvo, rot) {
-      return { id: genId(), origem: origem || null, alvo: alvo || null, rot: rot || null,
-               amounts: amounts || {}, max: max || {}, offsetMs: null };
-    }
-    // Alvo efetivo de uma leva: o dela, ou o do campo Alvo lá em cima.
+    // Parser de coordenada: aceita 478|586, 478 586, 478-586...
     function ccCoordParse(raw) {
       const m = String(raw || '').match(/(\d{1,3})\s*[|\s.,;:-]\s*(\d{1,3})/);
       return m ? { x: m[1], y: m[2], coord: m[1] + '|' + m[2] } : null;
     }
-    function ccOndaAlvo(o) { return ccCoordParse(o.alvo) || ccAlvo(); }
-    // Alvos distintos usados na operação (pra montar o seletor de alvo por leva).
-    function ccOpAlvos() {
-      const vistos = {}, out = [];
-      const glob = ccAlvo(); if (glob) { vistos[glob.coord] = 1; out.push(glob.coord); }
-      ccOndas().forEach((o) => { const a = ccCoordParse(o.alvo); if (a && !vistos[a.coord]) { vistos[a.coord] = 1; out.push(a.coord); } });
-      (config.cmd.opAlvos || []).forEach((c) => { if (!vistos[c]) { vistos[c] = 1; out.push(c); } });
-      return out;
+
+    // ==================== OPERAÇÃO ====================
+    // O ALVO é o container: cada um tem coordenada, horário de chegada da 1ª onda e uma
+    // LISTA ORDENADA de ondas. Cada onda é uma aldeia + tropas digitadas à mão. A ordem da
+    // lista manda: a onda i chega em `base + i*gap`, salvo quando o horário foi calibrado
+    // à mão (offsetMs deixa de ser null). Terminado um alvo, cria-se o próximo e repete.
+    function ccOpCfg() {
+      const c = (config.cmd.op = config.cmd.op || { gapMs: 100, ativo: null, alvos: [] });
+      if (c.gapMs == null) c.gapMs = 100;
+      if (!Array.isArray(c.alvos)) c.alvos = [];
+      return c;
     }
-    // Cria uma leva por ORIGEM MARCADA, com a composição escolhida. É o que troca
-    // "montar 15 ondas no dropdown, uma a uma" por dois cliques.
-    function ccOpAddMarcadas() {
-      const m = document.getElementById('cc-msg');
-      const diz = (t, cor) => { if (m) { m.style.color = cor || '#c0483a'; m.textContent = t; } };
-      const selM = document.getElementById('cc-op-modelo');
-      const idM = selM ? selM.value : '';
-      let comp, rotulo;
-      if (idM === '__atual') {
-        comp = ccComposicao(); rotulo = 'atual';
-      } else {
-        const mod = ccModelos().find((z) => z.id === idM);
-        if (!mod) return diz('Escolha um modelo (ou "composição atual").');
-        comp = { amounts: mod.amounts || {}, max: mod.max || {} }; rotulo = mod.nome;
-      }
-      if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) {
-        return diz('A composição escolhida está vazia.');
-      }
-      const alvoEl = document.getElementById('cc-op-alvo');
-      const alvoRaw = alvoEl ? (alvoEl.value || '').trim() : '';
-      // Alvo digitado vira coord normalizada; vazio = herda o alvo do campo lá em cima.
-      const alvoP = alvoRaw ? ccCoordParse(alvoRaw) : null;
-      if (alvoRaw && !alvoP) return diz('Alvo "' + alvoRaw + '" inválido. Use 478|586 (ou deixe vazio).');
-      const alvoTxt = alvoP ? alvoP.coord : '';
-      const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid]);
-      if (!marcadas.length) return diz('Marque as origens na lista abaixo primeiro.');
-      const O = ccOndas();
-      marcadas.forEach((v) => {
-        O.push(ccOndaNova(Object.assign({}, comp.amounts), Object.assign({}, comp.max), v.vid, alvoTxt || null, rotulo));
-      });
-      save(); ccOndasRender();
-      diz(marcadas.length + ' leva(s) "' + rotulo + '" adicionada(s)' + (alvoTxt ? ' → ' + alvoTxt : '') + '.', '#2e7d3a');
+    function ccOpAtivo() {
+      const c = ccOpCfg();
+      return c.alvos.find((a) => a.id === c.ativo) || c.alvos[0] || null;
     }
-    // Popula o seletor de modelo da criação em massa (preserva a escolha atual).
-    function ccOpModelosSelect() {
-      const sel = document.getElementById('cc-op-modelo'); if (!sel) return;
-      const cur = sel.value;
-      sel.innerHTML = '<option value="__atual">composição atual</option>' +
-        ccModelos().map((m) => '<option value="' + m.id + '">' + esc(m.nome) + '</option>').join('');
-      if (cur) sel.value = cur;
-      if (!sel.value) sel.value = '__atual';
+    function ccOpAlvoNovo() {
+      const c = ccOpCfg();
+      const a = { id: genId(), coord: '', chegadaLocal: '', vids: {}, ondas: [] };
+      c.alvos.push(a); c.ativo = a.id; save(); ccOpRender();
     }
-    // Soma o que CADA aldeia vai mandar somando TODAS as levas dela e compara com o estoque.
-    // É o caso "a mesma aldeia manda o nuke e depois o trem de nobre" — que estoura calado.
-    function ccOpValidarTropa() {
+    function ccOpAlvoDel() {
+      const c = ccOpCfg(), a = ccOpAtivo(); if (!a) return;
+      c.alvos = c.alvos.filter((z) => z.id !== a.id);
+      c.ativo = c.alvos.length ? c.alvos[0].id : null;
+      save(); ccOpRender();
+    }
+    // Defasagem efetiva da onda: a calibrada à mão, ou a automática pela posição.
+    function ccOpOffset(a, i) {
+      const o = a.ondas[i];
+      return (o && o.offsetMs != null) ? o.offsetMs : i * ccOpCfg().gapMs;
+    }
+    function ccOpChegadaBase(a) { return a ? arrivalToServerMs(a.chegadaLocal || '') || 0 : 0; }
+    function ccOpOndaAdd(vid) {
+      const a = ccOpAtivo(); if (!a) return;
+      a.ondas.push({ id: genId(), vid: String(vid), tipo: 'attack', amounts: {}, offsetMs: null });
+      save(); ccOpRender();
+    }
+    function ccOpOndaMover(id, d) {
+      const a = ccOpAtivo(); if (!a) return;
+      const i = a.ondas.findIndex((z) => z.id === id), j = i + d;
+      if (i < 0 || j < 0 || j >= a.ondas.length) return;
+      a.ondas.splice(j, 0, a.ondas.splice(i, 1)[0]);
+      // Reordenou: os horários calibrados à mão perdem o sentido — tudo volta pro automático.
+      a.ondas.forEach((z) => { z.offsetMs = null; });
+      save(); ccOpRender();
+    }
+    // Soma o que cada aldeia manda em TODAS as ondas deste alvo e compara com o estoque.
+    // É o caso "a mesma aldeia manda o nuke e depois o nobre" — que estoura calado no preparo.
+    function ccOpResumo(a) {
       const porVid = {};
-      ccOndas().forEach((o) => {
-        const vid = o.origem; if (!vid) return;
-        const v = CCVILAS.find((z) => String(z.vid) === String(vid)); if (!v) return;
-        const a = ccResolverPara({ amounts: o.amounts, max: o.max }, v.avail);
-        const acc = (porVid[vid] = porVid[vid] || {});
-        Object.keys(a).forEach((u) => { acc[u] = (acc[u] || 0) + a[u]; });
+      (a.ondas || []).forEach((o) => {
+        const acc = (porVid[o.vid] = porVid[o.vid] || {});
+        Object.keys(o.amounts || {}).forEach((u) => { acc[u] = (acc[u] || 0) + (o.amounts[u] || 0); });
       });
       const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
-      const faltas = [];
+      const linhas = [];
       Object.keys(porVid).forEach((vid) => {
-        const v = CCVILAS.find((z) => String(z.vid) === String(vid)); if (!v) return;
-        const falta = Object.keys(porVid[vid]).filter((u) => porVid[vid][u] > ((v.avail && v.avail[u]) || 0));
-        if (falta.length) {
-          faltas.push((v.nome ? v.nome + ' ' : '') + (v.coord || vid) + ': ' +
-            falta.map((u) => (rot[u] || u) + ' pede ' + fmtN(porVid[vid][u]) + ', tem ' + fmtN((v.avail && v.avail[u]) || 0)).join('; '));
-        }
+        const v = CCVILAS.find((z) => String(z.vid) === String(vid));
+        const nome = v ? ((v.nome ? v.nome + ' ' : '') + (v.coord || vid)) : vid;
+        const falta = Object.keys(porVid[vid]).filter((u) => porVid[vid][u] > ((v && v.avail && v.avail[u]) || 0));
+        const tot = Object.keys(porVid[vid]).reduce((s, u) => s + porVid[vid][u], 0);
+        linhas.push('<span style="color:' + (falta.length ? '#c0483a' : '#6f6153') + '" title="' +
+          esc(falta.length ? 'falta: ' + falta.map((u) => rot[u] || u).join(', ') : 'cabe no estoque') + '">' +
+          esc(nome) + ' ' + fmtN(tot) + (falta.length ? ' ⚠' : '') + '</span>');
       });
-      return faltas;
+      return linhas.join(' · ');
     }
-    // Defasagem efetiva: se a onda não tem uma própria, usa a posição × intervalo.
-    function ccOndaOffset(o, i) { return (o.offsetMs != null) ? o.offsetMs : i * ccGap(); }
-    function ccOndaTxt(o) {
-      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
-      const p = Object.entries(o.amounts).filter(([, n]) => n > 0).map(([u, n]) => (rot[u] || u) + ' ' + fmtN(n));
-      Object.keys(o.max).forEach((u) => p.push((rot[u] || u) + ' tudo'));
-      return p.join(', ') || '(vazia)';
-    }
-    function ccOndasRender() {
-      const box = document.getElementById('cc-ondas'); if (!box) return;
-      const O = ccOndas();
-      if (!O.length) {
-        box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma onda. Use um atalho acima ou monte a composição e clique em "+ onda". —</div>';
-        ccOndasAviso(); return;
+    function ccOpRender() {
+      const cfg = ccOpCfg();
+      const sel = document.getElementById('cc-op-sel'); if (!sel) return;
+      const a = ccOpAtivo();
+      if (a) cfg.ativo = a.id;
+      sel.innerHTML = cfg.alvos.length
+        ? cfg.alvos.map((z, i) => '<option value="' + z.id + '">' + esc(z.coord || ('alvo ' + (i + 1) + ' (sem coord)')) + ' · ' + (z.ondas || []).length + ' onda(s)</option>').join('')
+        : '<option value="">— nenhum alvo —</option>';
+      if (a) sel.value = a.id;
+      const gapEl = document.getElementById('cc-op-gap'); if (gapEl) gapEl.value = cfg.gapMs;
+      const coordEl = document.getElementById('cc-op-coord'); if (coordEl) coordEl.value = a ? (a.coord || '') : '';
+      const chEl = document.getElementById('cc-op-chegada'); if (chEl) chEl.value = a ? (a.chegadaLocal || '') : '';
+
+      const boxV = document.getElementById('cc-op-vilas');
+      const boxO = document.getElementById('cc-op-ondas');
+      const boxR = document.getElementById('cc-op-resumo');
+      if (!a) {
+        if (boxV) boxV.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— crie um alvo pra começar —</div>';
+        if (boxO) boxO.innerHTML = '';
+        if (boxR) boxR.innerHTML = '';
+        return;
       }
-      const opts = CCVILAS.map((v) => '<option value="' + v.vid + '">' + esc(v.coord || v.vid) + (v.nome ? ' · ' + esc(v.nome) : '') + '</option>').join('');
-      const alvosOpts = ccOpAlvos().map((c) => '<option value="' + c + '">' + esc(c) + '</option>').join('');
-      const chBase = ccChegadaMs();
-      box.innerHTML = O.map((o, i) => {
-        const chega = chBase ? chBase + ccOndaOffset(o, i) : 0;
-        return '<div style="display:grid;grid-template-columns:18px 74px 88px 1fr 78px 54px 58px;gap:4px;align-items:center;padding:3px 4px;border-bottom:1px solid rgba(0,0,0,.07);font-size:10px">' +
-          '<span style="color:#a2643a">' + (i + 1) + '</span>' +
-          '<select data-onda-alvo="' + o.id + '" class="twmgr-inp" style="width:100%;font-size:9px;padding:1px" title="alvo desta leva">' +
-            '<option value="">(alvo acima)</option>' + alvosOpts + '</select>' +
-          '<select data-onda-org="' + o.id + '" class="twmgr-inp" style="width:100%;font-size:9px;padding:1px">' +
-            '<option value="">(1ª marcada)</option>' + opts + '</select>' +
-          '<span style="color:#6f6153;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(ccOndaTxt(o)) + '">' +
-            (o.rot ? '<b style="color:#8b5426">' + esc(o.rot) + '</b> · ' : '') + esc(ccOndaTxt(o)) + '</span>' +
-          '<span style="color:#2e7d3a;white-space:nowrap" title="chegada calculada desta leva">' + (chega ? srvClockMs(chega) : '—') + '</span>' +
-          '<input data-onda-off="' + o.id + '" class="twmgr-inp" type="number" step="10" style="width:100%;font-size:9px;padding:1px" value="' + ccOndaOffset(o, i) + '">' +
-          '<span style="text-align:right;white-space:nowrap">' +
-            '<a data-onda-up="' + o.id + '" style="cursor:pointer;color:#a2643a" title="subir">▲</a> ' +
-            '<a data-onda-dn="' + o.id + '" style="cursor:pointer;color:#a2643a" title="descer">▼</a> ' +
-            '<a data-onda-ed="' + o.id + '" style="cursor:pointer;color:#2e7d3a" title="carregar nas caixas de tropa">✎</a> ' +
-            '<a data-onda-rm="' + o.id + '" style="cursor:pointer;color:#c0483a" title="remover">✕</a>' +
-          '</span>' +
+      // ---- aldeias participantes ----
+      const alvoP = ccCoordParse(a.coord);
+      const vilas = CCVILAS.slice().sort((x, y) => {
+        const dx = (alvoP && x.x != null) ? fieldDist(x.x, x.y, +alvoP.x, +alvoP.y) : 1e9;
+        const dy = (alvoP && y.x != null) ? fieldDist(y.x, y.y, +alvoP.x, +alvoP.y) : 1e9;
+        return dx - dy;
+      });
+      boxV.innerHTML = vilas.map((v) => {
+        const on = !!a.vids[v.vid];
+        const d = (alvoP && v.x != null) ? fieldDist(v.x, v.y, +alvoP.x, +alvoP.y) : null;
+        const n = (a.ondas || []).filter((o) => String(o.vid) === String(v.vid)).length;
+        return '<div style="display:grid;grid-template-columns:18px 1fr 52px 62px;gap:6px;align-items:center;padding:2px 5px;border-bottom:1px solid rgba(0,0,0,.05);font-size:10px">' +
+          '<input type="checkbox" class="cc-op-v" data-vid="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
+          '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' +
+            (v.nome ? '<b style="color:#584526">' + esc(v.nome) + '</b> ' : '') +
+            '<span style="color:#a2643a">' + esc(v.coord || v.vid) + '</span>' +
+            (n ? '<span style="color:#8a7d6d"> · ' + n + ' onda(s)</span>' : '') + '</span>' +
+          '<span style="color:#8a7d6d">' + (d == null ? '—' : d.toFixed(1) + ' c') + '</span>' +
+          (on ? '<a class="cc-op-add-onda" data-vid="' + v.vid + '" href="#" style="color:#2e7d3a;font-size:9px">+ onda</a>' : '<span></span>') +
         '</div>';
-      }).join('');
-      O.forEach((o) => {
-        const sel = box.querySelector('[data-onda-org="' + o.id + '"]');
-        if (sel) { sel.value = o.origem || ''; sel.onchange = () => { o.origem = sel.value || null; save(); ccOndasAviso(); }; }
-        const alv = box.querySelector('[data-onda-alvo="' + o.id + '"]');
-        if (alv) { alv.value = o.alvo || ''; alv.onchange = () => { o.alvo = alv.value || null; save(); ccOndasRender(); }; }
-        const off = box.querySelector('[data-onda-off="' + o.id + '"]');
-        if (off) off.onchange = () => { o.offsetMs = parseInt(off.value, 10) || 0; save(); ccOndasRender(); };
+      }).join('') || '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma aldeia —</div>';
+      boxV.querySelectorAll('.cc-op-v').forEach((el) => el.onchange = () => {
+        const vid = el.getAttribute('data-vid');
+        if (el.checked) { a.vids[vid] = true; if (!(a.ondas || []).some((o) => String(o.vid) === String(vid))) ccOpOndaAdd(vid); }
+        else { delete a.vids[vid]; a.ondas = a.ondas.filter((o) => String(o.vid) !== String(vid)); }
+        save(); ccOpRender();
       });
-      const mover = (id, d) => {
-        const A = ccOndas(), i = A.findIndex((z) => z.id === id), j = i + d;
-        if (i < 0 || j < 0 || j >= A.length) return;
-        A.splice(j, 0, A.splice(i, 1)[0]);
-        A.forEach((z) => { z.offsetMs = null; });   // reordenou: volta pra defasagem automática
-        save(); ccOndasRender();
-      };
-      box.querySelectorAll('[data-onda-up]').forEach((e) => e.onclick = () => mover(e.getAttribute('data-onda-up'), -1));
-      box.querySelectorAll('[data-onda-dn]').forEach((e) => e.onclick = () => mover(e.getAttribute('data-onda-dn'), 1));
-      box.querySelectorAll('[data-onda-rm]').forEach((e) => e.onclick = () => {
-        config.cmd.ondas = ccOndas().filter((z) => z.id !== e.getAttribute('data-onda-rm'));
-        save(); ccOndasRender();
+      boxV.querySelectorAll('.cc-op-add-onda').forEach((el) => el.onclick = (ev) => {
+        ev.preventDefault(); ccOpOndaAdd(el.getAttribute('data-vid'));
       });
-      box.querySelectorAll('[data-onda-ed]').forEach((e) => e.onclick = () => {
-        const o = ccOndas().find((z) => z.id === e.getAttribute('data-onda-ed')); if (!o) return;
-        UNITS.forEach(([u]) => {
-          const inp = document.getElementById('cc-u-' + u), chk = document.getElementById('cc-max-' + u);
-          if (chk) chk.checked = !!o.max[u];
-          if (inp) { inp.value = o.amounts[u] || ''; inp.disabled = !!o.max[u]; }
-        });
-        const m = document.getElementById('cc-msg');
-        if (m) { m.style.color = '#2e7d3a'; m.textContent = 'Onda carregada nas caixas. Edite e clique em "+ onda" pra criar uma nova, ou ✕ pra remover esta.'; }
+
+      // ---- ondas (a lista ordenada) ----
+      const base = ccOpChegadaBase(a);
+      const listaU = ccUnidadesUI();
+      boxO.innerHTML = (a.ondas || []).length ? a.ondas.map((o, i) => {
+        const v = CCVILAS.find((z) => String(z.vid) === String(o.vid));
+        const nome = v ? ((v.nome ? v.nome + ' ' : '') + (v.coord || o.vid)) : o.vid;
+        const chega = base ? base + ccOpOffset(a, i) : 0;
+        const manual = (o.offsetMs != null);
+        const campos = listaU.map(([u, rot]) => {
+          const disp = (v && v.avail && v.avail[u]) || 0;
+          return '<label style="display:flex;flex-direction:column;align-items:center;gap:1px" title="' + esc(rot) + ' — disponível ' + fmtN(disp) + '">' +
+            unitIcon(u, rot) +
+            '<input class="cc-op-amt" data-id="' + o.id + '" data-u="' + u + '" type="number" min="0" placeholder="0" ' +
+              'value="' + ((o.amounts && o.amounts[u]) || '') + '" style="width:40px;padding:1px;text-align:center;font-size:10px">' +
+            '<span style="font-size:8px;color:#8a7d6d">' + fmtN(disp) + '</span>' +
+          '</label>';
+        }).join('');
+        return '<div style="border-bottom:1px solid rgba(0,0,0,.07);padding:4px 5px">' +
+          '<div style="display:grid;grid-template-columns:18px 1fr 70px 96px 46px;gap:5px;align-items:center;font-size:10px">' +
+            '<span style="color:#a2643a">' + (i + 1) + '</span>' +
+            '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + esc(nome) + '</span>' +
+            '<select class="cc-op-tipo twmgr-inp" data-id="' + o.id + '" style="font-size:9px;padding:1px">' +
+              '<option value="attack"' + (o.tipo !== 'support' ? ' selected' : '') + '>⚔ ataque</option>' +
+              '<option value="support"' + (o.tipo === 'support' ? ' selected' : '') + '>🛡 apoio</option></select>' +
+            '<input class="cc-op-chega" data-id="' + o.id + '" value="' + (chega ? srvClockMs(chega) : '') + '" placeholder="—" ' +
+              'title="horário de chegada desta onda; edite pra calibrar" ' +
+              'style="width:100%;padding:1px;text-align:center;font-size:10px;color:' + (manual ? '#8b5426' : '#2e7d3a') + ';font-weight:' + (manual ? '700' : '400') + '">' +
+            '<span style="text-align:right;white-space:nowrap">' +
+              '<a class="cc-op-up" data-id="' + o.id + '" href="#" style="color:#a2643a" title="subir">▲</a> ' +
+              '<a class="cc-op-dn" data-id="' + o.id + '" href="#" style="color:#a2643a" title="descer">▼</a> ' +
+              '<a class="cc-op-rm" data-id="' + o.id + '" href="#" style="color:#c0483a" title="remover">✕</a></span>' +
+          '</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:4px;margin:3px 0 0 23px">' + campos + '</div>' +
+        '</div>';
+      }).join('') : '<div style="color:#8a7d6d;padding:6px;font-size:10px">— marque uma aldeia acima pra criar a 1ª onda —</div>';
+
+      boxO.querySelectorAll('.cc-op-amt').forEach((el) => el.onchange = () => {
+        const o = a.ondas.find((z) => z.id === el.getAttribute('data-id')); if (!o) return;
+        const n = parseInt(el.value, 10) || 0;
+        o.amounts = o.amounts || {};
+        if (n > 0) o.amounts[el.getAttribute('data-u')] = n; else delete o.amounts[el.getAttribute('data-u')];
+        save(); if (boxR) boxR.innerHTML = ccOpResumo(a);
       });
-      ccOndasAviso();
+      boxO.querySelectorAll('.cc-op-tipo').forEach((el) => el.onchange = () => {
+        const o = a.ondas.find((z) => z.id === el.getAttribute('data-id')); if (!o) return;
+        o.tipo = el.value; save();
+      });
+      // Calibrar: digitar HH:MM:SS.mmm fixa o offset desta onda (deixa de seguir o gap).
+      boxO.querySelectorAll('.cc-op-chega').forEach((el) => el.onchange = () => {
+        const o = a.ondas.find((z) => z.id === el.getAttribute('data-id')); if (!o || !base) return;
+        const m = (el.value || '').match(/(\d{1,2}):(\d{2}):(\d{2})(?:[.,:](\d{1,3}))?/);
+        if (!m) { ccOpRender(); return; }
+        const d = new Date(base - wallToServerOffset());
+        d.setHours(+m[1], +m[2], +m[3], m[4] ? +(m[4] + '00').slice(0, 3) : 0);
+        o.offsetMs = Math.round((d.getTime() + wallToServerOffset()) - base);
+        save(); ccOpRender();
+      });
+      boxO.querySelectorAll('.cc-op-up').forEach((el) => el.onclick = (ev) => { ev.preventDefault(); ccOpOndaMover(el.getAttribute('data-id'), -1); });
+      boxO.querySelectorAll('.cc-op-dn').forEach((el) => el.onclick = (ev) => { ev.preventDefault(); ccOpOndaMover(el.getAttribute('data-id'), 1); });
+      boxO.querySelectorAll('.cc-op-rm').forEach((el) => el.onclick = (ev) => {
+        ev.preventDefault();
+        a.ondas = a.ondas.filter((z) => z.id !== el.getAttribute('data-id'));
+        save(); ccOpRender();
+      });
+      if (boxR) boxR.innerHTML = ccOpResumo(a);
     }
-    function ccOndasAviso() {
-      const av = document.getElementById('cc-trem-aviso'); if (!av) return;
-      const O = ccOndas();
-      if (!O.length) { av.textContent = ''; return; }
-      const partes = [];
-      const e = erroEstimadoMs(), gap = ccGap();
-      if (gap < e * 2) partes.push('⚠ intervalo de ' + gap + 'ms está perto do erro estimado (±' + e + 'ms) — as levas podem trocar de ordem');
-      const semOrigem = O.filter((o) => !o.origem).length;
-      if (semOrigem) partes.push(semOrigem + ' leva(s) sem origem definida usarão a 1ª aldeia marcada');
-      // Resumo por alvo: quantas levas caem em cada um (a operação costuma ter mais de um).
-      const porAlvo = {};
-      O.forEach((o) => { const a = ccOndaAlvo(o); const k = a ? a.coord : '(sem alvo)'; porAlvo[k] = (porAlvo[k] || 0) + 1; });
-      const alvosTxt = Object.keys(porAlvo).map((k) => k + ' (' + porAlvo[k] + ')').join(' · ');
-      if (alvosTxt) partes.push(O.length + ' leva(s) → ' + alvosTxt);
-      av.innerHTML = partes.map(esc).join('<br>');
-      // Tropa somada por aldeia: uma aldeia que manda nuke E trem de nobre pode não ter
-      // tropa pros dois. Sem isto o estouro só aparece no preparo, comando por comando.
-      const faltas = ccOpValidarTropa();
-      if (faltas.length) {
-        av.innerHTML += (av.innerHTML ? '<br>' : '') +
-          '<b style="color:#c0483a">⚠ tropa insuficiente somando as levas da mesma aldeia:</b><br>' +
-          faltas.map((f) => '· ' + esc(f)).join('<br>');
+    // Arma TODAS as ondas do alvo ativo, cada uma com o seu horário. O disparo em si é o
+    // mesmo motor de precisão dos comandos avulsos — cmdAdicionar entrega pro cmdTick.
+    function ccOpArmarAtivo(dizer) {
+      const a = ccOpAtivo();
+      if (!a) return dizer('Crie um alvo primeiro.');
+      const alvoP = ccCoordParse(a.coord);
+      if (!alvoP) return dizer('Alvo inválido. Use 478|586.');
+      const base = ccOpChegadaBase(a);
+      if (!base) return dizer('Defina o horário de chegada da 1ª onda.');
+      if (!(a.ondas || []).length) return dizer('Nenhuma onda neste alvo.');
+      const apoio = a.ondas.some((o) => o.tipo === 'support');
+      if (apoio && !config.cmd.suporteOkAt) {
+        return dizer('Tem onda de apoio, mas o parâmetro de apoio ainda não foi confirmado neste mundo.');
       }
-    }
-    // Atalhos que preenchem o editor
-    function ccNtMontar() {
-      const comp = ccComposicao();
-      const n = Math.max(1, Math.min(8, parseInt((document.getElementById('cc-trem-n') || {}).value, 10) || 4));
-      if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) {
-        const m = document.getElementById('cc-msg');
-        if (m) { m.style.color = '#c0483a'; m.textContent = 'Monte primeiro a composição do NUKE nas caixas de tropa.'; }
-        return;
-      }
-      // Onda 1 = o nuke que está nas caixas (sem nobre); depois, 1 nobre por onda.
-      const nuke = { amounts: Object.assign({}, comp.amounts), max: Object.assign({}, comp.max) };
-      delete nuke.amounts.snob; delete nuke.max.snob;
-      const O = [ccOndaNova(nuke.amounts, nuke.max)];
-      for (let i = 0; i < n; i++) O.push(ccOndaNova({ snob: 1 }, {}));
-      config.cmd.ondas = O; save(); ccOndasRender();
-    }
-    function ccNtDividir() {
-      const comp = ccComposicao();
-      const n = Math.max(2, Math.min(8, parseInt((document.getElementById('cc-trem-n') || {}).value, 10) || 4));
-      const m = document.getElementById('cc-msg');
-      if (Object.keys(comp.max).length) {
-        if (m) { m.style.color = '#c0483a'; m.textContent = 'Pra dividir, use quantidades exatas — "tudo" não dá pra repartir sem saber o estoque da origem.'; }
-        return;
-      }
-      if (!Object.keys(comp.amounts).length) {
-        if (m) { m.style.color = '#c0483a'; m.textContent = 'Preencha as tropas que serão divididas.'; }
-        return;
-      }
-      // Divide igual e joga o resto nas primeiras ondas (4000/3 -> 1334,1333,1333).
-      const O = [];
-      for (let i = 0; i < n; i++) {
-        const a = {};
-        Object.entries(comp.amounts).forEach(([u, tot]) => {
-          const base = Math.floor(tot / n), resto = tot % n;
-          const q = base + (i < resto ? 1 : 0);
-          if (q > 0) a[u] = q;
-        });
-        if (Object.keys(a).length) O.push(ccOndaNova(a, {}));
-      }
-      config.cmd.ondas = O; save(); ccOndasRender();
-    }
-    function ccNtNobres() {
-      const n = Math.max(1, Math.min(8, parseInt((document.getElementById('cc-trem-n') || {}).value, 10) || 4));
-      const O = [];
-      for (let i = 0; i < n; i++) O.push(ccOndaNova({ snob: 1 }, {}));
-      config.cmd.ondas = O; save(); ccOndasRender();
+      let armados = 0; const pulados = [];
+      a.ondas.forEach((o, i) => {
+        const rotO = 'onda ' + (i + 1);
+        const v = CCVILAS.find((z) => String(z.vid) === String(o.vid));
+        if (!v) { pulados.push(rotO + ' (aldeia sumiu)'); return; }
+        const amounts = {};
+        Object.keys(o.amounts || {}).forEach((u) => { if (o.amounts[u] > 0) amounts[u] = o.amounts[u]; });
+        if (!Object.keys(amounts).length) { pulados.push(rotO + ' (sem tropa)'); return; }
+        const chega = base + ccOpOffset(a, i);
+        const t = (v.x != null) ? ccTempoViagemMs(v.x, v.y, alvoP.x, alvoP.y, amounts) : null;
+        if (t != null && (chega - t) <= srvNowP()) { pulados.push(rotO + ' (longe demais)'); return; }
+        cmdAdicionar(o.tipo === 'support' ? 'support' : 'attack', alvoP.x, alvoP.y, amounts, chega, v.vid);
+        armados++;
+      });
+      ccHistAdd(alvoP.coord); ccHistRender();
+      save();
+      if (!armados) return dizer('Nada armado. ' + (pulados.length ? pulados.join(', ') : ''));
+      dizer(armados + ' onda(s) armada(s) → ' + alvoP.coord + ', a 1ª chegando ' + srvClockMs(base) +
+            (pulados.length ? ' · pulada(s): ' + pulados.join(', ') : ''),
+            pulados.length ? '#a2643a' : '#2e7d3a');
     }
 
     function ccPreviaFake() {
@@ -1450,61 +1448,24 @@
       // Fake tem caminho próprio: vários alvos de uma vez, com distribuição escolhida.
       if (tipo === 'fake') return ccArmarFakes(dizer, arriveAt0);
 
+      // Operação tem caminho próprio: alvos e ondas com horário calibrado por leva.
+      if (tipo === 'op') return ccOpArmarAtivo(dizer);
+
       const alvo = ccAlvo();
-      // Na Operação o alvo pode viver em cada leva, então o campo global vira opcional —
-      // desde que toda leva tenha o seu. Nos outros tipos ele continua obrigatório.
-      const opAlvosOk = (tipo === 'nobre') && ccOndas().length && ccOndas().every((o) => !!ccCoordParse(o.alvo));
-      if (!alvo && !opAlvosOk) return dizer('Alvo inválido. Use 478|586 (ou defina o alvo em cada leva).');
+      if (!alvo) return dizer('Alvo inválido. Use 478|586.');
       const arriveAt = arriveAt0;
       if (!arriveAt) return dizer('Defina o horário de chegada.');
       if (arriveAt <= srvNowP()) return dizer('Esse horário já passou.');
-      if (alvo) { ccHistAdd(alvo.coord); ccHistRender(); }
+      ccHistAdd(alvo.coord); ccHistRender();
       if (tipo === 'support' && !config.cmd.suporteOkAt) {
         return dizer('Rode o teste de apoio antes — o parâmetro ainda não foi confirmado neste mundo.');
       }
       const comp = ccComposicao();
+      if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) {
+        return dizer('Escolha as tropas aqui em cima.');
+      }
       const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid]);
-      // Na Operação a tropa e a origem moram em cada leva; as caixas de cima e as marcações
-      // são só o atalho pra CRIAR levas, não requisito pra armar.
-      if (tipo !== 'nobre') {
-        if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) {
-          return dizer('Escolha as tropas aqui em cima.');
-        }
-        if (!marcadas.length) return dizer('Marque ao menos uma origem.');
-      }
-
-      // NT/Ondas: cada onda tem composição, origem e defasagem próprias.
-      if (tipo === 'nobre') {
-        const O = ccOndas();
-        if (!O.length) return dizer('Monte as levas primeiro (marque as origens e use "+ adicionar marcadas").');
-        let armados = 0; const pulados = [];
-        const alvosUsados = {};
-        O.forEach((o, i) => {
-          const rotL = 'leva ' + (i + 1) + (o.rot ? ' (' + o.rot + ')' : '');
-          // Origem da leva: a dela, ou a primeira marcada como padrão.
-          const v = CCVILAS.find((z) => String(z.vid) === String(o.origem)) || marcadas[0];
-          if (!v) { pulados.push(rotL + ' (sem origem)'); return; }
-          // Alvo da leva: o dela, ou o do campo lá em cima.
-          const al = ccOndaAlvo(o);
-          if (!al) { pulados.push(rotL + ' (sem alvo)'); return; }
-          const amounts = ccResolverPara({ amounts: o.amounts, max: o.max }, v.avail);
-          if (!Object.keys(amounts).length) { pulados.push(rotL + ' (vazia)'); return; }
-          const chega = arriveAt + ccOndaOffset(o, i);
-          const t = (v.x != null) ? ccTempoViagemMs(v.x, v.y, al.x, al.y, amounts) : null;
-          if (t != null && (chega - t) <= srvNowP()) { pulados.push(rotL + ' (longe demais)'); return; }
-          const c = cmdAdicionar('nobre', al.x, al.y, amounts, chega, v.vid);
-          c.onda = i + 1; c.ondas = O.length;
-          alvosUsados[al.coord] = 1;
-          armados++;
-        });
-        Object.keys(alvosUsados).forEach((cd) => ccHistAdd(cd));
-        ccHistRender();
-        save();
-        if (!armados) return dizer('Nenhuma leva armada. ' + (pulados.length ? pulados.join(', ') : ''));
-        return dizer(armados + ' leva(s) armada(s) em ' + Object.keys(alvosUsados).length + ' alvo(s), a 1ª chegando ' +
-                     srvClockMs(arriveAt) + (pulados.length ? ' · pulada(s): ' + pulados.join(', ') : ''),
-                     pulados.length ? '#a2643a' : '#2e7d3a');
-      }
+      if (!marcadas.length) return dizer('Marque ao menos uma origem.');
 
       let armados = 0, pulados = [];
       let semTropaAgora = 0;
@@ -1913,15 +1874,9 @@
       const ch = ccChegadaMs();
       const base = n + ' de ' + CCVILAS.length + ' aldeia(s) marcada(s)' + (alvo ? ' → ' + alvo.coord : '') +
                    (ch ? ' · chegando ' + srvClockMs(ch) : '');
-      // Na Operação, várias origens é o normal (era o trem antigo que exigia uma só). O que
-      // importa aqui é quantas levas o plano já tem — as marcadas são só o atalho pra criar.
-      if (ccTipo() === 'nobre') {
-        const qtd = ccOndas().length;
-        el.innerHTML = esc(base) + ' · <b style="color:' + (qtd ? '#2e7d3a' : '#a2643a') + '">' +
-          (qtd ? qtd + ' leva(s) no plano' : 'nenhuma leva ainda — use "+ adicionar marcadas"') + '</b>';
-        return;
-      }
-      el.textContent = base;
+      // A Operação tem lista de aldeias e resumo próprios (por alvo), então este resumo
+      // global — que fala das origens marcadas — não se aplica a ela.
+      el.textContent = (ccTipo() === 'op') ? '' : base;
     }
 
     // Só dá pra mexer no tempo antes do disparo fino assumir. Depois de 'armado' o spin
@@ -2453,33 +2408,31 @@
           '</div>' +
           '<div id="cc-fake-previa" style="font-size:10px;color:#a2643a;margin-bottom:4px"></div>' +
         '</div>' +
-        '<div id="cc-trem-cfg" style="display:none">' +
-          row('Intervalo entre ondas',
-            '<input id="cc-trem-gap" class="twmgr-inp" type="number" min="50" max="5000" step="10" value="150" style="width:70px">' +
-            '<span style="color:#8a7d6d">ms</span>' +
-            '<span style="color:#8a7d6d;margin-left:10px">nobres</span>' +
-            '<input id="cc-trem-n" class="twmgr-inp" type="number" min="1" max="8" value="4" style="width:48px">') +
-          // Criação em massa: uma leva por origem marcada, com o modelo escolhido. É o que
-          // troca "montar 15 levas no dropdown, uma a uma" por dois cliques.
-          '<div style="background:#fbf7ee;border:1px solid #ece4d8;border-radius:6px;padding:6px;margin:4px 0 6px">' +
-            '<div style="font-size:9px;color:#6f6153;margin-bottom:4px">Marque as origens na lista abaixo e adicione-as de uma vez com um papel:</div>' +
-            '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:10px">' +
-              '<select id="cc-op-modelo" class="twmgr-inp" style="width:130px;font-size:10px;padding:1px"></select>' +
-              '<input id="cc-op-alvo" class="twmgr-inp" placeholder="alvo (vazio = o de cima)" style="width:150px;font-size:10px;padding:1px">' +
-              '<button id="cc-op-add" class="twmgr-btn twmgr-go" style="padding:3px 10px;font-size:10px">+ adicionar marcadas</button>' +
-            '</div>' +
+        // OPERAÇÃO: um alvo por vez (o alvo é o container). Dentro dele, as aldeias
+        // participantes e uma LISTA ORDENADA de ondas com horário calibrável.
+        '<div id="cc-op-cfg" style="display:none">' +
+          '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:5px">' +
+            '<span style="font-size:10px;color:#6f6153">Alvo</span>' +
+            '<select id="cc-op-sel" class="twmgr-inp" style="width:170px;font-size:10px;padding:1px"></select>' +
+            '<button id="cc-op-novo" class="twmgr-btn twmgr-ghost" style="padding:2px 8px;font-size:10px">+ novo alvo</button>' +
+            '<button id="cc-op-del" class="twmgr-btn twmgr-ghost" style="padding:2px 8px;font-size:10px" title="remove este alvo e as ondas dele">✕</button>' +
           '</div>' +
-          '<div style="font-size:10px;margin:4px 0 6px">' +
-            '<a id="cc-nt-preset" style="cursor:pointer;color:#2e7d3a">⚡ montar NT (nuke + nobres)</a> · ' +
-            '<a id="cc-nt-dividir" style="cursor:pointer;color:#a2643a">✂ dividir em N levas</a> · ' +
-            '<a id="cc-nt-nobres" style="cursor:pointer;color:#a2643a">👑 só nobres</a> · ' +
-            '<a id="cc-nt-add" style="cursor:pointer;color:#a2643a">+ leva com a composição atual</a> · ' +
-            '<a id="cc-nt-limpar" style="cursor:pointer;color:#c0483a">limpar</a>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:6px">' +
+            '<input id="cc-op-coord" class="twmgr-inp" placeholder="478|586" style="width:96px;font-size:10px;padding:2px">' +
+            '<span style="font-size:10px;color:#6f6153">chega a 1ª onda</span>' +
+            '<input id="cc-op-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:200px;font-size:10px;padding:1px">' +
+            '<span style="font-size:10px;color:#6f6153">gap</span>' +
+            '<input id="cc-op-gap" class="twmgr-inp" type="number" min="50" step="10" style="width:60px;font-size:10px;padding:1px">' +
+            '<span style="font-size:10px;color:#8a7d6d">ms</span>' +
           '</div>' +
-          '<div style="display:grid;grid-template-columns:18px 74px 88px 1fr 78px 54px 58px;gap:4px;font-size:9px;color:#8a7d6d;padding:0 4px 2px">' +
-            '<span>#</span><span>alvo</span><span>origem</span><span>papel · tropas</span><span>chega</span><span>defas.</span><span></span></div>' +
-          '<div id="cc-ondas" style="max-height:170px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
-          '<div id="cc-trem-aviso" style="font-size:10px;color:#a2643a;margin:4px 0 0"></div>' +
+          '<div style="font-size:9px;color:#6f6153;margin-bottom:2px">Aldeias deste alvo <span style="color:#8a7d6d">— marque e use <b>+ onda</b></span></div>' +
+          '<div id="cc-op-vilas" style="max-height:120px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px;margin-bottom:6px"></div>' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">' +
+            '<span style="font-size:9px;color:#6f6153">Ondas <span style="color:#8a7d6d">(ordem de chegada)</span></span>' +
+            '<a id="cc-op-limpar" style="cursor:pointer;color:#c0483a;font-size:9px">limpar ondas</a>' +
+          '</div>' +
+          '<div id="cc-op-ondas" style="max-height:230px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+          '<div id="cc-op-resumo" style="font-size:10px;color:#6f6153;margin-top:4px"></div>' +
         '</div>' +
           // Apoio em massa: aparece só quando a aba 🚚 está ativa. Usa as origens marcadas abaixo.
           '<div id="cc-massa-cfg" style="display:none">' +
@@ -2511,7 +2464,7 @@
           '</div>' +
         '</div>' +
         // Origens: cada aldeia com distância e tempo já calculados pela unidade mais lenta.
-        '<div style="margin:8px 0 4px;border-top:1px solid #ece4d8;padding-top:6px">' +
+        '<div id="cc-origens-sec" style="margin:8px 0 4px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
             '<span data-sec="origens" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Origens</span>' +
             '<span style="font-size:10px">' +
@@ -2575,18 +2528,28 @@
       // Apoio em massa
       document.getElementById('cc-massa-enviar').addEventListener('click', () => { keepAwake(true); ccMassaEnviar(); });
       ccMassaUnidades();
-      // Atalhos do editor de ondas
-      document.getElementById('cc-nt-preset').onclick = ccNtMontar;
-      document.getElementById('cc-nt-dividir').onclick = ccNtDividir;
-      document.getElementById('cc-nt-nobres').onclick = ccNtNobres;
-      document.getElementById('cc-nt-add').onclick = () => {
-        const comp = ccComposicao();
-        if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) return;
-        ccOndas().push(ccOndaNova(comp.amounts, comp.max)); save(); ccOndasRender();
+      // ---- Operação ----
+      document.getElementById('cc-op-sel').addEventListener('change', (e) => {
+        ccOpCfg().ativo = e.target.value; save(); ccOpRender();
+      });
+      document.getElementById('cc-op-novo').onclick = ccOpAlvoNovo;
+      document.getElementById('cc-op-del').onclick = ccOpAlvoDel;
+      document.getElementById('cc-op-coord').addEventListener('change', (e) => {
+        const a = ccOpAtivo(); if (!a) return;
+        const p = ccCoordParse(e.target.value);
+        a.coord = p ? p.coord : ''; save(); ccOpRender();
+      });
+      document.getElementById('cc-op-chegada').addEventListener('change', (e) => {
+        const a = ccOpAtivo(); if (!a) return;
+        a.chegadaLocal = e.target.value; save(); ccOpRender();
+      });
+      document.getElementById('cc-op-gap').addEventListener('change', (e) => {
+        ccOpCfg().gapMs = Math.max(50, parseInt(e.target.value, 10) || 100); save(); ccOpRender();
+      });
+      document.getElementById('cc-op-limpar').onclick = () => {
+        const a = ccOpAtivo(); if (!a) return;
+        a.ondas = []; save(); ccOpRender();
       };
-      document.getElementById('cc-nt-limpar').onclick = () => { config.cmd.ondas = []; save(); ccOndasRender(); };
-      document.getElementById('cc-op-add').onclick = ccOpAddMarcadas;
-      ccOpModelosSelect();
       const ordEl = document.getElementById('cc-fila-ordem');
       ordEl.value = config.cmd.filaOrdem || 'chegada';
       ordEl.addEventListener('change', () => { config.cmd.filaOrdem = ordEl.value; save(); ccRender(); });
@@ -2606,8 +2569,6 @@
         cmdFila().forEach((c) => { if (c.durMs != null && ccEditavel(c)) cmdRecalc(c); });
         save(); ccRender();
       });
-      const gapEl2 = document.getElementById('cc-trem-gap');
-      if (gapEl2) gapEl2.addEventListener('input', () => { ccOndasRender(); });
       // Mostra os campos do trem só quando o tipo é trem, e avisa quando o intervalo pedido
       // fica abaixo do jitter medido — aí a ORDEM das ondas vira sorteio.
       const attTrem = () => {
@@ -2624,22 +2585,26 @@
         });
         const hint = document.getElementById('cc-aba-hint');
         if (hint) hint.textContent = def.hint;
-        const cfg = document.getElementById('cc-trem-cfg');
-        if (cfg) cfg.style.display = (tipo === 'nobre') ? 'block' : 'none';
         const fk = document.getElementById('cc-fake-cfg');
         if (fk) fk.style.display = (tipo === 'fake') ? 'block' : 'none';
-        // Apoio em massa: mostra a UI própria e some com o fluxo de agendamento (grade + Armar).
-        const massa = (tipo === 'massa');
+        // Operação e Apoio em massa têm UI própria: ambas escondem a grade de tropas global.
+        // A Operação esconde também a lista de Origens (ela tem a sua, por alvo).
+        const massa = (tipo === 'massa'), op = (tipo === 'op');
         const mcfg = document.getElementById('cc-massa-cfg'); if (mcfg) mcfg.style.display = massa ? 'block' : 'none';
-        const tsec = document.getElementById('cc-tropas-sec'); if (tsec) tsec.style.display = massa ? 'none' : 'block';
+        const ocfg = document.getElementById('cc-op-cfg'); if (ocfg) ocfg.style.display = op ? 'block' : 'none';
+        const tsec = document.getElementById('cc-tropas-sec'); if (tsec) tsec.style.display = (massa || op) ? 'none' : 'block';
+        const osec = document.getElementById('cc-origens-sec'); if (osec) osec.style.display = op ? 'none' : 'block';
         const arow = document.getElementById('cc-armar-row'); if (arow) arow.style.display = massa ? 'none' : 'flex';
-        // O campo de alvo único não serve pro fake (que usa a lista) — deixa claro.
+        // O campo de alvo único não serve pro fake (lista própria) nem pra Operação (alvo por bloco).
+        const semAlvoGlobal = (tipo === 'fake' || op);
         const al = document.getElementById('cc-alvo');
-        if (al) { al.disabled = (tipo === 'fake'); al.style.opacity = (tipo === 'fake') ? '.4' : '1'; }
+        if (al) { al.disabled = semAlvoGlobal; al.style.opacity = semAlvoGlobal ? '.4' : '1'; }
+        const ch = document.getElementById('cc-chegada');
+        if (ch) { ch.disabled = op; ch.style.opacity = op ? '.4' : '1'; }
         const btn = document.getElementById('cc-armar');
-        if (btn) btn.textContent = '▶ Armar ' + def.rot.toLowerCase();
+        if (btn) btn.textContent = op ? '▶ Armar este alvo' : ('▶ Armar ' + def.rot.toLowerCase());
         if (tipo === 'fake') ccPreviaFake();
-        if (tipo === 'nobre') ccOndasRender();   // ele já cuida do aviso de intervalo/origens
+        if (op) ccOpRender();
         ccRenderOrigens();
       };
       _ccAttTipo = attTrem;   // o snipe troca a aba pra Apoio e precisa redesenhar

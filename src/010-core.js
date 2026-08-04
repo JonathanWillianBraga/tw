@@ -180,7 +180,7 @@
   // nível de cima, porque são parâmetros de CADA modo específico, não estado de execução.
   const MARKET_MODES = ['cunhagem', 'equilibrio', 'solidario'];
   const MARKET_MODE_LABEL = { cunhagem: 'Cunhagem', equilibrio: 'Equilíbrio', solidario: 'Solidário' };
-  const defMarketModeState = () => ({ running: false, nextAt: 0, stats: {}, stopAt: 0 });
+  const defMarketModeState = () => ({ running: false, nextAt: 0, stats: {}, stopAt: 0, totalCoins: 0 });
   const defMarket = () => ({
     modes: { cunhagem: defMarketModeState(), equilibrio: defMarketModeState(), solidario: defMarketModeState() },
     interval: 600, destCoords: [], reserveWood: 0, reserveStone: 0, reserveIron: 0,
@@ -449,6 +449,7 @@
     }
     MARKET_MODES.forEach((k) => { if (!c.market.modes[k]) c.market.modes[k] = defMarketModeState(); });
     if (c.market.modes.cunhar) delete c.market.modes.cunhar;
+    if (c.market.modes.cunhagem && c.market.modes.cunhagem.totalCoins == null) c.market.modes.cunhagem.totalCoins = 0;
     // Migração: Cunhagem trocou coordenada única + checkbox + reserva única por grupos do
     // TW + múltiplos destinos + reserva por recurso, e absorveu o antigo modo "Cunhar" (agora
     // é o toggle "cunhagem automática"). Não dá pra converter checkbox -> grupo automaticamente,

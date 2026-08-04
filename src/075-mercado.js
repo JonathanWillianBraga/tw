@@ -130,6 +130,7 @@
         } catch (e) { pushLog('Cunhagem automática em ' + v.name + ': ' + (e.message || e), 'err', 'market'); }
         await sleep(400 + Math.floor(Math.random() * 400));
       }
+      config.market.modes.cunhagem.totalCoins = (config.market.modes.cunhagem.totalCoins || 0) + coins;
     }
 
     config.market.modes.cunhagem.stats = { sending: count, receiving: destCoords.length, wood: tot.wood, stone: tot.stone, iron: tot.iron, coins: coins };

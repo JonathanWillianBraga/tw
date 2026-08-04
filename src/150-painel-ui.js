@@ -244,7 +244,8 @@
             '<div class="twmgr-row"><label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#5c4527"><input id="twmgr-mk-automint" type="checkbox">Cunhagem automática (moedas de ouro nas aldeias destino)</label></div>' +
             '<div class="twmgr-row"><label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#5c4527"><input id="twmgr-mk-stopon" type="checkbox">Parada programada, após</label><input id="twmgr-mk-stophours" class="twmgr-inp" type="number" min="0.1" step="0.5" value="2" style="width:56px"><span class="twmgr-lbl">h</span></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-cunhagem-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-cunhagem-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
-            '<div id="twmgr-mk-cunhagem-status" class="twmgr-cstatus"></div>') +
+            '<div id="twmgr-mk-cunhagem-status" class="twmgr-cstatus"></div>' +
+            '<div id="twmgr-mk-cunhagem-coins" style="font-size:10px;color:#6e5a2a;margin-top:2px"></div>') +
         sec('⚖️ Equilíbrio',
             '<div style="font-size:10px;color:#6e5a2a;margin-bottom:4px">Aldeia acima do limiar doa o excedente pras abaixo, por recurso. Da mais perto primeiro.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Encher armazém até (%)</span><input id="twmgr-mk-thr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
@@ -657,6 +658,7 @@
     document.getElementById('twmgr-mk-automint').checked = !!config.market.autoMint;
     document.getElementById('twmgr-mk-stopon').checked = !!config.market.cunhagemStopEnabled;
     document.getElementById('twmgr-mk-stophours').value = config.market.cunhagemStopHours != null ? config.market.cunhagemStopHours : 2;
+    document.getElementById('twmgr-mk-cunhagem-coins').textContent = '🪙 Total cunhado: ' + fmtN(config.market.modes.cunhagem.totalCoins || 0) + ' moeda(s)';
     document.getElementById('twmgr-mk-int').value = Math.round((config.market.interval || 600) / 60);
     document.getElementById('twmgr-mk-thr').value = config.market.thresholdPct != null ? config.market.thresholdPct : 50;
     document.getElementById('twmgr-mk-dist').value = config.market.maxDist != null ? config.market.maxDist : 15;

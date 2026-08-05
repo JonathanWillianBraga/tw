@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.45.0
+// @version      11.46.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.45.0';
+  const VERSION = '11.46.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -178,10 +178,21 @@
   const FARM_COLORS = ['greenEmpty', 'greenFull', 'yellowEmpty', 'yellowFull', 'blue'];
   const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, blueMaxWall: 0, delay: 500, mode: 'suave', group: null, repeat: false, repeatMin: 10, minCL: 0, order: 'dist', dynTemplate: false, matrix: defFarmMatrix(), sentReports: {}, defended: {} });
   const defWall = () => ({ running: false, nextAt: 0, interval: 600, wallMin: 1, wallMax: 6, ramMode: 'auto', ramFixed: 20, ramWall6: 24, axeCount: 80, spyCount: 1, sentDemo: {} });
+  // Recrutar no molde do "Gerente de conta → Tropas": MODELOS nomeados aplicados a aldeias.
+  //
+  // `templates[id] = { name, targets, grupo }` — o `grupo` é opcional e cobre o desenho antigo
+  // (um perfil servindo um grupo inteiro). `villages[vid] = { tpl, paused }` é a atribuição
+  // individual, que VENCE o grupo. Os dois juntos são um superconjunto do que existia.
+  //
+  // `targets` continua sendo quantidade-ALVO (manutenção), não pedido único: a tela do jogo é
+  // one-shot porque é manual; aqui o ciclo repete, então manter nível é o que faz sentido.
+  const defRecruitTpl = (name) => ({ name: name, targets: {}, grupo: '' });
   const defRecruit = () => ({
     running: false, nextAt: 0, interval: 600, targetHours: 2, refillBelowMin: 30,
-    groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
-    groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo
+    templates: {}, villages: {}, filterGroup: '', seguirGrupo: false, grupoTpl: '',
+    overrides: {}, queueEst: {},
+    // Campos do desenho antigo. NÃO são mais lidos — ficam só pra um revert achar os dados.
+    groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, groups: [],
   });
   // Limite de fake do mundo: o ataque precisa de pop >= pontos_da_origem * FAKE_LIMIT_PCT%. Era o
   // ajuste "pct" do módulo Fakes; virou constante quando ele saiu (v11.16.0). Quem usa é o SAQUE,
@@ -653,7 +664,45 @@
     // então o campo não é mais lido; apagar aqui evita que ele volte a assombrar um dia.
     delete c.noble.maxAldeiasProd;
     if (c.noble.interval == null) c.noble.interval = 900;
+    if (!c.recruit.templates || typeof c.recruit.templates !== 'object') c.recruit.templates = {};
+    if (!c.recruit.villages || typeof c.recruit.villages !== 'object') c.recruit.villages = {};
+    if (c.recruit.filterGroup == null) c.recruit.filterGroup = '';
+    if (c.recruit.seguirGrupo == null) c.recruit.seguirGrupo = false;
+    if (c.recruit.grupoTpl == null) c.recruit.grupoTpl = '';
+    // MIGRAÇÃO do desenho antigo (perfil→grupo) pro novo (modelo com grupo opcional). Roda uma
+    // vez: depois de criada, a lista de modelos existe e o bloco não entra mais.
+    //
+    // É SINCRONA de propósito — só remapeia estrutura, sem consultar o jogo. O normalizador roda
+    // dentro do load(), onde não dá pra fazer fetch; uma migração que dependesse de rede deixaria
+    // o usuário sem config no primeiro carregamento com a conexão ruim.
+    if (!Object.keys(c.recruit.templates).length) {
+      const temAlgo = (t) => t && Object.keys(t).some((u) => (t[u] || 0) > 0);
+      const velho = c.recruit.profiles || {};
+      if (temAlgo((velho.atk || {}).targets) || c.recruit.groupAtk) {
+        c.recruit.templates.atk = { name: 'ATK', targets: (velho.atk || {}).targets || {}, grupo: c.recruit.groupAtk || '' };
+      }
+      if (temAlgo((velho.def || {}).targets) || c.recruit.groupDef) {
+        c.recruit.templates.def = { name: 'DEF', targets: (velho.def || {}).targets || {}, grupo: c.recruit.groupDef || '' };
+      }
+      (c.recruit.groups || []).forEach((g, i) => {
+        if (!g) return;
+        const id = 'g' + (g.id || i);
+        c.recruit.templates[id] = { name: g.name || ('Grupo ' + (i + 1)), targets: g.targets || {}, grupo: g.groupId || '' };
+      });
+    }
+    Object.keys(c.recruit.templates).forEach((id) => {
+      const t = c.recruit.templates[id];
+      if (!t || typeof t !== 'object') { delete c.recruit.templates[id]; return; }
+      if (!t.name) t.name = id;
+      if (!t.targets || typeof t.targets !== 'object') t.targets = {};
+      if (t.grupo == null) t.grupo = '';
+    });
+    // Aldeia apontando pra modelo que sumiu perderia o recrutamento em silêncio.
+    Object.keys(c.recruit.villages).forEach((vid) => {
+      if (!c.recruit.templates[c.recruit.villages[vid].tpl]) delete c.recruit.villages[vid];
+    });
     if (!c.map) c.map = defMap();
+
     // Reformulação do Mapa: de one-shot pra ciclo contínuo, com base de conhecimento e
     // blacklists. Campos novos entram sem apagar o que já existe.
     if (typeof c.map.cicloMin !== 'number' || c.map.cicloMin < 5) c.map.cicloMin = 30;

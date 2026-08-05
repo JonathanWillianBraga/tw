@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.45.0
+// @version      11.46.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.45.0';
+  const VERSION = '11.46.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -178,10 +178,21 @@
   const FARM_COLORS = ['greenEmpty', 'greenFull', 'yellowEmpty', 'yellowFull', 'blue'];
   const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, blueMaxWall: 0, delay: 500, mode: 'suave', group: null, repeat: false, repeatMin: 10, minCL: 0, order: 'dist', dynTemplate: false, matrix: defFarmMatrix(), sentReports: {}, defended: {} });
   const defWall = () => ({ running: false, nextAt: 0, interval: 600, wallMin: 1, wallMax: 6, ramMode: 'auto', ramFixed: 20, ramWall6: 24, axeCount: 80, spyCount: 1, sentDemo: {} });
+  // Recrutar no molde do "Gerente de conta → Tropas": MODELOS nomeados aplicados a aldeias.
+  //
+  // `templates[id] = { name, targets, grupo }` — o `grupo` é opcional e cobre o desenho antigo
+  // (um perfil servindo um grupo inteiro). `villages[vid] = { tpl, paused }` é a atribuição
+  // individual, que VENCE o grupo. Os dois juntos são um superconjunto do que existia.
+  //
+  // `targets` continua sendo quantidade-ALVO (manutenção), não pedido único: a tela do jogo é
+  // one-shot porque é manual; aqui o ciclo repete, então manter nível é o que faz sentido.
+  const defRecruitTpl = (name) => ({ name: name, targets: {}, grupo: '' });
   const defRecruit = () => ({
     running: false, nextAt: 0, interval: 600, targetHours: 2, refillBelowMin: 30,
-    groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, overrides: {}, queueEst: {},
-    groups: [],   // perfis adicionais livres: [{id, name, groupId, targets}] — além do ATK/DEF fixo
+    templates: {}, villages: {}, filterGroup: '', seguirGrupo: false, grupoTpl: '',
+    overrides: {}, queueEst: {},
+    // Campos do desenho antigo. NÃO são mais lidos — ficam só pra um revert achar os dados.
+    groupAtk: null, groupDef: null, profiles: { atk: { targets: {} }, def: { targets: {} } }, groups: [],
   });
   // Limite de fake do mundo: o ataque precisa de pop >= pontos_da_origem * FAKE_LIMIT_PCT%. Era o
   // ajuste "pct" do módulo Fakes; virou constante quando ele saiu (v11.16.0). Quem usa é o SAQUE,
@@ -653,7 +664,45 @@
     // então o campo não é mais lido; apagar aqui evita que ele volte a assombrar um dia.
     delete c.noble.maxAldeiasProd;
     if (c.noble.interval == null) c.noble.interval = 900;
+    if (!c.recruit.templates || typeof c.recruit.templates !== 'object') c.recruit.templates = {};
+    if (!c.recruit.villages || typeof c.recruit.villages !== 'object') c.recruit.villages = {};
+    if (c.recruit.filterGroup == null) c.recruit.filterGroup = '';
+    if (c.recruit.seguirGrupo == null) c.recruit.seguirGrupo = false;
+    if (c.recruit.grupoTpl == null) c.recruit.grupoTpl = '';
+    // MIGRAÇÃO do desenho antigo (perfil→grupo) pro novo (modelo com grupo opcional). Roda uma
+    // vez: depois de criada, a lista de modelos existe e o bloco não entra mais.
+    //
+    // É SINCRONA de propósito — só remapeia estrutura, sem consultar o jogo. O normalizador roda
+    // dentro do load(), onde não dá pra fazer fetch; uma migração que dependesse de rede deixaria
+    // o usuário sem config no primeiro carregamento com a conexão ruim.
+    if (!Object.keys(c.recruit.templates).length) {
+      const temAlgo = (t) => t && Object.keys(t).some((u) => (t[u] || 0) > 0);
+      const velho = c.recruit.profiles || {};
+      if (temAlgo((velho.atk || {}).targets) || c.recruit.groupAtk) {
+        c.recruit.templates.atk = { name: 'ATK', targets: (velho.atk || {}).targets || {}, grupo: c.recruit.groupAtk || '' };
+      }
+      if (temAlgo((velho.def || {}).targets) || c.recruit.groupDef) {
+        c.recruit.templates.def = { name: 'DEF', targets: (velho.def || {}).targets || {}, grupo: c.recruit.groupDef || '' };
+      }
+      (c.recruit.groups || []).forEach((g, i) => {
+        if (!g) return;
+        const id = 'g' + (g.id || i);
+        c.recruit.templates[id] = { name: g.name || ('Grupo ' + (i + 1)), targets: g.targets || {}, grupo: g.groupId || '' };
+      });
+    }
+    Object.keys(c.recruit.templates).forEach((id) => {
+      const t = c.recruit.templates[id];
+      if (!t || typeof t !== 'object') { delete c.recruit.templates[id]; return; }
+      if (!t.name) t.name = id;
+      if (!t.targets || typeof t.targets !== 'object') t.targets = {};
+      if (t.grupo == null) t.grupo = '';
+    });
+    // Aldeia apontando pra modelo que sumiu perderia o recrutamento em silêncio.
+    Object.keys(c.recruit.villages).forEach((vid) => {
+      if (!c.recruit.templates[c.recruit.villages[vid].tpl]) delete c.recruit.villages[vid];
+    });
     if (!c.map) c.map = defMap();
+
     // Reformulação do Mapa: de one-shot pra ciclo contínuo, com base de conhecimento e
     // blacklists. Campos novos entram sem apagar o que já existe.
     if (typeof c.map.cicloMin !== 'number' || c.map.cicloMin < 5) c.map.cicloMin = 30;
@@ -2420,26 +2469,47 @@
     }
   }
 
+  // Monta { vid: {name, targets} } — o que o motor consome. Três camadas, da mais genérica pra
+  // mais específica, cada uma sobrescrevendo a anterior:
+  //   1. modelo com GRUPO   → vale pra todas as aldeias daquele grupo
+  //   2. aldeia com MODELO  → escolha individual, vence o grupo
+  //   3. override           → quantidade avulsa daquela aldeia, vence tudo
+  //
+  // A ordem importa: sem ela, uma aldeia que você tirou do padrão do grupo voltaria pro padrão
+  // no ciclo seguinte, e a escolha individual nunca pegaria.
   async function resolveTargets() {
     const r = config.recruit, map = {};
-    const add = (list, targets) => (list || []).forEach((v) => { if (map[v.vid]) return; map[v.vid] = { name: v.coord || v.vid, targets: targets }; });
-    let atkV = [], defV = [];
-    if (r.groupAtk) { try { atkV = await getVillagesInGroup(r.groupAtk); } catch (e) { pushLog('Recrutar: erro grupo ATK: ' + (e.message || e), 'err'); } }
-    if (r.groupDef) { try { defV = await getVillagesInGroup(r.groupDef); } catch (e) { pushLog('Recrutar: erro grupo DEF: ' + (e.message || e), 'err'); } }
-    add(atkV, r.profiles.atk.targets); add(defV, r.profiles.def.targets);
-    // Grupos adicionais livres (quantos o usuário quiser, cada um ligado a 1 grupo do TW) — resolvidos DEPOIS
-    // do ATK/DEF fixo, então uma aldeia que já está no ATK/DEF antigo mantém o comportamento de sempre.
-    for (const g of (r.groups || [])) {
-      if (!g.groupId) continue;
+    const tpls = r.templates || {};
+
+    // 1. modelos amarrados a grupo
+    let usouGrupo = false;
+    for (const id of Object.keys(tpls)) {
+      const t = tpls[id];
+      if (!t.grupo) continue;
       let vs = [];
-      try { vs = await getVillagesInGroup(g.groupId); } catch (e) { pushLog('Recrutar: erro no grupo "' + (g.name || g.id) + '": ' + (e.message || e), 'err'); continue; }
-      add(vs, g.targets || {});
+      try { vs = await getVillagesInGroup(t.grupo); }
+      catch (e) { pushLog('Recrutar: erro no grupo do modelo "' + (t.name || id) + '": ' + (e.message || e), 'err', 'recruit'); continue; }
+      usouGrupo = true;
+      (vs || []).forEach((v) => { map[v.vid] = { name: v.coord || v.name || v.vid, targets: t.targets || {}, tpl: id }; });
     }
-    const anyGroup = r.groupAtk || r.groupDef || (r.groups || []).some((g) => g.groupId);
-    if (anyGroup) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} } // reseta grupo p/ "todos"
+    // Ler grupo deixa o jogo com aquele grupo selecionado; volta pra "todos" pra não afetar as
+    // outras telas do usuário.
+    if (usouGrupo) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
+
+    // 2. atribuição individual
+    Object.keys(r.villages || {}).forEach((vid) => {
+      const a = r.villages[vid];
+      if (a.paused) { delete map[vid]; return; }      // pausada sai, mesmo que o grupo mande
+      const t = tpls[a.tpl];
+      if (!t) return;
+      map[vid] = { name: a.coord || a.name || vid, targets: t.targets || {}, tpl: a.tpl };
+    });
+
+    // 3. override avulso
     Object.entries(r.overrides || {}).forEach(([vid, o]) => { map[vid] = { name: o.name || vid, targets: o.targets }; });
     return map;
   }
+
   async function getRecruitState(vid) {
     const res = await fetch('/game.php?village=' + vid + '&screen=train', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
@@ -2532,6 +2602,7 @@
     return true;
   }
   async function recruitTick() {
+
     clearTimeout(recruitTimer);
     if (!config.recruit.running) return;
     if (lockOther()) { recruitTimer = setTimeout(recruitTick, 5000); return; }
@@ -2539,6 +2610,12 @@
     claimLock();
     const now = Date.now();
     if ((config.recruit.nextAt || 0) > now) { scheduleRecruit(); return; }
+    // Quem entrou no grupo desde o último ciclo entra na gestão.
+    if (config.recruit.seguirGrupo && config.recruit.filterGroup) {
+      try { await rcSincronizarGrupo(); }
+      catch (e) { pushLog('Recrutar: não consegui ler o grupo (' + (e.message || e) + ') — sigo com a lista atual.', '', 'recruit'); }
+    }
+
     let map;
     try { map = await resolveTargets(); }
     catch (e) { pushLog('Recrutar: erro ao resolver os alvos (' + (e.message || e) + ').', 'err', 'recruit'); config.recruit.nextAt = now + 120000; save(); scheduleRecruit(); return; }
@@ -2584,103 +2661,211 @@
     scheduleRecruit();
   }
   function scheduleRecruit() { clearTimeout(recruitTimer); if (!config.recruit.running) return; recruitTimer = setTimeout(recruitTick, Math.min(Math.max((config.recruit.nextAt || 0) - Date.now(), 1000), 60000)); }
-  function recruitProfileHTML(prof, label) {
-    const t = (config.recruit.profiles[prof] || {}).targets || {};
-    const rows = RUNITS.map(([u, n]) =>
-      '<div style="display:flex;align-items:center;gap:5px;margin:1px 0">' +
-      '<input type="checkbox" class="twmgr-ron" data-prof="' + prof + '" data-unit="' + u + '"' + (t[u] !== undefined ? ' checked' : '') + '>' +
-      unitIcon(u, n) + '<span style="flex:1;font-size:10px">' + n + '</span>' +
-      '<input class="twmgr-rt" data-prof="' + prof + '" data-unit="' + u + '" type="number" min="0" placeholder="∞" value="' + (t[u] != null ? t[u] : '') + '" style="width:60px" title="alvo (vazio = contínuo)">' +
-      '</div>').join('');
-    return '<div style="font-size:11px;color:#8b5426;margin:6px 0 2px">' + label + '</div>' + rows;
-  }
+  // ===== Modelos de recrutamento =====
+  // Mesmo desenho de Construções e Pesquisa: modelo nomeado + tabela de aldeias. A diferença
+  // é que aqui o modelo pode ficar amarrado a um GRUPO, que era como este módulo funcionava
+  // antes — assim quem já usava perfil-por-grupo não precisa marcar aldeia por aldeia.
+  let _rcTplAtivo = '';
+  let _rcPool = [];              // aldeias disponíveis pra marcar na tabela
   let _twGroupsCache = [];
+
+  function rcTplIds() { return Object.keys(config.recruit.templates || {}); }
+  function rcTplAtivo() {
+    const ids = rcTplIds();
+    if (ids.indexOf(_rcTplAtivo) < 0) _rcTplAtivo = ids[0] || '';
+    return config.recruit.templates[_rcTplAtivo] || null;
+  }
+  function rcFillTplSelects() {
+    const ids = rcTplIds();
+    if (ids.indexOf(_rcTplAtivo) < 0) _rcTplAtivo = ids[0] || '';
+    const opts = ids.map((id) => '<option value="' + esc(id) + '">'
+      + esc(config.recruit.templates[id].name || id) + '</option>').join('');
+    const sel = document.getElementById('twmgr-rc-tpl');
+    if (sel) { sel.innerHTML = opts; sel.value = _rcTplAtivo; }
+    const mass = document.getElementById('twmgr-rc-mass-tpl');
+    if (mass) { const antes = mass.value; mass.innerHTML = opts; if (ids.indexOf(antes) >= 0) mass.value = antes; }
+    const gt = document.getElementById('twmgr-rc-grptpl');
+    if (gt) {
+      gt.innerHTML = '<option value="">— escolha —</option>' + opts;
+      gt.value = config.recruit.grupoTpl || '';
+    }
+  }
+
+  // Editor do modelo ativo: uma linha por unidade, com alvo. Campo VAZIO = contínuo (recruta
+  // sempre que couber); 0 = não recruta. A distinção vem do desenho antigo e foi mantida.
+  function rcRenderEditor() {
+    const box = document.getElementById('twmgr-rc-editor'); if (!box) return;
+    const t = rcTplAtivo();
+    if (!t) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">— crie um modelo com ✚ —</div>'; return; }
+    const tg = t.targets || {};
+    const gopts = '<option value="">— nenhum —</option>' + _twGroupsCache.map((gr) =>
+      '<option value="' + gr.id + '"' + (String(t.grupo || '') === String(gr.id) ? ' selected' : '') + '>'
+      + esc(gr.name) + '</option>').join('');
+    box.innerHTML =
+      '<div class="twmgr-fld"><span title="Todas as aldeias deste grupo usam este modelo, sem precisar marcar uma a uma">Aplicar ao grupo</span>' +
+        '<select id="twmgr-rc-tplgrp" class="twmgr-inp" style="flex:0 0 150px;width:150px">' + gopts + '</select></div>' +
+      '<div class="twmgr-ug">' + unitsDoMundo().filter((u) => u[0] !== 'knight' && u[0] !== 'snob').map((u) =>
+        '<div><div class="h" title="' + esc(u[1]) + '">'
+        + '<span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span><em>' + esc(u[1]) + '</em></div>'
+        + '<input class="twmgr-rc-t twmgr-inp" data-unit="' + u[0] + '" type="number" min="0" placeholder="—"'
+        + ' value="' + (tg[u[0]] != null ? tg[u[0]] : '') + '"></div>').join('') + '</div>' +
+      '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Vazio = <b>não recruta</b> essa unidade. Número = alvo a <b>manter</b> — ele repõe quando cai abaixo.</div>';
+  }
+  function rcLerEditor() {
+    const t = rcTplAtivo(); if (!t) return;
+    const tg = {};
+    document.querySelectorAll('.twmgr-rc-t').forEach((i) => {
+      if (String(i.value).trim() === '') return;
+      const v = parseInt(i.value, 10);
+      if (!Number.isNaN(v) && v >= 0) tg[i.getAttribute('data-unit')] = v;
+    });
+    t.targets = tg;
+    const g = document.getElementById('twmgr-rc-tplgrp');
+    if (g) t.grupo = g.value || '';
+  }
+  function rcSwitchTpl(id) {
+    if (!config.recruit.templates[id]) return;
+    rcLerEditor(); save();          // salva o que estava na tela antes de trocar
+    _rcTplAtivo = id;
+    rcFillTplSelects(); rcRenderEditor();
+  }
+  function rcNovoModelo() {
+    const nome = prompt('Nome do modelo de recrutamento:', 'Ofensivo');
+    if (!nome || !nome.trim()) return;
+    const at = rcTplAtivo();
+    const copiar = at && confirm('Copiar as quantidades de "' + at.name + '"?\n\nOK = copiar   -   Cancelar = do zero');
+    const id = 'r' + Date.now().toString(36);
+    config.recruit.templates[id] = copiar
+      ? { name: nome.trim().slice(0, 40), targets: JSON.parse(JSON.stringify(at.targets || {})), grupo: '' }
+      : defRecruitTpl(nome.trim().slice(0, 40));
+    _rcTplAtivo = id;
+    save(); rcFillTplSelects(); rcRenderEditor(); rcRenderVillages();
+  }
+  function rcRenomearModelo() {
+    const t = rcTplAtivo(); if (!t) return;
+    const nome = prompt('Novo nome:', t.name);
+    if (!nome || !nome.trim()) return;
+    t.name = nome.trim().slice(0, 40);
+    save(); rcFillTplSelects(); rcRenderVillages();
+  }
+  function rcApagarModelo() {
+    const t = rcTplAtivo(); if (!t) return;
+    const usando = Object.keys(config.recruit.villages || {}).filter((v) => config.recruit.villages[v].tpl === _rcTplAtivo);
+    if (!confirm('Apagar o modelo "' + t.name + '"?'
+      + (usando.length ? '\n\n' + usando.length + ' aldeia(s) usam ele e saem da gestão.' : ''))) return;
+    delete config.recruit.templates[_rcTplAtivo];
+    usando.forEach((v) => { delete config.recruit.villages[v]; });
+    _rcTplAtivo = rcTplIds()[0] || '';
+    save(); rcFillTplSelects(); rcRenderEditor(); rcRenderVillages();
+  }
+
+  // ===== Tabela de aldeias =====
+  async function rcCarregarAldeias() {
+    const btn = document.getElementById('twmgr-rc-vil-reload');
+    if (btn) btn.textContent = '…';
+    try {
+      const gid = config.recruit.filterGroup || '';
+      const vs = gid ? await getVillagesInGroup(gid) : await getAllVillagesCached();
+      _rcPool = (vs || []).map((v) => ({ vid: String(v.vid), coord: v.coord || null, name: v.name || v.coord || String(v.vid) }));
+      pushLog('Recrutar: ' + _rcPool.length + ' aldeia(s) carregadas' + (gid ? ' do grupo selecionado' : '') + '.', '', 'recruit');
+    } catch (e) {
+      pushLog('Recrutar: erro ao carregar as aldeias (' + (e.message || e) + ').', 'err', 'recruit');
+    }
+    if (btn) btn.textContent = '↻';
+    rcRenderVillages();
+  }
+  function rcRenderVillages() {
+    const box = document.getElementById('twmgr-rc-vils'); if (!box) return;
+    const assign = config.recruit.villages || {}, tpls = config.recruit.templates || {};
+    const mapa = {};
+    Object.keys(assign).forEach((vid) => { mapa[vid] = { vid: vid, coord: assign[vid].coord, name: assign[vid].name || assign[vid].coord || vid }; });
+    _rcPool.forEach((v) => { if (!mapa[v.vid]) mapa[v.vid] = v; });
+    const linhas = Object.keys(mapa).sort((a, b) => String(mapa[a].name).localeCompare(String(mapa[b].name), 'pt-BR', { numeric: true }));
+    if (!linhas.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">— clique em ↻ pra carregar suas aldeias —</div>'; return; }
+    const ids = rcTplIds();
+    box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr><th style="width:18px"></th><th>Aldeia</th><th>Modelo</th><th>Estado</th></tr></thead><tbody>' +
+      linhas.map((vid, i) => {
+        const v = mapa[vid], a = assign[vid];
+        const sel = '<select class="twmgr-rc-vtpl twmgr-inp" data-vid="' + esc(vid) + '" style="font-size:9px">'
+          + '<option value=""' + (!a ? ' selected' : '') + '>— fora —</option>'
+          + ids.map((id) => '<option value="' + esc(id) + '"' + (a && a.tpl === id ? ' selected' : '') + '>'
+            + esc(tpls[id].name || id) + '</option>').join('') + '</select>';
+        const est = !a ? '<span style="color:#8a7340">—</span>'
+          : a.paused ? '<a class="twmgr-rc-pause" data-vid="' + esc(vid) + '" style="color:#b5651d">pausada</a>'
+          : '<a class="twmgr-rc-pause" data-vid="' + esc(vid) + '" style="color:#3f8f52">ativa</a>';
+        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
+          '<td><input type="checkbox" class="twmgr-rc-ck" data-vid="' + esc(vid) + '"></td>' +
+          '<td>' + esc(v.name) + '</td><td>' + sel + '</td><td>' + est + '</td></tr>';
+      }).join('') + '</tbody></table>';
+    const info = document.getElementById('twmgr-rc-vils-info');
+    if (info) {
+      const ativas = Object.keys(assign).filter((v) => !assign[v].paused).length;
+      info.textContent = linhas.length + ' aldeia(s) · ' + ativas + ' na gestão';
+    }
+  }
+  function rcMarcadas() {
+    return Array.prototype.slice.call(document.querySelectorAll('.twmgr-rc-ck:checked'))
+      .map((c) => c.getAttribute('data-vid'));
+  }
+  function rcAcaoMassa() {
+    const acao = (document.getElementById('twmgr-rc-mass-acao') || {}).value;
+    const tpl = (document.getElementById('twmgr-rc-mass-tpl') || {}).value;
+    const vids = rcMarcadas();
+    if (!vids.length) { alert('Marque pelo menos uma aldeia.'); return; }
+    const assign = config.recruit.villages || (config.recruit.villages = {});
+    const pool = {}; _rcPool.forEach((v) => { pool[v.vid] = v; });
+    vids.forEach((vid) => {
+      if (acao === 'remove') { delete assign[vid]; return; }
+      if (acao === 'pause') { if (assign[vid]) assign[vid].paused = true; return; }
+      if (acao === 'resume') { if (assign[vid]) assign[vid].paused = false; return; }
+      if (!tpl || !config.recruit.templates[tpl]) return;
+      const v = pool[vid] || assign[vid] || {};
+      assign[vid] = { tpl: tpl, paused: false, coord: v.coord || null, name: v.name || vid };
+    });
+    save(); rcRenderVillages();
+  }
+
+  // Gemea da bldSincronizarGrupo: aldeia que entra no grupo entra sozinha. So ADICIONA.
+  async function rcSincronizarGrupo() {
+    const membros = await getVillagesInGroup(config.recruit.filterGroup);
+    if (!membros || !membros.length) return 0;
+    const assign = config.recruit.villages || (config.recruit.villages = {});
+    const ids = rcTplIds();
+    let tpl = config.recruit.grupoTpl;
+    if (!tpl || !config.recruit.templates[tpl]) tpl = (ids.length === 1) ? ids[0] : '';
+    const novas = membros.filter((v) => !assign[String(v.vid)]);
+    if (!novas.length) return 0;
+    if (!tpl) {
+      pushLog('Recrutar: ' + novas.length + ' aldeia(s) novas no grupo, mas nenhum modelo definido pra elas'
+        + ' — escolha o "modelo pra aldeia nova" na aba.', 'err', 'recruit');
+      return 0;
+    }
+    novas.forEach((v) => {
+      assign[String(v.vid)] = { tpl: tpl, paused: false, coord: v.coord || null, name: v.name || v.coord || String(v.vid) };
+    });
+    save();
+    pushLog('Recrutar: ' + novas.length + ' aldeia(s) entraram pelo grupo com o modelo "'
+      + (config.recruit.templates[tpl].name || tpl) + '".', 'ok', 'recruit');
+    rcRenderVillages();
+    return novas.length;
+  }
+
   async function fillGroupSelects() {
     let groups = [];
     try { groups = await getGroups(); } catch (e) { pushLog('Recrutar: erro ao listar grupos: ' + (e.message || e), 'err'); return; }
     _twGroupsCache = groups;
-    [['twmgr-r-gatk', config.recruit.groupAtk], ['twmgr-r-gdef', config.recruit.groupDef], ['twmgr-bm-group', config.map && config.map.group], ['twmgr-farm-group', config.farm && config.farm.group], ['twmgr-bld-group', config.build && config.build.filterGroup], ['twmgr-pq-group', config.research && config.research.filterGroup]].forEach(([id, cur]) => {
+    [['twmgr-rc-group', config.recruit.filterGroup], ['twmgr-bm-group', config.map && config.map.group],
+     ['twmgr-farm-group', config.farm && config.farm.group], ['twmgr-bld-group', config.build && config.build.filterGroup],
+     ['twmgr-pq-group', config.research && config.research.filterGroup]].forEach(([id, cur]) => {
       const sel = document.getElementById(id); if (!sel) return;
       sel.innerHTML = '<option value="">— nenhum —</option>' + groups.map((g) => '<option value="' + g.id + '"' + (String(cur) === String(g.id) ? ' selected' : '') + '>' + esc(g.name) + '</option>').join('');
     });
-    renderRecruitGroups();
+    rcRenderEditor();   // o select de grupo do modelo depende deste cache
   }
-  // ---- Grupos adicionais livres do Recrutar (quantos o usuário quiser, cada um ligado a 1 grupo do TW) ----
-  function recruitGroupCardHTML(g) {
-    const opts = '<option value="">— nenhum —</option>' + _twGroupsCache.map((gr) => '<option value="' + gr.id + '"' + (String(g.groupId || '') === String(gr.id) ? ' selected' : '') + '>' + esc(gr.name) + '</option>').join('');
-    const t = g.targets || {};
-    const rows = RUNITS.map(([u, n]) =>
-      '<div style="display:flex;align-items:center;gap:5px;margin:1px 0">' +
-      '<input type="checkbox" class="twmgr-rg-on" data-gid="' + g.id + '" data-unit="' + u + '"' + (t[u] !== undefined ? ' checked' : '') + '>' +
-      unitIcon(u, n) + '<span style="flex:1;font-size:10px">' + n + '</span>' +
-      '<input class="twmgr-rg-t twmgr-inp" data-gid="' + g.id + '" data-unit="' + u + '" type="number" min="0" placeholder="∞" value="' + (t[u] != null ? t[u] : '') + '" style="width:60px" title="alvo (vazio = contínuo)">' +
-      '</div>').join('');
-    return '<div class="twmgr-rg-card" data-gid="' + g.id + '" style="border:1px solid #ece4d8;border-radius:6px;padding:6px;margin-bottom:6px">' +
-      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">' +
-      '<input class="twmgr-rg-name twmgr-inp" data-gid="' + g.id + '" type="text" placeholder="nome do perfil" value="' + esc(g.name || '') + '" style="flex:1;font-size:11px">' +
-      '<select class="twmgr-rg-grp twmgr-inp" data-gid="' + g.id + '" style="width:130px">' + opts + '</select>' +
-      '<span class="twmgr-rg-rm" data-gid="' + g.id + '" title="remover grupo" style="cursor:pointer;color:#c0483a;padding:0 4px;font-weight:bold">✕</span>' +
-      '</div>' + rows + '</div>';
-  }
-  function renderRecruitGroups() {
-    const box = document.getElementById('twmgr-rg-list'); if (!box) return;
-    const groups = config.recruit.groups || [];
-    box.innerHTML = groups.length ? groups.map(recruitGroupCardHTML).join('') : '<div style="color:#8a7d6d;text-align:center;padding:8px;font-size:10px">— nenhum grupo adicional (use o botão abaixo) —</div>';
-  }
-  function bindRecruitGroupsHandlers() {
-    const box = document.getElementById('twmgr-rg-list'); if (!box) return;
-    box.addEventListener('change', (e) => {
-      const el = e.target, gid = el.getAttribute('data-gid'); if (!gid) return;
-      const g = (config.recruit.groups || []).find((x) => x.id === gid); if (!g) return;
-      if (el.classList.contains('twmgr-rg-name')) g.name = el.value;
-      else if (el.classList.contains('twmgr-rg-grp')) g.groupId = el.value || null;
-      else if (el.classList.contains('twmgr-rg-on') || el.classList.contains('twmgr-rg-t')) {
-        const u = el.getAttribute('data-unit');
-        const cb = box.querySelector('.twmgr-rg-on[data-gid="' + gid + '"][data-unit="' + u + '"]');
-        const inp = box.querySelector('.twmgr-rg-t[data-gid="' + gid + '"][data-unit="' + u + '"]');
-        const hasNum = inp && inp.value.trim() !== '';
-        g.targets = g.targets || {};
-        if (!cb.checked && !hasNum) { delete g.targets[u]; }
-        else {
-          const v = hasNum ? parseInt(inp.value, 10) : null;
-          g.targets[u] = (v != null && !Number.isNaN(v)) ? v : null;
-          if (hasNum) cb.checked = true;
-        }
-      }
-      save();
-    });
-    box.addEventListener('click', (e) => {
-      const el = e.target, gid = el.getAttribute('data-gid'); if (!gid) return;
-      if (el.classList.contains('twmgr-rg-rm')) {
-        if (!confirm('Remover este grupo?')) return;
-        config.recruit.groups = (config.recruit.groups || []).filter((x) => x.id !== gid);
-        save(); renderRecruitGroups();
-      }
-    });
-  }
-  function recruitAddGroup() {
-    config.recruit.groups = config.recruit.groups || [];
-    const id = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    config.recruit.groups.push({ id: id, name: 'Grupo ' + (config.recruit.groups.length + 1), groupId: null, targets: {} });
-    save(); renderRecruitGroups();
-  }
+
   function readRecruitCfg() {
     const r = config.recruit;
-    ['atk', 'def'].forEach((prof) => {
-      const tg = {};
-      document.querySelectorAll('.twmgr-ron[data-prof="' + prof + '"]').forEach((cb) => {
-        const u = cb.getAttribute('data-unit');
-        const inp = document.querySelector('.twmgr-rt[data-prof="' + prof + '"][data-unit="' + u + '"]');
-        const hasNum = inp && inp.value.trim() !== '';
-        if (!cb.checked && !hasNum) { return; }
-        const v = hasNum ? parseInt(inp.value, 10) : null;
-        tg[u] = (v != null && !Number.isNaN(v)) ? v : null;
-        if (hasNum) { cb.checked = true; }
-      });
-      r.profiles[prof].targets = tg;
-    });
-    const g1 = document.getElementById('twmgr-r-gatk'); if (g1) r.groupAtk = g1.value || null;
-    const g2 = document.getElementById('twmgr-r-gdef'); if (g2) r.groupDef = g2.value || null;
+    rcLerEditor();
     const h = document.getElementById('twmgr-r-hours'); if (h) r.targetHours = Math.max(0.5, parseFloat((h.value || '').replace(',', '.')) || 2);
     const rf = document.getElementById('twmgr-r-refill'); if (rf) r.refillBelowMin = Math.max(1, parseInt(rf.value, 10) || 30);
     save();
@@ -2688,8 +2873,12 @@
   function setRecruitStatus(on) { setBtnState('twmgr-r-start', 'twmgr-r-stop', on, '● Recrutando', '▶ Recrutar'); }
   function recruitStart() {
     readRecruitCfg();
-    const hasCustom = (config.recruit.groups || []).some((g) => g.groupId);
-    if (!config.recruit.groupAtk && !config.recruit.groupDef && !hasCustom) { pushLog('Recrutar: mapeie ao menos 1 grupo (ATK, DEF ou um grupo adicional).', 'err', 'recruit'); return; }
+    const temGrupo = Object.keys(config.recruit.templates || {}).some((id) => config.recruit.templates[id].grupo);
+    const temAldeia = Object.keys(config.recruit.villages || {}).some((v) => !config.recruit.villages[v].paused);
+    if (!temGrupo && !temAldeia) {
+      pushLog('Recrutar: nenhuma aldeia na gestão — aplique um modelo na tabela, ou amarre um modelo a um grupo.', 'err', 'recruit');
+      return;
+    }
     config.recruit.running = true; config.recruit.nextAt = 0; save(); setRecruitStatus(true); pushLog('Recrutar iniciado.', 'ok', 'recruit'); recruitTick();
   }
   function recruitStop() { readRecruitCfg(); config.recruit.running = false; save(); clearTimeout(recruitTimer); setRecruitStatus(false); pushLog('Recrutar parado.', '', 'recruit'); }
@@ -2698,9 +2887,8 @@
     try {
       const groups = await getGroups();
       pushLog('Grupos: ' + groups.map((g) => g.name + '#' + g.id).join(' · '));
-      if (config.recruit.groupAtk) { const v = await getVillagesInGroup(config.recruit.groupAtk); pushLog('ATK(' + config.recruit.groupAtk + '): ' + v.length + ' aldeias'); }
-      if (config.recruit.groupDef) { const v = await getVillagesInGroup(config.recruit.groupDef); pushLog('DEF(' + config.recruit.groupDef + '): ' + v.length + ' aldeias'); }
-      if (config.recruit.groupAtk || config.recruit.groupDef) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
+      const alvos = await resolveTargets();
+      pushLog('Aldeias na gestão: ' + Object.keys(alvos).length);
       const st = await getRecruitState(CUR_VID);
       RUNITS.forEach(([u, n]) => { const s = st.units[u]; if (s) pushLog(n + ': tot ' + s.total + ' · max ' + s.maxRec + ' · ' + s.wood + '/' + s.stone + '/' + s.iron + ' · ' + Math.round(s.buildTime) + 's · req ' + s.reqMet); });
       pushLog('Recursos ' + st.res.wood + '/' + st.res.stone + '/' + st.res.iron + ' · pop livre ' + st.popFree, 'ok');
@@ -7856,17 +8044,37 @@
         '</div>' +
       '</div>' +
       '<div id="twmgr-tab-recruit" style="display:none">' +
-        hint('Recruta por <b>grupo</b> do TW: mantém a fila alvo por edifício e para no alvo de tropas. Vazio = contínuo.') +
+        hint('⚔️ Modelos de recrutamento no molde do <b>Gerente de conta</b>: monte o modelo, aplique nas aldeias. O modelo pode ser amarrado a um <b>grupo</b> — aí toda aldeia dele segue sem você marcar uma a uma. O alvo é pra <b>manter</b>, não pedido único.') +
         cardsDiv('recruit') +
-        sec('Grupos (fixo ATK/DEF)',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo ATK</span><select id="twmgr-r-gatk" class="twmgr-inp" style="width:170px"></select></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo DEF</span><select id="twmgr-r-gdef" class="twmgr-inp" style="width:170px"></select></div>' +
-          '<div style="text-align:right;margin-top:2px"><button id="twmgr-r-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button></div>') +
-        sec('Tropas por perfil', recruitProfileHTML('atk', '⚔️ Perfil ATK') + recruitProfileHTML('def', '🛡️ Perfil DEF')) +
-        sec('Grupos adicionais',
-          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Crie quantos perfis quiser, cada um ligado a um grupo do TW — igual o ATK/DEF acima, mas sem limite de quantidade.</div>' +
-          '<div id="twmgr-rg-list"></div>' +
-          '<button id="twmgr-rg-add" class="twmgr-btn twmgr-ghost" style="width:100%;margin-top:2px">+ Adicionar grupo</button>') +
+        sec('Modelo',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<select id="twmgr-rc-tpl" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-rc-tpl-new" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="criar modelo">✚</button>' +
+            '<button id="twmgr-rc-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
+            '<button id="twmgr-rc-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
+          '</div>' +
+          '<div id="twmgr-rc-editor" style="margin-top:7px"></div>') +
+        sec('Aldeias',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<span class="twmgr-lbl" style="flex:0 0 auto">Grupo</span>' +
+            '<select id="twmgr-rc-group" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-rc-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
+          '</div>' +
+          '<div class="twmgr-fld" style="margin-top:6px"><span title="Aldeia adicionada ao grupo no jogo entra sozinha na gestão">Seguir o grupo <span style="color:#8a7d6d">(entrar sozinha)</span></span>' +
+            '<label class="twmgr-sw"><input id="twmgr-rc-seguir" type="checkbox"><i></i></label></div>' +
+          '<div class="twmgr-fld"><span>Modelo pra aldeia nova</span><select id="twmgr-rc-grptpl" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
+          '<div id="twmgr-rc-vils" class="twmgr-bld-vils" style="margin-top:5px"></div>' +
+          '<div id="twmgr-rc-vils-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>' +
+          '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
+            '<select id="twmgr-rc-mass-acao" class="twmgr-inp" style="flex:1">' +
+              '<option value="apply">Utilizar modelo</option>' +
+              '<option value="pause">Pausar</option>' +
+              '<option value="resume">Retomar</option>' +
+              '<option value="remove">Tirar da gestão</option>' +
+            '</select>' +
+            '<select id="twmgr-rc-mass-tpl" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-rc-mass-go" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">Aplicar</button>' +
+          '</div>') +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Fila alvo (h)</span><input id="twmgr-r-hours" class="twmgr-inp" type="number" min="0.5" step="0.5" value="2" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Repor quando faltar (min)</span><input id="twmgr-r-refill" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>') +
@@ -8214,16 +8422,46 @@
 
     document.getElementById('twmgr-r-hours').value = config.recruit.targetHours != null ? config.recruit.targetHours : 2;
     document.getElementById('twmgr-r-refill').value = config.recruit.refillBelowMin != null ? config.recruit.refillBelowMin : 30;
-    renderRecruitGroups();
-    bindRecruitGroupsHandlers();
-    document.getElementById('twmgr-rg-add').addEventListener('click', recruitAddGroup);
+    // ---- Modelos ----
+    rcFillTplSelects();
+    rcRenderEditor();
+    document.getElementById('twmgr-rc-tpl').addEventListener('change', (e) => rcSwitchTpl(e.target.value));
+    document.getElementById('twmgr-rc-tpl-new').addEventListener('click', rcNovoModelo);
+    document.getElementById('twmgr-rc-tpl-ren').addEventListener('click', rcRenomearModelo);
+    document.getElementById('twmgr-rc-tpl-del').addEventListener('click', rcApagarModelo);
+    // O editor é redesenhado a cada troca de modelo, então o listener fica no pai.
+    document.getElementById('twmgr-rc-editor').addEventListener('change', () => { rcLerEditor(); save(); });
+    // ---- Aldeias ----
+    document.getElementById('twmgr-rc-group').addEventListener('change', (e) => { config.recruit.filterGroup = e.target.value; save(); rcCarregarAldeias(); });
+    document.getElementById('twmgr-rc-vil-reload').addEventListener('click', rcCarregarAldeias);
+    document.getElementById('twmgr-rc-seguir').checked = !!config.recruit.seguirGrupo;
+    document.getElementById('twmgr-rc-seguir').addEventListener('change', (e) => { config.recruit.seguirGrupo = e.target.checked; save(); });
+    document.getElementById('twmgr-rc-grptpl').addEventListener('change', (e) => { config.recruit.grupoTpl = e.target.value; save(); });
+    document.getElementById('twmgr-rc-mass-go').addEventListener('click', rcAcaoMassa);
+    document.getElementById('twmgr-rc-vils').addEventListener('change', (e) => {
+      const el = e.target, vid = el.getAttribute && el.getAttribute('data-vid');
+      if (!vid || !el.classList.contains('twmgr-rc-vtpl')) return;
+      const assign = config.recruit.villages || (config.recruit.villages = {});
+      if (!el.value) { delete assign[vid]; }
+      else {
+        const v = _rcPool.find((x) => x.vid === vid) || assign[vid] || {};
+        assign[vid] = { tpl: el.value, paused: (assign[vid] || {}).paused || false,
+                        coord: v.coord || null, name: v.name || vid };
+      }
+      save(); rcRenderVillages();
+    });
+    document.getElementById('twmgr-rc-vils').addEventListener('click', (e) => {
+      const el = e.target, vid = el.getAttribute && el.getAttribute('data-vid');
+      if (!vid || !el.classList.contains('twmgr-rc-pause')) return;
+      const a = (config.recruit.villages || {})[vid]; if (!a) return;
+      a.paused = !a.paused; save(); rcRenderVillages();
+    });
+    rcRenderVillages();
     fillGroupSelects();
-    document.getElementById('twmgr-r-reload').addEventListener('click', fillGroupSelects);
     document.getElementById('twmgr-r-start').addEventListener('click', recruitStart);
     document.getElementById('twmgr-r-stop').addEventListener('click', recruitStop);
     document.getElementById('twmgr-r-diag').addEventListener('click', runRecruitDiag);
-    ['twmgr-r-gatk', 'twmgr-r-gdef', 'twmgr-r-hours', 'twmgr-r-refill'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readRecruitCfg); });
-    document.querySelectorAll('.twmgr-ron, .twmgr-rt').forEach((el) => el.addEventListener('change', readRecruitCfg));
+    ['twmgr-r-hours', 'twmgr-r-refill'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readRecruitCfg); });
     setRecruitStatus(config.recruit.running);
 
     // ---- Paladino (treino por XP) ----

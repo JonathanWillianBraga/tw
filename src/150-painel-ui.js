@@ -417,17 +417,37 @@
         '</div>' +
       '</div>' +
       '<div id="twmgr-tab-recruit" style="display:none">' +
-        hint('Recruta por <b>grupo</b> do TW: mantém a fila alvo por edifício e para no alvo de tropas. Vazio = contínuo.') +
+        hint('⚔️ Modelos de recrutamento no molde do <b>Gerente de conta</b>: monte o modelo, aplique nas aldeias. O modelo pode ser amarrado a um <b>grupo</b> — aí toda aldeia dele segue sem você marcar uma a uma. O alvo é pra <b>manter</b>, não pedido único.') +
         cardsDiv('recruit') +
-        sec('Grupos (fixo ATK/DEF)',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo ATK</span><select id="twmgr-r-gatk" class="twmgr-inp" style="width:170px"></select></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Grupo DEF</span><select id="twmgr-r-gdef" class="twmgr-inp" style="width:170px"></select></div>' +
-          '<div style="text-align:right;margin-top:2px"><button id="twmgr-r-reload" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">↻ grupos</button></div>') +
-        sec('Tropas por perfil', recruitProfileHTML('atk', '⚔️ Perfil ATK') + recruitProfileHTML('def', '🛡️ Perfil DEF')) +
-        sec('Grupos adicionais',
-          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Crie quantos perfis quiser, cada um ligado a um grupo do TW — igual o ATK/DEF acima, mas sem limite de quantidade.</div>' +
-          '<div id="twmgr-rg-list"></div>' +
-          '<button id="twmgr-rg-add" class="twmgr-btn twmgr-ghost" style="width:100%;margin-top:2px">+ Adicionar grupo</button>') +
+        sec('Modelo',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<select id="twmgr-rc-tpl" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-rc-tpl-new" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="criar modelo">✚</button>' +
+            '<button id="twmgr-rc-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
+            '<button id="twmgr-rc-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
+          '</div>' +
+          '<div id="twmgr-rc-editor" style="margin-top:7px"></div>') +
+        sec('Aldeias',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<span class="twmgr-lbl" style="flex:0 0 auto">Grupo</span>' +
+            '<select id="twmgr-rc-group" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-rc-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
+          '</div>' +
+          '<div class="twmgr-fld" style="margin-top:6px"><span title="Aldeia adicionada ao grupo no jogo entra sozinha na gestão">Seguir o grupo <span style="color:#8a7d6d">(entrar sozinha)</span></span>' +
+            '<label class="twmgr-sw"><input id="twmgr-rc-seguir" type="checkbox"><i></i></label></div>' +
+          '<div class="twmgr-fld"><span>Modelo pra aldeia nova</span><select id="twmgr-rc-grptpl" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
+          '<div id="twmgr-rc-vils" class="twmgr-bld-vils" style="margin-top:5px"></div>' +
+          '<div id="twmgr-rc-vils-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>' +
+          '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
+            '<select id="twmgr-rc-mass-acao" class="twmgr-inp" style="flex:1">' +
+              '<option value="apply">Utilizar modelo</option>' +
+              '<option value="pause">Pausar</option>' +
+              '<option value="resume">Retomar</option>' +
+              '<option value="remove">Tirar da gestão</option>' +
+            '</select>' +
+            '<select id="twmgr-rc-mass-tpl" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-rc-mass-go" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">Aplicar</button>' +
+          '</div>') +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Fila alvo (h)</span><input id="twmgr-r-hours" class="twmgr-inp" type="number" min="0.5" step="0.5" value="2" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Repor quando faltar (min)</span><input id="twmgr-r-refill" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>') +
@@ -775,16 +795,46 @@
 
     document.getElementById('twmgr-r-hours').value = config.recruit.targetHours != null ? config.recruit.targetHours : 2;
     document.getElementById('twmgr-r-refill').value = config.recruit.refillBelowMin != null ? config.recruit.refillBelowMin : 30;
-    renderRecruitGroups();
-    bindRecruitGroupsHandlers();
-    document.getElementById('twmgr-rg-add').addEventListener('click', recruitAddGroup);
+    // ---- Modelos ----
+    rcFillTplSelects();
+    rcRenderEditor();
+    document.getElementById('twmgr-rc-tpl').addEventListener('change', (e) => rcSwitchTpl(e.target.value));
+    document.getElementById('twmgr-rc-tpl-new').addEventListener('click', rcNovoModelo);
+    document.getElementById('twmgr-rc-tpl-ren').addEventListener('click', rcRenomearModelo);
+    document.getElementById('twmgr-rc-tpl-del').addEventListener('click', rcApagarModelo);
+    // O editor é redesenhado a cada troca de modelo, então o listener fica no pai.
+    document.getElementById('twmgr-rc-editor').addEventListener('change', () => { rcLerEditor(); save(); });
+    // ---- Aldeias ----
+    document.getElementById('twmgr-rc-group').addEventListener('change', (e) => { config.recruit.filterGroup = e.target.value; save(); rcCarregarAldeias(); });
+    document.getElementById('twmgr-rc-vil-reload').addEventListener('click', rcCarregarAldeias);
+    document.getElementById('twmgr-rc-seguir').checked = !!config.recruit.seguirGrupo;
+    document.getElementById('twmgr-rc-seguir').addEventListener('change', (e) => { config.recruit.seguirGrupo = e.target.checked; save(); });
+    document.getElementById('twmgr-rc-grptpl').addEventListener('change', (e) => { config.recruit.grupoTpl = e.target.value; save(); });
+    document.getElementById('twmgr-rc-mass-go').addEventListener('click', rcAcaoMassa);
+    document.getElementById('twmgr-rc-vils').addEventListener('change', (e) => {
+      const el = e.target, vid = el.getAttribute && el.getAttribute('data-vid');
+      if (!vid || !el.classList.contains('twmgr-rc-vtpl')) return;
+      const assign = config.recruit.villages || (config.recruit.villages = {});
+      if (!el.value) { delete assign[vid]; }
+      else {
+        const v = _rcPool.find((x) => x.vid === vid) || assign[vid] || {};
+        assign[vid] = { tpl: el.value, paused: (assign[vid] || {}).paused || false,
+                        coord: v.coord || null, name: v.name || vid };
+      }
+      save(); rcRenderVillages();
+    });
+    document.getElementById('twmgr-rc-vils').addEventListener('click', (e) => {
+      const el = e.target, vid = el.getAttribute && el.getAttribute('data-vid');
+      if (!vid || !el.classList.contains('twmgr-rc-pause')) return;
+      const a = (config.recruit.villages || {})[vid]; if (!a) return;
+      a.paused = !a.paused; save(); rcRenderVillages();
+    });
+    rcRenderVillages();
     fillGroupSelects();
-    document.getElementById('twmgr-r-reload').addEventListener('click', fillGroupSelects);
     document.getElementById('twmgr-r-start').addEventListener('click', recruitStart);
     document.getElementById('twmgr-r-stop').addEventListener('click', recruitStop);
     document.getElementById('twmgr-r-diag').addEventListener('click', runRecruitDiag);
-    ['twmgr-r-gatk', 'twmgr-r-gdef', 'twmgr-r-hours', 'twmgr-r-refill'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readRecruitCfg); });
-    document.querySelectorAll('.twmgr-ron, .twmgr-rt').forEach((el) => el.addEventListener('change', readRecruitCfg));
+    ['twmgr-r-hours', 'twmgr-r-refill'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readRecruitCfg); });
     setRecruitStatus(config.recruit.running);
 
     // ---- Paladino (treino por XP) ----

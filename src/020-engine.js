@@ -50,6 +50,13 @@
         { v: fmtN(s.andando), l: 'pesquisa em curso' },
         { v: fmtN(s.abastecidas), l: 'abastecidas (últ. ciclo)' },
       ];
+    } else if (mod === 'noble') {
+      const s = (config.noble && config.noble.stats) || {};
+      arr = [
+        { v: fmtN(s.alvos), l: 'alvos na lista', hl: true },
+        { v: fmtN(s.prontos), l: 'prontos p/ enviar' },
+        { v: fmtN(s.faltando), l: 'faltando nobre' },
+      ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});
       // O card "no alcance" mostrava s.mapped, que é barbCount: os bárbaros do MUNDO INTEIRO que

@@ -142,7 +142,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
+    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -185,7 +185,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       // Telas de modelo: overlay DENTRO do painel, nao aba nova. Ficam fora do #twmgr-body pra
       // cobrir o painel inteiro (inclusive a barra de abas) enquanto abertas -- e uma tela cheia
       // de edicao, entao trocar de aba no meio nao faz sentido.
@@ -467,6 +467,27 @@
         '<div class="twmgr-actions"><button id="twmgr-pq-start" class="twmgr-btn twmgr-go">▶ Pesquisar</button><button id="twmgr-pq-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-pq-status" class="twmgr-cstatus"></div>' +
         modLog('research') +
+      '</div>' +
+      '<div id="twmgr-tab-noble" style="display:none">' +
+        hint('👑 Cola as coordenadas, define o limite de viagem e ele monta o plano de conquista. <b>Não dispara sozinho</b> — o envio é seu.') +
+        cardsDiv('noble') +
+        sec('Alvos',
+          '<textarea id="twmgr-nb-coords" class="twmgr-inp" style="width:100%;height:56px;font-family:monospace;font-size:11px" placeholder="555|444 555|445 555446 texto solto no meio"></textarea>' +
+          '<div class="twmgr-row" style="margin-top:5px">' +
+            '<span id="twmgr-nb-count" class="twmgr-lbl">0 coordenadas</span>' +
+            '<span style="flex:1"></span>' +
+            '<button id="twmgr-nb-add" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">+ Adicionar</button>' +
+          '</div>' +
+          '<div id="twmgr-nb-lista" class="twmgr-bld-vils" style="margin-top:6px"></div>' +
+          '<div id="twmgr-nb-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>') +
+        sec('Regras',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Viagem máx. do nobre (h)</span><input id="twmgr-nb-horas" class="twmgr-inp" type="number" min="1" max="72" value="6" style="width:56px"></div>' +
+          '<label class="twmgr-check" title="NT = os 4 nobres saindo da MESMA aldeia"><input id="twmgr-nb-nt" type="checkbox"> Só enviar NT (4 nobres da mesma aldeia)</label>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">A duração vem do próprio jogo: o plano prepara o comando e lê o tempo real, então o limite vale em qualquer mundo.</div>') +
+        sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
+        '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+        '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
+        modLog('noble') +
       '</div>' +
       '<div id="twmgr-tab-planner" style="display:none">' +
         hint('🎯 Coordenado: monte vários ataques independentes — cada um com seu próprio alvo, aldeias e tropas — e arme cada um separadamente (o botão libera um novo ataque em branco assim que você arma). Cada aldeia pode mandar <b>várias ondas</b> (+ onda) dentro do mesmo ataque. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
@@ -818,6 +839,21 @@
     pesqRenderTplSelect();
     pesqSwitchTpl(_pesqTplAtivo);
     renderResearchVillages();
+    // ---- Noblar ----
+    document.getElementById('twmgr-nb-add').addEventListener('click', nobleAddCoords);
+    document.getElementById('twmgr-nb-coords').addEventListener('input', nobleContarCoords);
+    document.getElementById('twmgr-nb-horas').value = config.noble.maxHoras != null ? config.noble.maxHoras : 6;
+    document.getElementById('twmgr-nb-nt').checked = !!config.noble.soNT;
+    document.getElementById('twmgr-nb-int').value = Math.round((config.noble.interval || 900) / 60);
+    ['twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int'].forEach((id) => {
+      const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
+    });
+    bindNobleHandlers();
+    renderNoblePlano();
+    document.getElementById('twmgr-nb-start').addEventListener('click', nobleStart);
+    document.getElementById('twmgr-nb-stop').addEventListener('click', nobleStop);
+    setNobleStatus(config.noble.running);
+
     document.getElementById('twmgr-pq-start').addEventListener('click', researchStart);
     document.getElementById('twmgr-pq-stop').addEventListener('click', researchStop);
     setResearchStatus(config.research.running);
@@ -882,7 +918,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'research', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'research', 'noble', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -935,6 +971,7 @@
     MARKET_MODES.forEach((mkKey) => { if (config.market.modes[mkKey].running) { rlog('Mercado (' + MARKET_MODE_LABEL[mkKey] + ') retomado.', 'market'); retomar(() => scheduleMarket(mkKey)); } });
     if (config.build.running) { rlog('Construções retomado.', 'build'); retomar(scheduleBuild); }
     if (config.research && config.research.running) { rlog('Pesquisa retomada.', 'research'); retomar(scheduleResearch); }
+    if (config.noble && config.noble.running) { rlog('Noblar retomado.', 'noble'); retomar(scheduleNoble); }
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); retomar(scheduleMap); }
     if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); retomar(etiquetaTick); }
     if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); retomar(scheduleLock); }

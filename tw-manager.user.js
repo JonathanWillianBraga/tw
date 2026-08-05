@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.26.0
+// @version      11.27.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -129,7 +129,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.26.0';
+  const VERSION = '11.27.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -205,6 +205,14 @@
     templates: {}, villages: {}, filterGroup: '',
     feedOn: true, feedReserve: 40, feedMaxDist: 20, feedFillPct: 60,
     blocked: {}, blockTtlH: 6,   // pesquisa recusada por requisito: nao insiste por N horas
+    stats: {},
+  });
+  // Noblar — alvos colados pelo usuário + o plano montado no último ciclo. `plano` é cache de
+  // exibição: o disparo reprepara o comando na hora, porque o CSRF morre a cada recarregamento.
+  const defNoble = () => ({
+    running: false, nextAt: 0, interval: 900,
+    alvos: [], plano: [], planoAt: 0,
+    maxHoras: 6, soNT: false,
     stats: {},
   });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
@@ -347,7 +355,7 @@
     nextAt: 0,
     demand: {},              // { [vid]: { b, cost, coord, profile } }
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), market: defMarket(), build: defBuild(), research: defResearch(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), market: defMarket(), build: defBuild(), research: defResearch(), noble: defNoble(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -530,6 +538,21 @@
     if (c.research.blockTtlH == null) c.research.blockTtlH = 6;
     // Bloqueio de aldeia que saiu da gestão não serve pra nada e cresceria pra sempre.
     Object.keys(c.research.blocked).forEach((vid) => { if (!c.research.villages[vid]) delete c.research.blocked[vid]; });
+    if (!c.noble) c.noble = defNoble();
+    if (!Array.isArray(c.noble.alvos)) c.noble.alvos = [];
+    // só alvo com coordenada válida sobrevive ao load, sem repetido
+    const vistoNb = {};
+    c.noble.alvos = c.noble.alvos.filter((a) => {
+      if (!a || !a.coord || vistoNb[a.coord]) return false;
+      const m = String(a.coord).match(/^(\d{2,3})\|(\d{2,3})$/);
+      if (!m) return false;
+      vistoNb[a.coord] = 1; a.x = +m[1]; a.y = +m[2];
+      return true;
+    });
+    if (!Array.isArray(c.noble.plano)) c.noble.plano = [];
+    if (c.noble.maxHoras == null) c.noble.maxHoras = 6;
+    if (c.noble.soNT == null) c.noble.soNT = false;
+    if (c.noble.interval == null) c.noble.interval = 900;
     if (!c.map) c.map = defMap();
     // Reformulação do Mapa: de one-shot pra ciclo contínuo, com base de conhecimento e
     // blacklists. Campos novos entram sem apagar o que já existe.
@@ -680,12 +703,12 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, buildTimer = null, researchTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, buildTimer = null, researchTimer = null, nobleTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
   const marketTimers = { cunhagem: null, equilibrio: null, solidario: null, cunhar: null };   // 1 timer por modo — rodam de forma independente
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
   function anyMarketRunning() { return !!(config.market && config.market.modes && MARKET_MODES.some((k) => config.market.modes[k] && config.market.modes[k].running)); }
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || anyMarketRunning() || (config.build && config.build.running) || (config.research && config.research.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || anyMarketRunning() || (config.build && config.build.running) || (config.research && config.research.running) || (config.noble && config.noble.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.
@@ -816,6 +839,13 @@
         { v: fmtN(s.completas), l: 'modelo completo' },
         { v: fmtN(s.andando), l: 'pesquisa em curso' },
         { v: fmtN(s.abastecidas), l: 'abastecidas (últ. ciclo)' },
+      ];
+    } else if (mod === 'noble') {
+      const s = (config.noble && config.noble.stats) || {};
+      arr = [
+        { v: fmtN(s.alvos), l: 'alvos na lista', hl: true },
+        { v: fmtN(s.prontos), l: 'prontos p/ enviar' },
+        { v: fmtN(s.faltando), l: 'faltando nobre' },
       ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});
@@ -5019,6 +5049,272 @@
     clearTimeout(researchTimer); setResearchStatus(false);
     pushLog('Pesquisa parada.', '', 'research');
   }
+  // ==================== NOBLAR (planeja e arma a conquista de alvos) ====================
+  // Voce cola as coordenadas, define o limite de horas de viagem, e o modulo monta o PLANO: de quais
+  // aldeias sairiam os nobres e em quanto tempo cada comando chega. Ele NAO dispara sozinho --
+  // decisao do usuario: nobre e caro e o envio e irreversivel, entao o disparo passa pelo seu OK.
+  //
+  // A duracao vem do PROPRIO JOGO. Em vez de calcular distancia x velocidade da unidade x velocidade
+  // do mundo (tres constantes pra errar), o plano prepara o comando de verdade (`try=confirm`) e le
+  // o `data-duration` que o servidor devolve. Vale em qualquer mundo, com ou sem bonus de velocidade.
+  //
+  // Escolta: por enquanto manda SO nobre. Nobre sozinho morre pra qualquer defesa -- serve pra alvo
+  // ja limpo. Levar nuke junto e outra decisao (e outra tela), entao ficou de fora de proposito.
+
+  const NOBLE_POR_CONQUISTA = 4;   // 4 nobres derrubam 100 de lealdade no caso tipico
+
+  function nobleParseCoords(txt) {
+    // Aceita "555|444", "555444", "555 444" e texto misto no meio -- igual ao campo do jogo.
+    const out = [], visto = {};
+    (txt || '').split(/[\s,;\n]+/).forEach((tk) => {
+      const m = tk.match(/^(\d{3})\|?(\d{3})$/) || tk.match(/^(\d{2,3})\|(\d{2,3})$/);
+      if (!m) return;
+      const c = m[1] + '|' + m[2];
+      if (visto[c]) return;
+      visto[c] = 1;
+      out.push({ coord: c, x: +m[1], y: +m[2] });
+    });
+    return out;
+  }
+
+  // Aldeias proprias ordenadas pela distancia ate o alvo, com os nobres que cada uma tem agora.
+  // `reservado` respeita as reservas do resto do script, pra nao prometer nobre que outro modulo ja
+  // contou (o Coordenado guarda tropa desse jeito).
+  async function nobleOrigensPerto(alvo, todas, cacheTropa) {
+    const perto = [];
+    todas.forEach((v) => {
+      const m = (v.coord || '').match(/(\d+)\|(\d+)/);
+      if (!m) return;
+      perto.push({ vid: v.vid, nome: v.name || v.coord, coord: v.coord,
+                   d: fieldDist(+m[1], +m[2], alvo.x, alvo.y) });
+    });
+    perto.sort((a, b) => a.d - b.d);
+    for (const o of perto) {
+      if (cacheTropa[o.vid] === undefined) {
+        try { cacheTropa[o.vid] = ((await getVillageStateReserved(o.vid)).avail || {}).snob || 0; }
+        catch (e) { cacheTropa[o.vid] = 0; }
+        await sleep(200);
+      }
+      o.nobres = cacheTropa[o.vid] || 0;
+    }
+    return perto;
+  }
+
+  // Monta o plano de UM alvo. Devolve { pronto, envios[], falta, motivo }.
+  //   pronto  = da pra conquistar agora com o que existe dentro do limite de horas
+  //   envios  = [{vid, nome, coord, qtd, durSec}]
+  //   falta   = quantos nobres ainda faltam
+  async function noblePlanejarAlvo(alvo, todas, cacheTropa) {
+    const limite = Math.max(1, config.noble.maxHoras || 6) * 3600;
+    const origens = await nobleOrigensPerto(alvo, todas, cacheTropa);
+    const comNobre = origens.filter((o) => o.nobres > 0);
+    if (!comNobre.length) {
+      return { pronto: false, envios: [], falta: NOBLE_POR_CONQUISTA, dentroDoLimite: origens, motivo: 'nenhuma aldeia com nobre' };
+    }
+
+    // "So NT" exige os 4 saindo da MESMA aldeia; senao pode somar de varias, da mais perto pra mais longe.
+    const candidatos = config.noble.soNT
+      ? comNobre.filter((o) => o.nobres >= NOBLE_POR_CONQUISTA).slice(0, 1)
+      : comNobre;
+    if (!candidatos.length) {
+      return { pronto: false, envios: [], falta: NOBLE_POR_CONQUISTA, dentroDoLimite: origens,
+               motivo: 'nenhuma aldeia com ' + NOBLE_POR_CONQUISTA + ' nobres (modo só NT)' };
+    }
+
+    const envios = [];
+    let faltam = NOBLE_POR_CONQUISTA;
+    for (const o of candidatos) {
+      if (faltam <= 0) break;
+      const qtd = Math.min(o.nobres, faltam);
+      // Prepara de verdade so pra LER a duracao. O comando nao e disparado aqui.
+      let dur = null;
+      try {
+        const p = await fakePrepare(o.vid, alvo.x, alvo.y, { snob: qtd });
+        dur = p.dur || null;
+      } catch (e) {
+        pushLog('Noblar: ' + o.nome + ' → ' + alvo.coord + ' não deu pra conferir a duração (' + (e.message || e) + ').', '', 'noble');
+        continue;
+      }
+      await sleep(250);
+      if (dur == null) { pushLog('Noblar: ' + o.nome + ' → ' + alvo.coord + ': o jogo não informou a duração — origem descartada.', '', 'noble'); continue; }
+      if (dur > limite) continue;                     // fora do limite de horas: proxima origem
+      envios.push({ vid: o.vid, nome: o.nome, coord: o.coord, qtd: qtd, durSec: dur, d: o.d });
+      faltam -= qtd;
+    }
+    return {
+      pronto: faltam <= 0 && envios.length > 0,
+      envios: envios, falta: Math.max(0, faltam), dentroDoLimite: origens,
+      motivo: faltam > 0 ? ('faltam ' + faltam + ' nobre(s) dentro de ' + (config.noble.maxHoras || 6) + 'h') : null,
+    };
+  }
+
+  async function nobleTick() {
+    clearTimeout(nobleTimer);
+    if (!config.noble.running) return;
+    if (lockOther()) { nobleTimer = setTimeout(nobleTick, 5000); return; }
+    if (captchaBlocked()) { nobleTimer = setTimeout(nobleTick, 30000); return; }
+    claimLock();
+    const now = Date.now();
+    if ((config.noble.nextAt || 0) > now) { scheduleNoble(); return; }
+
+    const alvos = config.noble.alvos || [];
+    if (!alvos.length) {
+      pushLog('Noblar: nenhum alvo na lista.', '', 'noble');
+      config.noble.nextAt = now + 300000; save(); scheduleNoble(); return;
+    }
+
+    let todas = [];
+    try { todas = await getAllVillagesCached(); }
+    catch (e) {
+      pushLog('Noblar: erro ao listar as aldeias (' + (e.message || e) + ').', 'err', 'noble');
+      config.noble.nextAt = now + 120000; save(); scheduleNoble(); return;
+    }
+
+    const cacheTropa = {};
+    const plano = [];
+    let prontos = 0;
+    for (const alvo of alvos) {
+      { const pare = devoParar('noble'); if (pare) { pushLog('Noblar: ciclo interrompido — ' + pare + '.', '', 'noble'); break; } }
+      const r = await noblePlanejarAlvo(alvo, todas, cacheTropa);
+      plano.push({ coord: alvo.coord, x: alvo.x, y: alvo.y, pronto: r.pronto,
+                   envios: r.envios, falta: r.falta, motivo: r.motivo });
+      if (r.pronto) prontos++;
+    }
+
+    config.noble.plano = plano;
+    config.noble.planoAt = now;
+    config.noble.stats = { alvos: alvos.length, prontos: prontos, faltando: alvos.length - prontos };
+    config.noble.nextAt = now + Math.max(60, config.noble.interval || 900) * 1000;
+    save();
+    renderNoblePlano();
+    refreshCards('noble');
+    pushLog('Noblar: plano refeito — ' + prontos + ' de ' + alvos.length + ' alvo(s) com nobre suficiente dentro de '
+      + (config.noble.maxHoras || 6) + 'h. Nada foi enviado.', 'ok', 'noble');
+    scheduleNoble();
+  }
+  function scheduleNoble() {
+    clearTimeout(nobleTimer);
+    if (!config.noble.running) return;
+    nobleTimer = setTimeout(nobleTick, Math.min(Math.max((config.noble.nextAt || 0) - Date.now(), 1000), 60000));
+  }
+
+  // Disparo: so acontece por clique. Reprepara na hora em vez de reusar o payload do plano -- o CSRF
+  // muda a cada carregamento de pagina, e um payload velho falharia calado.
+  async function nobleDispararAlvo(coord) {
+    const item = (config.noble.plano || []).find((p) => p.coord === coord);
+    if (!item || !item.pronto) { alert('Esse alvo não está pronto no plano.'); return; }
+    const resumo = item.envios.map((e) => e.qtd + 'x de ' + e.nome + ' (' + fmtDur(e.durSec) + ')').join('\n');
+    if (!confirm('Enviar ' + NOBLE_POR_CONQUISTA + ' nobre(s) para ' + coord + '?\n\n' + resumo
+      + '\n\nIsso NÃO tem volta.')) return;
+
+    let ok = 0;
+    for (const e of item.envios) {
+      try {
+        await sendAttack(e.vid, item.x, item.y, { snob: e.qtd });
+        ok += e.qtd;
+        pushLog('Noblar: ' + e.nome + ' → ' + coord + ' — ' + e.qtd + ' nobre(s) enviado(s), chega em ' + fmtDur(e.durSec) + '.', 'ok', 'noble');
+      } catch (err) {
+        pushLog('Noblar: ' + e.nome + ' → ' + coord + ' FALHOU: ' + (err.message || err), 'err', 'noble');
+      }
+      await sleep(400);
+    }
+    pushLog('Noblar: ' + coord + ' — ' + ok + ' de ' + NOBLE_POR_CONQUISTA + ' nobre(s) saíram.', ok >= NOBLE_POR_CONQUISTA ? 'ok' : 'err', 'noble');
+    item.pronto = false; item.motivo = 'enviado';   // nao oferece disparar de novo sem replanejar
+    save(); renderNoblePlano();
+  }
+
+  function fmtDur(s) {
+    if (s == null) return '—';
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h + 'h' + String(m).padStart(2, '0');
+  }
+
+  // ===== UI =====
+  function nobleAddCoords() {
+    const ta = document.getElementById('twmgr-nb-coords'); if (!ta) return;
+    const novos = nobleParseCoords(ta.value);
+    if (!novos.length) { alert('Nenhuma coordenada válida no texto.'); return; }
+    const jaTem = {}; (config.noble.alvos || []).forEach((a) => { jaTem[a.coord] = 1; });
+    let n = 0;
+    novos.forEach((a) => { if (!jaTem[a.coord]) { config.noble.alvos.push(a); n++; } });
+    ta.value = '';
+    save(); renderNoblePlano();
+    pushLog('Noblar: ' + n + ' alvo(s) adicionado(s)' + (novos.length - n ? ' (' + (novos.length - n) + ' já estavam na lista)' : '') + '.', 'ok', 'noble');
+  }
+  function nobleContarCoords() {
+    const ta = document.getElementById('twmgr-nb-coords');
+    const el = document.getElementById('twmgr-nb-count');
+    if (!ta || !el) return;
+    const n = nobleParseCoords(ta.value).length;
+    el.textContent = n + ' coordenada' + (n === 1 ? '' : 's');
+  }
+  function renderNoblePlano() {
+    const box = document.getElementById('twmgr-nb-lista'); if (!box) return;
+    const alvos = config.noble.alvos || [], plano = config.noble.plano || [];
+    if (!alvos.length) {
+      box.innerHTML = '<div style="color:#8a7340;text-align:center;padding:10px;font-size:10px">— nenhum alvo na lista —</div>';
+      return;
+    }
+    const porCoord = {}; plano.forEach((p) => { porCoord[p.coord] = p; });
+    box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr>' +
+      '<th>Alvo</th><th>Origens</th><th>Chegada</th><th>Estado</th><th></th></tr></thead><tbody>' +
+      alvos.map((a, i) => {
+        const p = porCoord[a.coord];
+        const origens = p && p.envios.length
+          ? p.envios.map((e) => e.qtd + '× ' + esc(e.nome)).join(', ') : '<span style="color:#8a7340">—</span>';
+        const chegada = p && p.envios.length
+          ? p.envios.map((e) => fmtDur(e.durSec)).join(' / ') : '—';
+        const estado = !p ? '<span style="color:#8a7340">sem plano</span>'
+          : p.pronto ? '<b style="color:#3f8f52">pronto</b>'
+          : '<span style="color:#8a7340">' + esc(p.motivo || 'incompleto') + '</span>';
+        const acao = (p && p.pronto)
+          ? '<a class="twmgr-nb-fire" data-coord="' + esc(a.coord) + '">Enviar</a> · <a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '">✕</a>'
+          : '<a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '">✕</a>';
+        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
+          '<td><b>' + esc(a.coord) + '</b></td><td>' + origens + '</td><td>' + chegada + '</td>' +
+          '<td>' + estado + '</td><td>' + acao + '</td></tr>';
+      }).join('') + '</tbody></table>';
+    const info = document.getElementById('twmgr-nb-info');
+    if (info) {
+      const p = config.noble.planoAt
+        ? 'plano de ' + new Date(config.noble.planoAt).toLocaleTimeString('pt-BR') : 'sem plano ainda';
+      info.textContent = alvos.length + ' alvo(s) · ' + p;
+    }
+  }
+  function bindNobleHandlers() {
+    const box = document.getElementById('twmgr-nb-lista'); if (!box) return;
+    box.addEventListener('click', (e) => {
+      const el = e.target, coord = el.getAttribute && el.getAttribute('data-coord');
+      if (!coord) return;
+      if (el.classList.contains('twmgr-nb-fire')) nobleDispararAlvo(coord);
+      else if (el.classList.contains('twmgr-nb-rm')) {
+        config.noble.alvos = (config.noble.alvos || []).filter((a) => a.coord !== coord);
+        config.noble.plano = (config.noble.plano || []).filter((p) => p.coord !== coord);
+        save(); renderNoblePlano(); refreshCards('noble');
+      }
+    });
+  }
+  function readNobleCfg() {
+    const c = config.noble, g = (id) => document.getElementById(id);
+    if (g('twmgr-nb-horas')) c.maxHoras = Math.max(1, parseInt(g('twmgr-nb-horas').value, 10) || 6);
+    if (g('twmgr-nb-nt')) c.soNT = g('twmgr-nb-nt').checked;
+    if (g('twmgr-nb-int')) c.interval = Math.max(1, parseInt(g('twmgr-nb-int').value, 10) || 15) * 60;
+    save();
+  }
+  function setNobleStatus(on) { setBtnState('twmgr-nb-start', 'twmgr-nb-stop', on, '● Planejando', '▶ Planejar'); }
+  function nobleStart() {
+    readNobleCfg();
+    if (!(config.noble.alvos || []).length) { pushLog('Noblar: adicione pelo menos um alvo.', 'err', 'noble'); return; }
+    config.noble.running = true; config.noble.nextAt = 0; save();
+    setNobleStatus(true);
+    pushLog('Noblar iniciado — ' + config.noble.alvos.length + ' alvo(s). O disparo continua manual.', 'ok', 'noble');
+    nobleTick();
+  }
+  function nobleStop() {
+    readNobleCfg(); config.noble.running = false; save();
+    clearTimeout(nobleTimer); setNobleStatus(false);
+    pushLog('Noblar parado.', '', 'noble');
+  }
   // ==================== OBRA (construção por perfil, via grupos nativos do TW) ====================
   // Diferente do Construções (que é por aldeia, cadastrada à mão), aqui cada aldeia entra no fluxo
   // automaticamente ao ser colocada num dos 5 grupos do jogo — nenhum cadastro manual extra.
@@ -6444,6 +6740,13 @@
       else { pq.style.color = '#2e7d3a'; pq.textContent = (config.research.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.research.nextAt - now) : '● pesquisando…'; }
     }
     if (document.getElementById('twmgr-cards-research')) refreshCards('research');
+    const nb = document.getElementById('twmgr-nb-status'); if (nb) {
+      if (!config.noble || !config.noble.running) { nb.textContent = ''; }
+      else if (lockOther()) { nb.textContent = '⏸ outra aba'; nb.style.color = '#c0483a'; }
+      else { nb.style.color = '#3f8f52'; nb.textContent = (config.noble.nextAt || 0) > now
+        ? '● próximo plano: ' + fmt(config.noble.nextAt - now) : '● planejando…'; }
+    }
+    if (document.getElementById('twmgr-cards-noble')) refreshCards('noble');
     const bm = document.getElementById('twmgr-bm-status'); if (bm) {
       if (!config.map || !config.map.running) { bm.textContent = ''; }
       else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#c0483a'; }
@@ -6495,6 +6798,7 @@
     ring('twmgr-btab-market', anyMarketRunning());
     ring('twmgr-btab-build', config.build.running);
     ring('twmgr-btab-research', config.research && config.research.running);
+    ring('twmgr-btab-noble', config.noble && config.noble.running);
     ring('twmgr-btab-planner', config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running));
     ring('twmgr-btab-paladin', config.paladin && config.paladin.running);
     ring('twmgr-btab-obra', config.obra && config.obra.running);
@@ -6797,7 +7101,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
+    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -6840,7 +7144,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       // Telas de modelo: overlay DENTRO do painel, nao aba nova. Ficam fora do #twmgr-body pra
       // cobrir o painel inteiro (inclusive a barra de abas) enquanto abertas -- e uma tela cheia
       // de edicao, entao trocar de aba no meio nao faz sentido.
@@ -7122,6 +7426,27 @@
         '<div class="twmgr-actions"><button id="twmgr-pq-start" class="twmgr-btn twmgr-go">▶ Pesquisar</button><button id="twmgr-pq-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-pq-status" class="twmgr-cstatus"></div>' +
         modLog('research') +
+      '</div>' +
+      '<div id="twmgr-tab-noble" style="display:none">' +
+        hint('👑 Cola as coordenadas, define o limite de viagem e ele monta o plano de conquista. <b>Não dispara sozinho</b> — o envio é seu.') +
+        cardsDiv('noble') +
+        sec('Alvos',
+          '<textarea id="twmgr-nb-coords" class="twmgr-inp" style="width:100%;height:56px;font-family:monospace;font-size:11px" placeholder="555|444 555|445 555446 texto solto no meio"></textarea>' +
+          '<div class="twmgr-row" style="margin-top:5px">' +
+            '<span id="twmgr-nb-count" class="twmgr-lbl">0 coordenadas</span>' +
+            '<span style="flex:1"></span>' +
+            '<button id="twmgr-nb-add" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">+ Adicionar</button>' +
+          '</div>' +
+          '<div id="twmgr-nb-lista" class="twmgr-bld-vils" style="margin-top:6px"></div>' +
+          '<div id="twmgr-nb-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>') +
+        sec('Regras',
+          '<div class="twmgr-row"><span class="twmgr-lbl">Viagem máx. do nobre (h)</span><input id="twmgr-nb-horas" class="twmgr-inp" type="number" min="1" max="72" value="6" style="width:56px"></div>' +
+          '<label class="twmgr-check" title="NT = os 4 nobres saindo da MESMA aldeia"><input id="twmgr-nb-nt" type="checkbox"> Só enviar NT (4 nobres da mesma aldeia)</label>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">A duração vem do próprio jogo: o plano prepara o comando e lê o tempo real, então o limite vale em qualquer mundo.</div>') +
+        sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
+        '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+        '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
+        modLog('noble') +
       '</div>' +
       '<div id="twmgr-tab-planner" style="display:none">' +
         hint('🎯 Coordenado: monte vários ataques independentes — cada um com seu próprio alvo, aldeias e tropas — e arme cada um separadamente (o botão libera um novo ataque em branco assim que você arma). Cada aldeia pode mandar <b>várias ondas</b> (+ onda) dentro do mesmo ataque. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
@@ -7473,6 +7798,21 @@
     pesqRenderTplSelect();
     pesqSwitchTpl(_pesqTplAtivo);
     renderResearchVillages();
+    // ---- Noblar ----
+    document.getElementById('twmgr-nb-add').addEventListener('click', nobleAddCoords);
+    document.getElementById('twmgr-nb-coords').addEventListener('input', nobleContarCoords);
+    document.getElementById('twmgr-nb-horas').value = config.noble.maxHoras != null ? config.noble.maxHoras : 6;
+    document.getElementById('twmgr-nb-nt').checked = !!config.noble.soNT;
+    document.getElementById('twmgr-nb-int').value = Math.round((config.noble.interval || 900) / 60);
+    ['twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int'].forEach((id) => {
+      const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
+    });
+    bindNobleHandlers();
+    renderNoblePlano();
+    document.getElementById('twmgr-nb-start').addEventListener('click', nobleStart);
+    document.getElementById('twmgr-nb-stop').addEventListener('click', nobleStop);
+    setNobleStatus(config.noble.running);
+
     document.getElementById('twmgr-pq-start').addEventListener('click', researchStart);
     document.getElementById('twmgr-pq-stop').addEventListener('click', researchStop);
     setResearchStatus(config.research.running);
@@ -7537,7 +7877,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'research', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'research', 'noble', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -7590,6 +7930,7 @@
     MARKET_MODES.forEach((mkKey) => { if (config.market.modes[mkKey].running) { rlog('Mercado (' + MARKET_MODE_LABEL[mkKey] + ') retomado.', 'market'); retomar(() => scheduleMarket(mkKey)); } });
     if (config.build.running) { rlog('Construções retomado.', 'build'); retomar(scheduleBuild); }
     if (config.research && config.research.running) { rlog('Pesquisa retomada.', 'research'); retomar(scheduleResearch); }
+    if (config.noble && config.noble.running) { rlog('Noblar retomado.', 'noble'); retomar(scheduleNoble); }
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); retomar(scheduleMap); }
     if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); retomar(etiquetaTick); }
     if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); retomar(scheduleLock); }

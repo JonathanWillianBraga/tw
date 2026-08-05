@@ -250,7 +250,7 @@
     if (_ccSim) {
       cmd.state = 'enviado'; cmd.sentAt = cmd.fireAt; cmd.erro = null; cmd.rttEnvioMs = 0; cmd.simulado = true;
       save(); ccRenderPagina();
-      pushLog('🧪 SIMULADO: ' + ccRotulo(cmd) + ' — disparo em ' + ccFmtHora(cmd.fireAt), 'ok', 'planner');
+      pushLog('🧪 SIMULADO: ' + ccRotulo(cmd) + ' — disparo em ' + ccFmtHora(cmd.fireAt), 'ok');
       return;
     }
     const t0 = performance.now();
@@ -279,13 +279,13 @@
         clearTimeout(_ccConferirTimer);
         _ccConferirTimer = setTimeout(() => { ccConferirPendentes().catch(() => {}); }, 8000);
       }
-      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.state + ', estimei ' + cmd.erroMs + 'ms (ida-e-volta ' + cmd.rttEnvioMs + 'ms). Conferindo com o jogo…', cmd.state === 'enviado' ? 'ok' : 'err', 'planner');
+      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.state + ', estimei ' + cmd.erroMs + 'ms (ida-e-volta ' + cmd.rttEnvioMs + 'ms). Conferindo com o jogo…', cmd.state === 'enviado' ? 'ok' : 'err');
       save(); ccRenderPagina();
     }).catch((e) => {
       // Rede caiu: NÃO dá pra saber se o servidor recebeu. Incerto, nunca falha.
       cmd.state = 'incerto'; cmd.erro = 'rede caiu durante o envio (' + (e.message || e) + ')';
       save(); ccRenderPagina();
-      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — INCERTO (' + cmd.erro + ')', 'err', 'planner');
+      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — INCERTO (' + cmd.erro + ')', 'err');
     });
   }
 
@@ -394,7 +394,7 @@
           grupo.forEach((g) => { if ((g.cmd.tentativasConf || 0) >= 5) g.cmd.confAmbigua = true; });
           if (grupo[0] && (grupo[0].cmd.tentativasConf || 0) === 5) {
             pushLog('🎯 Central: não consegui medir o erro de ' + grupo.length + ' comando(s) → ' + coord +
-              ' — achei ' + cand.length + ' chegada(s) na lista, e com número diferente o casamento fica ambíguo. Prefiro não medir a medir errado.', '', 'planner');
+              ' — achei ' + cand.length + ' chegada(s) na lista, e com número diferente o casamento fica ambíguo. Prefiro não medir a medir errado.', '');
           }
           return;
         }
@@ -435,13 +435,13 @@
             g.cmd.foraDaBanda = true;
             pushLog('🎯 Central: ' + ccRotulo(g.cmd) + ' — chegada ' + ccFmtHora(casados[i]) + ', erro REAL ' +
               (g.cmd.erroRealMs > 0 ? '+' : '') + g.cmd.erroRealMs + 'ms. FORA da banda da onda (referência ' + referencia +
-              'ms) — engasgada do servidor, não latência. Não vai pro aprendizado.', '', 'planner');
+              'ms) — engasgada do servidor, não latência. Não vai pro aprendizado.', '');
             return;
           }
           // ESTE é o sinal que alimenta o viés. O erro estimado vira só diagnóstico.
           ccRealimentar(g.cmd, g.cmd.erroRealMs, true);
           pushLog('🎯 Central: ' + ccRotulo(g.cmd) + ' — o jogo registrou chegada ' + ccFmtHora(casados[i]) +
-            ', erro REAL ' + (g.cmd.erroRealMs > 0 ? '+' : '') + g.cmd.erroRealMs + 'ms (eu estimei ' + g.cmd.erroMs + 'ms).', 'ok', 'planner');
+            ', erro REAL ' + (g.cmd.erroRealMs > 0 ? '+' : '') + g.cmd.erroRealMs + 'ms (eu estimei ' + g.cmd.erroMs + 'ms).', 'ok');
         });
       });
     }
@@ -477,7 +477,7 @@
     const deriva = Math.abs(cmd.atrasoEscadaMs || 0);
     if (deriva > CC.GUARDA_DERIVA_MS) {
       cc.afericoes = (cc.afericoes || []).concat([{ t: ccNow(), erro: cmd.erroRealMs, descartada: true, deriva: deriva, bias: cc.biasMs }]).slice(-50);
-      pushLog('🎯 Central: amostra descartada do aprendizado — minha escada atrasou ' + deriva + 'ms, o erro não mede a rede.', '', 'planner');
+      pushLog('🎯 Central: amostra descartada do aprendizado — minha escada atrasou ' + deriva + 'ms, o erro não mede a rede.', '');
       save(); return;
     }
 
@@ -488,7 +488,7 @@
     const teto = Math.max(100, Math.min(CC.BIAS_TETO, cc.maxCorrecaoMs || 1000));
     if (Math.abs(erroMs) > teto) {
       cc.afericoes = (cc.afericoes || []).concat([{ t: ccNow(), erro: cmd.erroRealMs, descartada: true, motivo: 'acima do máximo de correção', bias: cc.biasMs }]).slice(-50);
-      pushLog('🎯 Central: erro de ' + Math.round(erroMs) + 'ms ignorado — acima do máximo de correção (' + teto + 'ms). Isso é defeito, não latência.', '', 'planner');
+      pushLog('🎯 Central: erro de ' + Math.round(erroMs) + 'ms ignorado — acima do máximo de correção (' + teto + 'ms). Isso é defeito, não latência.', '');
       save(); return;
     }
 
@@ -578,7 +578,7 @@
           cmd.state = 'perdido';
           cmd.erro = 'a hora de sair passou (aba fechada, ou a fila estava ocupada com outro comando)';
           save(); ccRenderPagina();
-          pushLog('⏱️ Central: ' + ccRotulo(cmd) + ' PERDIDO — ' + cmd.erro, 'err', 'planner');
+          pushLog('⏱️ Central: ' + ccRotulo(cmd) + ' PERDIDO — ' + cmd.erro, 'err');
           continue;
         }
 
@@ -592,7 +592,7 @@
           } catch (e) {
             cmd.state = 'falhou'; cmd.erro = 'preparo falhou: ' + (e.message || e);
             save(); ccRenderPagina();
-            pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.erro, 'err', 'planner');
+            pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.erro, 'err');
             continue;
           }
           continue;   // reavalia: o preparo pode ter mudado sendAt (duração exata do servidor)
@@ -675,7 +675,7 @@
     const corte = ccNow() - 12 * 3600 * 1000;
     config.cc.fila = fila.filter((c) => (c.state === 'armado' || c.state === 'preparado') || (c.sentAt || c.alvoMs || 0) > corte);
     save();
-    if (incertos) pushLog('🎯 Central: ' + incertos + ' comando(s) ficaram INCERTOS (a aba caiu no envio). Não vou reenviar — confira na tela de comandos.', 'err', 'planner');
+    if (incertos) pushLog('🎯 Central: ' + incertos + ' comando(s) ficaram INCERTOS (a aba caiu no envio). Não vou reenviar — confira na tela de comandos.', 'err');
     ccTick();
   }
 
@@ -735,7 +735,7 @@
       abaOculta: document.hidden,
       keepAwake: ccAcordadoOk(),
     };
-    pushLog('🎯 Aferição: erro mediano ' + r.mediana + 'ms (pior ' + r.pior + 'ms) · rede ' + (rede ? rede.mediana + 'ms ±' + rede.jitter : 'n/d') + ' · keep-awake ' + (r.keepAwake ? 'on' : 'off'), 'ok', 'planner');
+    pushLog('🎯 Aferição: erro mediano ' + r.mediana + 'ms (pior ' + r.pior + 'ms) · rede ' + (rede ? rede.mediana + 'ms ±' + rede.jitter : 'n/d') + ' · keep-awake ' + (r.keepAwake ? 'on' : 'off'), 'ok');
     return r;
   }
 
@@ -1023,7 +1023,7 @@
     alvo.querySelectorAll('.twmgr-cc-rm').forEach((el) => el.addEventListener('click', () => {
       const c = (config.cc.fila || []).find((x) => x.id === el.getAttribute('data-id'));
       ccRemover(el.getAttribute('data-id'));
-      if (c) pushLog('🎯 Central: ' + ccRotulo(c) + ' cancelado antes de sair.', '', 'planner');
+      if (c) pushLog('🎯 Central: ' + ccRotulo(c) + ' cancelado antes de sair.', '');
       ccRenderPagina();
     }));
   }
@@ -1197,7 +1197,7 @@
           ? 'Agendado: ' + ccResumoTropa(amounts) + ' → ' + mc[1] + '|' + mc[2] + aviso + '. Veja a fila pra acompanhar.'
           : 'Onda de ' + qtdOnda + ' agendada → ' + mc[1] + '|' + mc[2] + ', espaçada de ' + gap + 'ms' + aviso + '. Veja a fila pra acompanhar.');
         pushLog('🎯 Central: ' + (qtdOnda === 1 ? '' : 'onda de ' + qtdOnda + ' × ') + ccRotulo(criados[0]) +
-          ' agendado (' + modo + ' ' + ccFmtHora(base) + (qtdOnda > 1 ? ', gap ' + gap + 'ms' : '') + ').', 'ok', 'planner');
+          ' agendado (' + modo + ' ' + ccFmtHora(base) + (qtdOnda > 1 ? ', gap ' + gap + 'ms' : '') + ').', 'ok');
       } catch (e) { dizer(String(e.message || e), true); }
     });
     sincronizarLinha();
@@ -1255,7 +1255,7 @@
     pushLog('🧪 Teste ' + (opts.real ? 'REAL' : 'SIMULADO') + ': onda de ' + plano.origens.length +
       ' aldeia(s) → bárbara ' + plano.alvo.x + '|' + plano.alvo.y + ' (dist ' + plano.dist + '), ' +
       plano.nUnid + ' explorador(es) cada, gap ' + plano.gap + 'ms, saindo em ' + plano.emS + 's. Acompanhe na fila.',
-      'ok', 'planner');
+      'ok');
     ccTesteAcompanhar();
     return plano;
   }
@@ -1284,7 +1284,7 @@
       (ordemOk ? 'CORRETA ✅' : 'ERRADA ❌') + ' · espaçamento ' + (gaps.length ? gaps.join('/') + 'ms' : '—') +
       ' · erro médio de escada ' + (media == null ? '—' : (media > 0 ? '+' : '') + media + 'ms') +
       (falhas ? ' · NÃO enviados: ' + falhas : ''),
-      ordemOk && enviados === meus.length ? 'ok' : 'err', 'planner');
+      ordemOk && enviados === meus.length ? 'ok' : 'err');
     // Os simulados são fantasmas — limpa da fila depois de alguns segundos pra não poluir.
     if (meus.some((c) => c.simulado)) {
       setTimeout(() => { meus.forEach((c) => { if (c.simulado) ccRemover(c.id); }); ccRenderPagina(); }, 8000);

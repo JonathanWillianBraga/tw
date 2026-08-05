@@ -46,37 +46,6 @@
       else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#c0483a'; }
       else { bm.style.color = '#2e7d3a'; bm.textContent = (config.map.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.map.nextAt - now) : '● rastreando…'; }
     }
-    const plClk = document.getElementById('twmgr-pl-srvclock'); if (plClk) { try { plClk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
-    const pls = document.getElementById('twmgr-pl-status');
-    if (pls) {
-      const plAtk = config.planner && plActive();
-      if (!plAtk || !plAtk.running) { pls.textContent = ''; }
-      else if (lockOther()) { pls.textContent = '⏸ outra aba'; pls.style.color = '#c0483a'; }
-      else {
-        const rr = (plAtk.rows || []);
-        const pend = rr.filter((r) => r.state === 'armed' || r.state === 'scheduled').length;
-        const sent = rr.filter((r) => r.state === 'sent').length;
-        const err = rr.filter((r) => r.state === 'error').length;
-        const nx = rr.filter((r) => r.sendAt && (r.state === 'scheduled' || r.state === 'armed')).sort((a, b) => a.sendAt - b.sendAt)[0];
-        pls.style.color = '#2e7d3a';
-        pls.textContent = '● ' + sent + ' env · ' + pend + ' pend' + (err ? (' · ' + err + ' erro') : '') + (nx ? (' · próx ' + fmt(nx.sendAt - serverNow())) : '');
-      }
-    }
-    if (document.getElementById('twmgr-cards-planner')) refreshCards('planner');
-    if (document.getElementById('twmgr-pl-queue')) { try { renderPlannerQueue(plActive()); } catch (e) {} }
-    const pds = document.getElementById('twmgr-pd-status');
-    if (pds) {
-      if (!config.paladin.running) { pds.textContent = ''; }
-      else if (lockOther()) { pds.textContent = '⏸ outra aba'; pds.style.color = '#c0483a'; }
-      else { pds.style.color = '#2e7d3a'; pds.textContent = '● ' + Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]).length + ' aldeia(s) no ciclo'; }
-    }
-    if (document.getElementById('twmgr-pd-status-list')) renderPaladinStatus();
-    // Atualiza só o indicador (●) de cada aba de ataque, sem reconstruir a lista (evita "roubar" cliques).
-    document.querySelectorAll('.twmgr-pl-tab').forEach((el) => {
-      const atk = (config.planner.attacks || []).find((a) => a.id === el.getAttribute('data-id'));
-      const dot = el.querySelector('.twmgr-pl-tab-dot');
-      if (dot) dot.style.display = (atk && atk.running) ? 'inline' : 'none';
-    });
     const ring = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('twmgr-run', !!on && !lockOther()); };
     // Muralha e Mapa viraram sub-abas do Saque (v11.16.0): o indicador de atividade vai pro botão da
     // SUB-aba, e a aba Saque acende se qualquer um dos três estiver rodando — senão dá pra ter
@@ -93,7 +62,6 @@
     ring('twmgr-btab-build', config.build.running);
     ring('twmgr-btab-research', config.research && config.research.running);
     ring('twmgr-btab-noble', config.noble && config.noble.running);
-    ring('twmgr-btab-planner', config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running));
     ring('twmgr-btab-paladin', config.paladin && config.paladin.running);
     ring('twmgr-btab-obra', config.obra && config.obra.running);
     ring('twmgr-btab-etiqueta', config.etiqueta && config.etiqueta.running);

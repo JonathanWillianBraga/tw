@@ -142,7 +142,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
+    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -185,7 +185,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       // Telas de modelo: overlay DENTRO do painel, nao aba nova. Ficam fora do #twmgr-body pra
       // cobrir o painel inteiro (inclusive a barra de abas) enquanto abertas -- e uma tela cheia
       // de edicao, entao trocar de aba no meio nao faz sentido.
@@ -489,37 +489,6 @@
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
         modLog('noble') +
       '</div>' +
-      '<div id="twmgr-tab-planner" style="display:none">' +
-        hint('🎯 Coordenado: monte vários ataques independentes — cada um com seu próprio alvo, aldeias e tropas — e arme cada um separadamente (o botão libera um novo ataque em branco assim que você arma). Cada aldeia pode mandar <b>várias ondas</b> (+ onda) dentro do mesmo ataque. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
-        cardsDiv('planner') +
-        sec('Ataques', '<div id="twmgr-pl-attacks" style="display:flex;flex-wrap:wrap;gap:6px"></div>') +
-        sec('1. Alvo (do ataque selecionado acima)',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Relógio do servidor</span><b id="twmgr-pl-srvclock" style="color:#a2643a">--:--:--</b></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Coord alvo</span><span><input id="twmgr-pl-target-x" class="twmgr-inp" type="number" min="1" placeholder="x" style="width:56px"> | <input id="twmgr-pl-target-y" class="twmgr-inp" type="number" min="1" placeholder="y" style="width:56px"></span></div>' +
-          '<label class="twmgr-lbl">Chegada base (horário do servidor)</label><input id="twmgr-pl-arr" class="twmgr-inp" type="datetime-local" step="1" style="width:100%;margin:2px 0 0">' +
-          '<div class="twmgr-row" style="margin-top:6px"><span class="twmgr-lbl">Offset envio (ms)</span><input id="twmgr-pl-offset" class="twmgr-inp" type="number" min="0" value="150" style="width:56px"></div>') +
-        sec('2. Aldeias participantes',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Selecione</span><span style="font-size:9px"><a id="twmgr-pl-all" style="cursor:pointer;color:#a2643a">todas</a> · <a id="twmgr-pl-none" style="cursor:pointer;color:#a2643a">nenhuma</a> · <a id="twmgr-pl-load" style="cursor:pointer;color:#a2643a">🔄 carregar tropas</a></span></div>' +
-          '<div id="twmgr-pl-villages" style="max-height:110px;overflow-y:auto;border:1px solid #ece4d8;border-radius:6px;padding:4px"></div>') +
-        sec('3. Composição por aldeia (+ onda pra mandar mais de um ataque da mesma aldeia)',
-          '<div id="twmgr-pl-cards"><div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div></div>') +
-        sec('4. Armar este ataque',
-          '<div class="twmgr-actions"><button id="twmgr-pl-start" class="twmgr-btn twmgr-go">▶ Armar este ataque</button><button id="twmgr-pl-stop" class="twmgr-btn twmgr-stop">■ Desarmar</button><button id="twmgr-pl-clear" class="twmgr-btn twmgr-ghost" style="flex:0 0 auto">🗑</button></div>' +
-          '<div id="twmgr-pl-status" class="twmgr-cstatus"></div>') +
-        sec('5. Fila deste ataque',
-          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:10px;color:#8a7d6d">ordenada por horário de envio</span><button id="twmgr-pl-queue-clear" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="remover enviados e erros do histórico">🗑 limpar histórico</button></div>' +
-          '<div id="twmgr-pl-queue" style="max-height:220px;overflow-y:auto"></div>') +
-        sec('Templates',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Salvar plano atual</span><span><input id="twmgr-pl-tpl-name" class="twmgr-inp" type="text" placeholder="ex: guerra XYZ" style="width:120px"> <button id="twmgr-pl-tpl-save" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">💾</button></span></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Carregar</span><span><select id="twmgr-pl-tpl-load" class="twmgr-inp" style="width:120px"></select> <button id="twmgr-pl-tpl-apply" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">📂</button> <button id="twmgr-pl-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="apagar">🗑</button></span></div>') +
-        sec('🛡️ Blindagem da tribo',
-          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Puxa a tabela do tópico, escolhe origem por linha, envia apoios e copia o texto no formato do fórum.</div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">URL do tópico</span><input id="twmgr-blz-url" class="twmgr-inp" type="text" placeholder="https://.../screen=forum&mode=view&thread_id=..." style="flex:1;min-width:180px"></div>' +
-          '<div class="twmgr-actions"><button id="twmgr-blz-fetch" class="twmgr-btn twmgr-ghost">🛡️ Buscar pedidos</button><span id="twmgr-blz-status" style="flex:1;font-size:10px;color:#8a7d6d;padding-top:4px">—</span></div>' +
-          '<div id="twmgr-blz-list" style="max-height:280px;overflow-y:auto;border:1px solid #ece4d8;border-radius:6px;padding:4px;margin-top:4px"></div>' +
-          '<div class="twmgr-actions" style="margin-top:6px"><button id="twmgr-blz-send" class="twmgr-btn twmgr-go">✉️ Enviar marcados</button></div>') +
-        modLog('planner') +
-      '</div>' +
       '<div id="twmgr-tab-paladin" style="display:none">' +
         hint('🐴 Treina o(s) Paladino(s) por XP em ciclo — sempre no regime de <b>4h</b> (melhor XP/hora dos 5 disponíveis). Além do check periódico, cada envio arma um timer de precisão pra 4h+30s depois, garantindo reenvio quase imediato.') +
         cardsDiv('paladin') +
@@ -668,74 +637,6 @@
     ['twmgr-r-gatk', 'twmgr-r-gdef', 'twmgr-r-hours', 'twmgr-r-refill'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readRecruitCfg); });
     document.querySelectorAll('.twmgr-ron, .twmgr-rt').forEach((el) => el.addEventListener('change', readRecruitCfg));
     setRecruitStatus(config.recruit.running);
-
-    // ---- Planner (Coordenado) ----
-    renderPlannerTabs();
-    renderPlannerActive();
-    ['twmgr-pl-target-x', 'twmgr-pl-target-y', 'twmgr-pl-arr', 'twmgr-pl-offset'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', () => { readPlannerCfg(); const atk = plActive(); renderPlannerVillages(atk).then(() => renderPlannerCards(atk)); }); });
-    document.getElementById('twmgr-pl-all').addEventListener('click', () => {
-      const atk = plActive();
-      document.querySelectorAll('.twmgr-pl-vil').forEach((cb) => { cb.checked = true; const vid = cb.getAttribute('data-vid'); atk.selected[vid] = true; if (!atk.perVillage[vid] || !atk.perVillage[vid].length) atk.perVillage[vid] = [{ kind: 'attack', offsetMs: 0, amounts: {} }]; });
-      save(); plannerRecomputeReservations(); renderPlannerCards(atk);
-    });
-    document.getElementById('twmgr-pl-none').addEventListener('click', () => {
-      const atk = plActive();
-      document.querySelectorAll('.twmgr-pl-vil').forEach((cb) => { cb.checked = false; });
-      atk.selected = {}; atk.perVillage = {}; atk.homeAvail = {};
-      save(); plannerRecomputeReservations(); renderPlannerCards(atk);
-    });
-    document.getElementById('twmgr-pl-load').addEventListener('click', () => plannerLoadHomeAvail(plActive()));
-    document.getElementById('twmgr-pl-start').addEventListener('click', () => {
-      readPlannerCfg();
-      const atk = plActive();
-      const wasRunning = atk.running;
-      plannerStart(atk);
-      if (atk.running && !wasRunning) {
-        // Armou agora: libera um ataque novo em branco já selecionado, pra continuar configurando e armando sem travar o botão.
-        plannerAddAttack();
-      } else {
-        setPlannerStatus(atk.running);
-        renderPlannerTabs();
-      }
-    });
-    document.getElementById('twmgr-pl-stop').addEventListener('click', () => { const atk = plActive(); plannerStop(atk); setPlannerStatus(false); renderPlannerTabs(); });
-    document.getElementById('twmgr-pl-clear').addEventListener('click', () => plannerClearAll(plActive()));
-    document.getElementById('twmgr-pl-queue-clear').addEventListener('click', plannerClearHistory);
-    document.getElementById('twmgr-pl-tpl-save').addEventListener('click', plannerSaveTemplate);
-    document.getElementById('twmgr-pl-tpl-apply').addEventListener('click', plannerApplyTemplate);
-    document.getElementById('twmgr-pl-tpl-del').addEventListener('click', plannerDeleteTemplate);
-    plannerRefreshTemplatesList();
-
-    // Blindagem
-    const blzUrlEl = document.getElementById('twmgr-blz-url');
-    if (blzUrlEl) blzUrlEl.value = config.planner.blindagem.threadUrl || '';
-    if (blzUrlEl) blzUrlEl.addEventListener('change', () => { config.planner.blindagem.threadUrl = blzUrlEl.value.trim(); save(); });
-    const blzFetchBtn = document.getElementById('twmgr-blz-fetch');
-    if (blzFetchBtn) blzFetchBtn.addEventListener('click', async () => {
-      const url = (document.getElementById('twmgr-blz-url').value || '').trim();
-      if (!url) { pushLog('Blindagem: cole a URL do tópico primeiro.', 'err'); return; }
-      config.planner.blindagem.threadUrl = url; save();
-      const status = document.getElementById('twmgr-blz-status');
-      blzFetchBtn.disabled = true; if (status) status.textContent = '⏳ buscando…';
-      try {
-        const rows = await blindagemFetch(url);
-        if (status) status.textContent = rows.length + ' pedido(s) · atualizado ' + new Date().toLocaleTimeString();
-        pushLog('🛡️ Blindagem: ' + rows.length + ' pedido(s) carregado(s).', rows.length ? 'ok' : 'err', 'planner');
-      } catch (e) {
-        if (status) status.textContent = '⚠ ' + (e.message || e);
-        pushLog('🛡️ Blindagem: erro ao buscar (' + (e.message || e) + ').', 'err', 'planner');
-      }
-      blzFetchBtn.disabled = false;
-      renderBlindagemList();
-    });
-    const blzSendBtn = document.getElementById('twmgr-blz-send');
-    if (blzSendBtn) blzSendBtn.addEventListener('click', async () => {
-      blzSendBtn.disabled = true;
-      try { await blindagemSend(); } catch (e) { pushLog('🛡️ Blindagem erro: ' + (e.message || e), 'err'); }
-      blzSendBtn.disabled = false;
-      renderBlindagemList();
-    });
-    renderBlindagemList();
 
     // ---- Paladino (treino por XP) ----
     document.getElementById('twmgr-pd-interval').value = config.paladin.checkIntervalMin != null ? config.paladin.checkIntervalMin : 240;
@@ -918,7 +819,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'research', 'noble', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'research', 'noble', 'lock', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -975,11 +876,6 @@
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); retomar(scheduleMap); }
     if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); retomar(etiquetaTick); }
     if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); retomar(scheduleLock); }
-    if (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) {
-      config.planner.attacks.forEach((atk) => { if (!atk.running) return; (atk.rows || []).forEach((r) => { if (r.state === 'scheduled') r.state = 'armed'; }); });
-      rlog('🎯 Coordenado retomado.', 'planner');
-      retomar(plannerTick);
-    }
     if (config.paladin && config.paladin.running) { rlog('Paladino retomado.', 'paladin'); retomar(paladinTick); }
     if (config.obra && config.obra.running) { rlog('🏛️ Obra retomada.', 'obra'); retomar(obraTick); }
     closeStaleLiveLogs();   // barra de progresso de ciclo que morreu no reload desta página

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.27.0
+// @version      11.28.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -129,7 +129,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.27.0';
+  const VERSION = '11.28.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -251,27 +251,6 @@
     reserved: {},                          // vid do bárbaro -> timestamp de quando O SCRIPT travou (nunca destrava sozinho)
     stats: {},
   });
-  const defPlannerAttack = (name) => ({
-    id: genId(), name: name || 'Ataque',
-    running: false, offsetMs: 150,
-    targetX: '', targetY: '',
-    arriveLocal: '',                       // datetime-local base (usuário digita)
-    selected: {},                          // { [vid]: true } — aldeias participantes
-    perVillage: {},                        // { [vid]: { kind, offsetMs, amounts:{unit:qty} } }
-    homeAvail: {},                         // { [vid]: { unit:N, loadedAt: ms } } — cache do "Carregar tropas"
-    rows: [],                              // gerado no plannerStart a partir de perVillage
-  });
-  const defBlindagem = () => ({
-    threadUrl: '',        // URL do tópico do fórum da tribo com a tabela de pedidos
-    rows: [],             // [{ id, num, name, coord, x, y, ped:{LANC,ESP,SPY,CP}, originVid, send:{LANC,ESP,SPY,CP}, checked }]
-    lastFetch: 0,         // ms do último fetch bem-sucedido
-  });
-  const defPlanner = () => ({
-    attacks: [defPlannerAttack('Ataque 1')], // vários ataques independentes, cada um pode ser armado por conta própria
-    activeId: null,                        // id do ataque mostrado na UI (setado no load())
-    templates: [],                         // templates salvos { id, name, targetX, targetY, arriveLocal, selected, perVillage }
-    blindagem: defBlindagem(),             // sub-módulo: pedidos de blindagem da tribo
-  });
   const defDesviar = () => ({
     keepSpy: true,        // deixar exploradores em casa (pra farmar/monitorar)
     keepKnight: false,    // deixar paladino
@@ -355,7 +334,7 @@
     nextAt: 0,
     demand: {},              // { [vid]: { b, cost, coord, profile } }
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), market: defMarket(), build: defBuild(), research: defResearch(), noble: defNoble(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), market: defMarket(), build: defBuild(), research: defResearch(), noble: defNoble(), map: defMap(), captcha: defCaptcha(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -602,63 +581,8 @@
     if (c.captcha.cooldownSec == null) c.captcha.cooldownSec = 300;
     if (c.captcha.reloadMin == null) c.captcha.reloadMin = 0;
     if (c.captcha.lastNotifiedAt == null) c.captcha.lastNotifiedAt = 0;
-    if (!c.planner) c.planner = defPlanner();
-    if (!Array.isArray(c.planner.attacks) || !c.planner.attacks.length) {
-      // Migração do formato antigo (1 único ataque direto em config.planner) pro novo (lista de ataques independentes).
-      const legacy = c.planner;
-      const atk = defPlannerAttack('Ataque 1');
-      atk.running = !!legacy.running;
-      atk.offsetMs = legacy.offsetMs != null ? legacy.offsetMs : 150;
-      atk.targetX = legacy.targetX || ''; atk.targetY = legacy.targetY || '';
-      atk.arriveLocal = legacy.arriveLocal || '';
-      atk.selected = (legacy.selected && typeof legacy.selected === 'object') ? legacy.selected : {};
-      atk.perVillage = (legacy.perVillage && typeof legacy.perVillage === 'object') ? legacy.perVillage : {};
-      atk.homeAvail = (legacy.homeAvail && typeof legacy.homeAvail === 'object') ? legacy.homeAvail : {};
-      atk.rows = Array.isArray(legacy.rows) ? legacy.rows : [];
-      c.planner = { attacks: [atk], activeId: atk.id, templates: Array.isArray(legacy.plans) ? legacy.plans : [] };
-    }
-    if (!Array.isArray(c.planner.templates)) c.planner.templates = [];
-    c.planner.attacks.forEach((atk) => {
-      if (!atk.id) atk.id = genId();
-      if (!atk.name) atk.name = 'Ataque';
-      if (atk.offsetMs == null) atk.offsetMs = 150;
-      if (!atk.selected || typeof atk.selected !== 'object') atk.selected = {};
-      if (!atk.perVillage || typeof atk.perVillage !== 'object') atk.perVillage = {};
-      if (!atk.homeAvail || typeof atk.homeAvail !== 'object') atk.homeAvail = {};
-      if (!Array.isArray(atk.rows)) atk.rows = [];
-      if (atk.targetX == null) atk.targetX = '';
-      if (atk.targetY == null) atk.targetY = '';
-      if (atk.arriveLocal == null) atk.arriveLocal = '';
-      // Migração: perVillage[vid] era 1 onda só (objeto); agora é uma lista de ondas (array).
-      Object.keys(atk.perVillage).forEach((vid) => {
-        if (!Array.isArray(atk.perVillage[vid])) atk.perVillage[vid] = atk.perVillage[vid] ? [atk.perVillage[vid]] : [];
-        atk.perVillage[vid].forEach((w) => { if (!w.amounts || typeof w.amounts !== 'object') w.amounts = {}; if (!w.kind) w.kind = 'attack'; if (w.offsetMs == null) w.offsetMs = 0; });
-      });
-    });
-    if (!c.planner.activeId || !c.planner.attacks.some((a) => a.id === c.planner.activeId)) c.planner.activeId = c.planner.attacks[0].id;
-    if (!c.cc) c.cc = defCC();
-    if (!Array.isArray(c.cc.fila)) c.cc.fila = [];
-    if (!Array.isArray(c.cc.afericoes)) c.cc.afericoes = [];
-    if (typeof c.cc.biasMs !== 'number' || !isFinite(c.cc.biasMs)) c.cc.biasMs = 0;
-    if (typeof c.cc.rttMs !== 'number' || !isFinite(c.cc.rttMs)) c.cc.rttMs = 0;
-    if (typeof c.cc.manterAcordado !== 'boolean') c.cc.manterAcordado = true;
-    if (c.cc.modo !== 'fixo' && c.cc.modo !== 'adaptativo') c.cc.modo = 'adaptativo';
-    if (c.cc.estilo !== 'responsivo' && c.cc.estilo !== 'estavel') c.cc.estilo = 'estavel';
-    if (typeof c.cc.offsetFixoMs !== 'number' || !isFinite(c.cc.offsetFixoMs)) c.cc.offsetFixoMs = 0;
-    if (typeof c.cc.maxCorrecaoMs !== 'number' || c.cc.maxCorrecaoMs < 100) c.cc.maxCorrecaoMs = 1000;
-    if (typeof c.cc.ondaGapMs !== 'number' || c.cc.ondaGapMs < 100) c.cc.ondaGapMs = 100;
-    // Até a 10.22.0 a conferência casava vários comandos com a MESMA linha de chegada e
-    // produzia erros inventados — que foram direto pro estimador. O viés aprendido antes
-    // desta versão não vale nada; zera uma vez e recomeça com dado limpo.
-    if (c.cc.calibVer !== 2) {
-      c.cc.calibVer = 2; c.cc.biasMs = 0; c.cc.nReal = 0; c.cc.afericoes = [];
-      (c.cc.fila || []).forEach((x) => { x.erroRealMs = null; x.chegadaReal = null; x.tentativasConf = 0; });
-    }
-    if (!c.planner.blindagem) c.planner.blindagem = defBlindagem();
-    if (typeof c.planner.blindagem.threadUrl !== 'string') c.planner.blindagem.threadUrl = '';
-    if (!Array.isArray(c.planner.blindagem.rows)) c.planner.blindagem.rows = [];
-    if (c.planner.blindagem.lastFetch == null) c.planner.blindagem.lastFetch = 0;
-    if (!c.reservations || typeof c.reservations !== 'object') c.reservations = {};
+    // Coordenado e Blindagem saíram na v11.28.0. O config antigo (c.planner, com a blindagem
+    // dentro) deixa de ser lido, mas NÃO é apagado: se alguém der revert, os dados ainda estão lá.
     if (!c.desviar) c.desviar = defDesviar();
     if (c.desviar.keepSpy == null) c.desviar.keepSpy = true;
     if (c.desviar.keepKnight == null) c.desviar.keepKnight = false;
@@ -703,12 +627,12 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, buildTimer = null, researchTimer = null, nobleTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, buildTimer = null, researchTimer = null, nobleTimer = null, mapTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
   const marketTimers = { cunhagem: null, equilibrio: null, solidario: null, cunhar: null };   // 1 timer por modo — rodam de forma independente
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
   function anyMarketRunning() { return !!(config.market && config.market.modes && MARKET_MODES.some((k) => config.market.modes[k] && config.market.modes[k].running)); }
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || anyMarketRunning() || (config.build && config.build.running) || (config.research && config.research.running) || (config.noble && config.noble.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || anyMarketRunning() || (config.build && config.build.running) || (config.research && config.research.running) || (config.noble && config.noble.running) || (config.map && config.map.running) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.
@@ -731,8 +655,7 @@
   function devoParar(mod) {
     if (mod) {
       const c = config[mod];
-      if (mod === 'planner') { if (!(config.planner.attacks || []).some((a) => a.running)) return 'parado pelo usuário'; }
-      else if (c && c.running === false) return 'parado pelo usuário';
+      if (c && c.running === false) return 'parado pelo usuário';
     }
     if (lockOther()) return 'outra aba assumiu';
     if (captchaBlocked()) return 'bot-check na tela';
@@ -877,19 +800,6 @@
       arr = [
         { v: fmtN(e.lastCount || 0), l: 'na lista', hl: true },
         { v: fmtN(Object.keys(e.jaEnviados || {}).length), l: 'já etiquetados' },
-      ];
-    } else if (mod === 'planner') {
-      const attacks = (config.planner && config.planner.attacks) || [];
-      const rows = attacks.reduce((acc, a) => acc.concat(a.rows || []), []);
-      const armed = rows.filter((r) => r.state === 'armed' || r.state === 'scheduled').length;
-      const sent = rows.filter((r) => r.state === 'sent').length;
-      const err = rows.filter((r) => r.state === 'error').length;
-      const running = attacks.filter((a) => a.running).length;
-      arr = [
-        { v: fmtN(running), l: 'ataques armados', hl: true },
-        { v: fmtN(armed), l: 'ondas pendentes' },
-        { v: fmtN(sent), l: 'enviadas' },
-        { v: fmtN(err), l: 'erros' },
       ];
     } else if (mod === 'paladin') {
       const st = (config.paladin && config.paladin.state) || {};
@@ -2714,715 +2624,6 @@
     _pointsCache = map;
     return map;
   }
-  // ==================== PLANNER (Ataque Coordenado) ====================
-  // Lê o "home available" — tropas em casa (aproximação: usa o max do input do jogo se disponível,
-  // senão cai no data-all-count do link geral). O Fase 3 (UI) confirma o parser no jogo real.
-  async function getVillageHomeAvail(vid) {
-    const res = await fetch('/game.php?village=' + vid + '&screen=place', { credentials: 'include' });
-    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    const home = {};
-    UNITS.forEach(([u]) => {
-      let n = 0;
-      const inp = doc.querySelector('#unit_input_' + u);
-      if (inp) {
-        // placeholder típico: "0/N" onde N é o total em casa
-        const ph = inp.getAttribute('placeholder') || '';
-        const mm = ph.match(/(\d+)\s*\/\s*(\d+)/);
-        if (mm) n = parseInt(mm[2], 10) || 0;
-        if (!n) { const mx = inp.getAttribute('data-max') || inp.getAttribute('max') || inp.getAttribute('data-all-count-home'); if (mx) n = parseInt(mx, 10) || 0; }
-      }
-      if (!n) {
-        const alt = doc.querySelector('a.units-entry-all[data-unit="' + u + '"]');
-        if (alt) { const dc = alt.getAttribute('data-all-count'); n = parseInt(dc != null ? dc : (alt.textContent || '').replace(/\D/g, ''), 10) || 0; }
-      }
-      home[u] = isNaN(n) ? 0 : n;
-    });
-    return home;
-  }
-
-  const OFF_UNITS = ['spear', 'sword', 'axe', 'archer', 'light', 'marcher', 'heavy', 'ram', 'catapult'];
-  const DEF_UNITS = ['spear', 'sword', 'archer', 'heavy', 'knight'];
-  const NOBLE_ESCORT_PCT = 0.6;
-  const FAKE_MIN_POP = 5;
-
-  // Dado um preset e o avail (home) de uma aldeia, retorna { amounts, warn: [...] }.
-  function computePreset(kind, avail) {
-    const amounts = {}; const warn = [];
-    const av = (u) => avail[u] || 0;
-    if (kind === 'zero') return { amounts: {}, warn: [] };
-    if (kind === 'attack') {
-      OFF_UNITS.forEach((u) => { if (av(u) > 0) amounts[u] = av(u); });
-      if (Object.keys(amounts).length === 0) warn.push('sem tropas de ataque');
-      return { amounts: amounts, warn: warn };
-    }
-    if (kind === 'noble') {
-      if (av('snob') < 1) { warn.push('sem nobre'); return { amounts: amounts, warn: warn }; }
-      amounts.snob = 1;
-      OFF_UNITS.forEach((u) => { const q = Math.floor(av(u) * NOBLE_ESCORT_PCT); if (q > 0) amounts[u] = q; });
-      return { amounts: amounts, warn: warn };
-    }
-    if (kind === 'fake') {
-      let siege = null;
-      if (av('ram') >= 1) siege = 'ram';
-      else if (av('catapult') >= 1) siege = 'catapult';
-      let pop = 0;
-      if (siege) { amounts[siege] = 1; pop += FAKE_POP[siege] || 5; }
-      else warn.push('sem ram/catapult, fake sem siege');
-      const need = Math.max(0, FAKE_MIN_POP - pop);
-      if (need > 0) {
-        const spies = Math.min(av('spy'), Math.ceil(need / (FAKE_POP.spy || 2)));
-        if (spies > 0) amounts.spy = spies;
-        else warn.push('sem spy pra completar 5 pop');
-      }
-      return { amounts: amounts, warn: warn };
-    }
-    if (kind === 'support') {
-      DEF_UNITS.forEach((u) => { if (av(u) > 0) amounts[u] = av(u); });
-      if (Object.keys(amounts).length === 0) warn.push('sem tropas de defesa');
-      return { amounts: amounts, warn: warn };
-    }
-    return { amounts: amounts, warn: ['kind desconhecido: ' + kind] };
-  }
-
-  // Retorna o ataque atualmente exibido na aba Coordenado (ou o primeiro, se o ativo sumiu).
-  function plActive() {
-    const p = config.planner;
-    return p.attacks.find((a) => a.id === p.activeId) || p.attacks[0];
-  }
-
-  // Soma reservas de TODOS os ataques (armados usam rows; em edição usam perVillage) — uma aldeia
-  // pode participar de vários ataques ao mesmo tempo, então as reservas se acumulam.
-  function plannerRecomputeReservations() {
-    const res = {};
-    const attacks = (config.planner && config.planner.attacks) || [];
-    attacks.forEach((atk) => {
-      if (atk.running && Array.isArray(atk.rows)) {
-        atk.rows.forEach((r) => {
-          if (r.state !== 'armed' && r.state !== 'scheduled') return;
-          const vid = String(r.origin); res[vid] = res[vid] || {};
-          Object.entries(r.amounts || {}).forEach(([u, q]) => { res[vid][u] = (res[vid][u] || 0) + (parseInt(q, 10) || 0); });
-        });
-      } else {
-        Object.keys(atk.selected || {}).forEach((vid) => {
-          if (!atk.selected[vid]) return;
-          const waves = (atk.perVillage || {})[vid]; if (!waves) return;
-          res[vid] = res[vid] || {};
-          waves.forEach((pv) => {
-            Object.entries(pv.amounts || {}).forEach(([u, q]) => { const n = parseInt(q, 10) || 0; if (n > 0) res[vid][u] = (res[vid][u] || 0) + n; });
-          });
-        });
-      }
-    });
-    config.reservations = res;
-    save();
-  }
-
-  // Converte perVillage (agora uma LISTA de ondas por aldeia) de UM ataque em rows[] — 1 linha por onda,
-  // cada onda com seu próprio horário (base + offset).
-  function plannerBuildRows(atk) {
-    const baseMs = arrivalToServerMs(atk.arriveLocal); if (!baseMs) throw new Error('chegada base inválida');
-    const rows = [];
-    Object.keys(atk.selected || {}).forEach((vid) => {
-      if (!atk.selected[vid]) return;
-      const waves = (atk.perVillage || {})[vid]; if (!waves || !waves.length) return;
-      waves.forEach((pv) => {
-        const amounts = {}; let any = false;
-        Object.entries(pv.amounts || {}).forEach(([u, q]) => { const n = parseInt(q, 10) || 0; if (n > 0) { amounts[u] = n; any = true; } });
-        if (!any) return;
-        rows.push({
-          id: genId(), origin: String(vid), x: String(atk.targetX), y: String(atk.targetY),
-          kind: pv.kind || 'attack', amounts: amounts,
-          arriveAt: baseMs + (pv.offsetMs || 0), offsetMs: pv.offsetMs || 0,
-          durSec: null, sendAt: 0, state: 'armed', error: null, sentAt: null,
-        });
-      });
-    });
-    atk.rows = rows;
-    return rows;
-  }
-
-  const PL_ICON = { attack: '🧹', noble: '👑', fake: '🎭', support: '🛡️' };
-
-  function schedulePlannerFire(atk, r) {
-    const lead = 12000;
-    const delayPrep = Math.max(0, (r.sendAt - lead) - serverNow());
-    setTimeout(async () => {
-      if (!atk.running || r.state !== 'scheduled' || lockOther()) return;
-      let prep;
-      try { prep = await attackPrepare(r.origin, r.x, r.y, r.amounts, r.kind); }
-      catch (e) { r.state = 'error'; r.error = (e.message || e); save(); plannerRecomputeReservations(); pushLog((PL_ICON[r.kind] || '') + ' [' + atk.name + '] ' + r.kind + ' ' + r.x + '|' + r.y + ': preparo falhou (' + r.error + ').', 'err', 'planner'); return; }
-      const fireDelay = Math.max(0, (r.sendAt - (atk.offsetMs || 0)) - serverNow());
-      setTimeout(async () => {
-        if (!atk.running || r.state !== 'scheduled' || lockOther()) return;
-        try { await attackFire(prep); r.state = 'sent'; r.sentAt = serverNow(); pushLog((PL_ICON[r.kind] || '') + ' [' + atk.name + '] ' + r.kind + ' enviado → ' + r.x + '|' + r.y + ' (de ' + r.origin + ')', 'ok', 'planner'); }
-        catch (e) { r.state = 'error'; r.error = (e.message || e); pushLog((PL_ICON[r.kind] || '') + ' [' + atk.name + '] ' + r.kind + ' ' + r.x + '|' + r.y + ': envio falhou (' + r.error + ').', 'err', 'planner'); }
-        save(); plannerRecomputeReservations();
-      }, fireDelay);
-    }, delayPrep);
-  }
-
-  // Tick único e global: percorre TODOS os ataques armados (cada um pode estar mirando alvo/horário diferentes).
-  async function plannerTick() {
-    clearTimeout(plannerTimer);
-    const attacks = (config.planner && config.planner.attacks) || [];
-    if (!attacks.some((a) => a.running)) return;
-    if (lockOther()) { plannerTimer = setTimeout(plannerTick, 5000); return; }
-    if (captchaBlocked()) { plannerTimer = setTimeout(plannerTick, 30000); return; }
-    claimLock();
-    const nowS = serverNow();
-    for (const atk of attacks) {
-      if (!atk.running) continue;
-      for (const r of atk.rows) {
-        if (r.state === 'sent' || r.state === 'error' || r.state === 'scheduled') continue;
-        if (!r.arriveAt) { r.state = 'error'; r.error = 'sem horário'; continue; }
-        if (r.durSec == null) {
-          try { const p = await attackPrepare(r.origin, r.x, r.y, r.amounts, r.kind); r.durSec = p.dur; }
-          catch (e) { r.state = 'error'; r.error = (e.message || e); pushLog((PL_ICON[r.kind] || '') + ' [' + atk.name + '] ' + r.kind + ' ' + r.x + '|' + r.y + ': ' + r.error, 'err', 'planner'); continue; }
-          if (!r.durSec) { r.state = 'error'; r.error = 'sem duração'; continue; }
-        }
-        r.sendAt = r.arriveAt - r.durSec * 1000;
-        if (r.sendAt - nowS < -2000) { r.state = 'error'; r.error = 'envio no passado'; continue; }
-        r.state = 'scheduled'; schedulePlannerFire(atk, r);
-      }
-    }
-    save();
-    plannerTimer = setTimeout(plannerTick, 30000);
-  }
-
-  function plannerStart(atk) {
-    if (!atk.targetX || !atk.targetY) { pushLog('[' + atk.name + ']: informe o alvo (x|y).', 'err', 'planner'); return; }
-    if (!atk.arriveLocal) { pushLog('[' + atk.name + ']: informe a chegada base.', 'err', 'planner'); return; }
-    let rows;
-    try { rows = plannerBuildRows(atk); } catch (e) { pushLog('[' + atk.name + ']: ' + (e.message || e), 'err', 'planner'); return; }
-    if (!rows.length) { pushLog('[' + atk.name + ']: nenhuma aldeia com tropas configuradas.', 'err', 'planner'); return; }
-    atk.running = true;
-    save();
-    plannerRecomputeReservations();
-    pushLog('🎯 [' + atk.name + '] armado — ' + rows.length + ' ataque(s) contra ' + atk.targetX + '|' + atk.targetY + '.', 'ok', 'planner');
-    plannerTick();
-  }
-
-  function plannerStop(atk) {
-    atk.running = false;
-    atk.rows = [];
-    save();
-    plannerRecomputeReservations();
-    pushLog('🎯 [' + atk.name + '] desarmado.', '', 'planner');
-    if (!config.planner.attacks.some((a) => a.running)) clearTimeout(plannerTimer);
-  }
-
-  // Cache de aldeias (nome/coord) para render dos cards saber o nome.
-  let _plVilCache = null;
-
-  async function renderPlannerVillages(atk) {
-    const cont = document.getElementById('twmgr-pl-villages'); if (!cont) return;
-    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) { vils = [{ vid: CUR_VID, name: CUR_NAME }]; }
-    _plVilCache = vils;
-    const tgtCoord = (atk.targetX && atk.targetY) ? (atk.targetX + '|' + atk.targetY) : '';
-    vils.forEach((v) => { v.dist = (v.coord && tgtCoord) ? coordDist(v.coord, tgtCoord) : null; });
-    vils.sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist));
-    cont.innerHTML = vils.map((v) => {
-      const distTxt = v.dist != null ? (' · dist ' + v.dist.toFixed(1)) : '';
-      return '<label style="display:flex;align-items:center;gap:6px;font-size:10px;color:#6f6153;margin:1px 0"><input type="checkbox" class="twmgr-pl-vil" data-vid="' + v.vid + '"' + (atk.selected[v.vid] ? ' checked' : '') + '>' + esc(v.name) + '<span style="color:#8a7d6d">' + distTxt + '</span></label>';
-    }).join('');
-    cont.querySelectorAll('.twmgr-pl-vil').forEach((cb) => cb.addEventListener('change', () => {
-      const vid = cb.getAttribute('data-vid');
-      if (cb.checked) { atk.selected[vid] = true; if (!atk.perVillage[vid] || !atk.perVillage[vid].length) atk.perVillage[vid] = [{ kind: 'attack', offsetMs: 0, amounts: {} }]; }
-      else { delete atk.selected[vid]; delete atk.perVillage[vid]; delete atk.homeAvail[vid]; }
-      save(); plannerRecomputeReservations(); renderPlannerCards(atk);
-    }));
-  }
-
-  // Retorna "HH:MM:SS.mmm" (local) para um arriveAt em ms de servidor.
-  function fmtArriveLocal(arriveMsServer) {
-    if (!arriveMsServer) return '';
-    const d = new Date(arriveMsServer - wallToServerOffset());
-    const pad = (n, w) => String(n).padStart(w, '0');
-    return pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' + pad(d.getSeconds(), 2) + '.' + pad(d.getMilliseconds(), 3);
-  }
-
-  // Cada aldeia pode ter várias ONDAS (waves) — cada onda é um ataque/nobre/fake/apoio próprio, com seu
-  // próprio horário de chegada, dentro do mesmo ataque coordenado.
-  function renderPlannerCards(atk) {
-    const cont = document.getElementById('twmgr-pl-cards'); if (!cont) return;
-    const sel = Object.keys(atk.selected || {}).filter((v) => atk.selected[v]);
-    if (!sel.length) {
-      cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div>';
-      return;
-    }
-    const vilBy = {}; (_plVilCache || []).forEach((v) => { vilBy[v.vid] = v; });
-    const baseMs = arrivalToServerMs(atk.arriveLocal);
-    const kindOpt = [['attack', '🧹 attack'], ['noble', '👑 noble'], ['fake', '🎭 fake'], ['support', '🛡️ support']];
-    cont.innerHTML = sel.map((vid) => {
-      const waves = atk.perVillage[vid] || [];
-      const home = atk.homeAvail[vid] || {};
-      const loaded = home.loadedAt || 0;
-      const v = vilBy[vid] || { name: 'ID ' + vid };
-      const warnTxt = loaded ? '' : '<span style="color:#c2592c;font-size:9px">⚠ tropas não carregadas</span>';
-      const wavesHTML = waves.map((pv, widx) => {
-        const kindSel = kindOpt.map(([k, l]) => '<option value="' + k + '"' + (pv.kind === k ? ' selected' : '') + '>' + l + '</option>').join('');
-        const arrTxt = baseMs ? fmtArriveLocal(baseMs + (pv.offsetMs || 0)) : '—';
-        const grid = UNITS.map(([u, lbl]) => {
-          const max = home[u] || 0, cur = (pv.amounts && pv.amounts[u]) || 0;
-          return '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#6f6153"><span style="width:56px">' + unitIcon(u, lbl) + '</span><input class="twmgr-pl-amt" data-vid="' + vid + '" data-widx="' + widx + '" data-u="' + u + '" type="number" min="0" max="' + max + '" value="' + cur + '" style="width:56px" /><span style="color:#8a7d6d">/' + max + '</span></label>';
-        }).join('');
-        return '<div style="border-top:1px dashed #ece4d8;padding-top:6px;margin-top:6px">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px">' +
-            '<div style="font-size:10px;color:#8a7d6d">Onda ' + (widx + 1) + '</div>' +
-            '<div style="display:flex;gap:4px;align-items:center;font-size:10px">' +
-              '<select class="twmgr-pl-kind" data-vid="' + vid + '" data-widx="' + widx + '" style="font-size:10px">' + kindSel + '</select>' +
-              '<span>off</span><input class="twmgr-pl-off" data-vid="' + vid + '" data-widx="' + widx + '" type="number" value="' + (pv.offsetMs || 0) + '" step="100" style="width:64px;font-size:10px"><span>ms</span>' +
-              '<span class="twmgr-pl-wave-del" data-vid="' + vid + '" data-widx="' + widx + '" title="remover onda" style="cursor:pointer;opacity:.7">✕</span>' +
-            '</div>' +
-          '</div>' +
-          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">→ chega às <b style="color:#6f6153">' + arrTxt + '</b></div>' +
-          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px">' + grid + '</div>' +
-          '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">' +
-            '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-widx="' + widx + '" data-preset="attack" style="padding:3px 6px;font-size:10px">🧹 all off</button>' +
-            '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-widx="' + widx + '" data-preset="noble" style="padding:3px 6px;font-size:10px">👑 nobre</button>' +
-            '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-widx="' + widx + '" data-preset="fake" style="padding:3px 6px;font-size:10px">🎭 fake</button>' +
-            '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-widx="' + widx + '" data-preset="support" style="padding:3px 6px;font-size:10px">🛡️ all def</button>' +
-            '<button class="twmgr-pl-preset twmgr-btn twmgr-ghost" data-vid="' + vid + '" data-widx="' + widx + '" data-preset="zero" style="padding:3px 6px;font-size:10px">Zerar</button>' +
-          '</div>' +
-        '</div>';
-      }).join('');
-      return '<div style="border:1px solid #ece4d8;border-radius:6px;padding:6px;margin:6px 0">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px">' +
-          '<div style="font-size:11px;color:#a2643a"><b>' + esc(v.name) + '</b> ' + warnTxt + '</div>' +
-          '<span class="twmgr-pl-wave-add" data-vid="' + vid + '" title="adicionar onda" style="cursor:pointer;font-size:10px;color:#a2643a;border:1px dashed #ddd2c0;border-radius:4px;padding:2px 6px">+ onda</span>' +
-        '</div>' +
-        wavesHTML +
-      '</div>';
-    }).join('');
-    // Wire eventos dos cards
-    cont.querySelectorAll('.twmgr-pl-kind').forEach((el) => el.addEventListener('change', readPlannerCfg));
-    cont.querySelectorAll('.twmgr-pl-off').forEach((el) => el.addEventListener('change', readPlannerCfg));
-    cont.querySelectorAll('.twmgr-pl-amt').forEach((el) => el.addEventListener('change', readPlannerCfg));
-    cont.querySelectorAll('.twmgr-pl-wave-add').forEach((el) => el.addEventListener('click', () => {
-      const vid = el.getAttribute('data-vid');
-      atk.perVillage[vid] = atk.perVillage[vid] || [];
-      // Nova onda herda offset = max(existentes) + 200ms, pra chegar sempre depois da anterior sem colidir.
-      const maxOff = atk.perVillage[vid].reduce((m, w) => Math.max(m, w.offsetMs || 0), 0);
-      const nextOff = atk.perVillage[vid].length ? maxOff + 200 : 0;
-      atk.perVillage[vid].push({ kind: 'attack', offsetMs: nextOff, amounts: {} });
-      save(); renderPlannerCards(atk);
-    }));
-    cont.querySelectorAll('.twmgr-pl-wave-del').forEach((el) => el.addEventListener('click', () => {
-      const vid = el.getAttribute('data-vid'), widx = parseInt(el.getAttribute('data-widx'), 10);
-      if (atk.perVillage[vid]) atk.perVillage[vid].splice(widx, 1);
-      save(); plannerRecomputeReservations(); renderPlannerCards(atk);
-    }));
-    cont.querySelectorAll('.twmgr-pl-preset').forEach((btn) => btn.addEventListener('click', () => {
-      const vid = btn.getAttribute('data-vid'), widx = parseInt(btn.getAttribute('data-widx'), 10), preset = btn.getAttribute('data-preset');
-      const avail = atk.homeAvail[vid] || {};
-      const r = computePreset(preset, avail);
-      atk.perVillage[vid] = atk.perVillage[vid] || [];
-      atk.perVillage[vid][widx] = atk.perVillage[vid][widx] || { kind: 'attack', offsetMs: 0, amounts: {} };
-      atk.perVillage[vid][widx].amounts = r.amounts;
-      if (r.warn.length) pushLog('Preset ' + preset + ' em ' + vid + ': ' + r.warn.join(', '), 'err', 'planner');
-      save(); plannerRecomputeReservations(); renderPlannerCards(atk);
-    }));
-  }
-
-  async function plannerLoadHomeAvail(atk) {
-    const sel = Object.keys(atk.selected || {}).filter((v) => atk.selected[v]);
-    if (!sel.length) { pushLog('Marque pelo menos 1 aldeia antes de carregar tropas.', 'err', 'planner'); return; }
-    pushLog('[' + atk.name + ']: carregando tropas de ' + sel.length + ' aldeia(s)…', '', 'planner');
-    const results = await Promise.allSettled(sel.map((vid) => getVillageHomeAvail(vid).then((h) => ({ vid, h }))));
-    let ok = 0, fail = 0;
-    results.forEach((r) => {
-      if (r.status === 'fulfilled') { const h = r.value.h; h.loadedAt = Date.now(); atk.homeAvail[r.value.vid] = h; ok++; }
-      else fail++;
-    });
-    save();
-    pushLog('[' + atk.name + ']: tropas carregadas em ' + ok + '/' + sel.length + (fail ? ' (' + fail + ' falharam)' : '') + '.', ok ? 'ok' : 'err', 'planner');
-    renderPlannerCards(atk);
-  }
-
-  // Lê os campos da UI (que sempre refletem o ataque ATIVO) de volta pro objeto do ataque ativo.
-  function readPlannerCfg() {
-    const atk = plActive(), g = (id) => document.getElementById(id);
-    if (g('twmgr-pl-target-x')) atk.targetX = (g('twmgr-pl-target-x').value || '').replace(/\D/g, '');
-    if (g('twmgr-pl-target-y')) atk.targetY = (g('twmgr-pl-target-y').value || '').replace(/\D/g, '');
-    if (g('twmgr-pl-arr')) atk.arriveLocal = g('twmgr-pl-arr').value;
-    if (g('twmgr-pl-offset')) atk.offsetMs = Math.max(0, parseInt(g('twmgr-pl-offset').value, 10) || 150);
-    document.querySelectorAll('.twmgr-pl-kind').forEach((s) => { const vid = s.getAttribute('data-vid'), widx = parseInt(s.getAttribute('data-widx'), 10); const w = atk.perVillage[vid] && atk.perVillage[vid][widx]; if (w) w.kind = s.value; });
-    document.querySelectorAll('.twmgr-pl-off').forEach((s) => { const vid = s.getAttribute('data-vid'), widx = parseInt(s.getAttribute('data-widx'), 10); const w = atk.perVillage[vid] && atk.perVillage[vid][widx]; if (w) w.offsetMs = parseInt(s.value, 10) || 0; });
-    document.querySelectorAll('.twmgr-pl-amt').forEach((s) => {
-      const vid = s.getAttribute('data-vid'), widx = parseInt(s.getAttribute('data-widx'), 10), u = s.getAttribute('data-u');
-      const w = atk.perVillage[vid] && atk.perVillage[vid][widx];
-      if (w) { const n = Math.max(0, parseInt(s.value, 10) || 0); if (n > 0) w.amounts[u] = n; else delete w.amounts[u]; }
-    });
-    save(); plannerRecomputeReservations();
-  }
-
-  function setPlannerStatus(on) { setBtnState('twmgr-pl-start', 'twmgr-pl-stop', on, '● Armado', '▶ Armar este ataque'); }
-
-  // ---- Lista de ataques independentes (adicionar/trocar/renomear/remover) ----
-  function plannerAddAttack() {
-    const n = (config.planner.attacks || []).length + 1;
-    const atk = defPlannerAttack('Ataque ' + n);
-    config.planner.attacks.push(atk);
-    config.planner.activeId = atk.id;
-    save();
-    renderPlannerTabs();
-    renderPlannerActive();
-    pushLog('Novo ataque criado: [' + atk.name + '].', '', 'planner');
-  }
-
-  function plannerRemoveAttack(id) {
-    const atk = config.planner.attacks.find((a) => a.id === id); if (!atk) return;
-    if (config.planner.attacks.length <= 1) { pushLog('Precisa manter pelo menos 1 ataque.', 'err', 'planner'); return; }
-    if (!confirm('Remover [' + atk.name + ']?' + (atk.running ? ' Ele está armado — será desarmado.' : ''))) return;
-    if (atk.running) plannerStop(atk);
-    config.planner.attacks = config.planner.attacks.filter((a) => a.id !== id);
-    if (config.planner.activeId === id) config.planner.activeId = config.planner.attacks[0].id;
-    save(); plannerRecomputeReservations();
-    renderPlannerTabs();
-    renderPlannerActive();
-  }
-
-  function plannerRenameAttack(id) {
-    const atk = config.planner.attacks.find((a) => a.id === id); if (!atk) return;
-    const name = prompt('Nome do ataque:', atk.name);
-    if (!name || !name.trim()) return;
-    atk.name = name.trim();
-    save(); renderPlannerTabs();
-  }
-
-  function plannerSwitchAttack(id) {
-    if (!config.planner.attacks.some((a) => a.id === id)) return;
-    config.planner.activeId = id;
-    save();
-    renderPlannerTabs();
-    renderPlannerActive();
-  }
-
-  function renderPlannerTabs() {
-    const cont = document.getElementById('twmgr-pl-attacks'); if (!cont) return;
-    const p = config.planner;
-    cont.innerHTML = p.attacks.map((atk) => {
-      const active = atk.id === p.activeId;
-      return '<div class="twmgr-pl-tab' + (active ? ' active' : '') + '" data-id="' + atk.id + '" style="display:flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;cursor:pointer;font-size:10px;border:1px solid ' + (active ? '#a2643a' : '#ece4d8') + ';background:' + (active ? 'rgba(162,100,58,.15)' : 'transparent') + ';color:#6f6153">' +
-        '<span class="twmgr-pl-tab-dot" style="color:#2e7d3a;display:' + (atk.running ? 'inline' : 'none') + '">●</span>' +
-        '<span class="twmgr-pl-tab-name">' + esc(atk.name) + '</span>' +
-        '<span class="twmgr-pl-tab-ren" data-id="' + atk.id + '" title="renomear" style="opacity:.6">✎</span>' +
-        '<span class="twmgr-pl-tab-del" data-id="' + atk.id + '" title="remover" style="opacity:.6">✕</span>' +
-      '</div>';
-    }).join('') + '<div id="twmgr-pl-tab-add" title="adicionar ataque" style="padding:3px 8px;border-radius:6px;cursor:pointer;font-size:12px;border:1px dashed #ddd2c0;color:#a2643a">+ ataque</div>';
-    cont.querySelectorAll('.twmgr-pl-tab').forEach((el) => el.addEventListener('click', (e) => {
-      if (e.target.classList.contains('twmgr-pl-tab-ren') || e.target.classList.contains('twmgr-pl-tab-del')) return;
-      plannerSwitchAttack(el.getAttribute('data-id'));
-    }));
-    cont.querySelectorAll('.twmgr-pl-tab-ren').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); plannerRenameAttack(el.getAttribute('data-id')); }));
-    cont.querySelectorAll('.twmgr-pl-tab-del').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); plannerRemoveAttack(el.getAttribute('data-id')); }));
-    const addBtn = document.getElementById('twmgr-pl-tab-add'); if (addBtn) addBtn.addEventListener('click', plannerAddAttack);
-  }
-
-  // Repopula os campos (alvo/chegada/aldeias/composição/status) com os dados do ataque ATIVO.
-  function renderPlannerActive() {
-    const atk = plActive(), g = (id) => document.getElementById(id);
-    if (g('twmgr-pl-target-x')) g('twmgr-pl-target-x').value = atk.targetX || '';
-    if (g('twmgr-pl-target-y')) g('twmgr-pl-target-y').value = atk.targetY || '';
-    if (g('twmgr-pl-arr')) g('twmgr-pl-arr').value = atk.arriveLocal || '';
-    if (g('twmgr-pl-offset')) g('twmgr-pl-offset').value = atk.offsetMs != null ? atk.offsetMs : 150;
-    setPlannerStatus(atk.running);
-    renderPlannerVillages(atk).then(() => renderPlannerCards(atk));
-    renderPlannerQueue(atk);
-  }
-
-  const PL_STATE_META = {
-    armed:     { label: 'armado',   color: '#8a7d6d' },
-    scheduled: { label: 'agendado', color: '#a2643a' },
-    sent:      { label: 'enviado',  color: '#2e7d3a' },
-    error:     { label: 'erro',     color: '#c0483a' },
-  };
-
-  // Tabela linha-a-linha da fila do ataque ATIVO. Ordenada por sendAt (fallback arriveAt).
-  function renderPlannerQueue(atk) {
-    const cont = document.getElementById('twmgr-pl-queue'); if (!cont) return;
-    const rows = ((atk && atk.rows) || []).slice().sort((a, b) => (a.sendAt || a.arriveAt || 0) - (b.sendAt || b.arriveAt || 0));
-    if (!rows.length) {
-      cont.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— fila vazia. Arme o ataque pra ver as linhas aqui. —</div>';
-      return;
-    }
-    const vilBy = {}; (_plVilCache || []).forEach((v) => { vilBy[v.vid] = v; });
-    const th = 'text-align:left;padding:2px 4px;font-size:9px;color:#8a7d6d;font-weight:normal;border-bottom:1px solid #ece4d8';
-    const td = 'padding:2px 4px;font-size:10px;color:#6f6153;vertical-align:middle';
-    cont.innerHTML =
-      '<table style="width:100%;border-collapse:collapse">' +
-        '<thead><tr>' +
-          '<th style="' + th + '">#</th>' +
-          '<th style="' + th + '">origem</th>' +
-          '<th style="' + th + '">kind</th>' +
-          '<th style="' + th + '">chega</th>' +
-          '<th style="' + th + '">sai</th>' +
-          '<th style="' + th + '">estado</th>' +
-          '<th style="' + th + ';text-align:right">ação</th>' +
-        '</tr></thead>' +
-        '<tbody>' + rows.map((r, i) => {
-          const v = vilBy[r.origin] || { name: 'ID ' + r.origin };
-          const meta = PL_STATE_META[r.state] || { label: r.state, color: '#8a7d6d' };
-          const errTitle = r.state === 'error' && r.error ? (' title="' + esc(String(r.error)) + '"') : '';
-          const arrTxt = r.arriveAt ? fmtArriveLocal(r.arriveAt) : '—';
-          const sendTxt = r.sendAt ? fmtArriveLocal(r.sendAt) : '—';
-          const canCancel = r.state === 'armed' || r.state === 'scheduled';
-          const canRemove = r.state === 'sent' || r.state === 'error';
-          const actions = canCancel
-            ? '<span class="twmgr-pl-queue-cancel" data-id="' + r.id + '" title="cancelar" style="cursor:pointer;color:#c2592c">✕</span>'
-            : (canRemove ? '<span class="twmgr-pl-queue-del" data-id="' + r.id + '" title="remover do histórico" style="cursor:pointer;color:#8a7d6d">🗑</span>' : '');
-          return '<tr style="border-bottom:1px solid #fdfaf5">' +
-            '<td style="' + td + ';color:#8a7d6d">' + (i + 1) + '</td>' +
-            '<td style="' + td + '">' + esc(v.name) + '</td>' +
-            '<td style="' + td + '">' + (PL_ICON[r.kind] || '') + '</td>' +
-            '<td style="' + td + ';font-family:monospace;font-size:9px">' + arrTxt + '</td>' +
-            '<td style="' + td + ';font-family:monospace;font-size:9px">' + sendTxt + '</td>' +
-            '<td style="' + td + ';color:' + meta.color + '"' + errTitle + '>' + meta.label + '</td>' +
-            '<td style="' + td + ';text-align:right">' + actions + '</td>' +
-          '</tr>';
-        }).join('') + '</tbody>' +
-      '</table>';
-    cont.querySelectorAll('.twmgr-pl-queue-cancel').forEach((el) => el.addEventListener('click', () => {
-      const id = el.getAttribute('data-id');
-      const r = atk.rows.find((x) => x.id === id); if (!r) return;
-      r.state = 'error'; r.error = 'cancelado pelo usuário';
-      save(); plannerRecomputeReservations(); renderPlannerQueue(atk);
-      pushLog('[' + atk.name + '] linha cancelada (' + r.origin + ' → ' + r.x + '|' + r.y + ').', '', 'planner');
-    }));
-    cont.querySelectorAll('.twmgr-pl-queue-del').forEach((el) => el.addEventListener('click', () => {
-      const id = el.getAttribute('data-id');
-      atk.rows = atk.rows.filter((x) => x.id !== id);
-      save(); renderPlannerQueue(atk);
-    }));
-  }
-
-  function plannerClearHistory() {
-    const atk = plActive(); if (!atk) return;
-    const before = (atk.rows || []).length;
-    atk.rows = (atk.rows || []).filter((r) => r.state === 'armed' || r.state === 'scheduled');
-    const removed = before - atk.rows.length;
-    save(); renderPlannerQueue(atk);
-    pushLog('[' + atk.name + '] histórico limpo (' + removed + ' linha' + (removed === 1 ? '' : 's') + ').', '', 'planner');
-  }
-
-  function plannerRefreshTemplatesList() {
-    const sel = document.getElementById('twmgr-pl-tpl-load'); if (!sel) return;
-    const tpls = config.planner.templates || [];
-    sel.innerHTML = '<option value="">(nenhum)</option>' + tpls.map((pl) => '<option value="' + pl.id + '">' + esc(pl.name) + '</option>').join('');
-  }
-
-  function plannerSaveTemplate() {
-    const input = document.getElementById('twmgr-pl-tpl-name'); if (!input) return;
-    const name = (input.value || '').trim();
-    if (!name) { pushLog('Dê um nome pro template antes de salvar.', 'err', 'planner'); return; }
-    const atk = plActive();
-    const tpl = {
-      id: genId(), name: name,
-      targetX: atk.targetX, targetY: atk.targetY, arriveLocal: atk.arriveLocal, offsetMs: atk.offsetMs,
-      selected: JSON.parse(JSON.stringify(atk.selected)),
-      perVillage: JSON.parse(JSON.stringify(atk.perVillage)),
-    };
-    config.planner.templates = config.planner.templates || []; config.planner.templates.push(tpl); save();
-    plannerRefreshTemplatesList();
-    input.value = '';
-    pushLog('Template "' + name + '" salvo.', 'ok', 'planner');
-  }
-
-  function plannerApplyTemplate() {
-    const sel = document.getElementById('twmgr-pl-tpl-load'); if (!sel) return;
-    const id = sel.value; if (!id) return;
-    const tpl = (config.planner.templates || []).find((t) => t.id === id); if (!tpl) return;
-    const atk = plActive();
-    atk.targetX = tpl.targetX || ''; atk.targetY = tpl.targetY || '';
-    atk.arriveLocal = tpl.arriveLocal || ''; atk.offsetMs = tpl.offsetMs != null ? tpl.offsetMs : 150;
-    atk.selected = JSON.parse(JSON.stringify(tpl.selected || {}));
-    atk.perVillage = JSON.parse(JSON.stringify(tpl.perVillage || {}));
-    atk.homeAvail = {}; // será recarregado
-    save(); plannerRecomputeReservations();
-    renderPlannerActive();
-    pushLog('Template "' + tpl.name + '" aplicado em [' + atk.name + ']. Clique em 🔄 para carregar tropas.', 'ok', 'planner');
-  }
-
-  function plannerDeleteTemplate() {
-    const sel = document.getElementById('twmgr-pl-tpl-load'); if (!sel) return;
-    const id = sel.value; if (!id) return;
-    const tpl = (config.planner.templates || []).find((t) => t.id === id); if (!tpl) return;
-    if (!confirm('Apagar template "' + tpl.name + '"?')) return;
-    config.planner.templates = (config.planner.templates || []).filter((t) => t.id !== id);
-    save(); plannerRefreshTemplatesList();
-    pushLog('Template "' + tpl.name + '" apagado.', '', 'planner');
-  }
-
-  function plannerClearAll(atk) {
-    if (!confirm('Limpar seleção e composição de [' + atk.name + ']? (templates salvos ficam)')) return;
-    atk.selected = {}; atk.perVillage = {}; atk.homeAvail = {}; atk.rows = [];
-    save(); plannerRecomputeReservations();
-    renderPlannerVillages(atk).then(() => renderPlannerCards(atk));
-    pushLog('[' + atk.name + '] limpo.', '', 'planner');
-  }
-
-  // ==================== BLINDAGEM (pedidos da tribo do fórum) ====================
-  // Puxa a tabela de pedidos do tópico do fórum e monta lista editável de apoios.
-  // Regras da tribo: N°/LANC/ESP/SPY/CP separado por barra, mínimo 250/250, zero pra tropas não enviadas.
-
-  async function blindagemFetch(threadUrl) {
-    if (!threadUrl) throw new Error('URL do tópico vazia');
-    const res = await fetch(threadUrl, { credentials: 'include', cache: 'no-store' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    // Procura em TODAS as tabelas — pega as linhas cujo texto tem coord (x|y) e N inicial.
-    const rows = [];
-    doc.querySelectorAll('table tr').forEach((tr) => {
-      const tds = Array.from(tr.querySelectorAll('td'));
-      if (tds.length < 3) return;
-      const numText = (tds[0].textContent || '').trim();
-      if (!/^\d+$/.test(numText)) return;
-      const num = parseInt(numText, 10);
-      // Aldeia + coord: procura em qualquer td, tipicamente o 2º
-      let name = '', coord = null, x = 0, y = 0, ci = -1;
-      for (let i = 1; i < tds.length; i++) {
-        const t = (tds[i].textContent || '').replace(/\s+/g, ' ').trim();
-        const m = t.match(/^(.*?)\((\d{1,3})\|(\d{1,3})\)/);
-        if (m) { name = m[1].trim(); coord = m[2] + '|' + m[3]; x = +m[2]; y = +m[3]; ci = i; break; }
-      }
-      if (!coord) return;
-      // Quantidades: as colunas LOGO DEPOIS da aldeia, na ordem LANC/ESP/SPY/CP.
-      // Antes varria todos os tds, removia os zeros e destruturava por posição — dois defeitos
-      // somados: (a) o zero sumia, então "250/0/0/100" virava LANC=250 e ESP=100; (b) a célula
-      // da aldeia "Nome (500|600)" virava o número 500600 e entrava na lista, deslocando tudo.
-      // Resultado: o painel mostrava um pedido que a tribo não fez, e era ele que ia pro envio.
-      const val = (i) => {
-        const td = tds[i]; if (!td) return 0;
-        const t = (td.textContent || '').replace(/\D/g, '');
-        return t ? parseInt(t, 10) : 0;
-      };
-      const ped = { LANC: val(ci + 1), ESP: val(ci + 2), SPY: val(ci + 3), CP: val(ci + 4) };
-      rows.push({
-        id: 'blz' + num + '-' + coord,
-        num: num, name: name, coord: coord, x: x, y: y,
-        ped: ped,
-        originVid: '',
-        send: { LANC: ped.LANC, ESP: ped.ESP, SPY: 0, CP: 0 },
-        checked: false,
-      });
-    });
-    // PRESERVA o que era seu. Antes isto sobrescrevia tudo, apagando sem aviso a origem escolhida,
-    // as quantidades ajustadas à mão e a marca de já-enviado — e o que já tinha saído voltava a
-    // aparecer como pendente. Agora o fórum manda no pedido; o resto é seu e sobrevive.
-    const antigas = {};
-    (config.planner.blindagem.rows || []).forEach((r) => { antigas[r.id] = r; });
-    rows.forEach((r) => {
-      const a = antigas[r.id];
-      if (!a) return;
-      r.originVid = a.originVid || '';
-      r.enviadoEm = a.enviadoEm || 0;
-      r.checked = r.enviadoEm ? false : !!a.checked;
-      // só reaproveita o envio ajustado se o pedido do fórum não mudou
-      const mesmoPedido = a.ped && a.ped.LANC === r.ped.LANC && a.ped.ESP === r.ped.ESP
-        && a.ped.SPY === r.ped.SPY && a.ped.CP === r.ped.CP;
-      if (mesmoPedido && a.send) r.send = a.send;
-    });
-    config.planner.blindagem.rows = rows;
-    config.planner.blindagem.lastFetch = Date.now();
-    save();
-    return rows;
-  }
-
-  async function blindagemSend() { return ocupado(_blindagemSend); }
-  async function _blindagemSend() {
-    const list = (config.planner.blindagem.rows || []).filter((r) => r.checked && r.originVid);
-    if (!list.length) { pushLog('Blindagem: nenhuma linha marcada com origem definida.', 'err'); return; }
-    const results = [];
-    for (const r of list) {
-      const s = r.send || {};
-      const amounts = {};
-      if (s.LANC > 0) amounts.spear = s.LANC;
-      if (s.ESP > 0) amounts.sword = s.ESP;
-      if (s.SPY > 0) amounts.spy = s.SPY;
-      if (s.CP > 0) amounts.heavy = s.CP;
-      const total = (s.LANC || 0) + (s.ESP || 0) + (s.SPY || 0) + (s.CP || 0);
-      if (total === 0) { pushLog('Blindagem #' + r.num + ' (' + r.coord + '): sem tropa a enviar — pulado.', '', 'planner'); continue; }
-      if ((s.LANC || 0) + (s.ESP || 0) < 250) {
-        pushLog('Blindagem #' + r.num + ' (' + r.coord + '): LANC+ESP < 250 (mínimo da tribo) — pulado.', 'err', 'planner');
-        continue;
-      }
-      try {
-        await sendAttack(r.originVid, r.x, r.y, amounts, 'support');
-        // DESMARCA E GRAVA JÁ. Sem isto, um segundo clique em "Enviar" reenviava tudo que já
-        // tinha saído — as aldeias de defesa esvaziavam duas vezes. Grava a cada linha porque
-        // a página recarrega, e o que já saiu não pode voltar a aparecer como pendente.
-        r.checked = false; r.enviadoEm = Date.now(); save();
-        results.push(r);
-        pushLog('🛡️ Blindagem #' + r.num + ' → ' + r.coord + ' enviada (' + (s.LANC || 0) + '/' + (s.ESP || 0) + '/' + (s.SPY || 0) + '/' + (s.CP || 0) + ')', 'ok', 'planner');
-        await sleep(400);
-      } catch (e) {
-        const em = String(e.message || e);
-        // Ambíguo = pode ter saído. Desmarca também: reenviar apoio dobra a defesa fora de casa.
-        if (/^ambiguo:/.test(em)) {
-          r.checked = false; r.enviadoEm = Date.now(); save();
-          pushLog('🛡️ Blindagem #' + r.num + ' (' + r.coord + '): resposta ambígua, pode ter saído. Desmarquei — confira na tela de comandos antes de reenviar.', '', 'planner');
-        } else {
-          pushLog('🛡️ Blindagem #' + r.num + ' FALHOU: ' + em, 'err', 'planner');
-        }
-      }
-    }
-    // Gera texto do fórum a partir das enviadas
-    const text = results.map((r) => {
-      const s = r.send;
-      return r.num + '/' + (s.LANC || 0) + '/' + (s.ESP || 0) + '/' + (s.SPY || 0) + '/' + (s.CP || 0);
-    }).join('\n');
-    try {
-      await navigator.clipboard.writeText(text);
-      pushLog('🛡️ Blindagem: ' + results.length + '/' + list.length + ' apoios enviados. Texto copiado pro clipboard.', 'ok', 'planner');
-    } catch (e) {
-      pushLog('🛡️ Blindagem: ' + results.length + '/' + list.length + ' apoios enviados. Texto abaixo (copie manualmente):\n' + text, '', 'planner');
-    }
-    return { sent: results.length, total: list.length, text: text };
-  }
-
-  async function renderBlindagemList() {
-    const box = document.getElementById('twmgr-blz-list'); if (!box) return;
-    const rows = config.planner.blindagem.rows || [];
-    if (!rows.length) { box.innerHTML = '<div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— sem pedidos. Cole a URL e clique Buscar. —</div>'; return; }
-    let vils = []; try { vils = await getAllVillagesCached(); } catch (e) {}
-    const opts = '<option value="">— origem —</option>' + vils.map((v) => '<option value="' + v.vid + '">' + esc(v.name) + '</option>').join('');
-    box.innerHTML = rows.map((r) => {
-      const s = r.send || { LANC: 0, ESP: 0, SPY: 0, CP: 0 };
-      const p = r.ped;
-      const originSel = opts.replace('value="' + r.originVid + '"', 'value="' + r.originVid + '" selected');
-      return '<div data-blz-id="' + r.id + '" style="border-bottom:1px dashed #ece4d8;padding:4px 2px;font-size:10px;color:#6f6153">' +
-        '<div style="display:flex;align-items:center;gap:4px">' +
-          '<input type="checkbox" class="blz-chk"' + (r.checked ? ' checked' : '') + '>' +
-          '<b>#' + r.num + '</b> · ' + esc(r.name) + ' <span style="color:#a2643a">(' + r.coord + ')</span>' +
-        '</div>' +
-        '<div style="display:flex;align-items:center;gap:4px;margin-top:2px">' +
-          '<span style="color:#8a7d6d">origem:</span>' +
-          '<select class="blz-origin" style="flex:1;font-size:10px">' + originSel + '</select>' +
-        '</div>' +
-        '<div style="color:#8a7d6d;margin-top:2px">ped: ' + p.LANC + ' LANC / ' + p.ESP + ' ESP / ' + p.SPY + ' SPY / ' + p.CP + ' CP</div>' +
-        '<div style="display:flex;gap:3px;margin-top:2px;flex-wrap:wrap">' +
-          '<label style="display:flex;align-items:center;gap:2px">L <input type="number" min="0" class="blz-send" data-u="LANC" value="' + (s.LANC || 0) + '" style="width:52px;font-size:10px"></label>' +
-          '<label style="display:flex;align-items:center;gap:2px">E <input type="number" min="0" class="blz-send" data-u="ESP" value="' + (s.ESP || 0) + '" style="width:52px;font-size:10px"></label>' +
-          '<label style="display:flex;align-items:center;gap:2px">S <input type="number" min="0" class="blz-send" data-u="SPY" value="' + (s.SPY || 0) + '" style="width:40px;font-size:10px"></label>' +
-          '<label style="display:flex;align-items:center;gap:2px">CP <input type="number" min="0" class="blz-send" data-u="CP" value="' + (s.CP || 0) + '" style="width:52px;font-size:10px"></label>' +
-        '</div>' +
-      '</div>';
-    }).join('');
-    // Wire eventos
-    box.querySelectorAll('[data-blz-id]').forEach((el) => {
-      const id = el.getAttribute('data-blz-id');
-      const row = rows.find((r) => r.id === id); if (!row) return;
-      el.querySelector('.blz-chk').addEventListener('change', (e) => { row.checked = e.target.checked; save(); });
-      el.querySelector('.blz-origin').addEventListener('change', (e) => { row.originVid = e.target.value; save(); });
-      el.querySelectorAll('.blz-send').forEach((inp) => inp.addEventListener('change', (e) => {
-        const u = inp.getAttribute('data-u');
-        row.send = row.send || { LANC: 0, ESP: 0, SPY: 0, CP: 0 };
-        row.send[u] = Math.max(0, parseInt(inp.value, 10) || 0);
-        save();
-      }));
-    });
-  }
-
   // ==================== PALADINO (treino por XP) ====================
   // O regime de treino escolhido é sempre o de 4h — melhor taxa de XP/hora entre os disponíveis.
   // IMPORTANTE: o id do regime NÃO é fixo — varia por paladino/conta (confirmado: um paladino tinha
@@ -6692,7 +5893,7 @@
       if (desviarSaidaProxima(60000)) { pushLog('Auto-F5 adiado: tem desvio saindo em menos de 1 min.', '', 'desv'); return; }
       // Mesma razão pra Central: recarregar no meio da escada de espera mata o timer, e
       // a retomada custa segundos que um trem de nobre não tem.
-      if (ccJanelaCritica(60000)) { pushLog('Auto-F5 adiado: a Central tem disparo em menos de 1 min.', '', 'planner'); return; }
+      if (ccJanelaCritica(60000)) { pushLog('Auto-F5 adiado: a Central tem disparo em menos de 1 min.', ''); return; }
       location.reload();
     } catch (e) {}
   }
@@ -6752,37 +5953,6 @@
       else if (lockOther()) { bm.textContent = '⏸ outra aba'; bm.style.color = '#c0483a'; }
       else { bm.style.color = '#2e7d3a'; bm.textContent = (config.map.nextAt || 0) > now ? '● próximo ciclo: ' + fmt(config.map.nextAt - now) : '● rastreando…'; }
     }
-    const plClk = document.getElementById('twmgr-pl-srvclock'); if (plClk) { try { plClk.textContent = new Date(serverNow() - wallToServerOffset()).toLocaleTimeString(); } catch (e) {} }
-    const pls = document.getElementById('twmgr-pl-status');
-    if (pls) {
-      const plAtk = config.planner && plActive();
-      if (!plAtk || !plAtk.running) { pls.textContent = ''; }
-      else if (lockOther()) { pls.textContent = '⏸ outra aba'; pls.style.color = '#c0483a'; }
-      else {
-        const rr = (plAtk.rows || []);
-        const pend = rr.filter((r) => r.state === 'armed' || r.state === 'scheduled').length;
-        const sent = rr.filter((r) => r.state === 'sent').length;
-        const err = rr.filter((r) => r.state === 'error').length;
-        const nx = rr.filter((r) => r.sendAt && (r.state === 'scheduled' || r.state === 'armed')).sort((a, b) => a.sendAt - b.sendAt)[0];
-        pls.style.color = '#2e7d3a';
-        pls.textContent = '● ' + sent + ' env · ' + pend + ' pend' + (err ? (' · ' + err + ' erro') : '') + (nx ? (' · próx ' + fmt(nx.sendAt - serverNow())) : '');
-      }
-    }
-    if (document.getElementById('twmgr-cards-planner')) refreshCards('planner');
-    if (document.getElementById('twmgr-pl-queue')) { try { renderPlannerQueue(plActive()); } catch (e) {} }
-    const pds = document.getElementById('twmgr-pd-status');
-    if (pds) {
-      if (!config.paladin.running) { pds.textContent = ''; }
-      else if (lockOther()) { pds.textContent = '⏸ outra aba'; pds.style.color = '#c0483a'; }
-      else { pds.style.color = '#2e7d3a'; pds.textContent = '● ' + Object.keys(config.paladin.villages || {}).filter((v) => config.paladin.villages[v]).length + ' aldeia(s) no ciclo'; }
-    }
-    if (document.getElementById('twmgr-pd-status-list')) renderPaladinStatus();
-    // Atualiza só o indicador (●) de cada aba de ataque, sem reconstruir a lista (evita "roubar" cliques).
-    document.querySelectorAll('.twmgr-pl-tab').forEach((el) => {
-      const atk = (config.planner.attacks || []).find((a) => a.id === el.getAttribute('data-id'));
-      const dot = el.querySelector('.twmgr-pl-tab-dot');
-      if (dot) dot.style.display = (atk && atk.running) ? 'inline' : 'none';
-    });
     const ring = (id, on) => { const b = document.getElementById(id); if (b) b.classList.toggle('twmgr-run', !!on && !lockOther()); };
     // Muralha e Mapa viraram sub-abas do Saque (v11.16.0): o indicador de atividade vai pro botão da
     // SUB-aba, e a aba Saque acende se qualquer um dos três estiver rodando — senão dá pra ter
@@ -6799,7 +5969,6 @@
     ring('twmgr-btab-build', config.build.running);
     ring('twmgr-btab-research', config.research && config.research.running);
     ring('twmgr-btab-noble', config.noble && config.noble.running);
-    ring('twmgr-btab-planner', config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running));
     ring('twmgr-btab-paladin', config.paladin && config.paladin.running);
     ring('twmgr-btab-obra', config.obra && config.obra.running);
     ring('twmgr-btab-etiqueta', config.etiqueta && config.etiqueta.running);
@@ -7101,7 +6270,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'planner', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
+    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -7144,7 +6313,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('planner', '🎯', 'Coord.') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
       // Telas de modelo: overlay DENTRO do painel, nao aba nova. Ficam fora do #twmgr-body pra
       // cobrir o painel inteiro (inclusive a barra de abas) enquanto abertas -- e uma tela cheia
       // de edicao, entao trocar de aba no meio nao faz sentido.
@@ -7448,37 +6617,6 @@
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
         modLog('noble') +
       '</div>' +
-      '<div id="twmgr-tab-planner" style="display:none">' +
-        hint('🎯 Coordenado: monte vários ataques independentes — cada um com seu próprio alvo, aldeias e tropas — e arme cada um separadamente (o botão libera um novo ataque em branco assim que você arma). Cada aldeia pode mandar <b>várias ondas</b> (+ onda) dentro do mesmo ataque. Tropas ficam <b>reservadas</b> — Saque/Fakes/Muralha não gastam elas.') +
-        cardsDiv('planner') +
-        sec('Ataques', '<div id="twmgr-pl-attacks" style="display:flex;flex-wrap:wrap;gap:6px"></div>') +
-        sec('1. Alvo (do ataque selecionado acima)',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Relógio do servidor</span><b id="twmgr-pl-srvclock" style="color:#a2643a">--:--:--</b></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Coord alvo</span><span><input id="twmgr-pl-target-x" class="twmgr-inp" type="number" min="1" placeholder="x" style="width:56px"> | <input id="twmgr-pl-target-y" class="twmgr-inp" type="number" min="1" placeholder="y" style="width:56px"></span></div>' +
-          '<label class="twmgr-lbl">Chegada base (horário do servidor)</label><input id="twmgr-pl-arr" class="twmgr-inp" type="datetime-local" step="1" style="width:100%;margin:2px 0 0">' +
-          '<div class="twmgr-row" style="margin-top:6px"><span class="twmgr-lbl">Offset envio (ms)</span><input id="twmgr-pl-offset" class="twmgr-inp" type="number" min="0" value="150" style="width:56px"></div>') +
-        sec('2. Aldeias participantes',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Selecione</span><span style="font-size:9px"><a id="twmgr-pl-all" style="cursor:pointer;color:#a2643a">todas</a> · <a id="twmgr-pl-none" style="cursor:pointer;color:#a2643a">nenhuma</a> · <a id="twmgr-pl-load" style="cursor:pointer;color:#a2643a">🔄 carregar tropas</a></span></div>' +
-          '<div id="twmgr-pl-villages" style="max-height:110px;overflow-y:auto;border:1px solid #ece4d8;border-radius:6px;padding:4px"></div>') +
-        sec('3. Composição por aldeia (+ onda pra mandar mais de um ataque da mesma aldeia)',
-          '<div id="twmgr-pl-cards"><div style="font-size:10px;color:#8a7d6d;padding:6px;text-align:center">— marque aldeias acima e clique em <b>🔄 carregar tropas</b> —</div></div>') +
-        sec('4. Armar este ataque',
-          '<div class="twmgr-actions"><button id="twmgr-pl-start" class="twmgr-btn twmgr-go">▶ Armar este ataque</button><button id="twmgr-pl-stop" class="twmgr-btn twmgr-stop">■ Desarmar</button><button id="twmgr-pl-clear" class="twmgr-btn twmgr-ghost" style="flex:0 0 auto">🗑</button></div>' +
-          '<div id="twmgr-pl-status" class="twmgr-cstatus"></div>') +
-        sec('5. Fila deste ataque',
-          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-size:10px;color:#8a7d6d">ordenada por horário de envio</span><button id="twmgr-pl-queue-clear" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="remover enviados e erros do histórico">🗑 limpar histórico</button></div>' +
-          '<div id="twmgr-pl-queue" style="max-height:220px;overflow-y:auto"></div>') +
-        sec('Templates',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Salvar plano atual</span><span><input id="twmgr-pl-tpl-name" class="twmgr-inp" type="text" placeholder="ex: guerra XYZ" style="width:120px"> <button id="twmgr-pl-tpl-save" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">💾</button></span></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Carregar</span><span><select id="twmgr-pl-tpl-load" class="twmgr-inp" style="width:120px"></select> <button id="twmgr-pl-tpl-apply" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px">📂</button> <button id="twmgr-pl-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:3px 8px;font-size:10px" title="apagar">🗑</button></span></div>') +
-        sec('🛡️ Blindagem da tribo',
-          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Puxa a tabela do tópico, escolhe origem por linha, envia apoios e copia o texto no formato do fórum.</div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">URL do tópico</span><input id="twmgr-blz-url" class="twmgr-inp" type="text" placeholder="https://.../screen=forum&mode=view&thread_id=..." style="flex:1;min-width:180px"></div>' +
-          '<div class="twmgr-actions"><button id="twmgr-blz-fetch" class="twmgr-btn twmgr-ghost">🛡️ Buscar pedidos</button><span id="twmgr-blz-status" style="flex:1;font-size:10px;color:#8a7d6d;padding-top:4px">—</span></div>' +
-          '<div id="twmgr-blz-list" style="max-height:280px;overflow-y:auto;border:1px solid #ece4d8;border-radius:6px;padding:4px;margin-top:4px"></div>' +
-          '<div class="twmgr-actions" style="margin-top:6px"><button id="twmgr-blz-send" class="twmgr-btn twmgr-go">✉️ Enviar marcados</button></div>') +
-        modLog('planner') +
-      '</div>' +
       '<div id="twmgr-tab-paladin" style="display:none">' +
         hint('🐴 Treina o(s) Paladino(s) por XP em ciclo — sempre no regime de <b>4h</b> (melhor XP/hora dos 5 disponíveis). Além do check periódico, cada envio arma um timer de precisão pra 4h+30s depois, garantindo reenvio quase imediato.') +
         cardsDiv('paladin') +
@@ -7627,74 +6765,6 @@
     ['twmgr-r-gatk', 'twmgr-r-gdef', 'twmgr-r-hours', 'twmgr-r-refill'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readRecruitCfg); });
     document.querySelectorAll('.twmgr-ron, .twmgr-rt').forEach((el) => el.addEventListener('change', readRecruitCfg));
     setRecruitStatus(config.recruit.running);
-
-    // ---- Planner (Coordenado) ----
-    renderPlannerTabs();
-    renderPlannerActive();
-    ['twmgr-pl-target-x', 'twmgr-pl-target-y', 'twmgr-pl-arr', 'twmgr-pl-offset'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', () => { readPlannerCfg(); const atk = plActive(); renderPlannerVillages(atk).then(() => renderPlannerCards(atk)); }); });
-    document.getElementById('twmgr-pl-all').addEventListener('click', () => {
-      const atk = plActive();
-      document.querySelectorAll('.twmgr-pl-vil').forEach((cb) => { cb.checked = true; const vid = cb.getAttribute('data-vid'); atk.selected[vid] = true; if (!atk.perVillage[vid] || !atk.perVillage[vid].length) atk.perVillage[vid] = [{ kind: 'attack', offsetMs: 0, amounts: {} }]; });
-      save(); plannerRecomputeReservations(); renderPlannerCards(atk);
-    });
-    document.getElementById('twmgr-pl-none').addEventListener('click', () => {
-      const atk = plActive();
-      document.querySelectorAll('.twmgr-pl-vil').forEach((cb) => { cb.checked = false; });
-      atk.selected = {}; atk.perVillage = {}; atk.homeAvail = {};
-      save(); plannerRecomputeReservations(); renderPlannerCards(atk);
-    });
-    document.getElementById('twmgr-pl-load').addEventListener('click', () => plannerLoadHomeAvail(plActive()));
-    document.getElementById('twmgr-pl-start').addEventListener('click', () => {
-      readPlannerCfg();
-      const atk = plActive();
-      const wasRunning = atk.running;
-      plannerStart(atk);
-      if (atk.running && !wasRunning) {
-        // Armou agora: libera um ataque novo em branco já selecionado, pra continuar configurando e armando sem travar o botão.
-        plannerAddAttack();
-      } else {
-        setPlannerStatus(atk.running);
-        renderPlannerTabs();
-      }
-    });
-    document.getElementById('twmgr-pl-stop').addEventListener('click', () => { const atk = plActive(); plannerStop(atk); setPlannerStatus(false); renderPlannerTabs(); });
-    document.getElementById('twmgr-pl-clear').addEventListener('click', () => plannerClearAll(plActive()));
-    document.getElementById('twmgr-pl-queue-clear').addEventListener('click', plannerClearHistory);
-    document.getElementById('twmgr-pl-tpl-save').addEventListener('click', plannerSaveTemplate);
-    document.getElementById('twmgr-pl-tpl-apply').addEventListener('click', plannerApplyTemplate);
-    document.getElementById('twmgr-pl-tpl-del').addEventListener('click', plannerDeleteTemplate);
-    plannerRefreshTemplatesList();
-
-    // Blindagem
-    const blzUrlEl = document.getElementById('twmgr-blz-url');
-    if (blzUrlEl) blzUrlEl.value = config.planner.blindagem.threadUrl || '';
-    if (blzUrlEl) blzUrlEl.addEventListener('change', () => { config.planner.blindagem.threadUrl = blzUrlEl.value.trim(); save(); });
-    const blzFetchBtn = document.getElementById('twmgr-blz-fetch');
-    if (blzFetchBtn) blzFetchBtn.addEventListener('click', async () => {
-      const url = (document.getElementById('twmgr-blz-url').value || '').trim();
-      if (!url) { pushLog('Blindagem: cole a URL do tópico primeiro.', 'err'); return; }
-      config.planner.blindagem.threadUrl = url; save();
-      const status = document.getElementById('twmgr-blz-status');
-      blzFetchBtn.disabled = true; if (status) status.textContent = '⏳ buscando…';
-      try {
-        const rows = await blindagemFetch(url);
-        if (status) status.textContent = rows.length + ' pedido(s) · atualizado ' + new Date().toLocaleTimeString();
-        pushLog('🛡️ Blindagem: ' + rows.length + ' pedido(s) carregado(s).', rows.length ? 'ok' : 'err', 'planner');
-      } catch (e) {
-        if (status) status.textContent = '⚠ ' + (e.message || e);
-        pushLog('🛡️ Blindagem: erro ao buscar (' + (e.message || e) + ').', 'err', 'planner');
-      }
-      blzFetchBtn.disabled = false;
-      renderBlindagemList();
-    });
-    const blzSendBtn = document.getElementById('twmgr-blz-send');
-    if (blzSendBtn) blzSendBtn.addEventListener('click', async () => {
-      blzSendBtn.disabled = true;
-      try { await blindagemSend(); } catch (e) { pushLog('🛡️ Blindagem erro: ' + (e.message || e), 'err'); }
-      blzSendBtn.disabled = false;
-      renderBlindagemList();
-    });
-    renderBlindagemList();
 
     // ---- Paladino (treino por XP) ----
     document.getElementById('twmgr-pd-interval').value = config.paladin.checkIntervalMin != null ? config.paladin.checkIntervalMin : 240;
@@ -7877,7 +6947,7 @@
       renderModLog(mod);
     }));
     // Cards + logs por módulo no estado inicial (dados salvos do último ciclo)
-    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'research', 'noble', 'lock', 'planner', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
+    ['scav', 'farm', 'wall', 'recruit', 'market', 'build', 'research', 'noble', 'lock', 'paladin', 'etiqueta', 'obra'].forEach((m) => { refreshCards(m); renderModLog(m); });
     // busca o recurso do dia (saque/coleta) ao abrir, pra não mostrar valor velho salvo até o 1º ciclo
     refreshDaily('farm', config.farm, 'loot', 'loot_res'); refreshDaily('scav', config.scav, 'coleta', 'scavenge');
     const applyCollapsed = () => { p.classList.toggle('twmgr-collapsed', !!config.uiMin); const mb = document.getElementById('twmgr-min'); if (mb) mb.textContent = config.uiMin ? '＋' : '–'; };
@@ -7934,11 +7004,6 @@
     if (config.map && config.map.running) { rlog('Mapa retomado.', 'map'); retomar(scheduleMap); }
     if (config.etiqueta && config.etiqueta.running) { rlog('🏷️ Etiqueta retomada.', 'etiqueta'); retomar(etiquetaTick); }
     if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); retomar(scheduleLock); }
-    if (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) {
-      config.planner.attacks.forEach((atk) => { if (!atk.running) return; (atk.rows || []).forEach((r) => { if (r.state === 'scheduled') r.state = 'armed'; }); });
-      rlog('🎯 Coordenado retomado.', 'planner');
-      retomar(plannerTick);
-    }
     if (config.paladin && config.paladin.running) { rlog('Paladino retomado.', 'paladin'); retomar(paladinTick); }
     if (config.obra && config.obra.running) { rlog('🏛️ Obra retomada.', 'obra'); retomar(obraTick); }
     closeStaleLiveLogs();   // barra de progresso de ciclo que morreu no reload desta página
@@ -12768,7 +11833,7 @@
     if (_ccSim) {
       cmd.state = 'enviado'; cmd.sentAt = cmd.fireAt; cmd.erro = null; cmd.rttEnvioMs = 0; cmd.simulado = true;
       save(); ccRenderPagina();
-      pushLog('🧪 SIMULADO: ' + ccRotulo(cmd) + ' — disparo em ' + ccFmtHora(cmd.fireAt), 'ok', 'planner');
+      pushLog('🧪 SIMULADO: ' + ccRotulo(cmd) + ' — disparo em ' + ccFmtHora(cmd.fireAt), 'ok');
       return;
     }
     const t0 = performance.now();
@@ -12797,13 +11862,13 @@
         clearTimeout(_ccConferirTimer);
         _ccConferirTimer = setTimeout(() => { ccConferirPendentes().catch(() => {}); }, 8000);
       }
-      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.state + ', estimei ' + cmd.erroMs + 'ms (ida-e-volta ' + cmd.rttEnvioMs + 'ms). Conferindo com o jogo…', cmd.state === 'enviado' ? 'ok' : 'err', 'planner');
+      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.state + ', estimei ' + cmd.erroMs + 'ms (ida-e-volta ' + cmd.rttEnvioMs + 'ms). Conferindo com o jogo…', cmd.state === 'enviado' ? 'ok' : 'err');
       save(); ccRenderPagina();
     }).catch((e) => {
       // Rede caiu: NÃO dá pra saber se o servidor recebeu. Incerto, nunca falha.
       cmd.state = 'incerto'; cmd.erro = 'rede caiu durante o envio (' + (e.message || e) + ')';
       save(); ccRenderPagina();
-      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — INCERTO (' + cmd.erro + ')', 'err', 'planner');
+      pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — INCERTO (' + cmd.erro + ')', 'err');
     });
   }
 
@@ -12912,7 +11977,7 @@
           grupo.forEach((g) => { if ((g.cmd.tentativasConf || 0) >= 5) g.cmd.confAmbigua = true; });
           if (grupo[0] && (grupo[0].cmd.tentativasConf || 0) === 5) {
             pushLog('🎯 Central: não consegui medir o erro de ' + grupo.length + ' comando(s) → ' + coord +
-              ' — achei ' + cand.length + ' chegada(s) na lista, e com número diferente o casamento fica ambíguo. Prefiro não medir a medir errado.', '', 'planner');
+              ' — achei ' + cand.length + ' chegada(s) na lista, e com número diferente o casamento fica ambíguo. Prefiro não medir a medir errado.', '');
           }
           return;
         }
@@ -12953,13 +12018,13 @@
             g.cmd.foraDaBanda = true;
             pushLog('🎯 Central: ' + ccRotulo(g.cmd) + ' — chegada ' + ccFmtHora(casados[i]) + ', erro REAL ' +
               (g.cmd.erroRealMs > 0 ? '+' : '') + g.cmd.erroRealMs + 'ms. FORA da banda da onda (referência ' + referencia +
-              'ms) — engasgada do servidor, não latência. Não vai pro aprendizado.', '', 'planner');
+              'ms) — engasgada do servidor, não latência. Não vai pro aprendizado.', '');
             return;
           }
           // ESTE é o sinal que alimenta o viés. O erro estimado vira só diagnóstico.
           ccRealimentar(g.cmd, g.cmd.erroRealMs, true);
           pushLog('🎯 Central: ' + ccRotulo(g.cmd) + ' — o jogo registrou chegada ' + ccFmtHora(casados[i]) +
-            ', erro REAL ' + (g.cmd.erroRealMs > 0 ? '+' : '') + g.cmd.erroRealMs + 'ms (eu estimei ' + g.cmd.erroMs + 'ms).', 'ok', 'planner');
+            ', erro REAL ' + (g.cmd.erroRealMs > 0 ? '+' : '') + g.cmd.erroRealMs + 'ms (eu estimei ' + g.cmd.erroMs + 'ms).', 'ok');
         });
       });
     }
@@ -12995,7 +12060,7 @@
     const deriva = Math.abs(cmd.atrasoEscadaMs || 0);
     if (deriva > CC.GUARDA_DERIVA_MS) {
       cc.afericoes = (cc.afericoes || []).concat([{ t: ccNow(), erro: cmd.erroRealMs, descartada: true, deriva: deriva, bias: cc.biasMs }]).slice(-50);
-      pushLog('🎯 Central: amostra descartada do aprendizado — minha escada atrasou ' + deriva + 'ms, o erro não mede a rede.', '', 'planner');
+      pushLog('🎯 Central: amostra descartada do aprendizado — minha escada atrasou ' + deriva + 'ms, o erro não mede a rede.', '');
       save(); return;
     }
 
@@ -13006,7 +12071,7 @@
     const teto = Math.max(100, Math.min(CC.BIAS_TETO, cc.maxCorrecaoMs || 1000));
     if (Math.abs(erroMs) > teto) {
       cc.afericoes = (cc.afericoes || []).concat([{ t: ccNow(), erro: cmd.erroRealMs, descartada: true, motivo: 'acima do máximo de correção', bias: cc.biasMs }]).slice(-50);
-      pushLog('🎯 Central: erro de ' + Math.round(erroMs) + 'ms ignorado — acima do máximo de correção (' + teto + 'ms). Isso é defeito, não latência.', '', 'planner');
+      pushLog('🎯 Central: erro de ' + Math.round(erroMs) + 'ms ignorado — acima do máximo de correção (' + teto + 'ms). Isso é defeito, não latência.', '');
       save(); return;
     }
 
@@ -13096,7 +12161,7 @@
           cmd.state = 'perdido';
           cmd.erro = 'a hora de sair passou (aba fechada, ou a fila estava ocupada com outro comando)';
           save(); ccRenderPagina();
-          pushLog('⏱️ Central: ' + ccRotulo(cmd) + ' PERDIDO — ' + cmd.erro, 'err', 'planner');
+          pushLog('⏱️ Central: ' + ccRotulo(cmd) + ' PERDIDO — ' + cmd.erro, 'err');
           continue;
         }
 
@@ -13110,7 +12175,7 @@
           } catch (e) {
             cmd.state = 'falhou'; cmd.erro = 'preparo falhou: ' + (e.message || e);
             save(); ccRenderPagina();
-            pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.erro, 'err', 'planner');
+            pushLog('🎯 Central: ' + ccRotulo(cmd) + ' — ' + cmd.erro, 'err');
             continue;
           }
           continue;   // reavalia: o preparo pode ter mudado sendAt (duração exata do servidor)
@@ -13193,7 +12258,7 @@
     const corte = ccNow() - 12 * 3600 * 1000;
     config.cc.fila = fila.filter((c) => (c.state === 'armado' || c.state === 'preparado') || (c.sentAt || c.alvoMs || 0) > corte);
     save();
-    if (incertos) pushLog('🎯 Central: ' + incertos + ' comando(s) ficaram INCERTOS (a aba caiu no envio). Não vou reenviar — confira na tela de comandos.', 'err', 'planner');
+    if (incertos) pushLog('🎯 Central: ' + incertos + ' comando(s) ficaram INCERTOS (a aba caiu no envio). Não vou reenviar — confira na tela de comandos.', 'err');
     ccTick();
   }
 
@@ -13253,7 +12318,7 @@
       abaOculta: document.hidden,
       keepAwake: ccAcordadoOk(),
     };
-    pushLog('🎯 Aferição: erro mediano ' + r.mediana + 'ms (pior ' + r.pior + 'ms) · rede ' + (rede ? rede.mediana + 'ms ±' + rede.jitter : 'n/d') + ' · keep-awake ' + (r.keepAwake ? 'on' : 'off'), 'ok', 'planner');
+    pushLog('🎯 Aferição: erro mediano ' + r.mediana + 'ms (pior ' + r.pior + 'ms) · rede ' + (rede ? rede.mediana + 'ms ±' + rede.jitter : 'n/d') + ' · keep-awake ' + (r.keepAwake ? 'on' : 'off'), 'ok');
     return r;
   }
 
@@ -13541,7 +12606,7 @@
     alvo.querySelectorAll('.twmgr-cc-rm').forEach((el) => el.addEventListener('click', () => {
       const c = (config.cc.fila || []).find((x) => x.id === el.getAttribute('data-id'));
       ccRemover(el.getAttribute('data-id'));
-      if (c) pushLog('🎯 Central: ' + ccRotulo(c) + ' cancelado antes de sair.', '', 'planner');
+      if (c) pushLog('🎯 Central: ' + ccRotulo(c) + ' cancelado antes de sair.', '');
       ccRenderPagina();
     }));
   }
@@ -13715,7 +12780,7 @@
           ? 'Agendado: ' + ccResumoTropa(amounts) + ' → ' + mc[1] + '|' + mc[2] + aviso + '. Veja a fila pra acompanhar.'
           : 'Onda de ' + qtdOnda + ' agendada → ' + mc[1] + '|' + mc[2] + ', espaçada de ' + gap + 'ms' + aviso + '. Veja a fila pra acompanhar.');
         pushLog('🎯 Central: ' + (qtdOnda === 1 ? '' : 'onda de ' + qtdOnda + ' × ') + ccRotulo(criados[0]) +
-          ' agendado (' + modo + ' ' + ccFmtHora(base) + (qtdOnda > 1 ? ', gap ' + gap + 'ms' : '') + ').', 'ok', 'planner');
+          ' agendado (' + modo + ' ' + ccFmtHora(base) + (qtdOnda > 1 ? ', gap ' + gap + 'ms' : '') + ').', 'ok');
       } catch (e) { dizer(String(e.message || e), true); }
     });
     sincronizarLinha();
@@ -13773,7 +12838,7 @@
     pushLog('🧪 Teste ' + (opts.real ? 'REAL' : 'SIMULADO') + ': onda de ' + plano.origens.length +
       ' aldeia(s) → bárbara ' + plano.alvo.x + '|' + plano.alvo.y + ' (dist ' + plano.dist + '), ' +
       plano.nUnid + ' explorador(es) cada, gap ' + plano.gap + 'ms, saindo em ' + plano.emS + 's. Acompanhe na fila.',
-      'ok', 'planner');
+      'ok');
     ccTesteAcompanhar();
     return plano;
   }
@@ -13802,7 +12867,7 @@
       (ordemOk ? 'CORRETA ✅' : 'ERRADA ❌') + ' · espaçamento ' + (gaps.length ? gaps.join('/') + 'ms' : '—') +
       ' · erro médio de escada ' + (media == null ? '—' : (media > 0 ? '+' : '') + media + 'ms') +
       (falhas ? ' · NÃO enviados: ' + falhas : ''),
-      ordemOk && enviados === meus.length ? 'ok' : 'err', 'planner');
+      ordemOk && enviados === meus.length ? 'ok' : 'err');
     // Os simulados são fantasmas — limpa da fila depois de alguns segundos pra não poluir.
     if (meus.some((c) => c.simulado)) {
       setTimeout(() => { meus.forEach((c) => { if (c.simulado) ccRemover(c.id); }); ccRenderPagina(); }, 8000);

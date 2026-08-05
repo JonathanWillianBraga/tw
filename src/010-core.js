@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.27.0
+// @version      11.28.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -129,7 +129,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.27.0';
+  const VERSION = '11.28.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -251,27 +251,6 @@
     reserved: {},                          // vid do bárbaro -> timestamp de quando O SCRIPT travou (nunca destrava sozinho)
     stats: {},
   });
-  const defPlannerAttack = (name) => ({
-    id: genId(), name: name || 'Ataque',
-    running: false, offsetMs: 150,
-    targetX: '', targetY: '',
-    arriveLocal: '',                       // datetime-local base (usuário digita)
-    selected: {},                          // { [vid]: true } — aldeias participantes
-    perVillage: {},                        // { [vid]: { kind, offsetMs, amounts:{unit:qty} } }
-    homeAvail: {},                         // { [vid]: { unit:N, loadedAt: ms } } — cache do "Carregar tropas"
-    rows: [],                              // gerado no plannerStart a partir de perVillage
-  });
-  const defBlindagem = () => ({
-    threadUrl: '',        // URL do tópico do fórum da tribo com a tabela de pedidos
-    rows: [],             // [{ id, num, name, coord, x, y, ped:{LANC,ESP,SPY,CP}, originVid, send:{LANC,ESP,SPY,CP}, checked }]
-    lastFetch: 0,         // ms do último fetch bem-sucedido
-  });
-  const defPlanner = () => ({
-    attacks: [defPlannerAttack('Ataque 1')], // vários ataques independentes, cada um pode ser armado por conta própria
-    activeId: null,                        // id do ataque mostrado na UI (setado no load())
-    templates: [],                         // templates salvos { id, name, targetX, targetY, arriveLocal, selected, perVillage }
-    blindagem: defBlindagem(),             // sub-módulo: pedidos de blindagem da tribo
-  });
   const defDesviar = () => ({
     keepSpy: true,        // deixar exploradores em casa (pra farmar/monitorar)
     keepKnight: false,    // deixar paladino
@@ -355,7 +334,7 @@
     nextAt: 0,
     demand: {},              // { [vid]: { b, cost, coord, profile } }
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), market: defMarket(), build: defBuild(), research: defResearch(), noble: defNoble(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), market: defMarket(), build: defBuild(), research: defResearch(), noble: defNoble(), map: defMap(), captcha: defCaptcha(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -602,63 +581,8 @@
     if (c.captcha.cooldownSec == null) c.captcha.cooldownSec = 300;
     if (c.captcha.reloadMin == null) c.captcha.reloadMin = 0;
     if (c.captcha.lastNotifiedAt == null) c.captcha.lastNotifiedAt = 0;
-    if (!c.planner) c.planner = defPlanner();
-    if (!Array.isArray(c.planner.attacks) || !c.planner.attacks.length) {
-      // Migração do formato antigo (1 único ataque direto em config.planner) pro novo (lista de ataques independentes).
-      const legacy = c.planner;
-      const atk = defPlannerAttack('Ataque 1');
-      atk.running = !!legacy.running;
-      atk.offsetMs = legacy.offsetMs != null ? legacy.offsetMs : 150;
-      atk.targetX = legacy.targetX || ''; atk.targetY = legacy.targetY || '';
-      atk.arriveLocal = legacy.arriveLocal || '';
-      atk.selected = (legacy.selected && typeof legacy.selected === 'object') ? legacy.selected : {};
-      atk.perVillage = (legacy.perVillage && typeof legacy.perVillage === 'object') ? legacy.perVillage : {};
-      atk.homeAvail = (legacy.homeAvail && typeof legacy.homeAvail === 'object') ? legacy.homeAvail : {};
-      atk.rows = Array.isArray(legacy.rows) ? legacy.rows : [];
-      c.planner = { attacks: [atk], activeId: atk.id, templates: Array.isArray(legacy.plans) ? legacy.plans : [] };
-    }
-    if (!Array.isArray(c.planner.templates)) c.planner.templates = [];
-    c.planner.attacks.forEach((atk) => {
-      if (!atk.id) atk.id = genId();
-      if (!atk.name) atk.name = 'Ataque';
-      if (atk.offsetMs == null) atk.offsetMs = 150;
-      if (!atk.selected || typeof atk.selected !== 'object') atk.selected = {};
-      if (!atk.perVillage || typeof atk.perVillage !== 'object') atk.perVillage = {};
-      if (!atk.homeAvail || typeof atk.homeAvail !== 'object') atk.homeAvail = {};
-      if (!Array.isArray(atk.rows)) atk.rows = [];
-      if (atk.targetX == null) atk.targetX = '';
-      if (atk.targetY == null) atk.targetY = '';
-      if (atk.arriveLocal == null) atk.arriveLocal = '';
-      // Migração: perVillage[vid] era 1 onda só (objeto); agora é uma lista de ondas (array).
-      Object.keys(atk.perVillage).forEach((vid) => {
-        if (!Array.isArray(atk.perVillage[vid])) atk.perVillage[vid] = atk.perVillage[vid] ? [atk.perVillage[vid]] : [];
-        atk.perVillage[vid].forEach((w) => { if (!w.amounts || typeof w.amounts !== 'object') w.amounts = {}; if (!w.kind) w.kind = 'attack'; if (w.offsetMs == null) w.offsetMs = 0; });
-      });
-    });
-    if (!c.planner.activeId || !c.planner.attacks.some((a) => a.id === c.planner.activeId)) c.planner.activeId = c.planner.attacks[0].id;
-    if (!c.cc) c.cc = defCC();
-    if (!Array.isArray(c.cc.fila)) c.cc.fila = [];
-    if (!Array.isArray(c.cc.afericoes)) c.cc.afericoes = [];
-    if (typeof c.cc.biasMs !== 'number' || !isFinite(c.cc.biasMs)) c.cc.biasMs = 0;
-    if (typeof c.cc.rttMs !== 'number' || !isFinite(c.cc.rttMs)) c.cc.rttMs = 0;
-    if (typeof c.cc.manterAcordado !== 'boolean') c.cc.manterAcordado = true;
-    if (c.cc.modo !== 'fixo' && c.cc.modo !== 'adaptativo') c.cc.modo = 'adaptativo';
-    if (c.cc.estilo !== 'responsivo' && c.cc.estilo !== 'estavel') c.cc.estilo = 'estavel';
-    if (typeof c.cc.offsetFixoMs !== 'number' || !isFinite(c.cc.offsetFixoMs)) c.cc.offsetFixoMs = 0;
-    if (typeof c.cc.maxCorrecaoMs !== 'number' || c.cc.maxCorrecaoMs < 100) c.cc.maxCorrecaoMs = 1000;
-    if (typeof c.cc.ondaGapMs !== 'number' || c.cc.ondaGapMs < 100) c.cc.ondaGapMs = 100;
-    // Até a 10.22.0 a conferência casava vários comandos com a MESMA linha de chegada e
-    // produzia erros inventados — que foram direto pro estimador. O viés aprendido antes
-    // desta versão não vale nada; zera uma vez e recomeça com dado limpo.
-    if (c.cc.calibVer !== 2) {
-      c.cc.calibVer = 2; c.cc.biasMs = 0; c.cc.nReal = 0; c.cc.afericoes = [];
-      (c.cc.fila || []).forEach((x) => { x.erroRealMs = null; x.chegadaReal = null; x.tentativasConf = 0; });
-    }
-    if (!c.planner.blindagem) c.planner.blindagem = defBlindagem();
-    if (typeof c.planner.blindagem.threadUrl !== 'string') c.planner.blindagem.threadUrl = '';
-    if (!Array.isArray(c.planner.blindagem.rows)) c.planner.blindagem.rows = [];
-    if (c.planner.blindagem.lastFetch == null) c.planner.blindagem.lastFetch = 0;
-    if (!c.reservations || typeof c.reservations !== 'object') c.reservations = {};
+    // Coordenado e Blindagem saíram na v11.28.0. O config antigo (c.planner, com a blindagem
+    // dentro) deixa de ser lido, mas NÃO é apagado: se alguém der revert, os dados ainda estão lá.
     if (!c.desviar) c.desviar = defDesviar();
     if (c.desviar.keepSpy == null) c.desviar.keepSpy = true;
     if (c.desviar.keepKnight == null) c.desviar.keepKnight = false;
@@ -703,12 +627,12 @@
   function save() { localStorage.setItem(KEY, JSON.stringify(config)); }
 
   let config = load();
-  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, buildTimer = null, researchTimer = null, nobleTimer = null, mapTimer = null, plannerTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
+  let sendTimer = null, scavTimer = null, farmTimer = null, wallTimer = null, recruitTimer = null, buildTimer = null, researchTimer = null, nobleTimer = null, mapTimer = null, paladinTimer = null, obraTimer = null, uiTimer = null, lockTimer = null, etiquetaTimer = null;
   const marketTimers = { cunhagem: null, equilibrio: null, solidario: null, cunhar: null };   // 1 timer por modo — rodam de forma independente
   let _farmZeroStreak = 0, _farmEverSent = false;   // Saque parou de enviar (detecção de bloqueio/bot-check p/ alerta AFK)
   const paladinPreciseTimers = {};   // vid -> { id: setTimeout, finishAt } — timer de precisão (duração+30s) por aldeia
   function anyMarketRunning() { return !!(config.market && config.market.modes && MARKET_MODES.some((k) => config.market.modes[k] && config.market.modes[k].running)); }
-  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || anyMarketRunning() || (config.build && config.build.running) || (config.research && config.research.running) || (config.noble && config.noble.running) || (config.map && config.map.running) || (config.planner && config.planner.attacks && config.planner.attacks.some((a) => a.running)) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
+  function anyRunning() { return config.running || (config.scav && config.scav.running) || (config.farm && config.farm.running) || (config.wall && config.wall.running) || (config.recruit && config.recruit.running) || anyMarketRunning() || (config.build && config.build.running) || (config.research && config.research.running) || (config.noble && config.noble.running) || (config.map && config.map.running) || (config.paladin && config.paladin.running) || ((config.cc && config.cc.fila) || []).some((c) => c.state === 'armado' || c.state === 'preparado' || c.state === 'disparando') || (config.obra && config.obra.running) || (config.lock && config.lock.running) || (config.etiqueta && config.etiqueta.running) || _ocupadoAvulso > 0; }
   // Desviar e Blindagem rodam por clique e não têm flag `running` — ficavam fora do anyRunning(),
   // então a trava de aba (12s) expirava no meio deles e outra aba assumia enquanto o apoio estava
   // sendo montado. Quem faz trabalho avulso marca aqui.
@@ -731,8 +655,7 @@
   function devoParar(mod) {
     if (mod) {
       const c = config[mod];
-      if (mod === 'planner') { if (!(config.planner.attacks || []).some((a) => a.running)) return 'parado pelo usuário'; }
-      else if (c && c.running === false) return 'parado pelo usuário';
+      if (c && c.running === false) return 'parado pelo usuário';
     }
     if (lockOther()) return 'outra aba assumiu';
     if (captchaBlocked()) return 'bot-check na tela';

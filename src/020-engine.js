@@ -88,19 +88,6 @@
         { v: fmtN(e.lastCount || 0), l: 'na lista', hl: true },
         { v: fmtN(Object.keys(e.jaEnviados || {}).length), l: 'já etiquetados' },
       ];
-    } else if (mod === 'planner') {
-      const attacks = (config.planner && config.planner.attacks) || [];
-      const rows = attacks.reduce((acc, a) => acc.concat(a.rows || []), []);
-      const armed = rows.filter((r) => r.state === 'armed' || r.state === 'scheduled').length;
-      const sent = rows.filter((r) => r.state === 'sent').length;
-      const err = rows.filter((r) => r.state === 'error').length;
-      const running = attacks.filter((a) => a.running).length;
-      arr = [
-        { v: fmtN(running), l: 'ataques armados', hl: true },
-        { v: fmtN(armed), l: 'ondas pendentes' },
-        { v: fmtN(sent), l: 'enviadas' },
-        { v: fmtN(err), l: 'erros' },
-      ];
     } else if (mod === 'paladin') {
       const st = (config.paladin && config.paladin.state) || {};
       const villages = Object.keys((config.paladin && config.paladin.villages) || {}).filter((v) => config.paladin.villages[v]);

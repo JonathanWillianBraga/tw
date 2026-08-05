@@ -170,7 +170,7 @@
       if (desviarSaidaProxima(60000)) { pushLog('Auto-F5 adiado: tem desvio saindo em menos de 1 min.', '', 'desv'); return; }
       // Mesma razão pra Central: recarregar no meio da escada de espera mata o timer, e
       // a retomada custa segundos que um trem de nobre não tem.
-      if (ccJanelaCritica(60000)) { pushLog('Auto-F5 adiado: a Central tem disparo em menos de 1 min.', '', 'planner'); return; }
+      if (ccJanelaCritica(60000)) { pushLog('Auto-F5 adiado: a Central tem disparo em menos de 1 min.', ''); return; }
       location.reload();
     } catch (e) {}
   }

@@ -103,12 +103,26 @@
     let gs = [];
     try { gs = await getGroups(); } catch (e) { return; }
     const uteis = (gs || []).filter((g) => String(g.id) !== '0');
+    _nbGrupos = uteis;
     sel.innerHTML = '<option value="">— escolha —</option>'
       + uteis.map((g) => '<option value="' + esc(String(g.id)) + '">' + esc(g.name || g.id) + '</option>').join('');
     if (config.noble.posGrupoId) sel.value = String(config.noble.posGrupoId);
+    renderNoblePos();   // a tabela depende desta lista
+  }
+
+  // O que aplicar quando ESTE alvo cair. A escolha do alvo manda; sem ela, herda o padrão
+  // global. String vazia no alvo significa "nenhum" de propósito — diferente de indefinido,
+  // que é "usa o padrão". Sem essa distinção não dá pra desligar um alvo isolado.
+  function noblePosDoAlvo(coord) {
+    const a = (config.noble.alvos || []).find((x) => x.coord === coord) || {};
+    const gid = (a.posGrupoId != null) ? a.posGrupoId : (config.noble.posGrupoId || '');
+    const bt = (a.posBandTipo != null) ? a.posBandTipo : (config.noble.posBandeiraTipo || '');
+    const bn = (a.posBandNivel != null) ? a.posBandNivel : (config.noble.posBandeiraNivel || 1);
+    return { gid: gid, bandTipo: bt, bandNivel: bn };
   }
 
   // Equipa bandeira. Chamada CONFIRMADA pelo dump do FlagsScreen.assignFlag:
+
   //   TribalWars.post("flags", {ajaxaction:"assign_flag"}, {flag_type, level, village_id}, cb)
   // O assignFlag do jogo e so um wrapper com dialogo de confirmacao em volta disso.
   //
@@ -155,28 +169,27 @@
   // agora é minha (aparece no getAllVillages). `posFeitos` impede repetir — sem ele, cada
   // releitura do relatório antigo re-adicionaria a aldeia ao grupo.
   async function noblePosConquista(todas) {
-    const querGrupo = config.noble.posGrupo && config.noble.posGrupoId;
-    const querBandeira = config.noble.posBandeira && config.noble.posBandeiraTipo;
-    if (!querGrupo && !querBandeira) return;
+    if (!config.noble.posGrupo && !config.noble.posBandeira) return;
     const rel = config.noble.relatorios || {};
     for (const coord of Object.keys(rel)) {
       if (rel[coord].lealdade == null || rel[coord].lealdade > 0) continue;
       if (config.noble.posFeitos[coord]) continue;
       const v = (todas || []).find((x) => (x.coord || '') === coord);
       if (!v) continue;                 // ainda não entrou na lista de aldeias; tenta no próximo ciclo
+      const alvoCfg = noblePosDoAlvo(coord);
       const feito = [];
-      if (config.noble.posGrupo && config.noble.posGrupoId) {
+      if (config.noble.posGrupo && alvoCfg.gid) {
         try {
-          await nobleAddGrupo(v.vid, config.noble.posGrupoId);
+          await nobleAddGrupo(v.vid, alvoCfg.gid);
           feito.push('grupo');
         } catch (e) {
           pushLog('Noblar: não consegui pôr ' + coord + ' no grupo (' + (e.message || e) + ').', 'err', 'noble');
         }
         await sleep(400);
       }
-      if (config.noble.posBandeira && config.noble.posBandeiraTipo) {
+      if (config.noble.posBandeira && alvoCfg.bandTipo) {
         try {
-          await nobleEquiparBandeira(v.vid, config.noble.posBandeiraTipo, config.noble.posBandeiraNivel || 1);
+          await nobleEquiparBandeira(v.vid, alvoCfg.bandTipo, alvoCfg.bandNivel || 1);
           feito.push('bandeira');
         } catch (e) {
           pushLog('Noblar: não consegui equipar bandeira em ' + coord + ' (' + (e.message || e) + ').', 'err', 'noble');
@@ -792,7 +805,7 @@
     // select ali em cima e o que voce esta EDITANDO, nao o que voce escolheu pro alvo.
     novos.forEach((a) => { if (!jaTem[a.coord]) { a.tpl = ''; config.noble.alvos.push(a); n++; } });
     ta.value = '';
-    save(); renderNoblePlano();
+    save(); renderNoblePlano(); renderNoblePos();
     pushLog('Noblar: ' + n + ' alvo(s) adicionado(s)' + (novos.length - n ? ' (' + (novos.length - n) + ' já estavam na lista)' : '') + '.', 'ok', 'noble');
     // Avisa AGORA, que e quando voce ainda lembra por que colou aquela coordenada. O cache de
     // aldeias pode nao estar quente, entao isto e best-effort: quem garante e o plano.
@@ -894,7 +907,53 @@
     }
   }
 
+  // Tabela da sub-aba Pós-conquista: um alvo por linha, com o que aplicar quando ele cair.
+  // Reusa os grupos já carregados em _nbGrupos pra não refazer o fetch por linha.
+  let _nbGrupos = [];
+  function renderNoblePos() {
+    const box = document.getElementById('twmgr-nb-poslista'); if (!box) return;
+    const alvos = config.noble.alvos || [];
+    if (!alvos.length) {
+      box.innerHTML = '<div style="color:#8a7340;text-align:center;padding:10px;font-size:10px">— nenhum alvo na lista —</div>';
+      return;
+    }
+    const opts = (sel) => '<option value=""' + (!sel ? ' selected' : '') + '>— nenhum —</option>'
+      + _nbGrupos.map((g) => '<option value="' + esc(String(g.id)) + '"'
+        + (String(g.id) === String(sel) ? ' selected' : '') + '>' + esc(g.name || g.id) + '</option>').join('');
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-nb-tab"><thead><tr>' +
+      '<th>Alvo</th><th>Grupo</th><th>Bandeira</th><th>Estado</th></tr></thead><tbody>' +
+      alvos.map((a, i) => {
+        const cfg = noblePosDoAlvo(a.coord);
+        const herdaG = (a.posGrupoId == null), herdaB = (a.posBandTipo == null);
+        const feito = config.noble.posFeitos[a.coord];
+        const l = nobleLealdadeAgora(a.coord);
+        const estado = feito ? '<b style="color:#3f8f52">aplicado</b>'
+          : (l != null && l <= 0) ? '<span style="color:#b5651d">conquistada, aguardando</span>'
+          : '<span style="color:#8a7340">—</span>';
+        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
+          '<td><b>' + esc(a.coord) + '</b></td>' +
+          '<td><select class="twmgr-nb-pgrp twmgr-inp" data-coord="' + esc(a.coord) + '">' + opts(cfg.gid) + '</select>'
+            + (herdaG ? '<div class="sub">padrão</div>' : '') + '</td>' +
+          '<td><input class="twmgr-nb-pbt twmgr-inp" data-coord="' + esc(a.coord) + '" type="text" placeholder="tipo" style="width:46px" value="' + esc(cfg.bandTipo || '') + '">'
+            + '<input class="twmgr-nb-pbn twmgr-inp" data-coord="' + esc(a.coord) + '" type="number" min="1" max="10" style="width:38px" value="' + (cfg.bandNivel || 1) + '">'
+            + (herdaB ? '<div class="sub">padrão</div>' : '') + '</td>' +
+          '<td>' + estado + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+  function bindNoblePosHandlers() {
+    const box = document.getElementById('twmgr-nb-poslista'); if (!box) return;
+    box.addEventListener('change', (e) => {
+      const el = e.target, coord = el.getAttribute && el.getAttribute('data-coord');
+      if (!coord) return;
+      const a = (config.noble.alvos || []).find((x) => x.coord === coord); if (!a) return;
+      if (el.classList.contains('twmgr-nb-pgrp')) a.posGrupoId = el.value;
+      else if (el.classList.contains('twmgr-nb-pbt')) a.posBandTipo = el.value.trim();
+      else if (el.classList.contains('twmgr-nb-pbn')) a.posBandNivel = Math.max(1, Math.min(10, parseInt(el.value, 10) || 1));
+      save(); renderNoblePos();
+    });
+  }
   function bindNobleHandlers() {
+
     const box = document.getElementById('twmgr-nb-lista'); if (!box) return;
     box.addEventListener('change', (e) => {
       const el = e.target;
@@ -914,7 +973,7 @@
       else if (el.classList.contains('twmgr-nb-rm')) {
         config.noble.alvos = (config.noble.alvos || []).filter((a) => a.coord !== coord);
         config.noble.plano = (config.noble.plano || []).filter((p) => p.coord !== coord);
-        save(); renderNoblePlano(); refreshCards('noble');
+        save(); renderNoblePlano(); renderNoblePos(); refreshCards('noble');
       }
     });
   }

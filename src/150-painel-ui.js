@@ -137,6 +137,14 @@
       ".twmgr-nb-tab td{vertical-align:top;padding:4px 4px}",
       ".twmgr-nb-tab .sub{font-size:8px;color:#8a7340;margin-top:1px;line-height:1.2;word-break:break-word}",
       ".twmgr-nb-tab select{width:100%;min-width:0;font-size:9px;padding:1px 2px;text-overflow:ellipsis}",
+      // Ícone de bandeira: o arquivo do jogo já vem no tamanho certo, só precisa caber na célula.
+      ".twmgr-flag{display:inline-block;width:30px;height:30px;background-size:contain;background-repeat:no-repeat;background-position:center;vertical-align:middle}",
+      ".twmgr-flaggrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:4px}",
+      ".twmgr-flaggrid a{display:block;text-align:center;padding:3px 1px;border:1px solid transparent;border-radius:6px;cursor:pointer}",
+      ".twmgr-flaggrid a:hover{border-color:#c9a56a;background:#f5e6cd}",
+      ".twmgr-flaggrid em{display:block;font-style:normal;font-size:8px;color:#8a7340}",
+      ".twmgr-nb-pband{cursor:pointer;display:inline-block;min-width:32px}",
+
       ".twmgr-log{height:150px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:8px;padding:7px 8px;font-family:Consolas,'Courier New',monospace;font-size:10px;line-height:1.45}",
       ".twmgr-log::-webkit-scrollbar{width:8px}.twmgr-log::-webkit-scrollbar-thumb{background:#e0d6c6;border-radius:4px}",
       "#twmgr-panel.twmgr-collapsed{width:auto}",
@@ -603,13 +611,13 @@
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A conquista é detectada pela <b>lealdade ≤ 0</b> no relatório, então depende de <b>Ler relatórios</b> estar ligado. Cada aldeia entra <b>uma vez</b> só.</div>' +
             '<div class="twmgr-fld" style="margin-top:11px"><span>Equipar bandeira</span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-posband" type="checkbox"><i></i></label></div>' +
-            '<div class="twmgr-fld"><span title="O identificador do tipo de bandeira">Tipo padrão</span><input id="twmgr-nb-bandtipo" class="twmgr-inp" type="text" placeholder="ex: 1"></div>' +
-            '<div class="twmgr-fld"><span>Nível padrão</span><input id="twmgr-nb-bandnivel" class="twmgr-inp" type="number" min="1" max="10" value="1"></div>' +
+            '<div class="twmgr-fld"><span>Bandeira padrão</span><span id="twmgr-nb-bandpad"></span></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">A chamada é a mesma que o botão do jogo usa (<code>assign_flag</code>), só sem o diálogo. Se o jogo recusar (bandeira em uso, nível inexistente), o log diz o motivo e a aldeia continua na fila pro próximo ciclo.</div>') +
           sec('Por alvo',
             '<div id="twmgr-nb-poslista" class="twmgr-bld-vils"></div>' +
+            '<div id="twmgr-nb-flagpick" style="display:none;margin-top:6px;background:#fdfaf4;border:1px solid #e8dfcc;border-radius:8px;padding:7px"></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Cada alvo pode ter o seu. Linha marcada como <b>padrão</b> herda o que está ali em cima — mexer nela desliga a herança <b>só daquele alvo</b>, sem afetar os outros.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">O tipo da bandeira ainda é um número, não um ícone: eu não vi a marcação do inventário, e chutar ali levaria a equipar a <b>bandeira errada</b>.</div>') +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Clique na bandeira da linha pra escolher — a grade mostra <b>só as que a conta tem</b>, com o efeito de cada uma.</div>') +
         '</div>' +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
@@ -895,8 +903,7 @@
     document.getElementById('twmgr-nb-cunhar-n').value = config.noble.cunharMaxAldeias != null ? config.noble.cunharMaxAldeias : 3;
     document.getElementById('twmgr-nb-posgrupo').checked = !!config.noble.posGrupo;
     document.getElementById('twmgr-nb-posband').checked = !!config.noble.posBandeira;
-    document.getElementById('twmgr-nb-bandtipo').value = config.noble.posBandeiraTipo || '';
-    document.getElementById('twmgr-nb-bandnivel').value = config.noble.posBandeiraNivel != null ? config.noble.posBandeiraNivel : 1;
+
 
     fillNobleGrupos();
     bindNoblePosHandlers();
@@ -907,7 +914,7 @@
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
      'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen',
      'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid',
-     'twmgr-nb-posband', 'twmgr-nb-bandtipo', 'twmgr-nb-bandnivel'].forEach((id) => {
+     'twmgr-nb-posband'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();

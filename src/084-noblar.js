@@ -108,6 +108,39 @@
       + uteis.map((g) => '<option value="' + esc(String(g.id)) + '">' + esc(g.name || g.id) + '</option>').join('');
     if (config.noble.posGrupoId) sel.value = String(config.noble.posGrupoId);
     renderNoblePos();   // a tabela depende desta lista
+    nobleRenderBandPadrao();
+  }
+
+  // Le o inventário de bandeiras da conta. Estrutura confirmada por dump:
+  //   <div class="flag_box" style="background-image: url('.../flags/medium/<TIPO>_<NIVEL>.webp')"
+  //        data-title="+12% na velocidade de recrutamento :: Realizações - hoje às ...">
+  // O nome do arquivo É o par tipo_nível, que é exatamente o que o assign_flag pede.
+  //
+  // Não confundir com /flags/small/<N>.webp: aquele é só a estrelinha de NÍVEL ao lado, não o
+  // ícone da bandeira — um dump anterior só trouxe esses e por isso o seletor não saiu antes.
+  let _nbBandeiras = null;
+  async function nobleLerBandeiras(forcar) {
+    if (_nbBandeiras && !forcar) return _nbBandeiras;
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=flags', { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const out = [], visto = {};
+    doc.querySelectorAll('.flag_box').forEach((el) => {
+      const st = el.getAttribute('style') || '';
+      const mi = st.match(/flags\/medium\/(\d+)_(\d+)\.\w+/);
+      if (!mi) return;
+      const chave = mi[1] + '_' + mi[2];
+      if (visto[chave]) return;
+      visto[chave] = 1;
+      const mu = st.match(/url\((['\"]?)(.*?)\1\)/);
+      // O data-title traz a origem depois de "::" ("... :: Realizações - hoje às 14:43").
+      // Só o efeito interessa aqui.
+      const dt = (el.getAttribute('data-title') || '').split('::')[0].trim();
+      out.push({ tipo: mi[1], nivel: parseInt(mi[2], 10), img: mu ? mu[2] : '', desc: dt });
+    });
+    out.sort((a, b) => (a.tipo - b.tipo) || (a.nivel - b.nivel));
+    _nbBandeiras = out;
+    return out;
   }
 
   // O que aplicar quando ESTE alvo cair. A escolha do alvo manda; sem ela, herda o padrão
@@ -912,6 +945,11 @@
   let _nbGrupos = [];
   function renderNoblePos() {
     const box = document.getElementById('twmgr-nb-poslista'); if (!box) return;
+    // Sem o inventário em mão os ícones sairiam como "2/4"; carrega uma vez e redesenha.
+    if (_nbBandeiras === null) {
+      _nbBandeiras = [];
+      nobleLerBandeiras(true).then(() => { renderNoblePos(); nobleRenderBandPadrao(); }).catch(() => {});
+    }
     const alvos = config.noble.alvos || [];
     if (!alvos.length) {
       box.innerHTML = '<div style="color:#8a7340;text-align:center;padding:10px;font-size:10px">— nenhum alvo na lista —</div>';
@@ -934,23 +972,90 @@
           '<td><b>' + esc(a.coord) + '</b></td>' +
           '<td><select class="twmgr-nb-pgrp twmgr-inp" data-coord="' + esc(a.coord) + '">' + opts(cfg.gid) + '</select>'
             + (herdaG ? '<div class="sub">padrão</div>' : '') + '</td>' +
-          '<td><input class="twmgr-nb-pbt twmgr-inp" data-coord="' + esc(a.coord) + '" type="text" placeholder="tipo" style="width:46px" value="' + esc(cfg.bandTipo || '') + '">'
-            + '<input class="twmgr-nb-pbn twmgr-inp" data-coord="' + esc(a.coord) + '" type="number" min="1" max="10" style="width:38px" value="' + (cfg.bandNivel || 1) + '">'
+          '<td>' + nobleBandBtn(a.coord, cfg.bandTipo, cfg.bandNivel)
             + (herdaB ? '<div class="sub">padrão</div>' : '') + '</td>' +
           '<td>' + estado + '</td></tr>';
       }).join('') + '</tbody></table>';
   }
+  // Botão da célula: mostra o ícone da bandeira escolhida, ou um tracinho se não há.
+  function nobleBandBtn(coord, tipo, nivel) {
+    const b = (_nbBandeiras || []).find((x) => x.tipo === String(tipo) && x.nivel === (nivel || 1));
+    const dentro = b
+      ? '<span class="twmgr-flag" style="background-image:url(\'' + esc(b.img) + '\')"></span>'
+      : (tipo ? '<span style="font-size:9px">' + esc(tipo) + '/' + (nivel || 1) + '</span>'
+              : '<span style="color:#8a7340">—</span>');
+    return '<a class="twmgr-nb-pband" data-coord="' + esc(coord) + '" title="escolher bandeira">' + dentro + '</a>';
+  }
+
+  // Grade de escolha. Abre embaixo da tabela em vez de num popup: o painel já é flutuante, e
+  // popup dentro de popup fica preso na borda quando a tabela está no fim da rolagem.
+  async function nobleAbrirPicker(coord) {
+    const box = document.getElementById('twmgr-nb-flagpick'); if (!box) return;
+    box.style.display = 'block';
+    box.innerHTML = '<div style="font-size:10px;color:#8a7340;padding:6px">lendo as bandeiras…</div>';
+    let lista = [];
+    try { lista = await nobleLerBandeiras(); }
+    catch (e) {
+      box.innerHTML = '<div style="font-size:10px;color:#b03030;padding:6px">não consegui ler a tela de bandeiras (' + esc(String(e.message || e)) + ')</div>';
+      return;
+    }
+    if (!lista.length) {
+      box.innerHTML = '<div style="font-size:10px;color:#8a7340;padding:6px">nenhuma bandeira na conta.</div>';
+      return;
+    }
+    const alvo = coord === '*' ? 'padrão' : coord;
+    box.innerHTML = '<div style="font-size:10px;color:#6f6153;margin-bottom:5px">Bandeira para <b>' + esc(alvo) + '</b>'
+      + ' · <a class="twmgr-nb-flagnone" data-coord="' + esc(coord) + '">nenhuma</a>'
+      + ' · <a class="twmgr-nb-flagfech">fechar</a></div>'
+      + '<div class="twmgr-flaggrid">' + lista.map((b) =>
+        '<a class="twmgr-nb-flagsel" data-coord="' + esc(coord) + '" data-tipo="' + esc(b.tipo) + '"'
+        + ' data-nivel="' + b.nivel + '" title="' + esc(b.desc || (b.tipo + '/' + b.nivel)) + '">'
+        + '<span class="twmgr-flag" style="background-image:url(\'' + esc(b.img) + '\')"></span>'
+        + '<em>nível ' + b.nivel + '</em></a>').join('') + '</div>';
+  }
+
   function bindNoblePosHandlers() {
+
     const box = document.getElementById('twmgr-nb-poslista'); if (!box) return;
     box.addEventListener('change', (e) => {
       const el = e.target, coord = el.getAttribute && el.getAttribute('data-coord');
       if (!coord) return;
       const a = (config.noble.alvos || []).find((x) => x.coord === coord); if (!a) return;
       if (el.classList.contains('twmgr-nb-pgrp')) a.posGrupoId = el.value;
-      else if (el.classList.contains('twmgr-nb-pbt')) a.posBandTipo = el.value.trim();
-      else if (el.classList.contains('twmgr-nb-pbn')) a.posBandNivel = Math.max(1, Math.min(10, parseInt(el.value, 10) || 1));
       save(); renderNoblePos();
     });
+    // Cliques do seletor de bandeira. Delegado no container inteiro porque a grade é
+    // redesenhada a cada abertura.
+    const pai = box.parentNode || box;
+    pai.addEventListener('click', (e) => {
+      const el = e.target.closest ? e.target.closest('a') : null;
+      if (!el) return;
+      const coord = el.getAttribute('data-coord');
+      if (el.classList.contains('twmgr-nb-pband')) { nobleAbrirPicker(coord); return; }
+      if (el.classList.contains('twmgr-nb-flagfech')) {
+        const g = document.getElementById('twmgr-nb-flagpick'); if (g) g.style.display = 'none';
+        return;
+      }
+      const escolheu = el.classList.contains('twmgr-nb-flagsel');
+      const limpou = el.classList.contains('twmgr-nb-flagnone');
+      if (!escolheu && !limpou) return;
+      const tipo = escolheu ? el.getAttribute('data-tipo') : '';
+      const nivel = escolheu ? parseInt(el.getAttribute('data-nivel'), 10) : 1;
+      if (coord === '*') {
+        config.noble.posBandeiraTipo = tipo; config.noble.posBandeiraNivel = nivel;
+      } else {
+        const a = (config.noble.alvos || []).find((x) => x.coord === coord); if (!a) return;
+        a.posBandTipo = tipo; a.posBandNivel = nivel;
+      }
+      const g = document.getElementById('twmgr-nb-flagpick'); if (g) g.style.display = 'none';
+      save(); renderNoblePos(); nobleRenderBandPadrao();
+    });
+  }
+
+  // O padrão global usa o mesmo seletor, com coord '*'.
+  function nobleRenderBandPadrao() {
+    const el = document.getElementById('twmgr-nb-bandpad'); if (!el) return;
+    el.innerHTML = nobleBandBtn('*', config.noble.posBandeiraTipo, config.noble.posBandeiraNivel);
   }
   function bindNobleHandlers() {
 
@@ -1129,8 +1234,7 @@
     if (g('twmgr-nb-posgrupo')) c.posGrupo = g('twmgr-nb-posgrupo').checked;
     if (g('twmgr-nb-posgid')) c.posGrupoId = g('twmgr-nb-posgid').value;
     if (g('twmgr-nb-posband')) c.posBandeira = g('twmgr-nb-posband').checked;
-    if (g('twmgr-nb-bandtipo')) c.posBandeiraTipo = g('twmgr-nb-bandtipo').value.trim();
-    if (g('twmgr-nb-bandnivel')) c.posBandeiraNivel = Math.max(1, Math.min(10, parseInt(g('twmgr-nb-bandnivel').value, 10) || 1));
+    // Tipo/nível da bandeira não são mais campos de texto: quem grava é o seletor de ícones.
 
 
     save();

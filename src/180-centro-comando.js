@@ -1320,7 +1320,6 @@
 
   buildUI();
   try { enhanceUnitsPage(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
-  try { unitsScheduleAuto(); } catch (e) { /* silencioso: scheduler é opcional */ }
   try { enhanceIncomingsPage(); } catch (e) { /* silencioso */ }
   try { desviarResumeAll(); } catch (e) { /* silencioso */ }
   try { ccRetomar(); } catch (e) { console.warn('[TWMgr Central] retomada falhou:', e); }

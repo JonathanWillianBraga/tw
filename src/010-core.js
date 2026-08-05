@@ -1,8 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-
-// @version      11.24.1
+// @version      11.25.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -127,10 +126,10 @@
     fastNobre: { name: 'Fast Nobre', tpl: OBRA_TPL_FAST_NOBRE, storageProativo: true,  priorityBuilding: 'stable' },
   };
 
-  const VERSION = '11.24.1';
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
+  const VERSION = '11.25.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -265,16 +264,6 @@
     templates: [],                         // templates salvos { id, name, targetX, targetY, arriveLocal, selected, perVillage }
     blindagem: defBlindagem(),             // sub-módulo: pedidos de blindagem da tribo
   });
-  const defUnits = () => ({
-    // history[YYYY-MM-DD] = {
-    //   at: msEpoch,
-    //   totals: { [unit]: N },
-    //   byVillage: { [vid]: { name, coord, totals: {u:N}, force: {...} } },
-    //   force: { total, att, def, defCav, defArch, pop, nobles },
-    // }
-    history: {},
-    historyDays: 90,
-  });
   const defDesviar = () => ({
     keepSpy: true,        // deixar exploradores em casa (pra farmar/monitorar)
     keepKnight: false,    // deixar paladino
@@ -358,7 +347,7 @@
     nextAt: 0,
     demand: {},              // { [vid]: { b, cost, coord, profile } }
   });
-  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), market: defMarket(), build: defBuild(), research: defResearch(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), units: defUnits(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
+  const def = () => ({ targets: [], reloadAfterSend: true, running: false, scav: defScav(), farm: defFarm(), recruit: defRecruit(), market: defMarket(), build: defBuild(), research: defResearch(), map: defMap(), captcha: defCaptcha(), planner: defPlanner(), desviar: defDesviar(), mapUi: defMapUi(), paladin: defPaladin(), cc: defCC(), obra: defObra(), etiqueta: defEtiqueta(), reservations: {} });
   function load() {
     let c = def();
     try {
@@ -647,9 +636,6 @@
     if (!Array.isArray(c.planner.blindagem.rows)) c.planner.blindagem.rows = [];
     if (c.planner.blindagem.lastFetch == null) c.planner.blindagem.lastFetch = 0;
     if (!c.reservations || typeof c.reservations !== 'object') c.reservations = {};
-    if (!c.units) c.units = defUnits();
-    if (!c.units.history || typeof c.units.history !== 'object') c.units.history = {};
-    if (c.units.historyDays == null) c.units.historyDays = 90;
     if (!c.desviar) c.desviar = defDesviar();
     if (c.desviar.keepSpy == null) c.desviar.keepSpy = true;
     if (c.desviar.keepKnight == null) c.desviar.keepKnight = false;

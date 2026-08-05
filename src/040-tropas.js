@@ -1,268 +1,94 @@
   // ==================== TROPAS (helpers de força/pop) ====================
   // Injetados direto na tela do jogo (screen=overview_villages&mode=units).
   // Sem UI no TW Manager, sem requests — só parse do DOM local.
-  function unitsForce(totals) {
-    let att = 0, def = 0, defCav = 0, defArch = 0, pop = 0, nobles = 0, total = 0;
-    UNITS.forEach(([u]) => {
-      const n = totals[u] || 0, s = UNIT_STATS[u]; if (!s) return;
-      att += n * s.att; def += n * s.def; defCav += n * s.defCav; defArch += n * s.defArch;
-      pop += n * s.pop; total += n; if (u === 'snob') nobles = n;
-    });
-    return { total: total, att: att, def: def, defCav: defCav, defArch: defArch, pop: pop, nobles: nobles };
-  }
-
-  // Chave de bucket de 6h (00, 06, 12, 18). Ex.: 2026-07-15T12.
-  function unitsBucketKey(ms) {
-    const d = new Date(ms || Date.now());
-    const bucketH = Math.floor(d.getHours() / 6) * 6;
-    const pad = (n) => String(n).padStart(2, '0');
-    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(bucketH);
-  }
-
-  // Snapshot no bucket atual (sobrescreve o mesmo bucket). Rotaciona por historyDays * 4.
-  function unitsSaveSnapshot(byVillage, totals, force) {
-    const key = unitsBucketKey();
-    const h = config.units.history;
-    h[key] = { at: Date.now(), totals: totals, byVillage: byVillage, force: force };
-    const maxEntries = (config.units.historyDays || 90) * 4;
-    const keys = Object.keys(h).sort();
-    while (keys.length > maxEntries) delete h[keys.shift()];
-    save();
-  }
-
-  // Parse compartilhado entre enhanceUnitsPage (DOM local) e unitsFetchAndSnapshot (fetch).
-  // Retorna { totals, byVillage, force, ok }. Se a tabela não existir/mudou, ok=false.
-  function unitsParseTable(root) {
-    const table = (root || document).getElementById ? (root || document).getElementById('units_table') : root.querySelector('#units_table');
-    if (!table) return { ok: false };
-    const headImgs = table.querySelectorAll('thead th img[src*="/unit_"]');
-    if (!headImgs.length) return { ok: false };
-    const colUnits = [];
-    headImgs.forEach((img) => {
-      const m = (img.getAttribute('src') || '').match(/\/unit_([a-z]+)\.[a-z]+/i);
-      colUnits.push(m ? m[1] : null);
-    });
-    const totals = {}; UNITS.forEach(([u]) => { totals[u] = 0; });
-    const byVillage = {};
-    const bodies = table.querySelectorAll('tbody.row_marker');
-    bodies.forEach((tb) => {
-      const totalRow = tb.querySelector('tr[style*="font-weight: bold"]') || tb.querySelector('tr[style*="font-weight:bold"]');
-      if (!totalRow) return;
-      const nameEl = tb.querySelector('.quickedit-vn[data-id]');
-      const vid = nameEl ? String(nameEl.getAttribute('data-id')) : null;
-      const labelEl = tb.querySelector('.quickedit-label');
-      const rawName = labelEl ? (labelEl.textContent || '').replace(/\s+/g, ' ').trim() : (vid || '?');
-      const coordM = rawName.match(/(\d{1,3})\|(\d{1,3})/);
-      const coord = coordM ? (coordM[1] + '|' + coordM[2]) : null;
-      const cells = totalRow.querySelectorAll('td.unit-item');
-      const vTotals = {};
-      cells.forEach((td, i) => {
-        const unit = colUnits[i]; if (!unit || !UNIT_STATS[unit]) return;
-        const n = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0;
-        vTotals[unit] = n;
-        totals[unit] = (totals[unit] || 0) + n;
-      });
-      if (vid) byVillage[vid] = { name: rawName, coord: coord, totals: vTotals, force: unitsForce(vTotals) };
-    });
-    return { ok: true, table: table, colUnits: colUnits, totals: totals, byVillage: byVillage, force: unitsForce(totals) };
-  }
-
-  // Fetch em background da tela units — usado pelo scheduler quando entra em novo bucket.
+  // ==================== TROPAS: total por unidade na tela do jogo ====================
+  // Injetado em Visualizacoes > Tropas (screen=overview_villages&mode=units). Sem UI no painel e
+  // sem requisicao nenhuma: so le o DOM que ja esta na tela.
   //
-  // RECUO APOS FALHA. Antes, erro era engolido em silencio e o instantaneo nao era salvo —
-  // entao `last !== now` seguia verdadeiro e a proxima checagem tentava de novo. Sob 429
-  // isso virava: TODA pagina aberta dispara a requisicao, e ela sempre falha.
-  // Foi a que apareceu no console do usuario como 429 em overview_villages&mode=units.
-  let _unitsProxTentativa = 0;
-  async function unitsFetchAndSnapshot() {
-    if (Date.now() < _unitsProxTentativa) return;
-    try {
-      const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units', { credentials: 'include' });
-      if (res.status === 429) { _unitsProxTentativa = Date.now() + 30 * 60000; console.warn('[TWMgr] instantaneo de tropas: 429, tentando de novo em 30 min'); return; }
-      if (!res.ok) { _unitsProxTentativa = Date.now() + 10 * 60000; return; }
-      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-      const p = unitsParseTable(doc);
-      if (!p.ok) return;
-      unitsSaveSnapshot(p.byVillage, p.totals, p.force);
-    } catch (e) { /* silencioso: proximo tick tenta de novo */ }
-  }
-
-  // Checa a cada 15min se entramos em bucket novo (00/06/12/18). Se sim, dispara fetch.
-  let unitsAutoTimer = null;
-  function unitsScheduleAuto() {
-    if (unitsAutoTimer) clearInterval(unitsAutoTimer);
-    const check = () => {
-      const keys = Object.keys(config.units.history || {});
-      const last = keys.length ? keys.sort().pop() : null;
-      const now = unitsBucketKey();
-      if (last !== now) unitsFetchAndSnapshot();
-    };
-    // NAO no boot imediato. Esta funcao roda em toda pagina, independente de qualquer
-    // modulo estar ligado, e disparava junto com o carregamento — competindo com as ~128
-    // requisicoes que o proprio jogo faz pra montar a tela. Entra depois da fila de
-    // retomada dos modulos, que se estende por ~60s.
-    setTimeout(check, 75000);
-    unitsAutoTimer = setInterval(check, 15 * 60 * 1000);
-  }
-
-  // Retorna a data (YYYY-MM-DD) mais recente com snapshot cujo daysAgo >= n.
-  function unitsFindSnapshotDaysAgo(n) {
-    const targetMs = Date.now() - n * 86400000;
-    const keys = Object.keys(config.units.history || {}).sort().reverse();
-    for (const k of keys) {
-      const at = config.units.history[k].at || new Date(k).getTime();
-      if (at <= targetMs) return config.units.history[k];
-    }
-    return null;
-  }
-
-  // Desenha um sparkline SVG simples a partir de série [{at, v}].
-  function unitsSparkline(series, w, h, color) {
-    if (!series.length) return '<svg width="' + w + '" height="' + h + '"></svg>';
-    if (series.length === 1) return '<svg width="' + w + '" height="' + h + '"><circle cx="' + (w / 2) + '" cy="' + (h / 2) + '" r="2" fill="' + color + '"/></svg>';
-    const vals = series.map((p) => p.v), min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
-    const range = max - min || 1;
-    const pad = 2;
-    const pts = series.map((p, i) => {
-      const x = pad + (i * (w - pad * 2)) / (series.length - 1);
-      const y = (h - pad) - ((p.v - min) / range) * (h - pad * 2);
-      return x.toFixed(1) + ',' + y.toFixed(1);
-    }).join(' ');
-    return '<svg width="' + w + '" height="' + h + '" style="vertical-align:middle">' +
-      '<polyline fill="none" stroke="' + color + '" stroke-width="1.5" points="' + pts + '"/>' +
-      '</svg>';
-  }
-
-  function unitsDownloadCsv() {
-    const rows = [];
-    rows.push(['data', 'total_tropas', 'forca_off', 'def_geral', 'def_cav', 'def_arq', 'pop_ocupada', 'nobres']
-      .concat(UNITS.map((u) => u[0])).join(','));
-    const keys = Object.keys(config.units.history || {}).sort();
-    keys.forEach((k) => {
-      const s = config.units.history[k];
-      const f = s.force || {};
-      const row = [k, f.total || 0, f.att || 0, f.def || 0, f.defCav || 0, f.defArch || 0, f.pop || 0, f.nobles || 0];
-      UNITS.forEach(([u]) => row.push((s.totals && s.totals[u]) || 0));
-      rows.push(row.join(','));
+  // A soma segue a ABA escolhida (Todos / Proprias / Na Aldeia / Fora / Em transito / Defesas /
+  // Apoios). A versao anterior somava sempre a linha em negrito "total" de cada aldeia, entao o
+  // numero era o mesmo em qualquer aba.
+  //
+  // Como a aba muda a tabela: em "Todos" cada aldeia tem varias linhas (proprias, na aldeia, fora,
+  // em transito) mais uma em NEGRITO com o total; nas outras abas sobra uma linha por aldeia e nao
+  // ha negrito. Dai a regra: se a aldeia tem linha de total, use ela; senao some as linhas que
+  // aparecem. Isso da o numero certo nos dois casos sem depender do nome da aba.
+  function unitsSomaVisivel(table, colUnits) {
+    const totais = {}, cols = colUnits.filter(Boolean);
+    cols.forEach((u) => { totais[u] = 0; });
+    let aldeias = 0, linhas = 0, usouTotal = 0;
+    table.querySelectorAll('tbody.row_marker').forEach((tb) => {
+      const negrito = tb.querySelector('tr[style*="font-weight: bold"], tr[style*="font-weight:bold"]');
+      const alvo = negrito ? [negrito] : Array.prototype.filter.call(
+        tb.querySelectorAll('tr'), (tr) => tr.querySelector('td.unit-item'));
+      if (!alvo.length) return;
+      aldeias++;
+      if (negrito) usouTotal++;
+      alvo.forEach((tr) => {
+        linhas++;
+        tr.querySelectorAll('td.unit-item').forEach((td, i) => {
+          const u = colUnits[i]; if (!u || totais[u] == null) return;
+          totais[u] += parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0;
+        });
+      });
     });
-    const csv = rows.join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'tw-tropas-' + WORLD + '-' + new Date().toISOString().slice(0, 10) + '.csv';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return { totais: totais, aldeias: aldeias, linhas: linhas, usouTotal: usouTotal };
   }
 
-  // Detecta se estamos na tela Visualizações > Tropas, parseia a tabela, salva snapshot
-  // e injeta: resumo, deltas, sparklines, botão CSV e linha "TOTAL GERAL" na tabela.
+  // Rotulo da aba selecionada, pra linha dizer o que ela esta somando.
+  function unitsAbaAtiva() {
+    const sel = document.querySelector('table.modemenu td.selected a, table.modemenu td.selected,'
+      + ' .modemenu td.selected a, .modemenu td.selected');
+    const t = sel ? (sel.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    return t || 'sele\u00e7\u00e3o atual';
+  }
+
   function enhanceUnitsPage() {
     const gd = window.game_data;
     if (!gd || gd.screen !== 'overview_villages' || gd.mode !== 'units') return;
-    if (document.getElementById('twmgr-units-summary')) return;
+    const anterior = document.getElementById('twmgr-units-total');
+    if (anterior && anterior.parentNode) anterior.parentNode.removeChild(anterior);
 
-    const p = unitsParseTable(document);
-    if (!p.ok) return;
-    const table = p.table, colUnits = p.colUnits, totals = p.totals, byVillage = p.byVillage, f = p.force;
+    const table = document.getElementById('units_table'); if (!table) return;
+    const cabecalhos = table.querySelectorAll('thead th img[src*="/unit_"]');
+    if (!cabecalhos.length) return;
+    const colUnits = [];
+    cabecalhos.forEach((img) => {
+      const m = (img.getAttribute('src') || '').match(/\/unit_([a-z]+)\.[a-z]+/i);
+      colUnits.push(m ? m[1] : null);
+    });
+
+    const r = unitsSomaVisivel(table, colUnits);
+    if (!r.aldeias) return;
     const fmt = (n) => Number(n).toLocaleString('pt-BR');
-    const fmtSigned = (n) => (n >= 0 ? '+' : '') + fmt(n);
-    const colorFor = (delta) => delta > 0 ? '#2f7a2f' : (delta < 0 ? '#a52020' : '#584526');
-    const arrowFor = (delta) => delta > 0 ? '↑' : (delta < 0 ? '↓' : '·');
 
-    // 3) Salva snapshot ANTES de calcular deltas (pra ter o de hoje já disponível).
-    unitsSaveSnapshot(byVillage, totals, f);
-
-    // 4) Deltas vs snapshots antigos.
-    const snapYest = unitsFindSnapshotDaysAgo(1);
-    const snap7 = unitsFindSnapshotDaysAgo(7);
-    const snap30 = unitsFindSnapshotDaysAgo(30);
-    const deltaBlock = (label, snap) => {
-      if (!snap || !snap.force) return '<div style="min-width:110px;color:#8a7d6d;font-size:10px">' + label + ': —</div>';
-      const dTotal = f.total - (snap.force.total || 0);
-      const dAtt = f.att - (snap.force.att || 0);
-      const dDef = f.def - (snap.force.def || 0);
-      return '<div style="min-width:110px;font-size:10px;line-height:1.4">' +
-        '<div style="color:#ddd2c0;font-weight:bold">' + label + '</div>' +
-        '<div style="color:' + colorFor(dTotal) + '">' + arrowFor(dTotal) + ' tropas ' + fmtSigned(dTotal) + '</div>' +
-        '<div style="color:' + colorFor(dAtt) + '">' + arrowFor(dAtt) + ' off ' + fmtSigned(dAtt) + '</div>' +
-        '<div style="color:' + colorFor(dDef) + '">' + arrowFor(dDef) + ' def ' + fmtSigned(dDef) + '</div>' +
-      '</div>';
-    };
-
-    // 5) Séries pra sparklines. Longo (últimos ~30 dias) e "hoje" (últimas 24h).
-    const histKeys = Object.keys(config.units.history).sort();
-    // Longo prazo: 1 ponto por dia (média dos buckets do dia)
-    const byDay = {};
-    histKeys.forEach((k) => {
-      const day = k.slice(0, 10);
-      if (!byDay[day]) byDay[day] = { total: 0, att: 0, def: 0, n: 0, at: 0 };
-      const s = config.units.history[k].force || {};
-      byDay[day].total += s.total || 0; byDay[day].att += s.att || 0; byDay[day].def += s.def || 0;
-      byDay[day].n++; byDay[day].at = Math.max(byDay[day].at, config.units.history[k].at || 0);
-    });
-    const dayKeys = Object.keys(byDay).sort().slice(-30);
-    const seriesTotal = dayKeys.map((d) => ({ at: byDay[d].at, v: Math.round(byDay[d].total / byDay[d].n) }));
-    const seriesAtt = dayKeys.map((d) => ({ at: byDay[d].at, v: Math.round(byDay[d].att / byDay[d].n) }));
-    const seriesDef = dayKeys.map((d) => ({ at: byDay[d].at, v: Math.round(byDay[d].def / byDay[d].n) }));
-    // Curto prazo: últimos 24h de buckets (até 4 pontos)
-    const cutoff24h = Date.now() - 24 * 3600 * 1000;
-    const todayKeys = histKeys.filter((k) => (config.units.history[k].at || 0) >= cutoff24h);
-    const seriesToday = todayKeys.map((k) => ({ at: config.units.history[k].at, v: (config.units.history[k].force || {}).total || 0 }));
-
-    // 6) Bloco de resumo + deltas + sparklines + botão CSV.
-    const summary = document.createElement('div');
-    summary.id = 'twmgr-units-summary';
-    summary.style.cssText = 'margin:6px 0 8px;padding:8px 10px;border:1px solid #a2643a;border-radius:6px;background:linear-gradient(180deg,#f4e4bc,#8b5426);font-size:12px;color:#3b2914;box-shadow:0 1px 2px rgba(0,0,0,.1)';
-    const item = (label, val, big) => '<div style="display:flex;flex-direction:column;align-items:center;min-width:80px"><div style="font-size:' + (big ? '16px' : '13px') + ';font-weight:bold;font-variant-numeric:tabular-nums">' + fmt(val) + '</div><div style="font-size:10px;color:#584526">' + label + '</div></div>';
-    const sparkBlock = (label, series, color) => '<div style="display:flex;flex-direction:column;align-items:center;min-width:110px">' +
-      '<div style="font-size:10px;color:#ddd2c0;font-weight:bold">' + label + ' (' + series.length + 'd)</div>' +
-      unitsSparkline(series, 110, 28, color) +
-      '</div>';
-    summary.innerHTML =
-      '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px">' +
-        '<div style="font-weight:bold;font-size:11px;color:#ddd2c0">🏰 Resumo (TW Manager) · <span style="font-weight:normal;font-size:10px">' + histKeys.length + ' snapshot' + (histKeys.length === 1 ? '' : 's') + ' no histórico</span></div>' +
-        '<button id="twmgr-units-csv" style="padding:2px 8px;font-size:10px;border:1px solid #a2643a;border-radius:4px;background:#8b5426;cursor:pointer;color:#3b2914">📥 baixar histórico CSV</button>' +
-      '</div>' +
-      '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding-bottom:6px;border-bottom:1px dashed #b89a5a">' +
-        item('total tropas', f.total, true) +
-        item('força ⚔️', f.att) +
-        item('def 🛡️', f.def) +
-        item('def cav 🐎', f.defCav) +
-        item('def arq 🏹', f.defArch) +
-        item('pop 🌾', f.pop) +
-        item('nobres 👑', f.nobles) +
-      '</div>' +
-      '<div style="display:flex;flex-wrap:wrap;gap:16px;padding:6px 0;border-bottom:1px dashed #b89a5a">' +
-        deltaBlock('vs ontem', snapYest) +
-        deltaBlock('vs 7 dias', snap7) +
-        deltaBlock('vs 30 dias', snap30) +
-      '</div>' +
-      '<div style="display:flex;flex-wrap:wrap;gap:12px;padding-top:6px;align-items:center">' +
-        '<div style="display:flex;flex-direction:column;align-items:center;min-width:110px">' +
-          '<div style="font-size:10px;color:#ddd2c0;font-weight:bold">total (hoje ' + seriesToday.length + 'pt)</div>' +
-          unitsSparkline(seriesToday, 110, 28, '#a2643a') +
-        '</div>' +
-        sparkBlock('total (30d)', seriesTotal, '#ddd2c0') +
-        sparkBlock('força ⚔️ (30d)', seriesAtt, '#a52020') +
-        sparkBlock('def 🛡️ (30d)', seriesDef, '#2f6b2f') +
-      '</div>';
-    table.parentNode.insertBefore(summary, table);
-    const csvBtn = document.getElementById('twmgr-units-csv');
-    if (csvBtn) csvBtn.addEventListener('click', unitsDownloadCsv);
-
-    // 7) Nova tbody "TOTAL GERAL" no final da tabela.
+    const tbody = document.createElement('tbody');
+    tbody.id = 'twmgr-units-total';
+    // O titulo carrega o diagnostico: quantas aldeias e linhas entraram na conta. Se algum dia a
+    // tabela do jogo mudar, da pra ver na hora que a soma esta pegando pouca coisa.
+    const diag = r.aldeias + ' aldeia(s), ' + r.linhas + ' linha(s) somada(s)'
+      + (r.usouTotal ? ' \u2014 ' + r.usouTotal + ' pela linha de total' : '');
     const nCols = table.querySelectorAll('thead th').length;
-    const totalBody = document.createElement('tbody');
-    totalBody.id = 'twmgr-units-grandtotal';
-    let cellsHtml = '<td style="padding:4px 6px;color:#ddd2c0">TOTAL GERAL</td><td></td>';
-    colUnits.forEach((unit) => {
-      const n = (unit && totals[unit]) || 0;
-      cellsHtml += '<td class="unit-item" style="text-align:center">' + (n > 0 ? fmt(n) : '0') + '</td>';
+    let cells = '<td class="twmgr-ut-cel twmgr-ut-rot" colspan="2" title="' + esc(diag) + '">'
+      + '\u03a3 ' + esc(unitsAbaAtiva()) + '</td>';
+    colUnits.forEach((u) => {
+      const n = (u && r.totais[u]) || 0;
+      cells += '<td class="twmgr-ut-cel twmgr-ut-num">' + (n ? fmt(n) : '0') + '</td>';
     });
-    const emittedCols = 2 + colUnits.length;
-    for (let i = emittedCols; i < nCols; i++) cellsHtml += '<td></td>';
-    totalBody.innerHTML = '<tr style="background:linear-gradient(180deg,#f4e4bc,#8b5426);font-weight:bold;font-size:13px;color:#3b2914;border-top:2px solid #a2643a">' + cellsHtml + '</tr>';
-    table.appendChild(totalBody);
+    for (let i = 2 + colUnits.length; i < nCols; i++) cells += '<td class="twmgr-ut-cel"></td>';
+    tbody.innerHTML = '<tr>' + cells + '</tr>';
+    table.appendChild(tbody);
+
+    // Estilo proprio: a tabela e do jogo, entao nao herdo nada do painel. `position:sticky` no TD
+    // (nao no TR -- em tabela o sticky so pega na celula) mantem a linha visivel enquanto rola.
+    if (!document.getElementById('twmgr-ut-css')) {
+      const st = document.createElement('style'); st.id = 'twmgr-ut-css';
+      st.textContent = '.twmgr-ut-cel{position:sticky;bottom:0;z-index:5;background:#fbf6ee;'
+        + 'border-top:2px solid #a2643a;padding:5px 6px;font-weight:bold;color:#463b30}'
+        + '.twmgr-ut-rot{text-align:left;color:#8b5426;white-space:nowrap}'
+        + '.twmgr-ut-num{text-align:center;font-variant-numeric:tabular-nums}';
+      document.head.appendChild(st);
+    }
   }
 
   async function resolveTargets() {

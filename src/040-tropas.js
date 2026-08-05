@@ -125,11 +125,10 @@
   // Monta { vid: {name, targets} } — o que o motor consome. Três camadas, da mais genérica pra
   // mais específica, cada uma sobrescrevendo a anterior:
   //   1. modelo com GRUPO   → vale pra todas as aldeias daquele grupo
-  //   2. aldeia com MODELO  → escolha individual, vence o grupo
-  //   3. override           → quantidade avulsa daquela aldeia, vence tudo
+  //   2. override           → quantidade avulsa daquela aldeia, vence o grupo
   //
-  // A ordem importa: sem ela, uma aldeia que você tirou do padrão do grupo voltaria pro padrão
-  // no ciclo seguinte, e a escolha individual nunca pegaria.
+  // Decisao do usuario: recrutamento e SEMPRE modelo->grupo. Excecao pra uma aldeia = ela vai
+  // pra um grupo proprio, com o modelo dela. Por isso nao existe atribuicao individual aqui.
   async function resolveTargets() {
     const r = config.recruit, map = {};
     const tpls = r.templates || {};
@@ -149,16 +148,7 @@
     // outras telas do usuário.
     if (usouGrupo) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
 
-    // 2. atribuição individual
-    Object.keys(r.villages || {}).forEach((vid) => {
-      const a = r.villages[vid];
-      if (a.paused) { delete map[vid]; return; }      // pausada sai, mesmo que o grupo mande
-      const t = tpls[a.tpl];
-      if (!t) return;
-      map[vid] = { name: a.coord || a.name || vid, targets: t.targets || {}, tpl: a.tpl };
-    });
-
-    // 3. override avulso
+    // 2. override avulso
     Object.entries(r.overrides || {}).forEach(([vid, o]) => { map[vid] = { name: o.name || vid, targets: o.targets }; });
     return map;
   }
@@ -263,11 +253,8 @@
     claimLock();
     const now = Date.now();
     if ((config.recruit.nextAt || 0) > now) { scheduleRecruit(); return; }
-    // Quem entrou no grupo desde o último ciclo entra na gestão.
-    if (config.recruit.seguirGrupo && config.recruit.filterGroup) {
-      try { await rcSincronizarGrupo(); }
-      catch (e) { pushLog('Recrutar: não consegui ler o grupo (' + (e.message || e) + ') — sigo com a lista atual.', '', 'recruit'); }
-    }
+    // Nao precisa sincronizar nada: o modelo aponta pro GRUPO, entao aldeia que entra no grupo
+    // ja aparece no resolveTargets do proximo ciclo, sozinha.
 
     let map;
     try { map = await resolveTargets(); }
@@ -289,6 +276,21 @@
       const fmtm = (s) => Math.floor(s / 3600) + 'h' + String(Math.floor((s % 3600) / 60)).padStart(2, '0');
       const qStr = 'fila quartel ' + fmtm(queuedSec.barracks) + ', estábulo ' + fmtm(queuedSec.stable) + ', oficina ' + fmtm(queuedSec.garage);
       const nm = map[vid].name || vid;
+
+      // Snapshot do que a aldeia TEM contra o que o modelo pede. Alimenta a aba Status sem
+      // custar requisicao nenhuma -- o estado ja foi lido aqui em cima pra decidir o recrutamento.
+      const un = {};
+      let bateuTudo = true;
+      Object.keys(targets).forEach((u) => {
+        const alvo = targets[u];
+        const tem = ((state.units || {})[u] || {}).total || 0;
+        un[u] = { tem: tem, alvo: alvo };
+        // alvo null = "continuo" (recruta sempre): nunca conta como cumprido.
+        if (alvo == null || tem < alvo) bateuTudo = false;
+      });
+      config.recruit.status = config.recruit.status || {};
+      config.recruit.status[vid] = { name: nm, at: Date.now(), tpl: map[vid].tpl || '', units: un, ok: bateuTudo };
+      if (bateuTudo) metas++;
       if (Object.keys(amounts).length) {
         try {
           await sendRecruit(vid, amounts);
@@ -296,10 +298,9 @@
           totalSent++;
         } catch (e) { pushLog('Recrutar em ' + nm + ': ' + (e.message || e), 'err', 'recruit'); }
       } else {
-        // "Atingiu a meta" é diferente de "não deu pra recrutar": se faltou recurso, o computeRecruit
-        // devolve wantCost > 0 (é a demanda que vai pro Equilíbrio). Sem nada querido, o alvo está cumprido.
-        const querendo = wantCost && ((wantCost.wood || 0) + (wantCost.stone || 0) + (wantCost.iron || 0)) > 0;
-        if (!querendo) metas++;
+        // NAO conta meta aqui. "Nada a recrutar" também acontece com fila cheia ou requisito
+        // faltando — era esse o bug do card: dizia meta atingida sem a tropa ter chegado no alvo.
+        // Quem conta é o `bateuTudo` lá em cima, comparando tropa com alvo, unidade por unidade.
         pushLog(nm + ': nada a recrutar — ' + reason + ' (' + qStr + ')', '', 'recruit');
       }
       await sleep(300);
@@ -307,6 +308,8 @@
     config.recruit.stats = config.recruit.stats || {};
     config.recruit.stats.villages = vids.length;
     config.recruit.stats.metas = metas;
+    // Aldeia que saiu da gestão some do Status — senão a aba mostraria dado velho pra sempre.
+    Object.keys(config.recruit.status || {}).forEach((v) => { if (!map[v]) delete config.recruit.status[v]; });
     config.recruit.nextAt = now + Math.max(60, config.recruit.interval || 600) * 1000;
     save();
     refreshCards('recruit');
@@ -319,8 +322,6 @@
   // é que aqui o modelo pode ficar amarrado a um GRUPO, que era como este módulo funcionava
   // antes — assim quem já usava perfil-por-grupo não precisa marcar aldeia por aldeia.
   let _rcTplAtivo = '';
-  let _rcPool = [];              // aldeias disponíveis pra marcar na tabela
-  let _rcPorGrupo = {};          // { vid: tplId } — quem já é atendido por um modelo-com-grupo
   let _twGroupsCache = [];
 
   function rcTplIds() { return Object.keys(config.recruit.templates || {}); }
@@ -336,13 +337,7 @@
       + esc(config.recruit.templates[id].name || id) + '</option>').join('');
     const sel = document.getElementById('twmgr-rc-tpl');
     if (sel) { sel.innerHTML = opts; sel.value = _rcTplAtivo; }
-    const mass = document.getElementById('twmgr-rc-mass-tpl');
-    if (mass) { const antes = mass.value; mass.innerHTML = opts; if (ids.indexOf(antes) >= 0) mass.value = antes; }
-    const gt = document.getElementById('twmgr-rc-grptpl');
-    if (gt) {
-      gt.innerHTML = '<option value="">— escolha —</option>' + opts;
-      gt.value = config.recruit.grupoTpl || '';
-    }
+    // O modelo se aplica por GRUPO, entao nao ha mais seletor de massa nem de "aldeia nova".
   }
 
   // Editor do modelo ativo: uma linha por unidade, com alvo. Campo VAZIO = contínuo (recruta
@@ -393,14 +388,14 @@
       ? { name: nome.trim().slice(0, 40), targets: JSON.parse(JSON.stringify(at.targets || {})), grupo: '' }
       : defRecruitTpl(nome.trim().slice(0, 40));
     _rcTplAtivo = id;
-    save(); rcFillTplSelects(); rcRenderEditor(); rcRenderVillages();
+    save(); rcFillTplSelects(); rcRenderEditor(); rcRenderStatus();
   }
   function rcRenomearModelo() {
     const t = rcTplAtivo(); if (!t) return;
     const nome = prompt('Novo nome:', t.name);
     if (!nome || !nome.trim()) return;
     t.name = nome.trim().slice(0, 40);
-    save(); rcFillTplSelects(); rcRenderVillages();
+    save(); rcFillTplSelects(); rcRenderStatus();
   }
   function rcApagarModelo() {
     const t = rcTplAtivo(); if (!t) return;
@@ -410,126 +405,114 @@
     delete config.recruit.templates[_rcTplAtivo];
     usando.forEach((v) => { delete config.recruit.villages[v]; });
     _rcTplAtivo = rcTplIds()[0] || '';
-    save(); rcFillTplSelects(); rcRenderEditor(); rcRenderVillages();
+    save(); rcFillTplSelects(); rcRenderEditor(); rcRenderStatus();
   }
 
-  // ===== Tabela de aldeias =====
-  async function rcCarregarAldeias() {
-    const btn = document.getElementById('twmgr-rc-vil-reload');
+  // ===== Aba Status =====
+  // Mostra o que cada aldeia TEM contra o alvo do modelo. Le do snapshot que o ciclo gravou:
+  // o estado ja foi buscado pra decidir o recrutamento, entao a aba nao custa requisicao.
+  // O botao de atualizar refaz a leitura sem recrutar nada.
+  function rcStatusUnidades() {
+    // So as unidades que ALGUM modelo pede -- uma coluna por unidade do mundo deixaria a tabela
+    // cheia de coluna zerada.
+    const usadas = {};
+    Object.keys(config.recruit.templates || {}).forEach((id) => {
+      Object.keys(config.recruit.templates[id].targets || {}).forEach((u) => { usadas[u] = 1; });
+    });
+    return unitsDoMundo().filter((u) => usadas[u[0]]);
+  }
+  function rcRenderStatus() {
+    const box = document.getElementById('twmgr-rc-status'); if (!box) return;
+    const st = config.recruit.status || {};
+    const gid = _rcStatusGrupo;
+    let vids = Object.keys(st);
+    if (gid) vids = vids.filter((v) => _rcStatusPool[v]);
+    if (!vids.length) {
+      box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">'
+        + (Object.keys(st).length ? '— nenhuma aldeia deste grupo na gestão —'
+                                  : '— rode um ciclo (ou clique em ↻) pra ver o status —') + '</div>';
+      return;
+    }
+    const uns = rcStatusUnidades();
+    vids.sort((a, b) => String(st[a].name).localeCompare(String(st[b].name), 'pt-BR', { numeric: true }));
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><thead><tr><th>Aldeia</th>'
+      + uns.map((u) => '<th title="' + esc(u[1]) + '"><span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span></th>').join('')
+      + '</tr></thead><tbody>' + vids.map((vid, i) => {
+        const r = st[vid];
+        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
+          '<td><b>' + esc(r.name) + '</b>' + (r.ok ? ' <span style="color:#3f8f52">✓</span>' : '')
+          + '<div class="sub">' + esc((config.recruit.templates[r.tpl] || {}).name || '—') + '</div></td>' +
+          uns.map((u) => {
+            const c = (r.units || {})[u[0]];
+            if (!c) return '<td><span style="color:#c9bda6">—</span></td>';
+            const cheio = (c.alvo != null && c.tem >= c.alvo);
+            return '<td><b style="color:' + (cheio ? '#3f8f52' : '#8b5426') + '">' + fmtN(c.tem) + '</b>'
+              + '<div class="sub">' + (c.alvo == null ? '∞' : fmtN(c.alvo)) + '</div></td>';
+          }).join('') + '</tr>';
+      }).join('') + '</tbody></table>';
+    const info = document.getElementById('twmgr-rc-status-info');
+    if (info) {
+      const quando = vids.length ? new Date(Math.max.apply(null, vids.map((v) => st[v].at || 0))).toLocaleTimeString('pt-BR') : '—';
+      const ok = vids.filter((v) => st[v].ok).length;
+      info.textContent = vids.length + ' aldeia(s) · ' + ok + ' com a meta cheia · lido às ' + quando;
+    }
+  }
+
+  // Filtro de grupo da aba Status. Guarda quais aldeias sao do grupo escolhido; vazio = todas.
+  let _rcStatusGrupo = '';
+  let _rcStatusPool = {};
+  async function rcStatusFiltrar(gid) {
+    _rcStatusGrupo = gid || '';
+    _rcStatusPool = {};
+    if (_rcStatusGrupo) {
+      try {
+        const vs = await getVillagesInGroup(_rcStatusGrupo);
+        (vs || []).forEach((v) => { _rcStatusPool[String(v.vid)] = 1; });
+      } catch (e) { pushLog('Recrutar: não consegui ler o grupo do filtro (' + (e.message || e) + ').', 'err', 'recruit'); }
+    }
+    rcRenderStatus();
+  }
+
+  // Releitura sob demanda: mesma varredura do ciclo, mas SEM recrutar. Serve pra conferir depois
+  // de mexer num modelo, sem esperar o proximo ciclo nem disparar envio.
+  async function rcAtualizarStatus() {
+    const btn = document.getElementById('twmgr-rc-status-reload');
     if (btn) btn.textContent = '…';
     try {
-      const gid = config.recruit.filterGroup || '';
-      const vs = gid ? await getVillagesInGroup(gid) : await getAllVillagesCached();
-      _rcPool = (vs || []).map((v) => ({ vid: String(v.vid), coord: v.coord || null, name: v.name || v.coord || String(v.vid) }));
-      // Descobre quem cada modelo-com-grupo cobre, pra tabela poder mostrar o modelo EFETIVO
-      // em vez de "fora". Uma leitura por modelo, só no ↻ — não entra no ciclo.
-      _rcPorGrupo = {};
-      for (const id of rcTplIds()) {
-        const t = config.recruit.templates[id];
-        if (!t.grupo) continue;
-        try {
-          const membros = await getVillagesInGroup(t.grupo);
-          (membros || []).forEach((v) => { _rcPorGrupo[String(v.vid)] = id; });
-        } catch (e) { /* grupo ilegivel: a linha só não mostra a cobertura */ }
+      const map = await resolveTargets();
+      config.recruit.status = config.recruit.status || {};
+      for (const vid of Object.keys(map)) {
+        const targets = map[vid].targets || {};
+        if (!Object.keys(targets).length) continue;
+        let state;
+        try { state = await getRecruitState(vid); } catch (e) { continue; }
+        const un = {};
+        let ok = true;
+        Object.keys(targets).forEach((u) => {
+          const alvo = targets[u], tem = ((state.units || {})[u] || {}).total || 0;
+          un[u] = { tem: tem, alvo: alvo };
+          if (alvo == null || tem < alvo) ok = false;
+        });
+        config.recruit.status[vid] = { name: map[vid].name || vid, at: Date.now(), tpl: map[vid].tpl || '', units: un, ok: ok };
+        await sleep(250);
       }
-      pushLog('Recrutar: ' + _rcPool.length + ' aldeia(s) carregadas' + (gid ? ' do grupo selecionado' : '') + '.', '', 'recruit');
+      Object.keys(config.recruit.status).forEach((v) => { if (!map[v]) delete config.recruit.status[v]; });
+      config.recruit.stats = config.recruit.stats || {};
+      config.recruit.stats.villages = Object.keys(map).length;
+      config.recruit.stats.metas = Object.keys(config.recruit.status).filter((v) => config.recruit.status[v].ok).length;
+      save(); refreshCards('recruit');
     } catch (e) {
-      pushLog('Recrutar: erro ao carregar as aldeias (' + (e.message || e) + ').', 'err', 'recruit');
+      pushLog('Recrutar: não consegui atualizar o status (' + (e.message || e) + ').', 'err', 'recruit');
     }
     if (btn) btn.textContent = '↻';
-    rcRenderVillages();
-  }
-  function rcRenderVillages() {
-    const box = document.getElementById('twmgr-rc-vils'); if (!box) return;
-    const assign = config.recruit.villages || {}, tpls = config.recruit.templates || {};
-    const mapa = {};
-    Object.keys(assign).forEach((vid) => { mapa[vid] = { vid: vid, coord: assign[vid].coord, name: assign[vid].name || assign[vid].coord || vid }; });
-    _rcPool.forEach((v) => { if (!mapa[v.vid]) mapa[v.vid] = v; });
-    const linhas = Object.keys(mapa).sort((a, b) => String(mapa[a].name).localeCompare(String(mapa[b].name), 'pt-BR', { numeric: true }));
-    if (!linhas.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">— clique em ↻ pra carregar suas aldeias —</div>'; return; }
-    const ids = rcTplIds();
-    box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr><th style="width:18px"></th><th>Aldeia</th><th>Modelo</th><th>Estado</th></tr></thead><tbody>' +
-      linhas.map((vid, i) => {
-        const v = mapa[vid], a = assign[vid];
-        const doGrupo = _rcPorGrupo[vid];
-        // Sem escolha individual, o rótulo do "vazio" diz a verdade: herda do grupo, ou está fora.
-        const vazio = doGrupo ? ('← grupo: ' + (tpls[doGrupo] ? tpls[doGrupo].name : doGrupo)) : '— fora —';
-        const sel = '<select class="twmgr-rc-vtpl twmgr-inp" data-vid="' + esc(vid) + '" style="font-size:9px">'
-          + '<option value=""' + (!a ? ' selected' : '') + '>' + esc(vazio) + '</option>'
-          + ids.map((id) => '<option value="' + esc(id) + '"' + (a && a.tpl === id ? ' selected' : '') + '>'
-            + esc(tpls[id].name || id) + '</option>').join('') + '</select>';
-        const est = a
-          ? (a.paused ? '<a class="twmgr-rc-pause" data-vid="' + esc(vid) + '" style="color:#b5651d">pausada</a>'
-                      : '<a class="twmgr-rc-pause" data-vid="' + esc(vid) + '" style="color:#3f8f52">ativa</a>')
-          : (doGrupo ? '<span style="color:#3f8f52">ativa</span><div class="sub">pelo grupo</div>'
-                     : '<span style="color:#8a7340">fora</span>');
-        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
-          '<td><input type="checkbox" class="twmgr-rc-ck" data-vid="' + esc(vid) + '"></td>' +
-          '<td>' + esc(v.name) + '</td><td>' + sel + '</td><td>' + est + '</td></tr>';
-      }).join('') + '</tbody></table>';
-    const info = document.getElementById('twmgr-rc-vils-info');
-    if (info) {
-      // Conta a UNIAO: individuais ativas + cobertas por grupo que nao foram pausadas.
-      const efetivas = {};
-      Object.keys(_rcPorGrupo).forEach((v) => { efetivas[v] = 1; });
-      Object.keys(assign).forEach((v) => { if (assign[v].paused) delete efetivas[v]; else efetivas[v] = 1; });
-      const porGrupo = Object.keys(_rcPorGrupo).filter((v) => efetivas[v] && !assign[v]).length;
-      info.textContent = linhas.length + ' aldeia(s) · ' + Object.keys(efetivas).length + ' recrutando'
-        + (porGrupo ? ' (' + porGrupo + ' pelo grupo)' : '');
-    }
-  }
-  function rcMarcadas() {
-    return Array.prototype.slice.call(document.querySelectorAll('.twmgr-rc-ck:checked'))
-      .map((c) => c.getAttribute('data-vid'));
-  }
-  function rcAcaoMassa() {
-    const acao = (document.getElementById('twmgr-rc-mass-acao') || {}).value;
-    const tpl = (document.getElementById('twmgr-rc-mass-tpl') || {}).value;
-    const vids = rcMarcadas();
-    if (!vids.length) { alert('Marque pelo menos uma aldeia.'); return; }
-    const assign = config.recruit.villages || (config.recruit.villages = {});
-    const pool = {}; _rcPool.forEach((v) => { pool[v.vid] = v; });
-    vids.forEach((vid) => {
-      if (acao === 'remove') { delete assign[vid]; return; }
-      if (acao === 'pause') { if (assign[vid]) assign[vid].paused = true; return; }
-      if (acao === 'resume') { if (assign[vid]) assign[vid].paused = false; return; }
-      if (!tpl || !config.recruit.templates[tpl]) return;
-      const v = pool[vid] || assign[vid] || {};
-      assign[vid] = { tpl: tpl, paused: false, coord: v.coord || null, name: v.name || vid };
-    });
-    save(); rcRenderVillages();
-  }
-
-  // Gemea da bldSincronizarGrupo: aldeia que entra no grupo entra sozinha. So ADICIONA.
-  async function rcSincronizarGrupo() {
-    const membros = await getVillagesInGroup(config.recruit.filterGroup);
-    if (!membros || !membros.length) return 0;
-    const assign = config.recruit.villages || (config.recruit.villages = {});
-    const ids = rcTplIds();
-    let tpl = config.recruit.grupoTpl;
-    if (!tpl || !config.recruit.templates[tpl]) tpl = (ids.length === 1) ? ids[0] : '';
-    const novas = membros.filter((v) => !assign[String(v.vid)]);
-    if (!novas.length) return 0;
-    if (!tpl) {
-      pushLog('Recrutar: ' + novas.length + ' aldeia(s) novas no grupo, mas nenhum modelo definido pra elas'
-        + ' — escolha o "modelo pra aldeia nova" na aba.', 'err', 'recruit');
-      return 0;
-    }
-    novas.forEach((v) => {
-      assign[String(v.vid)] = { tpl: tpl, paused: false, coord: v.coord || null, name: v.name || v.coord || String(v.vid) };
-    });
-    save();
-    pushLog('Recrutar: ' + novas.length + ' aldeia(s) entraram pelo grupo com o modelo "'
-      + (config.recruit.templates[tpl].name || tpl) + '".', 'ok', 'recruit');
-    rcRenderVillages();
-    return novas.length;
+    rcRenderStatus();
   }
 
   async function fillGroupSelects() {
     let groups = [];
     try { groups = await getGroups(); } catch (e) { pushLog('Recrutar: erro ao listar grupos: ' + (e.message || e), 'err'); return; }
     _twGroupsCache = groups;
-    [['twmgr-rc-group', config.recruit.filterGroup], ['twmgr-bm-group', config.map && config.map.group],
+    [['twmgr-rc-stgroup', config.recruit.filterGroup], ['twmgr-bm-group', config.map && config.map.group],
      ['twmgr-farm-group', config.farm && config.farm.group], ['twmgr-bld-group', config.build && config.build.filterGroup],
      ['twmgr-pq-group', config.research && config.research.filterGroup]].forEach(([id, cur]) => {
       const sel = document.getElementById(id); if (!sel) return;
@@ -549,9 +532,8 @@
   function recruitStart() {
     readRecruitCfg();
     const temGrupo = Object.keys(config.recruit.templates || {}).some((id) => config.recruit.templates[id].grupo);
-    const temAldeia = Object.keys(config.recruit.villages || {}).some((v) => !config.recruit.villages[v].paused);
-    if (!temGrupo && !temAldeia) {
-      pushLog('Recrutar: nenhuma aldeia na gestão — aplique um modelo na tabela, ou amarre um modelo a um grupo.', 'err', 'recruit');
+    if (!temGrupo) {
+      pushLog('Recrutar: nenhum modelo amarrado a um grupo — escolha o grupo no modelo.', 'err', 'recruit');
       return;
     }
     config.recruit.running = true; config.recruit.nextAt = 0; save(); setRecruitStatus(true); pushLog('Recrutar iniciado.', 'ok', 'recruit'); recruitTick();

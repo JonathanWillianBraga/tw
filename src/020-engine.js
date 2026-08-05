@@ -37,7 +37,9 @@
       ];
     } else if (mod === 'recruit') {
       const s = (config.recruit.stats || {});
-      arr = [{ v: fmtN(s.villages), l: 'aldeias recrutando', hl: true }, { v: fmtN(s.metas), l: 'atingiram a meta' }];
+      // "meta" = TODAS as unidades do modelo com quantidade >= alvo. Antes contava toda aldeia
+      // em que o ciclo nao recrutou nada, o que inclui fila cheia e requisito faltando.
+      arr = [{ v: fmtN(s.villages), l: 'aldeias recrutando', hl: true }, { v: fmtN(s.metas), l: 'com a meta cheia' }];
     } else if (mod === 'build') {
       const s = (config.build.stats || {}), as = config.build.villages || {};
       const pausadas = Object.keys(as).filter((v) => as[v].paused).length;

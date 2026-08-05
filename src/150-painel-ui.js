@@ -135,6 +135,10 @@
       ".twmgr-ug .lock input{background:#f0ebe0;color:#a09480}",
       // Tabela de alvos: célula de duas linhas (o valor e o seu contexto embaixo, menor).
       ".twmgr-nb-tab td{vertical-align:top;padding:4px 4px}",
+      // Status do Recrutar: uma coluna por unidade, tem em cima e alvo embaixo.
+      ".twmgr-rc-st td,.twmgr-rc-st th{text-align:center;padding:3px 2px;vertical-align:top}",
+      ".twmgr-rc-st td:first-child,.twmgr-rc-st th:first-child{text-align:left}",
+      ".twmgr-rc-st .sub{font-size:8px;color:#8a7340;line-height:1.1}",
       ".twmgr-nb-tab .sub{font-size:8px;color:#8a7340;margin-top:1px;line-height:1.2;word-break:break-word}",
       ".twmgr-nb-tab select{width:100%;min-width:0;font-size:9px;padding:1px 2px;text-overflow:ellipsis}",
       // Ícone de bandeira: o arquivo do jogo já vem no tamanho certo, só precisa caber na célula.
@@ -209,7 +213,8 @@
   const FARM_SUB_KEY = 'twMgr_farmSub';
   // Sub-abas por módulo. Era só do Saque; virou genérico quando o Noblar também passou a ter —
   // duplicar a função daria duas cópias pra manter em sincronia.
-  const SUBS = { farm: ['farm', 'wall', 'map'], noble: ['alvos', 'cunhar', 'pos'] };
+  const SUBS = { farm: ['farm', 'wall', 'map'], noble: ['alvos', 'cunhar', 'pos'],
+                 recruit: ['rcmodelos', 'rcstatus'] };
   function showSub(mod, name) {
     (SUBS[mod] || []).forEach((n) => {
       const c = document.getElementById('twmgr-sub-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
@@ -419,6 +424,11 @@
       '<div id="twmgr-tab-recruit" style="display:none">' +
         hint('⚔️ Modelos de recrutamento no molde do <b>Gerente de conta</b>: monte o modelo, aplique nas aldeias. O modelo pode ser amarrado a um <b>grupo</b> — aí toda aldeia dele segue sem você marcar uma a uma. O alvo é pra <b>manter</b>, não pedido único.') +
         cardsDiv('recruit') +
+        '<div class="twmgr-subtabs">' +
+          subBtn('rcmodelos', '⚔️', 'Modelos', 'recruit') +
+          subBtn('rcstatus', '📊', 'Status', 'recruit') +
+        '</div>' +
+        '<div id="twmgr-sub-rcmodelos">' +
         sec('Modelo',
           '<div class="twmgr-row" style="gap:4px">' +
             '<select id="twmgr-rc-tpl" class="twmgr-inp" style="flex:1"></select>' +
@@ -427,27 +437,19 @@
             '<button id="twmgr-rc-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
           '</div>' +
           '<div id="twmgr-rc-editor" style="margin-top:7px"></div>') +
-        sec('Aldeias',
-          '<div class="twmgr-row" style="gap:4px">' +
-            '<span class="twmgr-lbl" style="flex:0 0 auto">Grupo</span>' +
-            '<select id="twmgr-rc-group" class="twmgr-inp" style="flex:1"></select>' +
-            '<button id="twmgr-rc-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
-          '</div>' +
-          '<div class="twmgr-fld" style="margin-top:6px"><span title="Aldeia adicionada ao grupo no jogo entra sozinha na gestão">Seguir o grupo <span style="color:#8a7d6d">(entrar sozinha)</span></span>' +
-            '<label class="twmgr-sw"><input id="twmgr-rc-seguir" type="checkbox"><i></i></label></div>' +
-          '<div class="twmgr-fld"><span>Modelo pra aldeia nova</span><select id="twmgr-rc-grptpl" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
-          '<div id="twmgr-rc-vils" class="twmgr-bld-vils" style="margin-top:5px"></div>' +
-          '<div id="twmgr-rc-vils-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>' +
-          '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
-            '<select id="twmgr-rc-mass-acao" class="twmgr-inp" style="flex:1">' +
-              '<option value="apply">Utilizar modelo</option>' +
-              '<option value="pause">Pausar</option>' +
-              '<option value="resume">Retomar</option>' +
-              '<option value="remove">Tirar da gestão</option>' +
-            '</select>' +
-            '<select id="twmgr-rc-mass-tpl" class="twmgr-inp" style="flex:1"></select>' +
-            '<button id="twmgr-rc-mass-go" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">Aplicar</button>' +
-          '</div>') +
+        '</div>' +
+        '<div id="twmgr-sub-rcstatus" style="display:none">' +
+          sec('Status por aldeia',
+            '<div class="twmgr-row" style="gap:4px">' +
+              '<span class="twmgr-lbl" style="flex:0 0 auto">Grupo</span>' +
+              '<select id="twmgr-rc-stgroup" class="twmgr-inp" style="flex:1"></select>' +
+              '<button id="twmgr-rc-status-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="reler agora (não recruta)">↻</button>' +
+            '</div>' +
+            '<div id="twmgr-rc-status" class="twmgr-bld-vils" style="margin-top:5px"></div>' +
+            '<div id="twmgr-rc-status-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Número de cima = o que a aldeia <b>tem</b>; embaixo = o <b>alvo</b> do modelo. Verde = cumprido. O ✓ no nome sai quando <b>todas</b> as unidades chegaram.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vem da leitura do último ciclo, sem custo. O ↻ relê agora e <b>não recruta nada</b>.</div>') +
+        '</div>' +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Fila alvo (h)</span><input id="twmgr-r-hours" class="twmgr-inp" type="number" min="0.5" step="0.5" value="2" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Repor quando faltar (min)</span><input id="twmgr-r-refill" class="twmgr-inp" type="number" min="1" value="30" style="width:66px"></div>') +
@@ -804,32 +806,10 @@
     document.getElementById('twmgr-rc-tpl-del').addEventListener('click', rcApagarModelo);
     // O editor é redesenhado a cada troca de modelo, então o listener fica no pai.
     document.getElementById('twmgr-rc-editor').addEventListener('change', () => { rcLerEditor(); save(); });
-    // ---- Aldeias ----
-    document.getElementById('twmgr-rc-group').addEventListener('change', (e) => { config.recruit.filterGroup = e.target.value; save(); rcCarregarAldeias(); });
-    document.getElementById('twmgr-rc-vil-reload').addEventListener('click', rcCarregarAldeias);
-    document.getElementById('twmgr-rc-seguir').checked = !!config.recruit.seguirGrupo;
-    document.getElementById('twmgr-rc-seguir').addEventListener('change', (e) => { config.recruit.seguirGrupo = e.target.checked; save(); });
-    document.getElementById('twmgr-rc-grptpl').addEventListener('change', (e) => { config.recruit.grupoTpl = e.target.value; save(); });
-    document.getElementById('twmgr-rc-mass-go').addEventListener('click', rcAcaoMassa);
-    document.getElementById('twmgr-rc-vils').addEventListener('change', (e) => {
-      const el = e.target, vid = el.getAttribute && el.getAttribute('data-vid');
-      if (!vid || !el.classList.contains('twmgr-rc-vtpl')) return;
-      const assign = config.recruit.villages || (config.recruit.villages = {});
-      if (!el.value) { delete assign[vid]; }
-      else {
-        const v = _rcPool.find((x) => x.vid === vid) || assign[vid] || {};
-        assign[vid] = { tpl: el.value, paused: (assign[vid] || {}).paused || false,
-                        coord: v.coord || null, name: v.name || vid };
-      }
-      save(); rcRenderVillages();
-    });
-    document.getElementById('twmgr-rc-vils').addEventListener('click', (e) => {
-      const el = e.target, vid = el.getAttribute && el.getAttribute('data-vid');
-      if (!vid || !el.classList.contains('twmgr-rc-pause')) return;
-      const a = (config.recruit.villages || {})[vid]; if (!a) return;
-      a.paused = !a.paused; save(); rcRenderVillages();
-    });
-    rcRenderVillages();
+    // ---- Status ----
+    document.getElementById('twmgr-rc-stgroup').addEventListener('change', (e) => rcStatusFiltrar(e.target.value));
+    document.getElementById('twmgr-rc-status-reload').addEventListener('click', rcAtualizarStatus);
+    rcRenderStatus();
     fillGroupSelects();
     document.getElementById('twmgr-r-start').addEventListener('click', recruitStart);
     document.getElementById('twmgr-r-stop').addEventListener('click', recruitStop);

@@ -175,7 +175,7 @@
       + '<col style="width:11%"></colgroup>'
       + '<thead><tr><th class="ordena" data-col="name">Aldeia' + seta('name') + '</th>'
       + preds.map((b) => '<th class="ordena" data-col="' + b + '" title="' + esc(BUILD_META[b].name) + ' — clique pra ordenar">'
-        + '<span class="bico">' + BUILD_META[b].ico + '</span>' + seta(b) + '</th>').join('')
+        + '<i class="twmgr-uicon">' + buildingIcon(b, BUILD_META[b].ico) + '</i>' + seta(b) + '</th>').join('')
       + '<th class="ordena" data-col="pct" title="% do modelo já construído">%' + seta('pct') + '</th>'
       + '</tr></thead><tbody>' + vids.map((vid, i) => {
         const r = st[vid], P = pcts[vid];
@@ -200,6 +200,8 @@
           + esc(P.pior ? ('mais atrasado: ' + BUILD_META[P.pior.b].name + ' ' + Math.round(P.pior.p * 100) + '%') : '')
           + '"><b>' + (P.pct == null ? '—' : Math.round(P.pct * 100) + '%') + '</b></td></tr>';
       }).join('') + '</tbody></table>';
+    // Mesma normalização do Recrutar: as imagens do jogo têm tamanhos diferentes entre si.
+    if (typeof rcAjustarIcones === 'function') rcAjustarIcones(box);
     if (!box._bldOrdOn) {
       box._bldOrdOn = true;
       box.addEventListener('click', (e) => {

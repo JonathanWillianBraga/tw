@@ -459,7 +459,9 @@
     // deixa pro showTab/showSub chamar de novo quando ela abrir. Antes isso passava batido e o
     // usuário via os ícones tortos até reordenar a tabela por acaso.
     if (box.offsetParent === null) return false;
-    box.querySelectorAll('.twmgr-uicon .unit_sprite').forEach((el) => {
+    // Pega sprite de tropa E <img> de edifício: as duas telas usam a mesma caixa, e as imagens
+    // do jogo também vêm com tamanhos diferentes entre si.
+    box.querySelectorAll('.twmgr-uicon .unit_sprite, .twmgr-uicon img').forEach((el) => {
       el.style.transform = '';                 // mede o natural, sem a escala anterior
       const maior = Math.max(el.offsetWidth, el.offsetHeight);
       if (!maior) return;                      // sprite sem CSS carregado: deixa como está

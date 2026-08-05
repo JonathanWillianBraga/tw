@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.51.0
+// @version      11.52.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.51.0';
+  const VERSION = '11.52.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2819,7 +2819,9 @@
     // deixa pro showTab/showSub chamar de novo quando ela abrir. Antes isso passava batido e o
     // usuário via os ícones tortos até reordenar a tabela por acaso.
     if (box.offsetParent === null) return false;
-    box.querySelectorAll('.twmgr-uicon .unit_sprite').forEach((el) => {
+    // Pega sprite de tropa E <img> de edifício: as duas telas usam a mesma caixa, e as imagens
+    // do jogo também vêm com tamanhos diferentes entre si.
+    box.querySelectorAll('.twmgr-uicon .unit_sprite, .twmgr-uicon img').forEach((el) => {
       el.style.transform = '';                 // mede o natural, sem a escala anterior
       const maior = Math.max(el.offsetWidth, el.offsetHeight);
       if (!maior) return;                      // sprite sem CSS carregado: deixa como está
@@ -3986,7 +3988,7 @@
       + '<col style="width:11%"></colgroup>'
       + '<thead><tr><th class="ordena" data-col="name">Aldeia' + seta('name') + '</th>'
       + preds.map((b) => '<th class="ordena" data-col="' + b + '" title="' + esc(BUILD_META[b].name) + ' — clique pra ordenar">'
-        + '<span class="bico">' + BUILD_META[b].ico + '</span>' + seta(b) + '</th>').join('')
+        + '<i class="twmgr-uicon">' + buildingIcon(b, BUILD_META[b].ico) + '</i>' + seta(b) + '</th>').join('')
       + '<th class="ordena" data-col="pct" title="% do modelo já construído">%' + seta('pct') + '</th>'
       + '</tr></thead><tbody>' + vids.map((vid, i) => {
         const r = st[vid], P = pcts[vid];
@@ -4011,6 +4013,8 @@
           + esc(P.pior ? ('mais atrasado: ' + BUILD_META[P.pior.b].name + ' ' + Math.round(P.pior.p * 100) + '%') : '')
           + '"><b>' + (P.pct == null ? '—' : Math.round(P.pct * 100) + '%') + '</b></td></tr>';
       }).join('') + '</tbody></table>';
+    // Mesma normalização do Recrutar: as imagens do jogo têm tamanhos diferentes entre si.
+    if (typeof rcAjustarIcones === 'function') rcAjustarIcones(box);
     if (!box._bldOrdOn) {
       box._bldOrdOn = true;
       box.addEventListener('click', (e) => {

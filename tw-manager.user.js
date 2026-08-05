@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.34.0
+// @version      11.35.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.34.0';
+  const VERSION = '11.35.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -4389,12 +4389,24 @@
 
   // que escolta, viagem maxima e se e so NT. Cada alvo aponta pro seu (`a.tpl`).
   //
-  // A escolta viaja NO MESMO comando dos nobres, nao num ataque separado. Nobre anda na
-  // velocidade da unidade mais lenta do comando; escolta em comando proprio chegaria antes e
-  // morreria sozinha. Por isso a duracao do plano e medida COM a escolta dentro -- ariete e
-  // catapulta sao mais lentos que o nobre e mudariam a hora de chegada.
+  // UM NOBRE POR COMANDO. A lealdade cai uma vez por ATAQUE, nao por nobre: mandar 4 nobres
+  // num comando so queima 3 a toa. E por isso que "NT" existe como conceito no jogo -- sao 4
+  // comandos SEGUIDOS, nao um comando com 4. Entao `nobres por alvo` = quantos COMANDOS sair,
+  // e cada um leva snob:1 + a escolta do modelo.
+  //
+  // A escolta viaja NO MESMO comando do nobre, nao num ataque separado: em comando proprio ela
+  // chegaria antes e morreria sozinha. Como cada comando tem a sua, uma aldeia que manda 3
+  // nobres precisa de 3x a escolta.
+  //
+  // A escolta e so tropa de campo (sem explorador, ariete e catapulta) -- pedido do usuario.
+  // Efeito colateral bom: o nobre (35) e a unidade mais LENTA do jogo, entao a escolta nunca
+  // muda a hora de chegada. A duracao segue vindo do proprio jogo mesmo assim.
 
-  const NOBLE_POR_CONQUISTA = 4;   // padrao: 4 nobres derrubam 100 de lealdade no caso tipico
+  const NOBLE_POR_CONQUISTA = 4;   // padrao: 4 comandos derrubam 100 de lealdade no caso tipico
+  // Quem pode ir de escolta. Explorador nao briga; ariete e catapulta servem pra muralha e
+  // predio, nao pra proteger nobre. Fica so tropa de campo.
+  const NOBLE_ESCOLTA = ['spear', 'sword', 'axe', 'light', 'heavy'];
+
 
   function nobleTpl(id) {
     const t = (config.noble.templates || {})[id];
@@ -4414,12 +4426,24 @@
     const k = Object.keys(config.noble.templates || {});
     return k.length ? [{ id: k[0], t: config.noble.templates[k[0]] }] : [];
   }
-  // A escolta sai da aldeia mais perto COM NOBRE. Cabe inteira ali? Sem requisicao nenhuma:
-  // o `avail` ja veio no cache das origens.
-  function nobleEscoltaCabe(tpl, origens) {
-    const o = origens.filter((x) => x.nobres > 0)[0];
-    if (!o) return false;
-    return Object.keys(tpl.escolta || {}).every((u) => ((o.avail || {})[u] || 0) >= tpl.escolta[u]);
+  // Quantos comandos COMPLETOS (1 nobre + escolta inteira) esta aldeia consegue armar.
+  // Sem requisicao nenhuma: o `avail` ja veio no cache das origens.
+  function nobleCmdsDaAldeia(tpl, o) {
+    let cap = o.nobres;
+    Object.keys(tpl.escolta || {}).forEach((u) => {
+      cap = Math.min(cap, Math.floor(((o.avail || {})[u] || 0) / tpl.escolta[u]));
+    });
+    return Math.max(0, cap);
+  }
+  // Quantos comandos completos o modelo renderia no alvo inteiro. E o criterio da ordem de
+  // prioridade: vale mais o modelo que arma 4 comandos do que o que arma 1. Antes bastava
+  // caber UMA escolta, o que fazia o 1o modelo ganhar mesmo rendendo um nobre so.
+  function nobleCapacidade(tpl, origens, precisa) {
+    const comNobre = origens.filter((o) => o.nobres > 0);
+    const cands = tpl.soNT ? comNobre.filter((o) => nobleCmdsDaAldeia(tpl, o) >= precisa).slice(0, 1) : comNobre;
+    let n = 0;
+    for (const o of cands) { n += nobleCmdsDaAldeia(tpl, o); if (n >= precisa) return precisa; }
+    return n;
   }
 
   function unitPt(u) { const r = UNITS.filter((p) => p[0] === u)[0]; return r ? r[1] : u; }
@@ -4483,14 +4507,17 @@
     const opcoes = nobleTplsDe(alvo);
     if (!opcoes.length) return { pronto: false, envios: [], falta: 0, dentroDoLimite: [], motivo: 'nenhum modelo' };
     const origens = await nobleOrigensPerto(alvo, todas, cacheTropa, usados);
+    // Melhor = mais comandos completos. Empate fica com quem vem antes na ordem do usuario.
+    let melhor = null, melhorCap = -1;
     for (const op of opcoes) {
-      if (opcoes.length > 1 && !nobleEscoltaCabe(op.t, origens)) continue;
-      const r = await noblePlanejarComTpl(alvo, op, origens);
-      if (r.envios.length) return r;      // deu envio: e esse
+      const cap = nobleCapacidade(op.t, origens, op.t.nobres || NOBLE_POR_CONQUISTA);
+      if (cap > melhorCap) { melhorCap = cap; melhor = op; }
+      if (cap >= (op.t.nobres || NOBLE_POR_CONQUISTA)) { melhor = op; break; }   // completo: para aqui
     }
-    // Nenhum coube inteiro (ou nenhum rendeu envio dentro do limite de horas): primeiro da ordem.
-    const r = await noblePlanejarComTpl(alvo, opcoes[0], origens);
-    if (opcoes.length > 1 && r.envios.length) r.motivo = (r.motivo ? r.motivo + ' · ' : '') + 'nenhum modelo coube inteiro';
+    const r = await noblePlanejarComTpl(alvo, melhor || opcoes[0], origens);
+    if (opcoes.length > 1 && melhorCap <= 0 && r.envios.length) {
+      r.motivo = (r.motivo ? r.motivo + ' · ' : '') + 'nenhum modelo com escolta completa';
+    }
     return r;
   }
 
@@ -4521,21 +4548,26 @@
     let faltam = precisa;
     for (const o of candidatos) {
       if (faltam <= 0) break;
-      const qtd = Math.min(o.nobres, faltam);
-      // A escolta inteira vai no PRIMEIRO comando (a origem mais perto). Repetir a escolta em
-      // cada comando multiplicaria a tropa enviada sem o usuario ter pedido isso.
-      const unidades = { snob: qtd };
-      const escoltaCurta = [];
-      if (!envios.length) {
-        Object.keys(tpl.escolta || {}).forEach((u) => {
-          const querem = tpl.escolta[u] || 0, tem = (o.avail || {})[u] || 0;
-          const vai = Math.min(querem, tem);
-          if (vai > 0) unidades[u] = vai;
-          if (vai < querem) escoltaCurta.push((unitPt(u)) + ' ' + vai + '/' + querem);
-        });
-      }
-      // Prepara de verdade so pra LER a duracao, ja COM a escolta -- ariete/catapulta sao mais
-      // lentos que o nobre e mudam a chegada. O comando nao e disparado aqui.
+
+      // Quantos COMANDOS esta aldeia arma. Se nem um sai com escolta completa, ainda mandamos o
+      // nobre com o que houver -- a regra "envio parcial vale" vale pra escolta tambem.
+      const capCheia = nobleCmdsDaAldeia(tpl, o);
+      const cmds = Math.min(o.nobres, faltam, capCheia > 0 ? capCheia : o.nobres);
+      if (cmds <= 0) continue;
+
+      const unidades = { snob: 1 };
+      const curta = [];
+      Object.keys(tpl.escolta || {}).forEach((u) => {
+        const querem = tpl.escolta[u] || 0;
+        // Com escolta completa cada comando leva a cota cheia; sem ela, divide o que existe
+        // entre os comandos, pro primeiro nao levar tudo e os outros irem pelados.
+        const vai = capCheia > 0 ? querem : Math.floor(((o.avail || {})[u] || 0) / cmds);
+        if (vai > 0) unidades[u] = vai;
+        if (vai < querem) curta.push(unitPt(u) + ' ' + vai + '/' + querem);
+      });
+
+      // Duracao medida UMA vez por (aldeia, escolta): os comandos sao identicos, entao repetir o
+      // fakePrepare seria requisicao jogada fora.
       let dur = null;
       try {
         const p = await fakePrepare(o.vid, alvo.x, alvo.y, unidades);
@@ -4547,13 +4579,17 @@
       await sleep(250);
       if (dur == null) { pushLog('Noblar: ' + o.nome + ' → ' + alvo.coord + ': o jogo não informou a duração — origem descartada.', '', 'noble'); continue; }
       if (dur > limite) continue;                     // fora do limite de horas: proxima origem
-      if (escoltaCurta.length) {
-        pushLog('Noblar: ' + o.nome + ' → ' + alvo.coord + ' — escolta incompleta (' + escoltaCurta.join(', ') + ').', '', 'noble');
+      if (curta.length) {
+        pushLog('Noblar: ' + o.nome + ' → ' + alvo.coord + ' — escolta incompleta (' + curta.join(', ') + ').', '', 'noble');
       }
-      envios.push({ vid: o.vid, nome: o.nome, coord: o.coord, qtd: qtd, unidades: unidades,
-                    durSec: dur, d: o.d });
-      faltam -= qtd;
+      // UM ENVIO = UM COMANDO. E o que garante 1 nobre por ataque.
+      for (let k = 0; k < cmds; k++) {
+        envios.push({ vid: o.vid, nome: o.nome, coord: o.coord, qtd: 1,
+                      unidades: unidades, durSec: dur, d: o.d });
+      }
+      faltam -= cmds;
     }
+
     // Parcial VALE: com 1 nobre no alcance, manda 1. O alvo so fica sem disparo quando nao ha
     // nenhum. `falta` continua sendo informacao pro usuario, nao mais uma trava.
     const levando = precisa - faltam;
@@ -4698,18 +4734,24 @@
     const nomeUn = (u) => (unitPt(u));
     const detalha = (un) => Object.keys(un).filter((u) => u !== 'snob')
       .map((u) => un[u] + ' ' + nomeUn(u)).join(', ');
-    const resumo = item.envios.map((e) => {
-      const extra = detalha(e.unidades || { snob: e.qtd });
-      return e.qtd + 'x nobre de ' + e.nome + (extra ? ' + ' + extra : '') + ' (' + fmtDur(e.durSec) + ')';
-    }).join('\n');
+    // Agrupa por aldeia SO pra mostrar: o disparo continua um comando por nobre.
+    const porAldeia = [];
+    item.envios.forEach((e) => {
+      const j = porAldeia.find((x) => x.nome === e.nome && x.det === detalha(e.unidades || {}));
+      if (j) j.n++; else porAldeia.push({ nome: e.nome, det: detalha(e.unidades || {}), dur: e.durSec, n: 1 });
+    });
+    const resumo = porAldeia.map((g) => g.n + ' comando(s) de ' + g.nome
+      + ' — 1 nobre' + (g.det ? ' + ' + g.det : '') + ' cada (' + fmtDur(g.dur) + ')').join('\n');
     const totalNob = item.envios.reduce((a, e) => a + e.qtd, 0);
     if (!confirm('Enviar ' + totalNob + ' nobre(s) para ' + coord + '?\n\n' + resumo
+      + '\n\nCada comando leva 1 nobre — a lealdade cai uma vez por ataque.'
       + '\n\nIsso NÃO tem volta.')) return;
 
     let ok = 0;
     for (const e of item.envios) {
       try {
-        await sendAttack(e.vid, item.x, item.y, e.unidades || { snob: e.qtd });
+        // Sempre snob:1 — um envio É um comando. O fallback também, pra não reabrir a porta.
+        await sendAttack(e.vid, item.x, item.y, e.unidades || { snob: 1 });
         ok += e.qtd;
         pushLog('Noblar: ' + e.nome + ' → ' + coord + ' — ' + e.qtd + ' nobre(s) enviado(s), chega em ' + fmtDur(e.durSec) + '.', 'ok', 'noble');
       } catch (err) {
@@ -4864,10 +4906,12 @@
   }
   // Resumo da escolta pro chip: "50 Bárb. · 4👑". E o que deixa a lista de modelos legivel sem
   // abrir cada um -- que era o problema do <select>, onde so cabia o nome.
+  // O chip descreve UM comando (escolta + 1 nobre) e quantos comandos saem. Antes dizia
+  // "4 nobres", o que dava a entender que iam todos juntos.
   function nobleChipTxt(t) {
     const ks = Object.keys((t && t.escolta) || {});
-    const esc2 = ks.length ? ks.map((u) => t.escolta[u] + ' ' + unitPt(u)).join(' · ') : 'sem escolta';
-    return esc2 + ' · ' + (t.nobres || 4) + '👑';
+    const esc2 = ks.length ? ks.map((u) => t.escolta[u] + ' ' + unitPt(u)).join(' + ') : 'sem escolta';
+    return esc2 + ' + 1👑 × ' + (t.nobres || 4);
   }
   function nobleFillTplSel() {
     const box = document.getElementById('twmgr-nb-chips'); if (!box) return;
@@ -4910,15 +4954,17 @@
     if (g('twmgr-nb-horas')) g('twmgr-nb-horas').value = t ? t.maxHoras : 6;
     if (g('twmgr-nb-nt')) g('twmgr-nb-nt').checked = !!(t && t.soNT);
     const box = g('twmgr-nb-esc'); if (!box) return;
-    box.innerHTML = unitsDoMundo().filter((u) => u[0] !== 'knight').map((u) => {
+    box.innerHTML = unitsDoMundo().filter((u) => NOBLE_ESCOLTA.indexOf(u[0]) >= 0 || u[0] === 'snob').map((u) => {
       const nobre = (u[0] === 'snob');
-      const val = nobre ? (t ? t.nobres : 4) : (((t && t.escolta) || {})[u[0]] || '');
+      // Nobre trava em 1 e nao em `t.nobres`: cada COMANDO leva um so. O campo "Nobres por alvo"
+      // diz quantos comandos sair, nao quantos nobres cabem num.
+      const val = nobre ? 1 : (((t && t.escolta) || {})[u[0]] || '');
       return '<div' + (nobre ? ' class="lock"' : '') + '>'
         + '<div class="h" title="' + esc(u[1]) + '">'
         + '<span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span>'
         + '<em>' + esc(u[1]) + '</em></div>'
         + '<input class="twmgr-nb-escq twmgr-inp" data-unit="' + u[0] + '" type="number" min="0" step="1"'
-        + (nobre ? ' disabled title="definido no campo Nobres por alvo"' : '')
+        + (nobre ? ' disabled title="cada comando leva exatamente 1 nobre"' : '')
         + ' value="' + val + '"></div>';
     }).join('');
   }
@@ -4926,8 +4972,6 @@
     const t = nobleTplAtivo(); if (!t) return;
     const g = (id) => document.getElementById(id);
     if (g('twmgr-nb-nob')) t.nobres = Math.max(1, Math.min(8, parseInt(g('twmgr-nb-nob').value, 10) || 4));
-    const colNob = document.querySelector('.twmgr-nb-escq[data-unit="snob"]');
-    if (colNob) colNob.value = t.nobres;   // espelha na coluna travada da grade
     if (g('twmgr-nb-horas')) t.maxHoras = Math.max(1, parseInt(g('twmgr-nb-horas').value, 10) || 6);
     if (g('twmgr-nb-nt')) t.soNT = g('twmgr-nb-nt').checked;
     const esc2 = {};
@@ -7148,17 +7192,18 @@
               '<button id="twmgr-nb-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:4px 7px" title="apagar modelo">🗑</button>' +
             '</div>' +
             '<div class="twmgr-cols" style="margin-bottom:0">' +
-              '<div class="twmgr-fld"><span>Nobres por alvo</span><input id="twmgr-nb-nob" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
+              '<div class="twmgr-fld"><span title="Cada comando leva exatamente 1 nobre — a lealdade cai uma vez por ataque">Comandos por alvo <span style="color:#8a7d6d">(1 nobre cada)</span></span><input id="twmgr-nb-nob" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
               '<div class="twmgr-fld"><span>Viagem máx. (h)</span><input id="twmgr-nb-horas" class="twmgr-inp" type="number" min="1" max="72" value="6"></div>' +
             '</div>' +
             '<div class="twmgr-fld" style="margin-top:8px"><span title="NT = todos os nobres saindo da MESMA aldeia">Só enviar NT <span style="color:#8a7d6d">(todos da mesma aldeia)</span></span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-nt" type="checkbox"><i></i></label></div>' +
-            '<div style="font-size:10px;color:#6f6153;margin-top:9px">Escolta — vai no <b>mesmo comando</b> dos nobres</div>' +
+            '<div style="font-size:10px;color:#6f6153;margin-top:9px">Escolta — vai no <b>mesmo comando</b>, em <b>cada</b> um deles</div>' +
             '<div id="twmgr-nb-esc" class="twmgr-ug"></div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:6px;text-align:center;font-style:italic">O número do chip é a ordem de prioridade (◀▶ pra mudar) · Nobre não entra na escolta — é o campo próprio</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:6px;text-align:center;font-style:italic">O número do chip é a ordem de prioridade (◀▶ pra mudar) · Nobre é sempre 1 por comando</div>' +
           '</div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:6px">Alvo em <b>⇅ seguir ordem</b> tenta os modelos da esquerda pra direita e fica no primeiro cuja escolta <b>couber inteira</b> na aldeia que vai mandar. Se nenhum couber, usa o 1º com o que houver.</div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A escolta sai da aldeia <b>mais próxima</b> do alvo, uma vez só. A duração vem do próprio jogo já <b>com ela dentro</b> — aríete e catapulta são mais lentos que o nobre e mudam a chegada.</div>') +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:6px"><b>Cada comando leva 1 nobre.</b> A lealdade cai uma vez por <b>ataque</b>, então 4 nobres num comando só desperdiçaria 3 — é por isso que NT são 4 comandos seguidos. Uma aldeia que manda 3 nobres precisa de <b>3× a escolta</b>.</div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Alvo em <b>⇅ seguir ordem</b> fica com o modelo que armar <b>mais comandos completos</b> — vale mais um que rende 4 do que um que rende 1. Empate fica com quem vem antes.</div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Só tropa de campo na escolta: explorador não briga, e aríete e catapulta servem pra muralha, não pra proteger nobre. Como o nobre é a unidade <b>mais lenta do jogo</b>, a escolta não atrasa a chegada.</div>') +
         '<div class="twmgr-cols">' +
           '<div class="twmgr-card2"><h4>⏱ Ciclo</h4>' +
             '<div class="twmgr-fld"><span>Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15"></div>' +

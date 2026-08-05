@@ -532,17 +532,18 @@
               '<button id="twmgr-nb-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:4px 7px" title="apagar modelo">🗑</button>' +
             '</div>' +
             '<div class="twmgr-cols" style="margin-bottom:0">' +
-              '<div class="twmgr-fld"><span>Nobres por alvo</span><input id="twmgr-nb-nob" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
+              '<div class="twmgr-fld"><span title="Cada comando leva exatamente 1 nobre — a lealdade cai uma vez por ataque">Comandos por alvo <span style="color:#8a7d6d">(1 nobre cada)</span></span><input id="twmgr-nb-nob" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
               '<div class="twmgr-fld"><span>Viagem máx. (h)</span><input id="twmgr-nb-horas" class="twmgr-inp" type="number" min="1" max="72" value="6"></div>' +
             '</div>' +
             '<div class="twmgr-fld" style="margin-top:8px"><span title="NT = todos os nobres saindo da MESMA aldeia">Só enviar NT <span style="color:#8a7d6d">(todos da mesma aldeia)</span></span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-nt" type="checkbox"><i></i></label></div>' +
-            '<div style="font-size:10px;color:#6f6153;margin-top:9px">Escolta — vai no <b>mesmo comando</b> dos nobres</div>' +
+            '<div style="font-size:10px;color:#6f6153;margin-top:9px">Escolta — vai no <b>mesmo comando</b>, em <b>cada</b> um deles</div>' +
             '<div id="twmgr-nb-esc" class="twmgr-ug"></div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:6px;text-align:center;font-style:italic">O número do chip é a ordem de prioridade (◀▶ pra mudar) · Nobre não entra na escolta — é o campo próprio</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:6px;text-align:center;font-style:italic">O número do chip é a ordem de prioridade (◀▶ pra mudar) · Nobre é sempre 1 por comando</div>' +
           '</div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:6px">Alvo em <b>⇅ seguir ordem</b> tenta os modelos da esquerda pra direita e fica no primeiro cuja escolta <b>couber inteira</b> na aldeia que vai mandar. Se nenhum couber, usa o 1º com o que houver.</div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A escolta sai da aldeia <b>mais próxima</b> do alvo, uma vez só. A duração vem do próprio jogo já <b>com ela dentro</b> — aríete e catapulta são mais lentos que o nobre e mudam a chegada.</div>') +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:6px"><b>Cada comando leva 1 nobre.</b> A lealdade cai uma vez por <b>ataque</b>, então 4 nobres num comando só desperdiçaria 3 — é por isso que NT são 4 comandos seguidos. Uma aldeia que manda 3 nobres precisa de <b>3× a escolta</b>.</div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Alvo em <b>⇅ seguir ordem</b> fica com o modelo que armar <b>mais comandos completos</b> — vale mais um que rende 4 do que um que rende 1. Empate fica com quem vem antes.</div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Só tropa de campo na escolta: explorador não briga, e aríete e catapulta servem pra muralha, não pra proteger nobre. Como o nobre é a unidade <b>mais lenta do jogo</b>, a escolta não atrasa a chegada.</div>') +
         '<div class="twmgr-cols">' +
           '<div class="twmgr-card2"><h4>⏱ Ciclo</h4>' +
             '<div class="twmgr-fld"><span>Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15"></div>' +

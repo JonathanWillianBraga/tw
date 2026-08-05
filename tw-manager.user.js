@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.50.2
+// @version      11.51.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.50.2';
+  const VERSION = '11.51.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -11615,7 +11615,12 @@
       el.textContent = P.pares.length + ' fake(s) = ' + P.origens.length + ' origem(ns) × ' +
         P.alvos.length + ' alvo(s) no modo ' + (P.dist === 'todos' ? 'todas × todos' : 'rodízio');
     }
-    function ccArmarFakes(dizer, arriveAt) {
+    // População de uma composição, pelos pesos de FAKE_POP (mesma tabela que o Saque usa
+    // pro piso de fake do mundo — 050-envio.js).
+    function ccFakePopOf(amounts) {
+      return Object.keys(amounts || {}).reduce((s, u) => s + (parseInt(amounts[u], 10) || 0) * (FAKE_POP[u] || 1), 0);
+    }
+    async function ccArmarFakes(dizer, arriveAt) {
       if (!arriveAt) return dizer('Defina o horário de chegada.');
       if (arriveAt <= srvNowP()) return dizer('Esse horário já passou.');
       const comp = ccComposicao();
@@ -11624,11 +11629,34 @@
       if (!P.alvos.length) return dizer('Cole ao menos um alvo na lista de fakes.');
       if (!P.origens.length) return dizer('Marque ao menos uma origem.');
 
-      let armados = 0; const pulados = [];
+      // Piso de população do mundo (regra real do jogo — 1% dos pontos da PRÓPRIA origem).
+      // Mesma constante/fórmula que o Saque já usa em produção (020-engine.js). Sem os pontos
+      // (village.txt falhou), o piso fica desligado — degrada pro comportamento de antes, não
+      // trava o armar.
+      let pontos = null;
+      try { pontos = await getVillagePoints(); } catch (e) { pontos = null; }
+
+      let armados = 0, completados = 0; const pulados = [];
       P.pares.forEach((p) => {
         const v = p.o, nome = (v.coord || v.vid) + '→' + p.t.x + '|' + p.t.y;
         const amounts = ccResolverPara(comp, v.avail);
         if (!Object.keys(amounts).length) { pulados.push(nome); return; }
+        // Isenção real do jogo: ataque só de explorador não tem piso de população.
+        const soExplorador = Object.keys(amounts).every((u) => u === 'spy');
+        if (!soExplorador && pontos) {
+          const pts = parseInt(pontos[String(v.vid)], 10) || 0;
+          const minPop = pts > 0 ? Math.ceil((FAKE_LIMIT_PCT / 100) * pts) : 0;
+          const falta = minPop - ccFakePopOf(amounts);
+          if (falta > 0) {
+            // Completa com exploradores extra — nunca substitui o que foi digitado.
+            const jaUsa = amounts.spy || 0;
+            const precisa = jaUsa + Math.ceil(falta / (FAKE_POP.spy || 2));
+            const sobra = (v.avail && v.avail.spy) || 0;
+            if (sobra < precisa) { pulados.push(nome + ' (falta população: piso ' + minPop + ', sem explorador sobrando pra completar)'); return; }
+            amounts.spy = precisa;
+            completados++;
+          }
+        }
         const t = ccTempoViagemMs(v.x, v.y, p.t.x, p.t.y, amounts);
         if (t != null && (arriveAt - t) <= srvNowP()) { pulados.push(nome + ' (longe)'); return; }
         cmdAdicionar('fake', p.t.x, p.t.y, amounts, arriveAt, v.vid);
@@ -11636,6 +11664,7 @@
       });
       if (!armados) return dizer('Nenhum fake armado.' + (pulados.length ? ' Pulados: ' + pulados.length : ''));
       dizer(armados + ' fake(s) armado(s) em ' + P.alvos.length + ' alvo(s), chegando ' + srvClockMs(arriveAt) +
+            (completados ? ' · ' + completados + ' completado(s) com explorador pro piso de ' + FAKE_LIMIT_PCT + '%' : '') +
             (pulados.length ? ' · ' + pulados.length + ' pulado(s)' : ''), '#2e7d3a');
     }
 

@@ -237,6 +237,44 @@ def checa_painel_inteiro(src, limpo):
             break
 
 
+# Prefixos dos modulos: funcoes NOSSAS, todas declaradas dentro do bundle. Nao entra prefixo
+# generico (get*, set*, parse*, render*) porque esses colidem com API do navegador e com nomes
+# que vivem dentro da ilha do 175-cc-rico.
+PREFIXOS_MODULO = (
+    "noble", "pesq", "bld", "obra", "wall", "scav", "farm", "recruit",
+    "mint", "cunhar", "etiq", "palad", "captcha", "desviar",
+)
+
+
+def checa_chamadas_orfas(limpo):
+    """Funcao NOSSA que e chamada mas nao existe mais.
+
+    Isto ja aconteceu de verdade (v11.32.0): um corte de intervalo levou junto tres funcoes de
+    leitura de relatorio que moravam ao lado da fronteira. A CHAMADA sobreviveu, e o modulo passou
+    a estourar "nobleVarrerRelatorios is not defined" a cada ciclo.
+
+    Nem este check nem o new Function() pegavam isso: e erro de RUNTIME, nao de sintaxe, e so
+    aparece na hora em que aquele caminho especifico roda -- podendo passar despercebido por dias.
+
+    So olha nomes com prefixo de modulo nosso: sao todos declarados aqui dentro, entao qualquer um
+    sem declaracao e orfao de verdade, sem falso positivo de API do navegador.
+    """
+    decl = set(re.findall(r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\(", limpo))
+    # const/let que recebem funcao (arrow ou nao) contam como declaracao
+    decl |= set(re.findall(
+        r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|\()", limpo))
+    vistos = set()
+    # chamada NAO precedida de ponto, senao pega metodo de objeto (obj.nobleX())
+    for m in re.finditer(r"(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(", limpo):
+        nome = m.group(1)
+        if not nome.startswith(PREFIXOS_MODULO) or nome in decl or nome in vistos:
+            continue
+        vistos.add(nome)
+        linha = limpo.count("\n", 0, m.start()) + 1
+        erros.append("%s() e chamada (linha ~%d do texto limpo) mas nao esta declarada em lugar nenhum"
+                     % (nome, linha))
+
+
 def main():
     if not os.path.exists(ALVO):
         print("nao achei", ALVO)
@@ -250,6 +288,7 @@ def main():
     checa_guarda_captcha(src)
     checa_versao(src)
     checa_painel_inteiro(src, limpo)
+    checa_chamadas_orfas(limpo)
 
     for a in avisos:
         print("  aviso: %s" % a)

@@ -17,8 +17,7 @@
   //     6 nobres e 2 alvos: 4 no primeiro, 2 no segundo. Com 4: os 4 no primeiro e o segundo
   //     espera. Sem isso o mesmo nobre era prometido pros dois e o 2o disparo falhava.
   //
-  // O quanto se manda em cada alvo vem de um MODELO (config.noble.templates): quantos nobres,
-
+  // O quanto se manda em cada alvo vem de um MODELO (config.noble.templates): quantos comandos,
   // que escolta, viagem maxima e se e so NT. Cada alvo aponta pro seu (`a.tpl`).
   //
   // UM NOBRE POR COMANDO. A lealdade cai uma vez por ATAQUE, nao por nobre: mandar 4 nobres
@@ -127,14 +126,14 @@
 
   // Escolhe o modelo e monta o plano de UM alvo.
   //
-  // Ordem de prioridade: tenta os modelos na ordem do usuario e fica com o PRIMEIRO cuja escolta
-  // cabe INTEIRA na aldeia que vai mandar. O teste e de graca (usa o `avail` em cache), entao so
-  // o modelo escolhido paga fakePrepare.
+  // Ordem de prioridade: fica com o modelo que armar MAIS COMANDOS COMPLETOS, e em caso de empate
+  // com o que vem antes na ordem do usuario. O criterio nao e "cabe uma escolta" -- com 1 nobre por
+  // comando, um modelo que rende 4 comandos vale mais que um que rende 1, mesmo o segundo estando
+  // antes na lista.
   //
-  // Exigir a escolta inteira e o que faz a ordem existir: se "cabe pela metade" contasse, o 1o
-  // modelo venceria sempre mandando um pedaco (100 barbaro virando 12) e os outros nunca seriam
-  // alcancados. Se NENHUM couber, cai no primeiro da ordem com o que houver -- "envio parcial
-  // vale" continua de pe, so perde pra um modelo que caiba inteiro.
+  // A conta e de graca (usa o `avail` que ja esta em cache nas origens), entao so o modelo
+  // ESCOLHIDO paga fakePrepare. Se nenhum modelo fecha um comando completo, o melhor deles ainda
+  // manda com a escolta que houver -- "envio parcial vale" continua de pe.
   async function noblePlanejarAlvo(alvo, todas, cacheTropa, usados) {
     const opcoes = nobleTplsDe(alvo);
     if (!opcoes.length) return { pronto: false, envios: [], falta: 0, dentroDoLimite: [], motivo: 'nenhum modelo' };
@@ -233,6 +232,108 @@
         ? ('parcial: ' + levando + ' de ' + precisa + ' nobre(s)')
         : null,
     };
+  }
+
+  // ===== Lealdade =====
+  // A lealdade SÃ“ existe em relatÃ³rio de ATAQUE COM NOBRE. Conferido em dois dumps do usuÃ¡rio:
+  // relatÃ³rio de exploraÃ§Ã£o nÃ£o traz o campo em lugar nenhum (varredura do #content_value inteiro
+  // voltou vazia); o de nobre traz, dentro do #attack_results, como "Lealdade: Descida X para Y".
+  // Ou seja: isto Ã© ACOMPANHAMENTO do que jÃ¡ bateu, nÃ£o conferÃªncia prÃ©via. Antes do primeiro nobre
+  // nÃ£o dÃ¡ pra saber a lealdade de um alvo, e a tela mostra â€” em vez de fingir 100.
+  function nobleNorm(t) {
+    return String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').toLowerCase();
+  }
+  async function nobleLerRelatorio(reportId) {
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=report&view=' + reportId, { credentials: 'include' });
+    if (!res.ok) throw new Error('relatÃ³rio ' + reportId + ': HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const out = { reportId: reportId, lealdade: null, de: null, dono: null, tropa: null, coord: null };
+
+    const rBox = doc.querySelector('#attack_results');
+    if (rBox) {
+      // "Lealdade: Descida 3 para -29". Regex sem acento porque o texto jÃ¡ passou pelo nobleNorm;
+      // o [^0-9-]* atravessa a palavra do meio (Descida/Subida) sem depender de qual Ã©.
+      const m = nobleNorm(rBox.textContent).match(/lealdade:[^0-9-]*(-?\d+) para (-?\d+)/);
+      if (m) { out.de = parseInt(m[1], 10); out.lealdade = parseInt(m[2], 10); }
+    }
+    const dBox = doc.querySelector('#attack_info_def');
+    if (dBox) {
+      const txt = (dBox.textContent || '').replace(/\s+/g, ' ').trim();
+      const md = txt.match(/Defensor:\s*(.+?)\s+Destino:/i);
+      if (md) out.dono = md[1].trim().slice(0, 30);
+      const mc = txt.match(/Destino:[^]*?(\d{2,3}\|\d{2,3})/);
+      if (mc) out.coord = mc[1];
+    }
+    // Mesma leitura do getReportDefenseTotal, mas sem um segundo fetch: o doc jÃ¡ estÃ¡ na mÃ£o.
+    const uBox = doc.querySelector('#attack_info_def_units');
+    if (uBox) {
+      let t = 0;
+      uBox.querySelectorAll('td.unit-item, .unit-item').forEach((c) => { t += parseInt((c.textContent || '').replace(/\D/g, ''), 10) || 0; });
+      out.tropa = t;
+    }
+    return out;
+  }
+
+  // Varre a primeira pÃ¡gina da lista de relatÃ³rios atrÃ¡s dos alvos da lista.
+  //
+  // Parser de propÃ³sito genÃ©rico: pega TODO a[href*="view="] em vez de amarrar num #id de tabela.
+  // A linha do relatÃ³rio tem o assunto ("X (o|o) conquista Y (a|a)") â€” a ÃšLTIMA coordenada do texto
+  // Ã© o DESTINO, que Ã© o que interessa; a primeira Ã© a origem. Se o assunto nÃ£o citar nenhum alvo
+  // da lista, nem abre o relatÃ³rio.
+  async function nobleVarrerRelatorios(alvos) {
+    const querido = {}; alvos.forEach((a) => { querido[a.coord] = 1; });
+    let doc;
+    try {
+      const res = await fetch('/game.php?village=' + CUR_VID + '&screen=report&mode=all', { credentials: 'include' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    } catch (e) {
+      pushLog('Noblar: nÃ£o consegui abrir a lista de relatÃ³rios (' + (e.message || e) + ').', '', 'noble');
+      return 0;
+    }
+    const fila = [], jaNaFila = {};
+    doc.querySelectorAll('a[href*="view="]').forEach((a) => {
+      const mi = (a.getAttribute('href') || '').match(/view=(\d+)/);
+      if (!mi) return;
+      const id = mi[1];
+      if (config.noble.vistos[id] || jaNaFila[id]) return;
+      const txt = (a.textContent || '').replace(/\s+/g, ' ');
+      const coords = txt.match(/\d{2,3}\|\d{2,3}/g);
+      if (!coords || !coords.length) return;
+      const destino = coords[coords.length - 1];      // assunto Ã© "origem ... destino"
+      if (!querido[destino]) return;
+      const tr = a.closest ? a.closest('tr') : null;
+      const tds = tr ? tr.querySelectorAll('td') : [];
+      const quando = tds.length ? parseReportDate(tds[tds.length - 1].textContent) : null;
+      jaNaFila[id] = 1;
+      fila.push({ id: id, coord: destino, at: quando });
+    });
+    if (!fila.length) return 0;
+
+    let lidos = 0;
+    for (const r of fila.slice(0, 12)) {            // teto por ciclo: nÃ£o vira varredura infinita
+      let info;
+      try { info = await nobleLerRelatorio(r.id); }
+      catch (e) { continue; }                        // relatÃ³rio ilegivel: tenta de novo no prÃ³ximo ciclo
+      config.noble.vistos[r.id] = 1;
+      lidos++;
+      await sleep(300);
+      const ant = config.noble.relatorios[r.coord];
+      // SÃ³ sobrescreve com relatÃ³rio MAIS NOVO â€” a lista vem ordenada, mas nÃ£o custa garantir.
+      if (ant && ant.at && r.at && ant.at > r.at) continue;
+      config.noble.relatorios[r.coord] = {
+        reportId: r.id, at: r.at || Date.now(),
+        lealdade: info.lealdade, de: info.de, dono: info.dono, tropa: info.tropa,
+      };
+      if (info.lealdade != null) {
+        pushLog('Noblar: ' + r.coord + ' â€” lealdade ' + info.de + ' â†’ ' + info.lealdade
+          + (info.lealdade <= 0 ? ' (CONQUISTADA)' : '') + '.', 'ok', 'noble');
+      }
+    }
+    // `vistos` guarda id de relatÃ³rio pra sempre; poda os mais antigos pra nÃ£o inchar o storage.
+    const ids = Object.keys(config.noble.vistos);
+    if (ids.length > 400) ids.sort().slice(0, ids.length - 400).forEach((k) => { delete config.noble.vistos[k]; });
+    return lidos;
   }
 
   // Recrutamento: FORMA nobre nas aldeias mais proximas do alvo que ainda cabem no limite de horas.

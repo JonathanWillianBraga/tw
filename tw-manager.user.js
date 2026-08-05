@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.52.1
+// @version      11.54.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.52.1';
+  const VERSION = '11.54.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -12642,10 +12642,16 @@
       d.style.cssText = 'background:linear-gradient(180deg,#fdfaf5,#fffdfa);border:1px solid #e0d6c6;border-radius:10px;padding:10px;margin:0 0 12px;color:#8b5426;font-size:11px';
       const row = (l, inner) => '<div class="twmgr-row" style="display:flex;align-items:center;gap:6px;margin:3px 0"><span style="min-width:120px;color:#6f6153">' + l + '</span>' + inner + '</div>';
       d.innerHTML =
+        // O cabeçalho fica SEMPRE visível, mesmo minimizado — é o que permite reabrir. O
+        // resto (tudo dentro de #cc-corpo) esconde/mostra junto do estado persistido.
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
-          '<b style="color:#a2643a;font-size:13px">🚀 Centro de Comando <span style="color:#8a7d6d;font-size:10px;font-weight:400">v' + VERSION + '</span></b>' +
+          '<span style="display:flex;align-items:center;gap:6px">' +
+            '<span id="cc-min-tog" title="minimizar/restaurar — o estado fica salvo" style="cursor:pointer;color:#a2643a;font-size:12px;user-select:none">▾</span>' +
+            '<b style="color:#a2643a;font-size:13px">🚀 Centro de Comando <span style="color:#8a7d6d;font-size:10px;font-weight:400">v' + VERSION + '</span></b>' +
+          '</span>' +
           '<b id="cc-clock" style="color:#a2643a;font-size:16px;font-variant-numeric:tabular-nums">--:--:--.---</b>' +
         '</div>' +
+        '<div id="cc-corpo">' +
         '<div id="cc-saude" style="font-size:10px;color:#6f6153;margin-bottom:4px"></div>' +
         '<div id="cc-silencio" style="font-size:10px;color:#a2643a;margin-bottom:4px;min-height:12px"></div>' +
         // Ajuste de precisão: o viés adaptativo (ccMedir) deveria corrigir sozinho, mas dá pra
@@ -12815,8 +12821,22 @@
             '<div id="cc-fila-envio" style="height:260px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
             '<div id="cc-fila-enviados" style="display:none;height:260px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
           '</div>' +
-        '</div>';
+        '</div>' +
+        '</div>';   // fecha #cc-corpo
       host.insertBefore(d, host.firstChild);
+      // Minimizado fica salvo em config.cmd (localStorage) — sobrevive a navegar dentro da
+      // praça (Tropas, Coletando...) e a F5, exatamente como o resto do estado da Central.
+      const ccAplicarMin = () => {
+        const corpo = document.getElementById('cc-corpo'), tog = document.getElementById('cc-min-tog');
+        const min = !!config.cmd.painelMin;
+        if (corpo) corpo.style.display = min ? 'none' : '';
+        if (tog) tog.textContent = min ? '▸' : '▾';
+        d.style.marginBottom = min ? '6px' : '12px';
+      };
+      document.getElementById('cc-min-tog').addEventListener('click', () => {
+        config.cmd.painelMin = !config.cmd.painelMin; save(); ccAplicarMin();
+      });
+      ccAplicarMin();
       // keepAwake PRECISA ser chamado sincronamente dentro do gesto, antes de qualquer await,
       // senão o AudioContext fica 'suspended' e o antichoke não vale nada.
       document.getElementById('cc-armar').addEventListener('click', () => { keepAwake(true); ccArmar(); });

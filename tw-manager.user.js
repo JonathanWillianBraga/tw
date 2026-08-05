@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.50.0
+// @version      11.50.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.50.0';
+  const VERSION = '11.50.1';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -12304,11 +12304,18 @@
     // ordenados pela chegada, pra você conferir que encaixam no timing dos comandos reais.
     let _ccOvTimer = null;
     function ccOverviewTabela() {
-      // "Próprios comandos" mora numa <table> dentro de #commands_outgoings.
-      const cont = document.querySelector('#commands_outgoings');
+      // O jogo reusa o MESMO id #commands_outgoings pra duas tabelas diferentes:
+      //   data-type="outgoing"       -> "Próprios comandos" da PRAÇA (nossos, saindo) — é esta.
+      //   data-type="towards_village" -> no painel de QUALQUER aldeia (info_village), lista
+      //                                  comandos de QUALQUER JOGADOR indo pra ELA.
+      // Bug real: sem o filtro por data-type, fakes agendados apareciam na ficha de uma
+      // bárbara sem relação nenhuma com o alvo, só porque o id batia. Por isso o data-type
+      // é obrigatório, e o fallback só roda na tela da praça — nunca repete o erro por outro caminho.
+      const cont = document.querySelector('#commands_outgoings[data-type="outgoing"]');
       if (cont) { const t = cont.querySelector('table'); if (t) return t; }
       let tb = document.querySelector('#commands_table');
       if (tb) return tb;
+      if (telaAtual() !== 'place') return null;
       // Fallback: pela heading "Próprios comandos" ou por uma tabela com linhas de comando saindo.
       const heads = Array.prototype.slice.call(document.querySelectorAll('h4,th,caption,td,.vis'))
         .filter((e) => /pr[óo]prios comandos|own commands/i.test(e.textContent || ''));

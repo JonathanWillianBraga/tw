@@ -142,7 +142,7 @@
     if (!vids.length) {
       box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">'
         + (Object.keys(st).length ? '— nenhuma aldeia deste grupo na gestão —'
-                                  : '— rode um ciclo pra ver o status —') + '</div>';
+                                  : '— clique em ↻ pra ler o status agora —') + '</div>';
       return;
     }
     const preds = bldStatusPredios();
@@ -216,6 +216,51 @@
       info.innerHTML = vids.length + ' aldeia(s) · ' + ok + ' com o modelo completo · <b>total '
         + (tAlvo > 0 ? Math.round((tTem / tAlvo) * 100) + '%' : '—') + '</b> · lido às ' + quando;
     }
+  }
+
+  // Releitura sob demanda: mesma varredura do ciclo, mas SEM enfileirar nada. Serve pra ver o
+  // estado depois de mexer num modelo, sem esperar o proximo ciclo nem disparar obra.
+  //
+  // Existe porque o Status vem do snapshot do ciclo: antes do primeiro tick a aba fica vazia, e
+  // sem este botao nao havia como saber se a configuracao ficou certa.
+  async function bldAtualizarStatus() {
+    const btn = document.getElementById('twmgr-bld-st-reload');
+    if (btn) btn.textContent = '…';
+    try {
+      const assign = await bldResolverAldeias();
+      const vids = Object.keys(assign);
+      if (!vids.length) {
+        pushLog('Construções: nenhuma aldeia na gestão — amarre um modelo a um grupo.', '', 'build');
+      }
+      config.build.status = config.build.status || {};
+      for (const vid of vids) {
+        const alvo = assign[vid];
+        const plan = (config.build.templates[alvo.tpl] || {}).plan || [];
+        const ativos = plan.filter((it) => it.en !== false);
+        if (!ativos.length) continue;
+        let st;
+        try { st = await getBuildState(vid); } catch (e) { continue; }
+        const preds = {};
+        let ok = true;
+        ativos.forEach((it) => {
+          const tem = st.level[it.b] || 0;
+          preds[it.b] = { tem: tem, alvo: it.lvl, fila: (st.queued || {})[it.b] || 0 };
+          if (tem < it.lvl) ok = false;
+        });
+        config.build.status[vid] = { name: alvo.name || vid, coord: alvo.coord || null,
+                                     at: Date.now(), tpl: alvo.tpl, preds: preds, ok: ok };
+        await sleep(250);
+      }
+      Object.keys(config.build.status).forEach((v) => { if (!assign[v]) delete config.build.status[v]; });
+      config.build.stats = config.build.stats || {};
+      config.build.stats.villages = vids.length;
+      config.build.stats.completas = Object.keys(config.build.status).filter((v) => config.build.status[v].ok).length;
+      save(); refreshCards('build');
+    } catch (e) {
+      pushLog('Construções: não consegui atualizar o status (' + (e.message || e) + ').', 'err', 'build');
+    }
+    if (btn) btn.textContent = '↻';
+    bldRenderStatus();
   }
 
   async function bldResolverAldeias() {

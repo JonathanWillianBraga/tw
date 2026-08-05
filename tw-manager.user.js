@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.50.2
+// @version      11.51.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.50.2';
+  const VERSION = '11.51.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -3953,7 +3953,7 @@
     if (!vids.length) {
       box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">'
         + (Object.keys(st).length ? '— nenhuma aldeia deste grupo na gestão —'
-                                  : '— rode um ciclo pra ver o status —') + '</div>';
+                                  : '— clique em ↻ pra ler o status agora —') + '</div>';
       return;
     }
     const preds = bldStatusPredios();
@@ -4027,6 +4027,51 @@
       info.innerHTML = vids.length + ' aldeia(s) · ' + ok + ' com o modelo completo · <b>total '
         + (tAlvo > 0 ? Math.round((tTem / tAlvo) * 100) + '%' : '—') + '</b> · lido às ' + quando;
     }
+  }
+
+  // Releitura sob demanda: mesma varredura do ciclo, mas SEM enfileirar nada. Serve pra ver o
+  // estado depois de mexer num modelo, sem esperar o proximo ciclo nem disparar obra.
+  //
+  // Existe porque o Status vem do snapshot do ciclo: antes do primeiro tick a aba fica vazia, e
+  // sem este botao nao havia como saber se a configuracao ficou certa.
+  async function bldAtualizarStatus() {
+    const btn = document.getElementById('twmgr-bld-st-reload');
+    if (btn) btn.textContent = '…';
+    try {
+      const assign = await bldResolverAldeias();
+      const vids = Object.keys(assign);
+      if (!vids.length) {
+        pushLog('Construções: nenhuma aldeia na gestão — amarre um modelo a um grupo.', '', 'build');
+      }
+      config.build.status = config.build.status || {};
+      for (const vid of vids) {
+        const alvo = assign[vid];
+        const plan = (config.build.templates[alvo.tpl] || {}).plan || [];
+        const ativos = plan.filter((it) => it.en !== false);
+        if (!ativos.length) continue;
+        let st;
+        try { st = await getBuildState(vid); } catch (e) { continue; }
+        const preds = {};
+        let ok = true;
+        ativos.forEach((it) => {
+          const tem = st.level[it.b] || 0;
+          preds[it.b] = { tem: tem, alvo: it.lvl, fila: (st.queued || {})[it.b] || 0 };
+          if (tem < it.lvl) ok = false;
+        });
+        config.build.status[vid] = { name: alvo.name || vid, coord: alvo.coord || null,
+                                     at: Date.now(), tpl: alvo.tpl, preds: preds, ok: ok };
+        await sleep(250);
+      }
+      Object.keys(config.build.status).forEach((v) => { if (!assign[v]) delete config.build.status[v]; });
+      config.build.stats = config.build.stats || {};
+      config.build.stats.villages = vids.length;
+      config.build.stats.completas = Object.keys(config.build.status).filter((v) => config.build.status[v].ok).length;
+      save(); refreshCards('build');
+    } catch (e) {
+      pushLog('Construções: não consegui atualizar o status (' + (e.message || e) + ').', 'err', 'build');
+    }
+    if (btn) btn.textContent = '↻';
+    bldRenderStatus();
   }
 
   async function bldResolverAldeias() {
@@ -8365,6 +8410,7 @@
             '<div class="twmgr-row" style="gap:4px">' +
               '<span class="twmgr-lbl" style="flex:0 0 auto">Grupo</span>' +
               '<select id="twmgr-bld-stgroup" class="twmgr-inp" style="flex:1"></select>' +
+              '<button id="twmgr-bld-st-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="reler agora (não constrói)">↻</button>' +
             '</div>' +
             '<div id="twmgr-bld-sttab" class="twmgr-bld-vils" style="margin-top:5px"></div>' +
             '<div id="twmgr-bld-sttab-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>') +
@@ -8757,6 +8803,7 @@
         + (t.grupo ? 'aplicado ao grupo selecionado.' : 'desamarrado do grupo.'), 'ok', 'build');
     });
     document.getElementById('twmgr-bld-stgroup').addEventListener('change', (e) => bldStatusFiltrar(e.target.value));
+    document.getElementById('twmgr-bld-st-reload').addEventListener('click', bldAtualizarStatus);
     bindBuildPlanHandlers();
     bldRenderTplSelect();
     bldSwitchProf(_bldActiveProf);

@@ -153,7 +153,7 @@
     sel.value = config.research.grupoTpl || '';
   }
 
-  // Gemea da bldSincronizarGrupo, com as MESMAS regras: so adiciona, nunca remove (tirar
+  // So adiciona, nunca remove (tirar
   // pararia a pesquisa em silencio, e uma leitura falha do grupo esvaziaria a gestao); modelo
   // unico e usado sozinho, varios sem escolha viram aviso em vez de chute.
   async function pesqSincronizarGrupo() {

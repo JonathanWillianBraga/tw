@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.49.0
+// @version      11.50.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.49.0';
+  const VERSION = '11.50.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -545,6 +545,13 @@
     });
     if (c.build.filterGroup == null) c.build.filterGroup = '';
     if (c.build.seguirGrupo == null) c.build.seguirGrupo = false;
+    // Modelo amarrado a grupo, igual ao Recrutar: vale pra todas as aldeias dele, sem
+    // precisar marcar uma a uma.
+    Object.keys(c.build.templates || {}).forEach((id) => {
+      if (c.build.templates[id] && c.build.templates[id].grupo == null) c.build.templates[id].grupo = '';
+    });
+    if (!c.build.status || typeof c.build.status !== 'object') c.build.status = {};
+
     if (c.build.grupoTpl == null) c.build.grupoTpl = '';
 
     delete c.build.atkTpl; delete c.build.defTpl;

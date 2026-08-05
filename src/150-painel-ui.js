@@ -268,7 +268,7 @@
   // Sub-abas por módulo. Era só do Saque; virou genérico quando o Noblar também passou a ter —
   // duplicar a função daria duas cópias pra manter em sincronia.
   const SUBS = { farm: ['farm', 'wall', 'map'], noble: ['alvos', 'cunhar', 'pos'],
-                 recruit: ['rcmodelos', 'rcstatus'] };
+                 recruit: ['rcmodelos', 'rcstatus'], build: ['bldmodelos', 'bldstatus'] };
   function showSub(mod, name) {
     (SUBS[mod] || []).forEach((n) => {
       const c = document.getElementById('twmgr-sub-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
@@ -548,31 +548,32 @@
         modLog('market') +
       '</div>' +
       '<div id="twmgr-tab-build" style="display:none">' +
-        hint('🏗️ Modelos de construção aplicados <b>por aldeia</b>, no molde do Gerente de conta. Ordem da lista = prioridade; item caro vira demanda pro Equilíbrio.') +
+        hint('🏗️ Modelos de construção <b>amarrados a um grupo</b>: toda aldeia do grupo segue o modelo. Ordem da lista = prioridade; item caro vira demanda pro Equilíbrio.') +
         cardsDiv('build') +
-        sec('Gerenciar construções da aldeia',
-          '<div class="twmgr-row" style="gap:4px">' +
-            '<span class="twmgr-lbl" style="flex:0 0 auto">Grupo</span>' +
-            '<select id="twmgr-bld-group" class="twmgr-inp" style="flex:1"></select>' +
-            '<button id="twmgr-bld-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
-          '</div>' +
-          '<div class="twmgr-fld" style="margin-top:6px"><span title="Aldeia adicionada ao grupo no jogo entra sozinha na gestão">Seguir o grupo <span style="color:#8a7d6d">(entrar sozinha)</span></span>' +
-            '<label class="twmgr-sw"><input id="twmgr-bld-seguir" type="checkbox"><i></i></label></div>' +
-          '<div class="twmgr-fld"><span>Modelo pra aldeia nova</span><select id="twmgr-bld-grptpl" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin:2px 0 7px">Ele só <b>adiciona</b>. Aldeia que sai do grupo <b>continua</b> na gestão — tirar sozinho pararia a obra dela em silêncio e apagaria o modelo que você escolheu.</div>' +
-          '<div id="twmgr-bld-vils" class="twmgr-bld-vils"></div>' +
-          '<div id="twmgr-bld-vils-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>' +
-          '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
-            '<select id="twmgr-bld-mass-acao" class="twmgr-inp" style="flex:1">' +
-              '<option value="apply">Utilizar modelo</option>' +
-              '<option value="pause">Pausar</option>' +
-              '<option value="resume">Retomar</option>' +
-              '<option value="remove">Remover</option>' +
-            '</select>' +
-            '<select id="twmgr-bld-mass-tpl" class="twmgr-inp" style="flex:1"></select>' +
-            '<button id="twmgr-bld-mass-go" class="twmgr-btn twmgr-ghost" style="padding:5px 10px">✓</button>' +
-          '</div>') +
-        '<div style="text-align:right;margin:-4px 0 8px"><a id="twmgr-bld-abrir-tpl" class="twmgr-link-tela">&raquo; Gerenciar modelos</a></div>' +
+        '<div class="twmgr-subtabs">' +
+          subBtn('bldmodelos', '🏗️', 'Modelos', 'build') +
+          subBtn('bldstatus', '📊', 'Status', 'build') +
+        '</div>' +
+        '<div id="twmgr-sub-bldmodelos">' +
+          sec('Modelo',
+            '<div class="twmgr-row" style="gap:4px">' +
+              '<select id="twmgr-bld-tpl" class="twmgr-inp" style="flex:1"></select>' +
+              '<a id="twmgr-bld-abrir-tpl" class="twmgr-btn twmgr-ghost" style="padding:5px 10px;white-space:nowrap">Gerenciar modelos</a>' +
+            '</div>' +
+            '<div class="twmgr-fld" style="margin-top:7px"><span title="Todas as aldeias deste grupo seguem este modelo">Aplicar ao grupo</span>' +
+              '<select id="twmgr-bld-tplgrp" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
+            '<div id="twmgr-bld-plano-resumo" style="font-size:9px;color:#8a7d6d;margin-top:5px"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Aldeia que entra no grupo no jogo entra na gestão <b>sozinha</b>, no ciclo seguinte — não precisa marcar nada aqui.</div>') +
+        '</div>' +
+        '<div id="twmgr-sub-bldstatus" style="display:none">' +
+          sec('Status por aldeia',
+            '<div class="twmgr-row" style="gap:4px">' +
+              '<span class="twmgr-lbl" style="flex:0 0 auto">Grupo</span>' +
+              '<select id="twmgr-bld-stgroup" class="twmgr-inp" style="flex:1"></select>' +
+            '</div>' +
+            '<div id="twmgr-bld-sttab" class="twmgr-bld-vils" style="margin-top:5px"></div>' +
+            '<div id="twmgr-bld-sttab-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>') +
+        '</div>' +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Máx na fila</span><input id="twmgr-bld-max" class="twmgr-inp" type="number" min="1" value="5" style="width:56px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-bld-int" class="twmgr-inp" type="number" min="1" value="10" style="width:56px"></div>') +
@@ -944,18 +945,17 @@
         save();
       });
     });
-    document.getElementById('twmgr-bld-group').addEventListener('change', (e) => { config.build.filterGroup = e.target.value; save(); bldCarregarAldeias(); fillBldGrupoTpl(); });
-    document.getElementById('twmgr-bld-seguir').checked = !!config.build.seguirGrupo;
-    document.getElementById('twmgr-bld-seguir').addEventListener('change', (e) => { config.build.seguirGrupo = e.target.checked; save(); });
-    document.getElementById('twmgr-bld-grptpl').addEventListener('change', (e) => { config.build.grupoTpl = e.target.value; save(); });
-    fillBldGrupoTpl();
-    document.getElementById('twmgr-bld-vil-reload').addEventListener('click', bldCarregarAldeias);
-    document.getElementById('twmgr-bld-mass-go').addEventListener('click', bldAcaoEmMassa);
+    // O modelo é amarrado ao GRUPO: mudar aqui muda quem o ciclo atende no próximo tick.
+    document.getElementById('twmgr-bld-tplgrp').addEventListener('change', (e) => {
+      const t = config.build.templates[_bldActiveProf];
+      if (t) { t.grupo = e.target.value || ''; save(); }
+    });
+    document.getElementById('twmgr-bld-stgroup').addEventListener('change', (e) => bldStatusFiltrar(e.target.value));
     bindBuildPlanHandlers();
-    bindBuildVillageHandlers();
     bldRenderTplSelect();
     bldSwitchProf(_bldActiveProf);
-    renderBuildVillages();
+    fillBldTplGrupo();
+    bldRenderStatus();
     // ---- Pesquisa ----
     document.getElementById('twmgr-pq-tpl').addEventListener('change', (e) => pesqSwitchTpl(e.target.value));
     document.getElementById('twmgr-pq-tpl-new').addEventListener('click', pesqNovoModelo);
@@ -1082,7 +1082,7 @@
     const abreTela = (id) => { const el = document.getElementById(id); if (el) el.style.display = 'flex'; };
     const fechaTela = (id) => { const el = document.getElementById(id); if (el) el.style.display = 'none'; };
     document.getElementById('twmgr-bld-abrir-tpl').addEventListener('click', () => abreTela('twmgr-tela-tpl-build'));
-    document.getElementById('twmgr-bld-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-build'); renderBuildVillages(); });
+    document.getElementById('twmgr-bld-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-build'); bldRenderTplSelect(); fillBldTplGrupo(); bldRenderStatus(); });
     document.getElementById('twmgr-pq-abrir-tpl').addEventListener('click', () => abreTela('twmgr-tela-tpl-pq'));
     document.getElementById('twmgr-pq-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-pq'); renderResearchVillages(); });
     document.querySelectorAll('[data-sub]').forEach((b) => b.addEventListener('click', () => {

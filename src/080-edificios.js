@@ -82,52 +82,170 @@
     await res.text();
     return true;
   }
-  // Select do modelo aplicado às aldeias que entram pelo grupo. Redesenhado junto com a lista de
-  // modelos, senão um modelo recém-criado não apareceria aqui.
-  function fillBldGrupoTpl() {
-    const sel = document.getElementById('twmgr-bld-grptpl'); if (!sel) return;
-    const ids = Object.keys(config.build.templates || {});
-    sel.innerHTML = '<option value="">— escolha —</option>'
-      + ids.map((id) => '<option value="' + esc(id) + '">'
-        + esc(config.build.templates[id].name || id) + '</option>').join('');
-    sel.value = config.build.grupoTpl || '';
+  // Select de grupo do MODELO ativo: todas as aldeias do grupo passam a seguir esse modelo.
+  function fillBldTplGrupo() {
+    const sel = document.getElementById('twmgr-bld-tplgrp'); if (!sel) return;
+    const t = config.build.templates[_bldActiveProf];
+    sel.innerHTML = '<option value="">— nenhum —</option>' + (_twGroupsCache || []).map((g) =>
+      '<option value="' + g.id + '"' + (t && String(t.grupo || '') === String(g.id) ? ' selected' : '') + '>'
+      + esc(g.name) + '</option>').join('');
+  }
+  // ===== Aba Status =====
+  // Gemea do Status do Recrutar, com edificios no lugar das unidades. Reusa o mesmo CSS.
+  //
+  // Cabecalho por EMOJI do BUILD_META (que ja tem `ico` e `name`), nao por imagem do jogo:
+  // nao preciso adivinhar caminho de sprite e vale em qualquer mundo.
+  let _bldOrd = { col: 'name', dir: 1 };
+  function bldOrdenar(col) {
+    if (_bldOrd.col === col) _bldOrd.dir = -_bldOrd.dir;
+    else _bldOrd = { col: col, dir: col === 'name' ? 1 : -1 };
+    bldRenderStatus();
+  }
+  // % ponderado pelo alvo, igual ao Recrutar: soma(min(tem,alvo))/soma(alvo). Ponderado e nao
+  // media dos predios porque subir o principal ate 20 e MUITO mais obra que a fazenda ate 5.
+  function bldPct(r) {
+    let tem = 0, alvo = 0, pior = null;
+    Object.keys(r.preds || {}).forEach((b) => {
+      const c = r.preds[b];
+      if (!c.alvo) return;
+      alvo += c.alvo; tem += Math.min(c.tem, c.alvo);
+      const p = c.tem / c.alvo;
+      if (!pior || p < pior.p) pior = { b: b, p: p };
+    });
+    return { pct: alvo > 0 ? tem / alvo : null, tem: tem, alvo: alvo, pior: pior };
+  }
+  // So os predios que ALGUM modelo pede -- uma coluna por predio do jogo seria metade vazia.
+  function bldStatusPredios() {
+    const usados = {};
+    Object.keys(config.build.templates || {}).forEach((id) => {
+      (config.build.templates[id].plan || []).forEach((it) => { if (it.en !== false) usados[it.b] = 1; });
+    });
+    return Object.keys(BUILD_META).filter((b) => usados[b]);
+  }
+  let _bldStatusGrupo = '', _bldStatusPool = {};
+  async function bldStatusFiltrar(gid) {
+    _bldStatusGrupo = gid || '';
+    _bldStatusPool = {};
+    if (_bldStatusGrupo) {
+      try {
+        const vs = await getVillagesInGroup(_bldStatusGrupo);
+        (vs || []).forEach((v) => { _bldStatusPool[String(v.vid)] = 1; });
+      } catch (e) { pushLog('Construções: não consegui ler o grupo do filtro (' + (e.message || e) + ').', 'err', 'build'); }
+    }
+    bldRenderStatus();
+  }
+  function bldRenderStatus() {
+    const box = document.getElementById('twmgr-bld-sttab'); if (!box) return;
+    const st = config.build.status || {};
+    let vids = Object.keys(st);
+    if (_bldStatusGrupo) vids = vids.filter((v) => _bldStatusPool[v]);
+    if (!vids.length) {
+      box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">'
+        + (Object.keys(st).length ? '— nenhuma aldeia deste grupo na gestão —'
+                                  : '— rode um ciclo pra ver o status —') + '</div>';
+      return;
+    }
+    const preds = bldStatusPredios();
+    const faixa = (tem, alvo) => {
+      if (!alvo) return 'inf';
+      if (tem >= alvo) return 'ok';
+      const p = tem / alvo;
+      return p < 0.5 ? 'ruim' : (p < 0.8 ? 'meio' : 'bom');
+    };
+    const pcts = {}; vids.forEach((v) => { pcts[v] = bldPct(st[v]); });
+    const valor = (vid) => {
+      if (_bldOrd.col === 'name') return null;
+      if (_bldOrd.col === 'pct') return pcts[vid].pct;
+      const c = (st[vid].preds || {})[_bldOrd.col];
+      return c ? c.tem : null;
+    };
+    vids.sort((a, b) => {
+      if (_bldOrd.col === 'name') return _bldOrd.dir * String(st[a].name).localeCompare(String(st[b].name), 'pt-BR', { numeric: true });
+      const va = valor(a), vb = valor(b);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return _bldOrd.dir * (va - vb);
+    });
+    const seta = (col) => _bldOrd.col === col ? '<span class="ord">' + (_bldOrd.dir > 0 ? '▲' : '▼') + '</span>' : '';
+    const wp = Math.max(7, Math.floor(56 / Math.max(1, preds.length)));
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><colgroup>'
+      + '<col style="width:' + (100 - wp * preds.length - 11) + '%">'
+      + preds.map(() => '<col style="width:' + wp + '%">').join('')
+      + '<col style="width:11%"></colgroup>'
+      + '<thead><tr><th class="ordena" data-col="name">Aldeia' + seta('name') + '</th>'
+      + preds.map((b) => '<th class="ordena" data-col="' + b + '" title="' + esc(BUILD_META[b].name) + ' — clique pra ordenar">'
+        + '<span class="bico">' + BUILD_META[b].ico + '</span>' + seta(b) + '</th>').join('')
+      + '<th class="ordena" data-col="pct" title="% do modelo já construído">%' + seta('pct') + '</th>'
+      + '</tr></thead><tbody>' + vids.map((vid, i) => {
+        const r = st[vid], P = pcts[vid];
+        const avulso = !!(config.build.villages || {})[vid];
+        const sub2 = (r.coord ? esc(r.coord) + ' · ' : '')
+          + esc((config.build.templates[r.tpl] || {}).name || '—')
+          + (avulso ? ' <span title="atribuição avulsa: vence o grupo">✱</span>' : '');
+        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + (r.ok ? ' twmgr-rc-full' : '') + '">' +
+          '<td><b>' + esc(r.name || vid) + '</b>' + (r.ok ? ' <span class="twmgr-rc-chk">✓</span>' : '')
+          + '<div class="sub">' + sub2 + '</div></td>' +
+          preds.map((b) => {
+            const c = (r.preds || {})[b];
+            if (!c) return '<td class="vazio">—</td>';
+            const f = faixa(c.tem, c.alvo);
+            // Obra na fila aparece como ▸: o número é o que ESTÁ de pé, mas saber que já está
+            // pago evita achar que o módulo parou.
+            const naFila = (c.fila && c.fila > c.tem) ? '<span class="nafila" title="nível ' + c.fila + ' já na fila">▸</span>' : '';
+            return '<td class="f-' + f + '" title="' + esc(BUILD_META[b].name + ': ' + c.tem + ' de ' + c.alvo) + '">'
+              + '<b>' + c.tem + '</b><span class="alvo">(' + c.alvo + ')</span>' + naFila + '</td>';
+          }).join('')
+          + '<td class="f-' + faixa(P.tem, P.alvo) + ' pctcel" title="'
+          + esc(P.pior ? ('mais atrasado: ' + BUILD_META[P.pior.b].name + ' ' + Math.round(P.pior.p * 100) + '%') : '')
+          + '"><b>' + (P.pct == null ? '—' : Math.round(P.pct * 100) + '%') + '</b></td></tr>';
+      }).join('') + '</tbody></table>';
+    if (!box._bldOrdOn) {
+      box._bldOrdOn = true;
+      box.addEventListener('click', (e) => {
+        const th = e.target.closest ? e.target.closest('th.ordena') : null;
+        if (th) bldOrdenar(th.getAttribute('data-col'));
+      });
+    }
+    const info = document.getElementById('twmgr-bld-sttab-info');
+    if (info) {
+      let tTem = 0, tAlvo = 0;
+      vids.forEach((v) => { const P = pcts[v]; tTem += P.tem; tAlvo += P.alvo; });
+      const ok = vids.filter((v) => st[v].ok).length;
+      const quando = new Date(Math.max.apply(null, vids.map((v) => st[v].at || 0))).toLocaleTimeString('pt-BR');
+      info.innerHTML = vids.length + ' aldeia(s) · ' + ok + ' com o modelo completo · <b>total '
+        + (tAlvo > 0 ? Math.round((tTem / tAlvo) * 100) + '%' : '—') + '</b> · lido às ' + quando;
+    }
   }
 
-  // Põe na gestão as aldeias do grupo que ainda não estão nela.
-  //
-  // Só ADICIONA. Tirar aldeia que saiu do grupo pararia a obra dela em silêncio e apagaria a
-  // atribuição (modelo, pausa) — destrutivo demais pra fazer sozinho, ainda mais porque uma falha
-  // de leitura do grupo poderia esvaziar a gestão inteira. Quem tira, tira na mão.
-  //
-  // O modelo vem do `grupoTpl`; sem ele escolhido cai no único modelo existente, e se houver
-  // vários AVISA em vez de chutar — modelo errado constrói prédio errado, e obra não tem desfazer.
-  async function bldSincronizarGrupo() {
-    const membros = await getVillagesInGroup(config.build.filterGroup);
-    if (!membros || !membros.length) return 0;
-    const assign = config.build.villages || (config.build.villages = {});
-    const tpls = Object.keys(config.build.templates || {});
-    let tpl = config.build.grupoTpl;
-    if (!tpl || !config.build.templates[tpl]) tpl = (tpls.length === 1) ? tpls[0] : '';
-    const novas = membros.filter((v) => !assign[String(v.vid)]);
-    if (!novas.length) return 0;
-    if (!tpl) {
-      pushLog('Construções: ' + novas.length + ' aldeia(s) novas no grupo, mas nenhum modelo definido pra elas'
-        + ' — escolha o "modelo pra aldeia nova" na aba.', 'err', 'build');
-      return 0;
+  async function bldResolverAldeias() {
+
+    const out = {}, tpls = config.build.templates || {};
+    let usouGrupo = false;
+    for (const id of Object.keys(tpls)) {
+      const t = tpls[id];
+      if (!t.grupo) continue;
+      let vs = [];
+      try { vs = await getVillagesInGroup(t.grupo); }
+      catch (e) { pushLog('Construções: erro no grupo do modelo "' + (t.name || id) + '": ' + (e.message || e), 'err', 'build'); continue; }
+      usouGrupo = true;
+      (vs || []).forEach((v) => {
+        out[String(v.vid)] = { tpl: id, name: v.name || v.coord || String(v.vid), coord: v.coord || null };
+      });
     }
-    novas.forEach((v) => {
-      assign[String(v.vid)] = { tpl: tpl, paused: false,
-                                coord: v.coord || null, name: v.name || v.coord || String(v.vid) };
+    // Ler grupo deixa o jogo com ele selecionado; volta pra "todos" pra nao afetar as outras telas.
+    if (usouGrupo) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
+    Object.keys(config.build.villages || {}).forEach((vid) => {
+      const a = config.build.villages[vid];
+      if (a.paused) { delete out[vid]; return; }        // pausada sai, mesmo vindo do grupo
+      if (!config.build.templates[a.tpl]) return;
+      out[vid] = { tpl: a.tpl, name: a.name || a.coord || vid, coord: a.coord || null };
     });
-    save();
-    pushLog('Construções: ' + novas.length + ' aldeia(s) entraram pelo grupo ('
-      + novas.map((v) => v.name || v.coord).join(', ') + ') com o modelo "'
-      + (config.build.templates[tpl].name || tpl) + '".', 'ok', 'build');
-    renderBuildVillages();
-    return novas.length;
+    return out;
   }
 
   async function buildTick() {
+
     clearTimeout(buildTimer);
     if (!config.build.running) return;
     if (lockOther()) { buildTimer = setTimeout(buildTick, 5000); return; }
@@ -135,14 +253,14 @@
     claimLock();
     const now = Date.now();
     if ((config.build.nextAt || 0) > now) { scheduleBuild(); return; }
-    // Antes de listar as ativas: quem entrou no grupo desde o último ciclo entra na gestão.
-    if (config.build.seguirGrupo && config.build.filterGroup) {
-      try { await bldSincronizarGrupo(); }
-      catch (e) { pushLog('Construções: não consegui ler o grupo (' + (e.message || e) + ') — sigo com a lista atual.', '', 'build'); }
+    let assign = {};
+    try { assign = await bldResolverAldeias(); }
+    catch (e) {
+      pushLog('Construções: erro ao resolver as aldeias (' + (e.message || e) + ').', 'err', 'build');
+      config.build.nextAt = now + 120000; save(); scheduleBuild(); return;
     }
-    const assign = config.build.villages || {};
-    const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.build.templates[assign[v].tpl]);
-    if (!ativas.length) { pushLog('Construções: nenhuma aldeia ativa — adicione aldeias e aplique um modelo na tabela.', '', 'build'); config.build.nextAt = now + 300000; save(); scheduleBuild(); return; }
+    const ativas = Object.keys(assign);
+    if (!ativas.length) { pushLog('Construções: nenhuma aldeia na gestão — amarre um modelo a um grupo.', '', 'build'); config.build.nextAt = now + 300000; save(); scheduleBuild(); return; }
     // Guarda anticolisão: o Obra (módulo do Johann) também enfileira obra. Se os dois pegarem a
     // mesma aldeia, brigam pela fila e gastam recurso fora de ordem. O Construções cede, porque é
     // o genérico e o Obra trabalha por grupo nativo do jogo.
@@ -217,9 +335,12 @@
       if (postos.length) pushLog('Construções: ' + rotulo + ' → ' + postos.join(', ') + ' na fila (' + postos.length + ' obra' + (postos.length > 1 ? 's' : '') + ').', 'ok', 'build');
       await sleep(300);
     }
-    renderBuildVillages();
+    // Aldeia que saiu da gestão some do Status — senão a aba mostraria dado velho pra sempre.
+    Object.keys(config.build.status || {}).forEach((v) => { if (!assign[v]) delete config.build.status[v]; });
+    bldRenderStatus();
     config.build.stats = config.build.stats || {};
     config.build.stats.villages = vids.length;
+    config.build.stats.completas = Object.keys(config.build.status || {}).filter((v) => config.build.status[v].ok).length;
     config.build.nextAt = now + Math.max(60, config.build.interval || 600) * 1000;
     save();
     refreshCards('build');
@@ -332,6 +453,7 @@
     const fp = document.getElementById('twmgr-bld-farmpct');
     if (fp) fp.value = bldTpl().farmPct != null ? bldTpl().farmPct : 0;
     renderBuildPlan();
+    fillBldTplGrupo();   // o grupo e por MODELO, entao acompanha a troca
   }
   function bldResetDefault() {
     const t = bldTpl(); if (!t) return;
@@ -354,10 +476,7 @@
     if (ids.indexOf(_bldActiveProf) < 0 && ids.length) _bldActiveProf = ids[0];
     sel.value = _bldActiveProf;
     // O seletor de modelo da barra de ação em massa espelha a mesma lista
-    const mass = document.getElementById('twmgr-bld-mass-tpl');
-    if (mass) { const antes = mass.value; mass.innerHTML = sel.innerHTML; if (ids.indexOf(antes) >= 0) mass.value = antes; }
-    // ...e o do "seguir o grupo" também, senão um modelo recém-criado não apareceria lá.
-    fillBldGrupoTpl();
+    // Sem seletor de massa: o modelo se aplica por GRUPO.
   }
   function bldNovoModelo() {
     const nome = (prompt('Nome do novo modelo:', '') || '').trim();
@@ -366,7 +485,7 @@
     const id = 'tpl' + Date.now().toString(36);
     config.build.templates[id] = { name: nome.slice(0, 40), plan: base && bldTpl() ? bldPlanAtual().map((it) => ({ b: it.b, lvl: it.lvl, en: it.en })) : [] };
     _bldActiveProf = id;
-    save(); bldRenderTplSelect(); renderBuildPlan(); renderBuildVillages();
+    save(); bldRenderTplSelect(); renderBuildPlan(); bldRenderStatus();
     pushLog('Modelo "' + nome + '" criado.', 'ok', 'build');
   }
   function bldRenomearModelo() {
@@ -374,7 +493,7 @@
     const nome = (prompt('Novo nome do modelo:', t.name) || '').trim();
     if (!nome) return;
     t.name = nome.slice(0, 40);
-    save(); bldRenderTplSelect(); renderBuildVillages();
+    save(); bldRenderTplSelect(); bldRenderStatus();
   }
   function bldApagarModelo() {
     const t = bldTpl(); if (!t) return;
@@ -385,7 +504,7 @@
     usando.forEach((v) => { delete config.build.villages[v]; });
     delete config.build.templates[_bldActiveProf];
     _bldActiveProf = bldTplIds()[0];
-    save(); bldRenderTplSelect(); renderBuildPlan(); renderBuildVillages();
+    save(); bldRenderTplSelect(); renderBuildPlan(); bldRenderStatus();
   }
 
   // ===== Exportar / importar modelo (equivalente ao "Importar Modelo" do Gerente de conta) =====
@@ -438,112 +557,24 @@
     const id = 'tpl' + Date.now().toString(36);
     config.build.templates[id] = { name: nome, plan: plan, farmPct: clamp(partes[2]), storagePct: clamp(partes[3]) };
     _bldActiveProf = id;
-    save(); bldRenderTplSelect(); bldSwitchProf(id); renderBuildVillages();
+    save(); bldRenderTplSelect(); bldSwitchProf(id); bldRenderStatus();
     pushLog('Modelo "' + nome + '" importado com ' + plan.length + ' item(ns)' + (ignorados.length ? ' — ' + ignorados.length + ' ignorado(s): ' + ignorados.join(', ') : '') + '.', 'ok', 'build');
     alert('Modelo "' + nome + '" importado com ' + plan.length + ' item(ns).' + (ignorados.length ? '\n\n' + ignorados.length + ' item(ns) foram ignorados por não existirem neste mundo:\n' + ignorados.join(', ') : ''));
   }
 
-  // ===== Tabela de aldeias (equivalente ao "Gerenciar construções da aldeia") =====
-  let _bldPool = [];   // aldeias da conta (ou do grupo filtrado) disponíveis pra adicionar
-  async function bldCarregarAldeias() {
-    const btn = document.getElementById('twmgr-bld-vil-reload');
-    if (btn) btn.textContent = '…';
-    try {
-      const gid = config.build.filterGroup || '';
-      const vs = gid ? await getVillagesInGroup(gid) : await getAllVillagesCached();   // ambos devolvem ARRAY
-      _bldPool = (vs || []).map((v) => ({ vid: String(v.vid), coord: v.coord || null, name: v.name || v.coord || String(v.vid) }));
-      pushLog('Construções: ' + _bldPool.length + ' aldeia(s) carregadas' + (gid ? ' do grupo selecionado' : '') + '.', '', 'build');
-    } catch (e) {
-      pushLog('Construções: erro ao carregar as aldeias (' + (e.message || e) + ').', 'err', 'build');
-    }
-    if (btn) btn.textContent = '↻';
-    renderBuildVillages();
-  }
-  function renderBuildVillages() {
-    const box = document.getElementById('twmgr-bld-vils'); if (!box) return;
-    const assign = config.build.villages || {}, tpls = config.build.templates || {};
-    // Une o que já está atribuído com o pool carregado, pra dar pra marcar aldeia nova na mesma lista
-    const mapa = {};
-    Object.keys(assign).forEach((vid) => { mapa[vid] = { vid: vid, coord: assign[vid].coord, name: assign[vid].name || assign[vid].coord || vid }; });
-    _bldPool.forEach((v) => { if (!mapa[v.vid]) mapa[v.vid] = v; });
-    const linhas = Object.keys(mapa).sort((a, b) => String(mapa[a].name).localeCompare(String(mapa[b].name), 'pt-BR', { numeric: true }));
-    if (!linhas.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">— clique em ↻ pra carregar suas aldeias —</div>'; return; }
-    box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr>' +
-      '<th class="twmgr-tab-ck"><input type="checkbox" id="twmgr-bld-all"></th><th>Aldeia</th><th>Modelo</th><th>Ordens</th><th>Estado</th><th></th>' +
-      '</tr></thead><tbody>' +
-      linhas.map((vid, i) => {
-        const v = mapa[vid], a = assign[vid];
-        const tplNome = a && tpls[a.tpl] ? esc(tpls[a.tpl].name) : '<span style="color:#8a7340">—</span>';
-        const ordens = a ? ((a.done != null ? a.done : '—') + ' / ' + (a.total != null ? a.total : (tpls[a.tpl] ? (tpls[a.tpl].plan || []).filter((x) => x.en !== false).length : '—'))) : '';
-        const estado = !a ? '<span style="color:#8a7340">não gerenciada</span>'
-          : a.paused ? 'Pausado ( <a class="twmgr-bld-tog" data-vid="' + vid + '">Retomar</a> )'
-          : 'Ativo ( <a class="twmgr-bld-tog" data-vid="' + vid + '">Pausar</a> )';
-        const rm = a ? '<a class="twmgr-bld-vrm" data-vid="' + vid + '" title="tirar da gestão">Remover</a>' : '';
-        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + (a ? '' : ' twmgr-bld-off') + '">' +
-          '<td class="twmgr-tab-ck"><input type="checkbox" class="twmgr-bld-vsel" data-vid="' + vid + '"></td>' +
-          '<td title="' + esc(v.name) + '">' + esc(v.name) + '</td>' +
-          '<td>' + tplNome + '</td><td>' + ordens + '</td><td>' + estado + '</td><td>' + rm + '</td></tr>';
-      }).join('') + '</tbody></table>';
-    const cnt = Object.keys(assign).length, pausadas = Object.keys(assign).filter((v) => assign[v].paused).length;
-    const rod = document.getElementById('twmgr-bld-vils-info');
-    if (rod) rod.textContent = cnt + ' gerenciada(s)' + (pausadas ? ' · ' + pausadas + ' pausada(s)' : '') + ' · ' + linhas.length + ' na lista';
-  }
-  function bldSelecionadas() {
-    return Array.prototype.slice.call(document.querySelectorAll('.twmgr-bld-vsel:checked')).map((el) => el.getAttribute('data-vid'));
-  }
-  function bldAcaoEmMassa() {
-    const acao = document.getElementById('twmgr-bld-mass-acao').value;
-    const tplId = document.getElementById('twmgr-bld-mass-tpl').value;
-    const vids = bldSelecionadas();
-    if (!vids.length) { alert('Marque pelo menos uma aldeia.'); return; }
-    const assign = config.build.villages;
-    const mapaPool = {}; _bldPool.forEach((v) => { mapaPool[v.vid] = v; });
-    let n = 0;
-    vids.forEach((vid) => {
-      if (acao === 'apply') {
-        if (!config.build.templates[tplId]) return;
-        const base = assign[vid] || mapaPool[vid] || {};
-        assign[vid] = { tpl: tplId, paused: false, coord: base.coord || null, name: base.name || base.coord || vid, done: null, total: null };
-        n++;
-      } else if (!assign[vid]) { return; }
-      else if (acao === 'pause') { assign[vid].paused = true; n++; }
-      else if (acao === 'resume') { assign[vid].paused = false; n++; }
-      else if (acao === 'remove') { delete assign[vid]; n++; }
-    });
-    config.build.stats = config.build.stats || {};
-    config.build.stats.villages = Object.keys(assign).filter((v) => !assign[v].paused).length;
-    save(); renderBuildVillages(); refreshCards('build');
-    const rotulo = { apply: 'modelo aplicado em', pause: 'pausada(s):', resume: 'retomada(s):', remove: 'removida(s) da gestão:' }[acao];
-    pushLog('Construções: ' + rotulo + ' ' + n + ' aldeia(s).', 'ok', 'build');
-  }
-  function bindBuildVillageHandlers() {
-    const box = document.getElementById('twmgr-bld-vils'); if (!box) return;
-    box.addEventListener('click', (e) => {
-      const el = e.target, vid = el.getAttribute && el.getAttribute('data-vid');
-      if (el.id === 'twmgr-bld-all') return;
-      if (!vid) return;
-      if (el.classList.contains('twmgr-bld-tog')) {
-        const a = config.build.villages[vid]; if (!a) return;
-        a.paused = !a.paused; save(); renderBuildVillages();
-      } else if (el.classList.contains('twmgr-bld-vrm')) {
-        delete config.build.villages[vid]; save(); renderBuildVillages(); refreshCards('build');
-      }
-    });
-    box.addEventListener('change', (e) => {
-      if (e.target.id !== 'twmgr-bld-all') return;
-      const on = e.target.checked;
-      document.querySelectorAll('.twmgr-bld-vsel').forEach((el) => { el.checked = on; });
-    });
-  }
   function setBuildStatus(on) { setBtnState('twmgr-bld-start', 'twmgr-bld-stop', on, '● Construindo', '▶ Construir'); }
   function buildStart() {
     readBuildCfg();
-    const assign = config.build.villages || {};
-    const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.build.templates[assign[v].tpl]);
-    if (!ativas.length) { pushLog('Construções: nenhuma aldeia ativa — carregue a lista (↻), marque as aldeias e aplique um modelo.', 'err', 'build'); return; }
+    const comGrupo = bldTplIds().filter((id) => config.build.templates[id].grupo);
+    const avulsas = Object.keys(config.build.villages || {}).filter((v) => !config.build.villages[v].paused).length;
+    if (!comGrupo.length && !avulsas) {
+      pushLog('Construções: nenhum modelo amarrado a um grupo — escolha o grupo no modelo.', 'err', 'build');
+      return;
+    }
     config.build.running = true; config.build.nextAt = 0; save();
     setBuildStatus(true);
-    pushLog('Construções iniciado — ' + ativas.length + ' aldeia(s) ativa(s) em ' + bldTplIds().length + ' modelo(s).', 'ok', 'build');
+    pushLog('Construções iniciado — ' + comGrupo.length + ' modelo(s) com grupo'
+      + (avulsas ? ' e ' + avulsas + ' aldeia(s) avulsa(s)' : '') + '.', 'ok', 'build');
     buildTick();
   }
   function buildStop() { readBuildCfg(); config.build.running = false; save(); clearTimeout(buildTimer); setBuildStatus(false); pushLog('Construções parado.', '', 'build'); }

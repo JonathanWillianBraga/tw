@@ -82,6 +82,51 @@
     await res.text();
     return true;
   }
+  // Select do modelo aplicado às aldeias que entram pelo grupo. Redesenhado junto com a lista de
+  // modelos, senão um modelo recém-criado não apareceria aqui.
+  function fillBldGrupoTpl() {
+    const sel = document.getElementById('twmgr-bld-grptpl'); if (!sel) return;
+    const ids = Object.keys(config.build.templates || {});
+    sel.innerHTML = '<option value="">— escolha —</option>'
+      + ids.map((id) => '<option value="' + esc(id) + '">'
+        + esc(config.build.templates[id].name || id) + '</option>').join('');
+    sel.value = config.build.grupoTpl || '';
+  }
+
+  // Põe na gestão as aldeias do grupo que ainda não estão nela.
+  //
+  // Só ADICIONA. Tirar aldeia que saiu do grupo pararia a obra dela em silêncio e apagaria a
+  // atribuição (modelo, pausa) — destrutivo demais pra fazer sozinho, ainda mais porque uma falha
+  // de leitura do grupo poderia esvaziar a gestão inteira. Quem tira, tira na mão.
+  //
+  // O modelo vem do `grupoTpl`; sem ele escolhido cai no único modelo existente, e se houver
+  // vários AVISA em vez de chutar — modelo errado constrói prédio errado, e obra não tem desfazer.
+  async function bldSincronizarGrupo() {
+    const membros = await getVillagesInGroup(config.build.filterGroup);
+    if (!membros || !membros.length) return 0;
+    const assign = config.build.villages || (config.build.villages = {});
+    const tpls = Object.keys(config.build.templates || {});
+    let tpl = config.build.grupoTpl;
+    if (!tpl || !config.build.templates[tpl]) tpl = (tpls.length === 1) ? tpls[0] : '';
+    const novas = membros.filter((v) => !assign[String(v.vid)]);
+    if (!novas.length) return 0;
+    if (!tpl) {
+      pushLog('Construções: ' + novas.length + ' aldeia(s) novas no grupo, mas nenhum modelo definido pra elas'
+        + ' — escolha o "modelo pra aldeia nova" na aba.', 'err', 'build');
+      return 0;
+    }
+    novas.forEach((v) => {
+      assign[String(v.vid)] = { tpl: tpl, paused: false,
+                                coord: v.coord || null, name: v.name || v.coord || String(v.vid) };
+    });
+    save();
+    pushLog('Construções: ' + novas.length + ' aldeia(s) entraram pelo grupo ('
+      + novas.map((v) => v.name || v.coord).join(', ') + ') com o modelo "'
+      + (config.build.templates[tpl].name || tpl) + '".', 'ok', 'build');
+    renderBuildVillages();
+    return novas.length;
+  }
+
   async function buildTick() {
     clearTimeout(buildTimer);
     if (!config.build.running) return;
@@ -90,6 +135,11 @@
     claimLock();
     const now = Date.now();
     if ((config.build.nextAt || 0) > now) { scheduleBuild(); return; }
+    // Antes de listar as ativas: quem entrou no grupo desde o último ciclo entra na gestão.
+    if (config.build.seguirGrupo && config.build.filterGroup) {
+      try { await bldSincronizarGrupo(); }
+      catch (e) { pushLog('Construções: não consegui ler o grupo (' + (e.message || e) + ') — sigo com a lista atual.', '', 'build'); }
+    }
     const assign = config.build.villages || {};
     const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.build.templates[assign[v].tpl]);
     if (!ativas.length) { pushLog('Construções: nenhuma aldeia ativa — adicione aldeias e aplique um modelo na tabela.', '', 'build'); config.build.nextAt = now + 300000; save(); scheduleBuild(); return; }
@@ -306,6 +356,8 @@
     // O seletor de modelo da barra de ação em massa espelha a mesma lista
     const mass = document.getElementById('twmgr-bld-mass-tpl');
     if (mass) { const antes = mass.value; mass.innerHTML = sel.innerHTML; if (ids.indexOf(antes) >= 0) mass.value = antes; }
+    // ...e o do "seguir o grupo" também, senão um modelo recém-criado não apareceria lá.
+    fillBldGrupoTpl();
   }
   function bldNovoModelo() {
     const nome = (prompt('Nome do novo modelo:', '') || '').trim();

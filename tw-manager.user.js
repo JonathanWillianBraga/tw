@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.43.1
+// @version      11.44.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.43.1';
+  const VERSION = '11.44.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -204,7 +204,11 @@
   // Construções = gerenciador no molde do "Gerente de conta → Construção" do jogo: N modelos nomeados
   // (templates) + atribuição POR ALDEIA (villages: vid -> {tpl, paused, coord, name, done, total}).
   // `plans` (atk/def) ficou só como semente da migração — quem manda agora é `templates`.
-  const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, templates: {}, villages: {}, filterGroup: '', demand: {} });
+  // `seguirGrupo`: aldeia que entra no grupo filtrado entra sozinha na gestão, com o modelo
+  // `grupoTpl`. Sem isso o filtro de grupo só mudava o que APARECE na tabela, e aldeia nova
+  // ficava de fora até alguém reparar.
+  const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, templates: {}, villages: {}, filterGroup: '', seguirGrupo: false, grupoTpl: '', demand: {} });
+
   // Ordem sugerida de pesquisa pra quem nunca montou um modelo: explorador cedo (revela alvo pro
   // Saque), depois o pacote de ataque, depois defesa. É só um ponto de partida — o usuário reordena.
   const PESQ_ORDEM_PADRAO = ['spy', 'axe', 'light', 'ram', 'spear', 'sword', 'heavy', 'catapult'];
@@ -529,6 +533,9 @@
       a.paused = !!a.paused;
     });
     if (c.build.filterGroup == null) c.build.filterGroup = '';
+    if (c.build.seguirGrupo == null) c.build.seguirGrupo = false;
+    if (c.build.grupoTpl == null) c.build.grupoTpl = '';
+
     delete c.build.atkTpl; delete c.build.defTpl;
     if (!c.research) c.research = defResearch();
     if (!c.research.templates || typeof c.research.templates !== 'object') c.research.templates = {};
@@ -3565,6 +3572,51 @@
     await res.text();
     return true;
   }
+  // Select do modelo aplicado às aldeias que entram pelo grupo. Redesenhado junto com a lista de
+  // modelos, senão um modelo recém-criado não apareceria aqui.
+  function fillBldGrupoTpl() {
+    const sel = document.getElementById('twmgr-bld-grptpl'); if (!sel) return;
+    const ids = Object.keys(config.build.templates || {});
+    sel.innerHTML = '<option value="">— escolha —</option>'
+      + ids.map((id) => '<option value="' + esc(id) + '">'
+        + esc(config.build.templates[id].name || id) + '</option>').join('');
+    sel.value = config.build.grupoTpl || '';
+  }
+
+  // Põe na gestão as aldeias do grupo que ainda não estão nela.
+  //
+  // Só ADICIONA. Tirar aldeia que saiu do grupo pararia a obra dela em silêncio e apagaria a
+  // atribuição (modelo, pausa) — destrutivo demais pra fazer sozinho, ainda mais porque uma falha
+  // de leitura do grupo poderia esvaziar a gestão inteira. Quem tira, tira na mão.
+  //
+  // O modelo vem do `grupoTpl`; sem ele escolhido cai no único modelo existente, e se houver
+  // vários AVISA em vez de chutar — modelo errado constrói prédio errado, e obra não tem desfazer.
+  async function bldSincronizarGrupo() {
+    const membros = await getVillagesInGroup(config.build.filterGroup);
+    if (!membros || !membros.length) return 0;
+    const assign = config.build.villages || (config.build.villages = {});
+    const tpls = Object.keys(config.build.templates || {});
+    let tpl = config.build.grupoTpl;
+    if (!tpl || !config.build.templates[tpl]) tpl = (tpls.length === 1) ? tpls[0] : '';
+    const novas = membros.filter((v) => !assign[String(v.vid)]);
+    if (!novas.length) return 0;
+    if (!tpl) {
+      pushLog('Construções: ' + novas.length + ' aldeia(s) novas no grupo, mas nenhum modelo definido pra elas'
+        + ' — escolha o "modelo pra aldeia nova" na aba.', 'err', 'build');
+      return 0;
+    }
+    novas.forEach((v) => {
+      assign[String(v.vid)] = { tpl: tpl, paused: false,
+                                coord: v.coord || null, name: v.name || v.coord || String(v.vid) };
+    });
+    save();
+    pushLog('Construções: ' + novas.length + ' aldeia(s) entraram pelo grupo ('
+      + novas.map((v) => v.name || v.coord).join(', ') + ') com o modelo "'
+      + (config.build.templates[tpl].name || tpl) + '".', 'ok', 'build');
+    renderBuildVillages();
+    return novas.length;
+  }
+
   async function buildTick() {
     clearTimeout(buildTimer);
     if (!config.build.running) return;
@@ -3573,6 +3625,11 @@
     claimLock();
     const now = Date.now();
     if ((config.build.nextAt || 0) > now) { scheduleBuild(); return; }
+    // Antes de listar as ativas: quem entrou no grupo desde o último ciclo entra na gestão.
+    if (config.build.seguirGrupo && config.build.filterGroup) {
+      try { await bldSincronizarGrupo(); }
+      catch (e) { pushLog('Construções: não consegui ler o grupo (' + (e.message || e) + ') — sigo com a lista atual.', '', 'build'); }
+    }
     const assign = config.build.villages || {};
     const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.build.templates[assign[v].tpl]);
     if (!ativas.length) { pushLog('Construções: nenhuma aldeia ativa — adicione aldeias e aplique um modelo na tabela.', '', 'build'); config.build.nextAt = now + 300000; save(); scheduleBuild(); return; }
@@ -3789,6 +3846,8 @@
     // O seletor de modelo da barra de ação em massa espelha a mesma lista
     const mass = document.getElementById('twmgr-bld-mass-tpl');
     if (mass) { const antes = mass.value; mass.innerHTML = sel.innerHTML; if (ids.indexOf(antes) >= 0) mass.value = antes; }
+    // ...e o do "seguir o grupo" também, senão um modelo recém-criado não apareceria lá.
+    fillBldGrupoTpl();
   }
   function bldNovoModelo() {
     const nome = (prompt('Nome do novo modelo:', '') || '').trim();
@@ -7814,6 +7873,10 @@
             '<select id="twmgr-bld-group" class="twmgr-inp" style="flex:1"></select>' +
             '<button id="twmgr-bld-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
           '</div>' +
+          '<div class="twmgr-fld" style="margin-top:6px"><span title="Aldeia adicionada ao grupo no jogo entra sozinha na gestão">Seguir o grupo <span style="color:#8a7d6d">(entrar sozinha)</span></span>' +
+            '<label class="twmgr-sw"><input id="twmgr-bld-seguir" type="checkbox"><i></i></label></div>' +
+          '<div class="twmgr-fld"><span>Modelo pra aldeia nova</span><select id="twmgr-bld-grptpl" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin:2px 0 7px">Ele só <b>adiciona</b>. Aldeia que sai do grupo <b>continua</b> na gestão — tirar sozinho pararia a obra dela em silêncio e apagaria o modelo que você escolheu.</div>' +
           '<div id="twmgr-bld-vils" class="twmgr-bld-vils"></div>' +
           '<div id="twmgr-bld-vils-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>' +
           '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
@@ -8186,7 +8249,11 @@
         save();
       });
     });
-    document.getElementById('twmgr-bld-group').addEventListener('change', (e) => { config.build.filterGroup = e.target.value; save(); bldCarregarAldeias(); });
+    document.getElementById('twmgr-bld-group').addEventListener('change', (e) => { config.build.filterGroup = e.target.value; save(); bldCarregarAldeias(); fillBldGrupoTpl(); });
+    document.getElementById('twmgr-bld-seguir').checked = !!config.build.seguirGrupo;
+    document.getElementById('twmgr-bld-seguir').addEventListener('change', (e) => { config.build.seguirGrupo = e.target.checked; save(); });
+    document.getElementById('twmgr-bld-grptpl').addEventListener('change', (e) => { config.build.grupoTpl = e.target.value; save(); });
+    fillBldGrupoTpl();
     document.getElementById('twmgr-bld-vil-reload').addEventListener('click', bldCarregarAldeias);
     document.getElementById('twmgr-bld-mass-go').addEventListener('click', bldAcaoEmMassa);
     bindBuildPlanHandlers();

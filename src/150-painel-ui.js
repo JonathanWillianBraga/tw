@@ -480,6 +480,10 @@
             '<select id="twmgr-bld-group" class="twmgr-inp" style="flex:1"></select>' +
             '<button id="twmgr-bld-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
           '</div>' +
+          '<div class="twmgr-fld" style="margin-top:6px"><span title="Aldeia adicionada ao grupo no jogo entra sozinha na gestão">Seguir o grupo <span style="color:#8a7d6d">(entrar sozinha)</span></span>' +
+            '<label class="twmgr-sw"><input id="twmgr-bld-seguir" type="checkbox"><i></i></label></div>' +
+          '<div class="twmgr-fld"><span>Modelo pra aldeia nova</span><select id="twmgr-bld-grptpl" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin:2px 0 7px">Ele só <b>adiciona</b>. Aldeia que sai do grupo <b>continua</b> na gestão — tirar sozinho pararia a obra dela em silêncio e apagaria o modelo que você escolheu.</div>' +
           '<div id="twmgr-bld-vils" class="twmgr-bld-vils"></div>' +
           '<div id="twmgr-bld-vils-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>' +
           '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
@@ -852,7 +856,11 @@
         save();
       });
     });
-    document.getElementById('twmgr-bld-group').addEventListener('change', (e) => { config.build.filterGroup = e.target.value; save(); bldCarregarAldeias(); });
+    document.getElementById('twmgr-bld-group').addEventListener('change', (e) => { config.build.filterGroup = e.target.value; save(); bldCarregarAldeias(); fillBldGrupoTpl(); });
+    document.getElementById('twmgr-bld-seguir').checked = !!config.build.seguirGrupo;
+    document.getElementById('twmgr-bld-seguir').addEventListener('change', (e) => { config.build.seguirGrupo = e.target.checked; save(); });
+    document.getElementById('twmgr-bld-grptpl').addEventListener('change', (e) => { config.build.grupoTpl = e.target.value; save(); });
+    fillBldGrupoTpl();
     document.getElementById('twmgr-bld-vil-reload').addEventListener('click', bldCarregarAldeias);
     document.getElementById('twmgr-bld-mass-go').addEventListener('click', bldAcaoEmMassa);
     bindBuildPlanHandlers();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.43.1
+// @version      11.44.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.43.1';
+  const VERSION = '11.44.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -204,7 +204,11 @@
   // Construções = gerenciador no molde do "Gerente de conta → Construção" do jogo: N modelos nomeados
   // (templates) + atribuição POR ALDEIA (villages: vid -> {tpl, paused, coord, name, done, total}).
   // `plans` (atk/def) ficou só como semente da migração — quem manda agora é `templates`.
-  const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, templates: {}, villages: {}, filterGroup: '', demand: {} });
+  // `seguirGrupo`: aldeia que entra no grupo filtrado entra sozinha na gestão, com o modelo
+  // `grupoTpl`. Sem isso o filtro de grupo só mudava o que APARECE na tabela, e aldeia nova
+  // ficava de fora até alguém reparar.
+  const defBuild = () => ({ running: false, nextAt: 0, interval: 600, maxQueue: 5, plans: { atk: tplToPlan(ATK_TPL), def: tplToPlan(DEF_TPL) }, templates: {}, villages: {}, filterGroup: '', seguirGrupo: false, grupoTpl: '', demand: {} });
+
   // Ordem sugerida de pesquisa pra quem nunca montou um modelo: explorador cedo (revela alvo pro
   // Saque), depois o pacote de ataque, depois defesa. É só um ponto de partida — o usuário reordena.
   const PESQ_ORDEM_PADRAO = ['spy', 'axe', 'light', 'ram', 'spear', 'sword', 'heavy', 'catapult'];
@@ -529,6 +533,9 @@
       a.paused = !!a.paused;
     });
     if (c.build.filterGroup == null) c.build.filterGroup = '';
+    if (c.build.seguirGrupo == null) c.build.seguirGrupo = false;
+    if (c.build.grupoTpl == null) c.build.grupoTpl = '';
+
     delete c.build.atkTpl; delete c.build.defTpl;
     if (!c.research) c.research = defResearch();
     if (!c.research.templates || typeof c.research.templates !== 'object') c.research.templates = {};

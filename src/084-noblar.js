@@ -92,7 +92,62 @@
     return { precisa: Math.max(0, base - voando), lealdade: l, voando: voando, bruto: base };
   }
 
+  // ===== Pós-conquista =====
+  // Endpoint CONFIRMADO pelo dump do usuário (br143, ago/2026). Note o `type=static`: grupo
+  // dinâmico é montado por regra e não aceita aldeia na mão — mandar pra lá falharia calado.
+  // Preenche o select de grupos. Reusa o getGroups() do Recrutar (que já sabe que o
+  // `ajax=load_group_menu` devolve false e parseia o overview). "todos" (id 0) fica de fora:
+  // não é grupo de verdade, e mandar aldeia pra lá não faz nada.
+  async function fillNobleGrupos() {
+    const sel = document.getElementById('twmgr-nb-posgid'); if (!sel) return;
+    let gs = [];
+    try { gs = await getGroups(); } catch (e) { return; }
+    const uteis = (gs || []).filter((g) => String(g.id) !== '0');
+    sel.innerHTML = '<option value="">— escolha —</option>'
+      + uteis.map((g) => '<option value="' + esc(String(g.id)) + '">' + esc(g.name || g.id) + '</option>').join('');
+    if (config.noble.posGrupoId) sel.value = String(config.noble.posGrupoId);
+  }
+
+  async function nobleAddGrupo(vid, gid) {
+
+    const body = new URLSearchParams();
+    body.append('village_ids[]', String(vid));
+    body.append('selected_group', String(gid));
+    body.append('add_to_group', 'Adicionar');
+    body.append('h', CSRF);
+    const url = '/game.php?village=' + CUR_VID
+      + '&screen=overview_villages&action=bulk_edit_villages&mode=groups&type=static&partial';
+    const res = await fetch(url, { method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return true;
+  }
+
+  // Roda depois da varredura de relatórios: alvo com lealdade <= 0 foi conquistado, e a aldeia
+  // agora é minha (aparece no getAllVillages). `posFeitos` impede repetir — sem ele, cada
+  // releitura do relatório antigo re-adicionaria a aldeia ao grupo.
+  async function noblePosConquista(todas) {
+    if (!config.noble.posGrupo || !config.noble.posGrupoId) return;
+    const rel = config.noble.relatorios || {};
+    for (const coord of Object.keys(rel)) {
+      if (rel[coord].lealdade == null || rel[coord].lealdade > 0) continue;
+      if (config.noble.posFeitos[coord]) continue;
+      const v = (todas || []).find((x) => (x.coord || '') === coord);
+      if (!v) continue;                 // ainda não entrou na lista de aldeias; tenta no próximo ciclo
+      try {
+        await nobleAddGrupo(v.vid, config.noble.posGrupoId);
+        config.noble.posFeitos[coord] = Date.now();
+        pushLog('Noblar: ' + coord + ' conquistada — adicionada ao grupo.', 'ok', 'noble');
+      } catch (e) {
+        pushLog('Noblar: não consegui pôr ' + coord + ' no grupo (' + (e.message || e) + ').', 'err', 'noble');
+      }
+      await sleep(400);
+    }
+    save();
+  }
+
   function nobleMinhaAldeia(coord, todas) {
+
 
     return (todas || []).some((v) => (v.coord || '') === coord);
   }
@@ -445,7 +500,7 @@
   // e o que decide se um envio parcial espera ou sai.
   async function nobleRecrutar(alvo, origensOrdenadas, faltam) {
     const feitas = [];
-    let formados = 0, naFila = 0, prontoEm = null;
+    let formados = 0, naFila = 0, prontoEm = null, cunhadas = 0;
     for (const o of origensOrdenadas) {
       // O que ja esta na fila conta como feito: nao precisa encomendar de novo.
       if (formados + naFila >= faltam) break;
@@ -466,9 +521,29 @@
       }
       const m = st.moedas || {};
       if (!(m.podemFormar > 0)) {
-        // Sem moeda guardada o bastante. NAO cunha -- so registra o quanto falta, pro usuario
-        // decidir se vai cunhar a mao.
-        if (m.faltam != null) feitas.push({ nome: o.nome, ok: false, motivo: 'faltam ' + m.faltam + ' moeda(s)' });
+        // Sem moeda guardada o bastante. Cunhar e OPT-IN (gasta recurso sem volta) e tem alvo:
+        // so ate esta aldeia conseguir fechar um NT de `cunharAte` nobres, contando o que ela ja
+        // tem MAIS o que esta na fila. Sem esse teto ela cunharia pra sempre.
+        if (config.noble.cunhar && cunhadas < (config.noble.cunharMaxAldeias || 3)) {
+          const jaTem = ((o.avail || {}).snob || 0) + (fl.nobres || 0);
+          if (jaTem >= (config.noble.cunharAte || 4)) {
+            feitas.push({ nome: o.nome, ok: false, motivo: 'já fecha NT (' + jaTem + ')' });
+          } else if (st.maxMint < 1) {
+            feitas.push({ nome: o.nome, ok: false, motivo: 'sem recurso pra cunhar' });
+          } else {
+            try {
+              const rc = await mintCoins(o.vid);
+              cunhadas++;
+              feitas.push({ nome: o.nome, ok: false,
+                            motivo: '+' + (rc.minted || 0) + ' moeda(s), faltam ' + m.faltam });
+            } catch (e2) {
+              feitas.push({ nome: o.nome, ok: false, motivo: 'cunhar falhou: ' + (e2.message || e2) });
+            }
+            await sleep(400); continue;
+          }
+        } else if (m.faltam != null) {
+          feitas.push({ nome: o.nome, ok: false, motivo: 'faltam ' + m.faltam + ' moeda(s)' });
+        }
         await sleep(200); continue;
       }
       try {
@@ -513,6 +588,9 @@
     if (config.noble.lerRelatorios !== false) {
       try { await nobleVarrerRelatorios(alvos); }
       catch (e) { pushLog('Noblar (relatórios): ' + (e.message || e), '', 'noble'); }
+      // Depende do que a varredura acabou de ler, entao vem logo em seguida.
+      try { await noblePosConquista(todas); }
+      catch (e) { pushLog('Noblar (pós-conquista): ' + (e.message || e), 'err', 'noble'); }
     }
 
     const cacheTropa = {};
@@ -939,6 +1017,12 @@
     if (g('twmgr-nb-rel')) c.lerRelatorios = g('twmgr-nb-rel').checked;
     if (g('twmgr-nb-lpa')) c.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(g('twmgr-nb-lpa').value, 10) || 28));
     if (g('twmgr-nb-regen')) c.lealdadeRegen = Math.max(0, Math.min(10, parseFloat(g('twmgr-nb-regen').value) || 0));
+    if (g('twmgr-nb-cunhar')) c.cunhar = g('twmgr-nb-cunhar').checked;
+    if (g('twmgr-nb-cunhar-ate')) c.cunharAte = Math.max(1, Math.min(8, parseInt(g('twmgr-nb-cunhar-ate').value, 10) || 4));
+    if (g('twmgr-nb-cunhar-n')) c.cunharMaxAldeias = Math.max(1, Math.min(12, parseInt(g('twmgr-nb-cunhar-n').value, 10) || 3));
+    if (g('twmgr-nb-posgrupo')) c.posGrupo = g('twmgr-nb-posgrupo').checked;
+    if (g('twmgr-nb-posgid')) c.posGrupoId = g('twmgr-nb-posgid').value;
+
     save();
   }
   function setNobleStatus(on) { setBtnState('twmgr-nb-start', 'twmgr-nb-stop', on, '● Planejando', '▶ Planejar'); }

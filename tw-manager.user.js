@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.39.0
+// @version      11.40.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.39.0';
+  const VERSION = '11.40.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -241,6 +241,12 @@
     // Quanto um nobre derruba de lealdade (no jogo varia 20-35) e quanto ela regenera por
     // hora. Os dois viram "quantos nobres ainda faltam" — ver noblePrecisaDe.
     lealdadePorAtk: 28, lealdadeRegen: 1,
+    // Cunhar DESLIGADO por padrão: gasta recurso sem volta. Quando ligado tem alvo claro —
+    // cunha até alguma aldeia perto conseguir fechar um NT de `cunharAte` nobres.
+    cunhar: false, cunharAte: 4, cunharMaxAldeias: 3,
+    // Pós-conquista: joga a aldeia tomada num grupo estático.
+    posGrupo: false, posGrupoId: '', posFeitos: {},
+
     emVoo: {},        // { [coord]: [{at, chega, n}] } — comandos meus que ainda não pousaram
 
 
@@ -605,6 +611,13 @@
     if (c.noble.lealdadeRegen == null) c.noble.lealdadeRegen = 1;
     c.noble.lealdadeRegen = Math.max(0, Math.min(10, parseFloat(c.noble.lealdadeRegen) || 0));
     if (!c.noble.emVoo || typeof c.noble.emVoo !== 'object') c.noble.emVoo = {};
+    if (c.noble.cunhar == null) c.noble.cunhar = false;
+    c.noble.cunharAte = Math.max(1, Math.min(8, parseInt(c.noble.cunharAte, 10) || 4));
+    c.noble.cunharMaxAldeias = Math.max(1, Math.min(12, parseInt(c.noble.cunharMaxAldeias, 10) || 3));
+    if (c.noble.posGrupo == null) c.noble.posGrupo = false;
+    if (c.noble.posGrupoId == null) c.noble.posGrupoId = '';
+    if (!c.noble.posFeitos || typeof c.noble.posFeitos !== 'object') c.noble.posFeitos = {};
+
     // Registro de alvo que saiu da lista não serve pra nada e cresceria pra sempre.
     Object.keys(c.noble.emVoo).forEach((k) => {
       if (!c.noble.alvos.some((a) => a.coord === k)) delete c.noble.emVoo[k];
@@ -4522,7 +4535,62 @@
     return { precisa: Math.max(0, base - voando), lealdade: l, voando: voando, bruto: base };
   }
 
+  // ===== Pós-conquista =====
+  // Endpoint CONFIRMADO pelo dump do usuário (br143, ago/2026). Note o `type=static`: grupo
+  // dinâmico é montado por regra e não aceita aldeia na mão — mandar pra lá falharia calado.
+  // Preenche o select de grupos. Reusa o getGroups() do Recrutar (que já sabe que o
+  // `ajax=load_group_menu` devolve false e parseia o overview). "todos" (id 0) fica de fora:
+  // não é grupo de verdade, e mandar aldeia pra lá não faz nada.
+  async function fillNobleGrupos() {
+    const sel = document.getElementById('twmgr-nb-posgid'); if (!sel) return;
+    let gs = [];
+    try { gs = await getGroups(); } catch (e) { return; }
+    const uteis = (gs || []).filter((g) => String(g.id) !== '0');
+    sel.innerHTML = '<option value="">— escolha —</option>'
+      + uteis.map((g) => '<option value="' + esc(String(g.id)) + '">' + esc(g.name || g.id) + '</option>').join('');
+    if (config.noble.posGrupoId) sel.value = String(config.noble.posGrupoId);
+  }
+
+  async function nobleAddGrupo(vid, gid) {
+
+    const body = new URLSearchParams();
+    body.append('village_ids[]', String(vid));
+    body.append('selected_group', String(gid));
+    body.append('add_to_group', 'Adicionar');
+    body.append('h', CSRF);
+    const url = '/game.php?village=' + CUR_VID
+      + '&screen=overview_villages&action=bulk_edit_villages&mode=groups&type=static&partial';
+    const res = await fetch(url, { method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return true;
+  }
+
+  // Roda depois da varredura de relatórios: alvo com lealdade <= 0 foi conquistado, e a aldeia
+  // agora é minha (aparece no getAllVillages). `posFeitos` impede repetir — sem ele, cada
+  // releitura do relatório antigo re-adicionaria a aldeia ao grupo.
+  async function noblePosConquista(todas) {
+    if (!config.noble.posGrupo || !config.noble.posGrupoId) return;
+    const rel = config.noble.relatorios || {};
+    for (const coord of Object.keys(rel)) {
+      if (rel[coord].lealdade == null || rel[coord].lealdade > 0) continue;
+      if (config.noble.posFeitos[coord]) continue;
+      const v = (todas || []).find((x) => (x.coord || '') === coord);
+      if (!v) continue;                 // ainda não entrou na lista de aldeias; tenta no próximo ciclo
+      try {
+        await nobleAddGrupo(v.vid, config.noble.posGrupoId);
+        config.noble.posFeitos[coord] = Date.now();
+        pushLog('Noblar: ' + coord + ' conquistada — adicionada ao grupo.', 'ok', 'noble');
+      } catch (e) {
+        pushLog('Noblar: não consegui pôr ' + coord + ' no grupo (' + (e.message || e) + ').', 'err', 'noble');
+      }
+      await sleep(400);
+    }
+    save();
+  }
+
   function nobleMinhaAldeia(coord, todas) {
+
 
     return (todas || []).some((v) => (v.coord || '') === coord);
   }
@@ -4875,7 +4943,7 @@
   // e o que decide se um envio parcial espera ou sai.
   async function nobleRecrutar(alvo, origensOrdenadas, faltam) {
     const feitas = [];
-    let formados = 0, naFila = 0, prontoEm = null;
+    let formados = 0, naFila = 0, prontoEm = null, cunhadas = 0;
     for (const o of origensOrdenadas) {
       // O que ja esta na fila conta como feito: nao precisa encomendar de novo.
       if (formados + naFila >= faltam) break;
@@ -4896,9 +4964,29 @@
       }
       const m = st.moedas || {};
       if (!(m.podemFormar > 0)) {
-        // Sem moeda guardada o bastante. NAO cunha -- so registra o quanto falta, pro usuario
-        // decidir se vai cunhar a mao.
-        if (m.faltam != null) feitas.push({ nome: o.nome, ok: false, motivo: 'faltam ' + m.faltam + ' moeda(s)' });
+        // Sem moeda guardada o bastante. Cunhar e OPT-IN (gasta recurso sem volta) e tem alvo:
+        // so ate esta aldeia conseguir fechar um NT de `cunharAte` nobres, contando o que ela ja
+        // tem MAIS o que esta na fila. Sem esse teto ela cunharia pra sempre.
+        if (config.noble.cunhar && cunhadas < (config.noble.cunharMaxAldeias || 3)) {
+          const jaTem = ((o.avail || {}).snob || 0) + (fl.nobres || 0);
+          if (jaTem >= (config.noble.cunharAte || 4)) {
+            feitas.push({ nome: o.nome, ok: false, motivo: 'já fecha NT (' + jaTem + ')' });
+          } else if (st.maxMint < 1) {
+            feitas.push({ nome: o.nome, ok: false, motivo: 'sem recurso pra cunhar' });
+          } else {
+            try {
+              const rc = await mintCoins(o.vid);
+              cunhadas++;
+              feitas.push({ nome: o.nome, ok: false,
+                            motivo: '+' + (rc.minted || 0) + ' moeda(s), faltam ' + m.faltam });
+            } catch (e2) {
+              feitas.push({ nome: o.nome, ok: false, motivo: 'cunhar falhou: ' + (e2.message || e2) });
+            }
+            await sleep(400); continue;
+          }
+        } else if (m.faltam != null) {
+          feitas.push({ nome: o.nome, ok: false, motivo: 'faltam ' + m.faltam + ' moeda(s)' });
+        }
         await sleep(200); continue;
       }
       try {
@@ -4943,6 +5031,9 @@
     if (config.noble.lerRelatorios !== false) {
       try { await nobleVarrerRelatorios(alvos); }
       catch (e) { pushLog('Noblar (relatórios): ' + (e.message || e), '', 'noble'); }
+      // Depende do que a varredura acabou de ler, entao vem logo em seguida.
+      try { await noblePosConquista(todas); }
+      catch (e) { pushLog('Noblar (pós-conquista): ' + (e.message || e), 'err', 'noble'); }
     }
 
     const cacheTropa = {};
@@ -5369,6 +5460,12 @@
     if (g('twmgr-nb-rel')) c.lerRelatorios = g('twmgr-nb-rel').checked;
     if (g('twmgr-nb-lpa')) c.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(g('twmgr-nb-lpa').value, 10) || 28));
     if (g('twmgr-nb-regen')) c.lealdadeRegen = Math.max(0, Math.min(10, parseFloat(g('twmgr-nb-regen').value) || 0));
+    if (g('twmgr-nb-cunhar')) c.cunhar = g('twmgr-nb-cunhar').checked;
+    if (g('twmgr-nb-cunhar-ate')) c.cunharAte = Math.max(1, Math.min(8, parseInt(g('twmgr-nb-cunhar-ate').value, 10) || 4));
+    if (g('twmgr-nb-cunhar-n')) c.cunharMaxAldeias = Math.max(1, Math.min(12, parseInt(g('twmgr-nb-cunhar-n').value, 10) || 3));
+    if (g('twmgr-nb-posgrupo')) c.posGrupo = g('twmgr-nb-posgrupo').checked;
+    if (g('twmgr-nb-posgid')) c.posGrupoId = g('twmgr-nb-posgid').value;
+
     save();
   }
   function setNobleStatus(on) { setBtnState('twmgr-nb-start', 'twmgr-nb-stop', on, '● Planejando', '▶ Planejar'); }
@@ -7189,11 +7286,19 @@
   // Sub-aba do Saque. Guarda a escolha no localStorage (preferência de tela, igual à largura do
   // painel) pra quem vive na Muralha não cair no Saque a cada recarregamento de página.
   const FARM_SUB_KEY = 'twMgr_farmSub';
-  function showFarmSub(name) {
-    ['farm', 'wall', 'map'].forEach((n) => {
+  // Sub-abas por módulo. Era só do Saque; virou genérico quando o Noblar também passou a ter —
+  // duplicar a função daria duas cópias pra manter em sincronia.
+  const SUBS = { farm: ['farm', 'wall', 'map'], noble: ['alvos', 'cunhar', 'pos'] };
+  function showSub(mod, name) {
+    (SUBS[mod] || []).forEach((n) => {
       const c = document.getElementById('twmgr-sub-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-sbtab-' + n); if (b) b.classList.toggle('active', n === name);
     });
+    try { localStorage.setItem(FARM_SUB_KEY + '_' + mod, name); } catch (e) {}
+  }
+  // O Saque salvava a sub-aba numa chave sem sufixo; mantida pra não resetar quem já usa.
+  function showFarmSub(name) {
+    showSub('farm', name);
     try { localStorage.setItem(FARM_SUB_KEY, name); } catch (e) {}
   }
 
@@ -7208,7 +7313,7 @@
     // Sub-abas dentro de um módulo (hoje só o Saque: Saque / Muralha / Mapa). O ponto é tirar peso da
     // barra principal sem esconder módulo: Muralha e Mapa só fazem sentido perto do Saque — um derruba
     // muralha dos alvos do assistente, o outro descobre bárbaro novo pra saquear.
-    const subBtn = (n, ico, label) => '<div id="twmgr-sbtab-' + n + '" class="twmgr-subtab" data-sub-farm="' + n + '"><span>' + ico + '</span> ' + label + '</div>';
+    const subBtn = (n, ico, label, mod) => '<div id="twmgr-sbtab-' + n + '" class="twmgr-subtab" data-sub="' + (mod || 'farm') + ':' + n + '"><span>' + ico + '</span> ' + label + '</div>';
     // Saque: matriz estilo FarmGod — A/B/C são checkboxes; regra "1 por linha" garantida no JS (marcar um desmarca os outros).
     const fmRow = (k, label) => '<tr class="twmgr-fmrow">' +
       '<td style="text-align:left;padding:3px 6px">' + label + '</td>' +
@@ -7509,6 +7614,12 @@
       '<div id="twmgr-tab-noble" style="display:none">' +
         hint('👑 Cola as coordenadas, define o limite de viagem e ele monta o plano de conquista e <b>dispara sozinho</b>. Serve os alvos <b>na ordem da lista</b>: com 6 nobres e 2 alvos, 4 no primeiro e 2 no segundo. Envia <b>parcial</b> se for o que há, e <b>nunca cunha</b> — só forma nobre onde a moeda já está guardada.') +
         cardsDiv('noble') +
+        '<div class="twmgr-subtabs">' +
+          subBtn('alvos', '👑', 'Alvos', 'noble') +
+          subBtn('cunhar', '🪙', 'Cunhar', 'noble') +
+          subBtn('pos', '🏴', 'Pós-conquista', 'noble') +
+        '</div>' +
+        '<div id="twmgr-sub-alvos">' +
         sec('Alvos',
           '<textarea id="twmgr-nb-coords" class="twmgr-inp" style="width:100%;height:56px;font-family:monospace;font-size:11px" placeholder="555|444 555|445 555446 texto solto no meio"></textarea>' +
           '<div class="twmgr-row" style="margin-top:5px">' +
@@ -7565,6 +7676,26 @@
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px"><b>Nunca cunha.</b> Cunhar converte recurso em moeda sem volta, num alvo que pode nem sair — isso fica com você, no modo <b>Cunhar</b> do Mercado.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto pra mais longe, e a que não conseguir agora <b>não interrompe</b> — tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>' +
           '</div>' +
+        '</div>' +
+        '</div>' +
+        '<div id="twmgr-sub-cunhar" style="display:none">' +
+          sec('Cunhar moeda de ouro',
+            '<div class="twmgr-fld"><span title="Converte recurso em moeda — sem volta">Cunhar quando faltar nobre</span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-cunhar" type="checkbox"><i></i></label></div>' +
+            '<div class="twmgr-fld"><span title="Para de cunhar numa aldeia quando ela já fecha esse tanto de nobre">Cunhar até fechar NT de</span><input id="twmgr-nb-cunhar-ate" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
+            '<div class="twmgr-fld"><span title="Trava de gasto: quantas aldeias podem cunhar num mesmo ciclo">Cunhar em até (aldeias/ciclo)</span><input id="twmgr-nb-cunhar-n" class="twmgr-inp" type="number" min="1" max="12" value="3"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px"><b>Desligado por padrão</b>, e de propósito: cunhar converte recurso em moeda <b>sem volta</b>, num alvo que pode nem sair.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Ligado, ele cunha nas aldeias mais perto do alvo e <b>para</b> quando a aldeia já fecha o NT — contando o que ela tem <b>mais o que está na fila</b> da Academia. Sem esse teto ela cunharia pra sempre.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">O modo <b>Cunhar</b> do Mercado continua existindo e é independente deste — aquele cunha sempre, este só quando falta nobre pro alvo.</div>') +
+        '</div>' +
+        '<div id="twmgr-sub-pos" style="display:none">' +
+          sec('Quando a aldeia cair',
+            '<div class="twmgr-fld"><span>Pôr num grupo automaticamente</span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-posgrupo" type="checkbox"><i></i></label></div>' +
+            '<div class="twmgr-fld"><span>Grupo</span><select id="twmgr-nb-posgid" class="twmgr-inp" style="flex:0 0 140px;width:140px"></select></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Só grupo <b>estático</b>. Grupo dinâmico é montado por regra e não aceita aldeia na mão — mandar pra lá falharia calado.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A conquista é detectada pela <b>lealdade ≤ 0</b> no relatório, então depende de <b>Ler relatórios</b> estar ligado. Cada aldeia entra <b>uma vez</b> só.</div>' +
+            '<div style="font-size:9px;color:#b5651d;margin-top:7px">⚠ <b>Bandeira ainda não.</b> A tela de bandeiras não tem formulário nenhum, então eu não sei como o jogo equipa uma. Falta um dump.</div>') +
         '</div>' +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
@@ -7845,10 +7976,17 @@
     document.getElementById('twmgr-nb-automax').value = config.noble.autoMax != null ? config.noble.autoMax : 8;
     document.getElementById('twmgr-nb-lpa').value = config.noble.lealdadePorAtk != null ? config.noble.lealdadePorAtk : 28;
     document.getElementById('twmgr-nb-regen').value = config.noble.lealdadeRegen != null ? config.noble.lealdadeRegen : 1;
+    document.getElementById('twmgr-nb-cunhar').checked = !!config.noble.cunhar;
+    document.getElementById('twmgr-nb-cunhar-ate').value = config.noble.cunharAte != null ? config.noble.cunharAte : 4;
+    document.getElementById('twmgr-nb-cunhar-n').value = config.noble.cunharMaxAldeias != null ? config.noble.cunharMaxAldeias : 3;
+    document.getElementById('twmgr-nb-posgrupo').checked = !!config.noble.posGrupo;
+    fillNobleGrupos();
+
 
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
-     'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen'].forEach((id) => {
+     'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen',
+     'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();
@@ -7912,7 +8050,14 @@
     document.getElementById('twmgr-bld-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-build'); renderBuildVillages(); });
     document.getElementById('twmgr-pq-abrir-tpl').addEventListener('click', () => abreTela('twmgr-tela-tpl-pq'));
     document.getElementById('twmgr-pq-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-pq'); renderResearchVillages(); });
-    document.querySelectorAll('[data-sub-farm]').forEach((b) => b.addEventListener('click', () => showFarmSub(b.getAttribute('data-sub-farm'))));
+    document.querySelectorAll('[data-sub]').forEach((b) => b.addEventListener('click', () => {
+      const p = (b.getAttribute('data-sub') || '').split(':');
+      showSub(p[0], p[1]);
+    }));
+    showSub('noble', (function () {
+      try { return localStorage.getItem(FARM_SUB_KEY + '_noble') || 'alvos'; } catch (e) { return 'alvos'; }
+    })());
+
     // Toggle expandir/recolher o log por módulo
     document.querySelectorAll('.twmgr-modlog-head').forEach((h) => h.addEventListener('click', () => {
       const mod = h.getAttribute('data-modlog'); const body = document.getElementById('twmgr-modlog-body-' + mod); if (!body) return;

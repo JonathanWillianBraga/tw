@@ -192,11 +192,19 @@
   // Sub-aba do Saque. Guarda a escolha no localStorage (preferência de tela, igual à largura do
   // painel) pra quem vive na Muralha não cair no Saque a cada recarregamento de página.
   const FARM_SUB_KEY = 'twMgr_farmSub';
-  function showFarmSub(name) {
-    ['farm', 'wall', 'map'].forEach((n) => {
+  // Sub-abas por módulo. Era só do Saque; virou genérico quando o Noblar também passou a ter —
+  // duplicar a função daria duas cópias pra manter em sincronia.
+  const SUBS = { farm: ['farm', 'wall', 'map'], noble: ['alvos', 'cunhar', 'pos'] };
+  function showSub(mod, name) {
+    (SUBS[mod] || []).forEach((n) => {
       const c = document.getElementById('twmgr-sub-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-sbtab-' + n); if (b) b.classList.toggle('active', n === name);
     });
+    try { localStorage.setItem(FARM_SUB_KEY + '_' + mod, name); } catch (e) {}
+  }
+  // O Saque salvava a sub-aba numa chave sem sufixo; mantida pra não resetar quem já usa.
+  function showFarmSub(name) {
+    showSub('farm', name);
     try { localStorage.setItem(FARM_SUB_KEY, name); } catch (e) {}
   }
 
@@ -211,7 +219,7 @@
     // Sub-abas dentro de um módulo (hoje só o Saque: Saque / Muralha / Mapa). O ponto é tirar peso da
     // barra principal sem esconder módulo: Muralha e Mapa só fazem sentido perto do Saque — um derruba
     // muralha dos alvos do assistente, o outro descobre bárbaro novo pra saquear.
-    const subBtn = (n, ico, label) => '<div id="twmgr-sbtab-' + n + '" class="twmgr-subtab" data-sub-farm="' + n + '"><span>' + ico + '</span> ' + label + '</div>';
+    const subBtn = (n, ico, label, mod) => '<div id="twmgr-sbtab-' + n + '" class="twmgr-subtab" data-sub="' + (mod || 'farm') + ':' + n + '"><span>' + ico + '</span> ' + label + '</div>';
     // Saque: matriz estilo FarmGod — A/B/C são checkboxes; regra "1 por linha" garantida no JS (marcar um desmarca os outros).
     const fmRow = (k, label) => '<tr class="twmgr-fmrow">' +
       '<td style="text-align:left;padding:3px 6px">' + label + '</td>' +
@@ -512,6 +520,12 @@
       '<div id="twmgr-tab-noble" style="display:none">' +
         hint('👑 Cola as coordenadas, define o limite de viagem e ele monta o plano de conquista e <b>dispara sozinho</b>. Serve os alvos <b>na ordem da lista</b>: com 6 nobres e 2 alvos, 4 no primeiro e 2 no segundo. Envia <b>parcial</b> se for o que há, e <b>nunca cunha</b> — só forma nobre onde a moeda já está guardada.') +
         cardsDiv('noble') +
+        '<div class="twmgr-subtabs">' +
+          subBtn('alvos', '👑', 'Alvos', 'noble') +
+          subBtn('cunhar', '🪙', 'Cunhar', 'noble') +
+          subBtn('pos', '🏴', 'Pós-conquista', 'noble') +
+        '</div>' +
+        '<div id="twmgr-sub-alvos">' +
         sec('Alvos',
           '<textarea id="twmgr-nb-coords" class="twmgr-inp" style="width:100%;height:56px;font-family:monospace;font-size:11px" placeholder="555|444 555|445 555446 texto solto no meio"></textarea>' +
           '<div class="twmgr-row" style="margin-top:5px">' +
@@ -568,6 +582,26 @@
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px"><b>Nunca cunha.</b> Cunhar converte recurso em moeda sem volta, num alvo que pode nem sair — isso fica com você, no modo <b>Cunhar</b> do Mercado.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto pra mais longe, e a que não conseguir agora <b>não interrompe</b> — tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>' +
           '</div>' +
+        '</div>' +
+        '</div>' +
+        '<div id="twmgr-sub-cunhar" style="display:none">' +
+          sec('Cunhar moeda de ouro',
+            '<div class="twmgr-fld"><span title="Converte recurso em moeda — sem volta">Cunhar quando faltar nobre</span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-cunhar" type="checkbox"><i></i></label></div>' +
+            '<div class="twmgr-fld"><span title="Para de cunhar numa aldeia quando ela já fecha esse tanto de nobre">Cunhar até fechar NT de</span><input id="twmgr-nb-cunhar-ate" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
+            '<div class="twmgr-fld"><span title="Trava de gasto: quantas aldeias podem cunhar num mesmo ciclo">Cunhar em até (aldeias/ciclo)</span><input id="twmgr-nb-cunhar-n" class="twmgr-inp" type="number" min="1" max="12" value="3"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px"><b>Desligado por padrão</b>, e de propósito: cunhar converte recurso em moeda <b>sem volta</b>, num alvo que pode nem sair.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Ligado, ele cunha nas aldeias mais perto do alvo e <b>para</b> quando a aldeia já fecha o NT — contando o que ela tem <b>mais o que está na fila</b> da Academia. Sem esse teto ela cunharia pra sempre.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">O modo <b>Cunhar</b> do Mercado continua existindo e é independente deste — aquele cunha sempre, este só quando falta nobre pro alvo.</div>') +
+        '</div>' +
+        '<div id="twmgr-sub-pos" style="display:none">' +
+          sec('Quando a aldeia cair',
+            '<div class="twmgr-fld"><span>Pôr num grupo automaticamente</span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-posgrupo" type="checkbox"><i></i></label></div>' +
+            '<div class="twmgr-fld"><span>Grupo</span><select id="twmgr-nb-posgid" class="twmgr-inp" style="flex:0 0 140px;width:140px"></select></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Só grupo <b>estático</b>. Grupo dinâmico é montado por regra e não aceita aldeia na mão — mandar pra lá falharia calado.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A conquista é detectada pela <b>lealdade ≤ 0</b> no relatório, então depende de <b>Ler relatórios</b> estar ligado. Cada aldeia entra <b>uma vez</b> só.</div>' +
+            '<div style="font-size:9px;color:#b5651d;margin-top:7px">⚠ <b>Bandeira ainda não.</b> A tela de bandeiras não tem formulário nenhum, então eu não sei como o jogo equipa uma. Falta um dump.</div>') +
         '</div>' +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
@@ -848,10 +882,17 @@
     document.getElementById('twmgr-nb-automax').value = config.noble.autoMax != null ? config.noble.autoMax : 8;
     document.getElementById('twmgr-nb-lpa').value = config.noble.lealdadePorAtk != null ? config.noble.lealdadePorAtk : 28;
     document.getElementById('twmgr-nb-regen').value = config.noble.lealdadeRegen != null ? config.noble.lealdadeRegen : 1;
+    document.getElementById('twmgr-nb-cunhar').checked = !!config.noble.cunhar;
+    document.getElementById('twmgr-nb-cunhar-ate').value = config.noble.cunharAte != null ? config.noble.cunharAte : 4;
+    document.getElementById('twmgr-nb-cunhar-n').value = config.noble.cunharMaxAldeias != null ? config.noble.cunharMaxAldeias : 3;
+    document.getElementById('twmgr-nb-posgrupo').checked = !!config.noble.posGrupo;
+    fillNobleGrupos();
+
 
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
-     'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen'].forEach((id) => {
+     'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen',
+     'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();
@@ -915,7 +956,14 @@
     document.getElementById('twmgr-bld-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-build'); renderBuildVillages(); });
     document.getElementById('twmgr-pq-abrir-tpl').addEventListener('click', () => abreTela('twmgr-tela-tpl-pq'));
     document.getElementById('twmgr-pq-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-pq'); renderResearchVillages(); });
-    document.querySelectorAll('[data-sub-farm]').forEach((b) => b.addEventListener('click', () => showFarmSub(b.getAttribute('data-sub-farm'))));
+    document.querySelectorAll('[data-sub]').forEach((b) => b.addEventListener('click', () => {
+      const p = (b.getAttribute('data-sub') || '').split(':');
+      showSub(p[0], p[1]);
+    }));
+    showSub('noble', (function () {
+      try { return localStorage.getItem(FARM_SUB_KEY + '_noble') || 'alvos'; } catch (e) { return 'alvos'; }
+    })());
+
     // Toggle expandir/recolher o log por módulo
     document.querySelectorAll('.twmgr-modlog-head').forEach((h) => h.addEventListener('click', () => {
       const mod = h.getAttribute('data-modlog'); const body = document.getElementById('twmgr-modlog-body-' + mod); if (!body) return;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.39.0
+// @version      11.40.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.39.0';
+  const VERSION = '11.40.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -241,6 +241,12 @@
     // Quanto um nobre derruba de lealdade (no jogo varia 20-35) e quanto ela regenera por
     // hora. Os dois viram "quantos nobres ainda faltam" — ver noblePrecisaDe.
     lealdadePorAtk: 28, lealdadeRegen: 1,
+    // Cunhar DESLIGADO por padrão: gasta recurso sem volta. Quando ligado tem alvo claro —
+    // cunha até alguma aldeia perto conseguir fechar um NT de `cunharAte` nobres.
+    cunhar: false, cunharAte: 4, cunharMaxAldeias: 3,
+    // Pós-conquista: joga a aldeia tomada num grupo estático.
+    posGrupo: false, posGrupoId: '', posFeitos: {},
+
     emVoo: {},        // { [coord]: [{at, chega, n}] } — comandos meus que ainda não pousaram
 
 
@@ -605,6 +611,13 @@
     if (c.noble.lealdadeRegen == null) c.noble.lealdadeRegen = 1;
     c.noble.lealdadeRegen = Math.max(0, Math.min(10, parseFloat(c.noble.lealdadeRegen) || 0));
     if (!c.noble.emVoo || typeof c.noble.emVoo !== 'object') c.noble.emVoo = {};
+    if (c.noble.cunhar == null) c.noble.cunhar = false;
+    c.noble.cunharAte = Math.max(1, Math.min(8, parseInt(c.noble.cunharAte, 10) || 4));
+    c.noble.cunharMaxAldeias = Math.max(1, Math.min(12, parseInt(c.noble.cunharMaxAldeias, 10) || 3));
+    if (c.noble.posGrupo == null) c.noble.posGrupo = false;
+    if (c.noble.posGrupoId == null) c.noble.posGrupoId = '';
+    if (!c.noble.posFeitos || typeof c.noble.posFeitos !== 'object') c.noble.posFeitos = {};
+
     // Registro de alvo que saiu da lista não serve pra nada e cresceria pra sempre.
     Object.keys(c.noble.emVoo).forEach((k) => {
       if (!c.noble.alvos.some((a) => a.coord === k)) delete c.noble.emVoo[k];

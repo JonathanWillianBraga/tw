@@ -54,8 +54,11 @@
       const s = (config.noble && config.noble.stats) || {};
       arr = [
         { v: fmtN(s.alvos), l: 'alvos na lista', hl: true },
+        // "prontos" = tem ao menos 1 nobre pra mandar (parcial conta); "completos" = leva o que o
+        // modelo pede. A diferença entre os dois é o que ainda vai sair capenga.
+        { v: fmtN(s.completos), l: 'com envio completo' },
         { v: fmtN(s.prontos), l: 'prontos p/ enviar' },
-        { v: fmtN(s.faltando), l: 'faltando nobre' },
+        { v: fmtN(s.faltando), l: 'sem nobre' },
       ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});

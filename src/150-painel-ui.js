@@ -474,7 +474,7 @@
         modLog('research') +
       '</div>' +
       '<div id="twmgr-tab-noble" style="display:none">' +
-        hint('👑 Cola as coordenadas, define o limite de viagem e ele monta o plano de conquista. <b>Não dispara sozinho</b> — o envio é seu.') +
+        hint('👑 Cola as coordenadas, define o limite de viagem e ele monta o plano de conquista. <b>Não dispara sozinho</b> — o envio é seu. Serve os alvos <b>na ordem da lista</b>: com 6 nobres e 2 alvos, 4 no primeiro e 2 no segundo. Envia <b>parcial</b> se for o que há, e <b>nunca cunha</b> — só forma nobre onde a moeda já está guardada.') +
         cardsDiv('noble') +
         sec('Alvos',
           '<textarea id="twmgr-nb-coords" class="twmgr-inp" style="width:100%;height:56px;font-family:monospace;font-size:11px" placeholder="555|444 555|445 555446 texto solto no meio"></textarea>' +
@@ -499,9 +499,9 @@
           '<div id="twmgr-nb-esc" class="twmgr-nb-esc"></div>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">A escolta sai da aldeia <b>mais próxima</b> do alvo, uma vez só (não se repete por comando). Se a origem não tiver a tropa toda, vai o que houver e o log avisa.</div>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A duração vem do próprio jogo, já <b>com a escolta dentro</b> — aríete e catapulta são mais lentos que o nobre e mudam a chegada.</div>') +
-        sec('Produzir nobre quando faltar', '<label class="twmgr-check" title="Cunha moeda de ouro nas aldeias mais próximas do alvo"><input id="twmgr-nb-prod" type="checkbox"> Cunhar moeda pra fazer nobre</label>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl" title="Cada aldeia cunha com o próprio recurso, então espalhar acelera de verdade">Cunhar em até (aldeias)</span><input id="twmgr-nb-prodn" class="twmgr-inp" type="number" min="1" max="12" value="4" style="width:56px"></div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">Nobre recruta em <b>paralelo</b> entre aldeias e em série dentro de uma. Com <b>só NT</b> ligado ele concentra numa só, porque os 4 precisam sair do mesmo lugar.</div>') +
+        sec('Recrutar nobre quando faltar', '<label class="twmgr-check" title="Forma o nobre onde JÁ existe moeda guardada — não cunha"><input id="twmgr-nb-prod" type="checkbox"> Formar nobre nas aldeias mais próximas do alvo</label>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:4px"><b>Nunca cunha.</b> Cunhar converte recurso em moeda sem volta, num alvo que pode nem sair — isso fica com você, no modo <b>Cunhar</b> do Mercado. Aqui ele só <b>forma</b> nobre onde a moeda já está guardada.</div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto do alvo pra mais longe, e a que não conseguir agora (sem recurso, sem população) <b>não interrompe</b> — ele tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>') +
         sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>' +
           '<label class="twmgr-check" title="Lê os relatórios de ataque pra saber a lealdade que sobrou"><input id="twmgr-nb-rel" type="checkbox"> Ler relatórios (lealdade, dono e tropa do alvo)</label>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">Lealdade só aparece em relatório de <b>ataque com nobre</b> — exploração não mostra. Por isso a coluna fica <b>?</b> até o primeiro nobre bater.</div>') +
@@ -774,8 +774,7 @@
     document.getElementById('twmgr-nb-int').value = Math.round((config.noble.interval || 900) / 60);
     document.getElementById('twmgr-nb-rel').checked = config.noble.lerRelatorios !== false;
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
-    document.getElementById('twmgr-nb-prodn').value = config.noble.maxAldeiasProd != null ? config.noble.maxAldeiasProd : 4;
-    ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-prodn', 'twmgr-nb-rel'].forEach((id) => {
+    ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();

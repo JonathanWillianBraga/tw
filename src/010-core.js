@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.28.0
+// @version      11.29.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -129,7 +129,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.28.0';
+  const VERSION = '11.29.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -213,6 +213,7 @@
     running: false, nextAt: 0, interval: 900,
     alvos: [], plano: [], planoAt: 0,
     maxHoras: 6, soNT: false,
+    produzir: true, maxAldeiasProd: 4,   // cunha em N aldeias ao mesmo tempo (paralelo)
     stats: {},
   });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
@@ -531,6 +532,8 @@
     if (!Array.isArray(c.noble.plano)) c.noble.plano = [];
     if (c.noble.maxHoras == null) c.noble.maxHoras = 6;
     if (c.noble.soNT == null) c.noble.soNT = false;
+    if (c.noble.produzir == null) c.noble.produzir = true;
+    if (c.noble.maxAldeiasProd == null) c.noble.maxAldeiasProd = 4;
     if (c.noble.interval == null) c.noble.interval = 900;
     if (!c.map) c.map = defMap();
     // Reformulação do Mapa: de one-shot pra ciclo contínuo, com base de conhecimento e

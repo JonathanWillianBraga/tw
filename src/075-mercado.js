@@ -158,7 +158,29 @@
       const mm = (form.textContent || '').match(/\((\d+)\)/);
       if (mm) maxMint = parseInt(mm[1], 10) || 0;
     }
-    return { resNow: resNow, hasForm: !!form, action: action, fields: fields, countName: countName, maxMint: maxMint };
+    // Progresso do proximo nobre. Confirmado no dump da tela (br143):
+    //   "Falta ainda para o limite de nobres 46: 16 moedas de ouro"
+    //   "Ja guardadas para o limite de nobres 46: 30 moedas de ouro"
+    // O numero do limite escala com quantos nobres a conta ja tem; as moedas sao POR ALDEIA.
+    // Sem acento no regex de proposito: comparo contra o texto normalizado (ver 082-pesquisa,
+    // onde classe de caractere com acento em fonte gerada por script ja quebrou calado).
+    const txt = (doc.body ? doc.body.textContent : '').replace(/\s+/g, ' ')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const mFalta = txt.match(/falta ainda para o limite de nobres (\d+)[^0-9]{0,12}(\d+)/i);
+    const mTem = txt.match(/ja guardadas para o limite de nobres \d+[^0-9]{0,12}(\d+)/i);
+    // "Ainda podem ser produzidos: N" = quantos nobres a aldeia pode FORMAR agora (o limite da
+    // conta menos existentes, em producao e aldeias conquistadas). Se for > 0, cunhar mais moeda
+    // nao adianta nada: o que falta e apertar Formar unidade.
+    const mPodem = txt.match(/ainda podem ser produzidos[^0-9]{0,12}(\d+)/i);
+    const moedas = {
+      podemFormar: mPodem ? parseInt(mPodem[1], 10) : null,
+      limite: mFalta ? parseInt(mFalta[1], 10) : null,   // qual nobre a aldeia esta juntando
+      faltam: mFalta ? parseInt(mFalta[2], 10) : null,
+      tem: mTem ? parseInt(mTem[1], 10) : null,
+    };
+    return { resNow: resNow, hasForm: !!form, action: action, fields: fields,
+             countName: countName, maxMint: maxMint, moedas: moedas };
+
   }
   async function mintCoins(vid) {
     const st = await getSnobState(vid);

@@ -484,6 +484,9 @@
           '<div class="twmgr-row"><span class="twmgr-lbl">Viagem máx. do nobre (h)</span><input id="twmgr-nb-horas" class="twmgr-inp" type="number" min="1" max="72" value="6" style="width:56px"></div>' +
           '<label class="twmgr-check" title="NT = os 4 nobres saindo da MESMA aldeia"><input id="twmgr-nb-nt" type="checkbox"> Só enviar NT (4 nobres da mesma aldeia)</label>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">A duração vem do próprio jogo: o plano prepara o comando e lê o tempo real, então o limite vale em qualquer mundo.</div>') +
+        sec('Produzir nobre quando faltar', '<label class="twmgr-check" title="Cunha moeda de ouro nas aldeias mais próximas do alvo"><input id="twmgr-nb-prod" type="checkbox"> Cunhar moeda pra fazer nobre</label>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Cada aldeia cunha com o próprio recurso, então espalhar acelera de verdade">Cunhar em até (aldeias)</span><input id="twmgr-nb-prodn" class="twmgr-inp" type="number" min="1" max="12" value="4" style="width:56px"></div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">Nobre recruta em <b>paralelo</b> entre aldeias e em série dentro de uma. Com <b>só NT</b> ligado ele concentra numa só, porque os 4 precisam sair do mesmo lugar.</div>') +
         sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
@@ -746,7 +749,9 @@
     document.getElementById('twmgr-nb-horas').value = config.noble.maxHoras != null ? config.noble.maxHoras : 6;
     document.getElementById('twmgr-nb-nt').checked = !!config.noble.soNT;
     document.getElementById('twmgr-nb-int').value = Math.round((config.noble.interval || 900) / 60);
-    ['twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int'].forEach((id) => {
+    document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
+    document.getElementById('twmgr-nb-prodn').value = config.noble.maxAldeiasProd != null ? config.noble.maxAldeiasProd : 4;
+    ['twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-prodn'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();

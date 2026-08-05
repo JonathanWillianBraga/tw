@@ -97,6 +97,49 @@
     };
   }
 
+  // Producao: cunha moeda nas aldeias mais proximas do alvo que ainda cabem no limite de horas.
+  //
+  // Cunhar e o gargalo real. O nobre so fica disponivel quando a aldeia junta as moedas do proximo
+  // limite (a tela diz "faltam N moedas"), e nao existe formulario de recrutar antes disso.
+  //
+  // ESPALHA de proposito: cada aldeia cunha com o PROPRIO recurso e guarda o PROPRIO estoque, entao
+  // quatro aldeias juntam quatro vezes mais rapido que uma. Quando o modo "so NT" esta ligado isso
+  // se inverte -- os 4 nobres precisam sair da mesma aldeia, entao concentra na mais proxima.
+  async function nobleProduzir(alvo, origensOrdenadas) {
+    const quantas = config.noble.soNT ? 1 : Math.max(1, config.noble.maxAldeiasProd || 4);
+    const escolhidas = origensOrdenadas.slice(0, quantas);
+    const feitas = [];
+    for (const o of escolhidas) {
+      let st;
+      try { st = await getSnobState(o.vid); }
+      catch (e) { continue; }                       // sem Academia: proxima aldeia
+      if (!st.hasForm) continue;
+      const m = st.moedas || {};
+      // Ja da pra formar nobre aqui: cunhar mais seria queimar recurso a toa.
+      if (m.podemFormar > 0) {
+        feitas.push({ nome: o.nome, cunhou: 0, podemFormar: m.podemFormar, motivo: 'ja pode formar' });
+        await sleep(200); continue;
+      }
+      if (st.maxMint < 1) {
+        feitas.push({ nome: o.nome, cunhou: 0, faltam: m.faltam, tem: m.tem, motivo: 'sem recurso' });
+        await sleep(250); continue;
+      }
+      try {
+        const r = await mintCoins(o.vid);
+        feitas.push({ nome: o.nome, cunhou: r.minted || 0, faltam: m.faltam, tem: m.tem });
+      } catch (e) {
+        feitas.push({ nome: o.nome, cunhou: 0, faltam: m.faltam, tem: m.tem, motivo: (e.message || e) });
+      }
+      await sleep(400);
+    }
+    if (feitas.length) {
+      const resumo = feitas.map((f) => f.nome + ': ' + (f.cunhou ? '+' + f.cunhou + ' moeda(s)' : (f.motivo || 'nada'))
+        + (f.faltam != null ? ' (faltam ' + f.faltam + ' p/ o nobre)' : '')).join(' \u00b7 ');
+      pushLog('Noblar (produz) \u2192 ' + alvo.coord + ' \u2014 ' + resumo, 'ok', 'noble');
+    }
+    return feitas;
+  }
+
   async function nobleTick() {
     clearTimeout(nobleTimer);
     if (!config.noble.running) return;
@@ -127,7 +170,13 @@
       const r = await noblePlanejarAlvo(alvo, todas, cacheTropa);
       plano.push({ coord: alvo.coord, x: alvo.x, y: alvo.y, pronto: r.pronto,
                    envios: r.envios, falta: r.falta, motivo: r.motivo });
-      if (r.pronto) prontos++;
+      if (r.pronto) { prontos++; continue; }
+      // Falta nobre: manda cunhar nas mais proximas. Cunhar gasta recurso da aldeia, mas nao envia
+      // nada nem tem volta ruim -- e so converter recurso que ja e seu em moeda.
+      if (config.noble.produzir !== false) {
+        try { await nobleProduzir(alvo, r.dentroDoLimite || []); }
+        catch (e) { pushLog('Noblar (produz) em ' + alvo.coord + ': ' + (e.message || e), 'err', 'noble'); }
+      }
     }
 
     config.noble.plano = plano;
@@ -248,6 +297,8 @@
     if (g('twmgr-nb-horas')) c.maxHoras = Math.max(1, parseInt(g('twmgr-nb-horas').value, 10) || 6);
     if (g('twmgr-nb-nt')) c.soNT = g('twmgr-nb-nt').checked;
     if (g('twmgr-nb-int')) c.interval = Math.max(1, parseInt(g('twmgr-nb-int').value, 10) || 15) * 60;
+    if (g('twmgr-nb-prod')) c.produzir = g('twmgr-nb-prod').checked;
+    if (g('twmgr-nb-prodn')) c.maxAldeiasProd = Math.max(1, Math.min(12, parseInt(g('twmgr-nb-prodn').value, 10) || 4));
     save();
   }
   function setNobleStatus(on) { setBtnState('twmgr-nb-start', 'twmgr-nb-stop', on, '● Planejando', '▶ Planejar'); }

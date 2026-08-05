@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.28.0
+// @version      11.29.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -129,7 +129,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.28.0';
+  const VERSION = '11.29.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -213,6 +213,7 @@
     running: false, nextAt: 0, interval: 900,
     alvos: [], plano: [], planoAt: 0,
     maxHoras: 6, soNT: false,
+    produzir: true, maxAldeiasProd: 4,   // cunha em N aldeias ao mesmo tempo (paralelo)
     stats: {},
   });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
@@ -531,6 +532,8 @@
     if (!Array.isArray(c.noble.plano)) c.noble.plano = [];
     if (c.noble.maxHoras == null) c.noble.maxHoras = 6;
     if (c.noble.soNT == null) c.noble.soNT = false;
+    if (c.noble.produzir == null) c.noble.produzir = true;
+    if (c.noble.maxAldeiasProd == null) c.noble.maxAldeiasProd = 4;
     if (c.noble.interval == null) c.noble.interval = 900;
     if (!c.map) c.map = defMap();
     // Reformulação do Mapa: de one-shot pra ciclo contínuo, com base de conhecimento e
@@ -3034,7 +3037,29 @@
       const mm = (form.textContent || '').match(/\((\d+)\)/);
       if (mm) maxMint = parseInt(mm[1], 10) || 0;
     }
-    return { resNow: resNow, hasForm: !!form, action: action, fields: fields, countName: countName, maxMint: maxMint };
+    // Progresso do proximo nobre. Confirmado no dump da tela (br143):
+    //   "Falta ainda para o limite de nobres 46: 16 moedas de ouro"
+    //   "Ja guardadas para o limite de nobres 46: 30 moedas de ouro"
+    // O numero do limite escala com quantos nobres a conta ja tem; as moedas sao POR ALDEIA.
+    // Sem acento no regex de proposito: comparo contra o texto normalizado (ver 082-pesquisa,
+    // onde classe de caractere com acento em fonte gerada por script ja quebrou calado).
+    const txt = (doc.body ? doc.body.textContent : '').replace(/\s+/g, ' ')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const mFalta = txt.match(/falta ainda para o limite de nobres (\d+)[^0-9]{0,12}(\d+)/i);
+    const mTem = txt.match(/ja guardadas para o limite de nobres \d+[^0-9]{0,12}(\d+)/i);
+    // "Ainda podem ser produzidos: N" = quantos nobres a aldeia pode FORMAR agora (o limite da
+    // conta menos existentes, em producao e aldeias conquistadas). Se for > 0, cunhar mais moeda
+    // nao adianta nada: o que falta e apertar Formar unidade.
+    const mPodem = txt.match(/ainda podem ser produzidos[^0-9]{0,12}(\d+)/i);
+    const moedas = {
+      podemFormar: mPodem ? parseInt(mPodem[1], 10) : null,
+      limite: mFalta ? parseInt(mFalta[1], 10) : null,   // qual nobre a aldeia esta juntando
+      faltam: mFalta ? parseInt(mFalta[2], 10) : null,
+      tem: mTem ? parseInt(mTem[1], 10) : null,
+    };
+    return { resNow: resNow, hasForm: !!form, action: action, fields: fields,
+             countName: countName, maxMint: maxMint, moedas: moedas };
+
   }
   async function mintCoins(vid) {
     const st = await getSnobState(vid);
@@ -4349,6 +4374,49 @@
     };
   }
 
+  // Producao: cunha moeda nas aldeias mais proximas do alvo que ainda cabem no limite de horas.
+  //
+  // Cunhar e o gargalo real. O nobre so fica disponivel quando a aldeia junta as moedas do proximo
+  // limite (a tela diz "faltam N moedas"), e nao existe formulario de recrutar antes disso.
+  //
+  // ESPALHA de proposito: cada aldeia cunha com o PROPRIO recurso e guarda o PROPRIO estoque, entao
+  // quatro aldeias juntam quatro vezes mais rapido que uma. Quando o modo "so NT" esta ligado isso
+  // se inverte -- os 4 nobres precisam sair da mesma aldeia, entao concentra na mais proxima.
+  async function nobleProduzir(alvo, origensOrdenadas) {
+    const quantas = config.noble.soNT ? 1 : Math.max(1, config.noble.maxAldeiasProd || 4);
+    const escolhidas = origensOrdenadas.slice(0, quantas);
+    const feitas = [];
+    for (const o of escolhidas) {
+      let st;
+      try { st = await getSnobState(o.vid); }
+      catch (e) { continue; }                       // sem Academia: proxima aldeia
+      if (!st.hasForm) continue;
+      const m = st.moedas || {};
+      // Ja da pra formar nobre aqui: cunhar mais seria queimar recurso a toa.
+      if (m.podemFormar > 0) {
+        feitas.push({ nome: o.nome, cunhou: 0, podemFormar: m.podemFormar, motivo: 'ja pode formar' });
+        await sleep(200); continue;
+      }
+      if (st.maxMint < 1) {
+        feitas.push({ nome: o.nome, cunhou: 0, faltam: m.faltam, tem: m.tem, motivo: 'sem recurso' });
+        await sleep(250); continue;
+      }
+      try {
+        const r = await mintCoins(o.vid);
+        feitas.push({ nome: o.nome, cunhou: r.minted || 0, faltam: m.faltam, tem: m.tem });
+      } catch (e) {
+        feitas.push({ nome: o.nome, cunhou: 0, faltam: m.faltam, tem: m.tem, motivo: (e.message || e) });
+      }
+      await sleep(400);
+    }
+    if (feitas.length) {
+      const resumo = feitas.map((f) => f.nome + ': ' + (f.cunhou ? '+' + f.cunhou + ' moeda(s)' : (f.motivo || 'nada'))
+        + (f.faltam != null ? ' (faltam ' + f.faltam + ' p/ o nobre)' : '')).join(' \u00b7 ');
+      pushLog('Noblar (produz) \u2192 ' + alvo.coord + ' \u2014 ' + resumo, 'ok', 'noble');
+    }
+    return feitas;
+  }
+
   async function nobleTick() {
     clearTimeout(nobleTimer);
     if (!config.noble.running) return;
@@ -4379,7 +4447,13 @@
       const r = await noblePlanejarAlvo(alvo, todas, cacheTropa);
       plano.push({ coord: alvo.coord, x: alvo.x, y: alvo.y, pronto: r.pronto,
                    envios: r.envios, falta: r.falta, motivo: r.motivo });
-      if (r.pronto) prontos++;
+      if (r.pronto) { prontos++; continue; }
+      // Falta nobre: manda cunhar nas mais proximas. Cunhar gasta recurso da aldeia, mas nao envia
+      // nada nem tem volta ruim -- e so converter recurso que ja e seu em moeda.
+      if (config.noble.produzir !== false) {
+        try { await nobleProduzir(alvo, r.dentroDoLimite || []); }
+        catch (e) { pushLog('Noblar (produz) em ' + alvo.coord + ': ' + (e.message || e), 'err', 'noble'); }
+      }
     }
 
     config.noble.plano = plano;
@@ -4500,6 +4574,8 @@
     if (g('twmgr-nb-horas')) c.maxHoras = Math.max(1, parseInt(g('twmgr-nb-horas').value, 10) || 6);
     if (g('twmgr-nb-nt')) c.soNT = g('twmgr-nb-nt').checked;
     if (g('twmgr-nb-int')) c.interval = Math.max(1, parseInt(g('twmgr-nb-int').value, 10) || 15) * 60;
+    if (g('twmgr-nb-prod')) c.produzir = g('twmgr-nb-prod').checked;
+    if (g('twmgr-nb-prodn')) c.maxAldeiasProd = Math.max(1, Math.min(12, parseInt(g('twmgr-nb-prodn').value, 10) || 4));
     save();
   }
   function setNobleStatus(on) { setBtnState('twmgr-nb-start', 'twmgr-nb-stop', on, '● Planejando', '▶ Planejar'); }
@@ -6612,6 +6688,9 @@
           '<div class="twmgr-row"><span class="twmgr-lbl">Viagem máx. do nobre (h)</span><input id="twmgr-nb-horas" class="twmgr-inp" type="number" min="1" max="72" value="6" style="width:56px"></div>' +
           '<label class="twmgr-check" title="NT = os 4 nobres saindo da MESMA aldeia"><input id="twmgr-nb-nt" type="checkbox"> Só enviar NT (4 nobres da mesma aldeia)</label>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">A duração vem do próprio jogo: o plano prepara o comando e lê o tempo real, então o limite vale em qualquer mundo.</div>') +
+        sec('Produzir nobre quando faltar', '<label class="twmgr-check" title="Cunha moeda de ouro nas aldeias mais próximas do alvo"><input id="twmgr-nb-prod" type="checkbox"> Cunhar moeda pra fazer nobre</label>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl" title="Cada aldeia cunha com o próprio recurso, então espalhar acelera de verdade">Cunhar em até (aldeias)</span><input id="twmgr-nb-prodn" class="twmgr-inp" type="number" min="1" max="12" value="4" style="width:56px"></div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">Nobre recruta em <b>paralelo</b> entre aldeias e em série dentro de uma. Com <b>só NT</b> ligado ele concentra numa só, porque os 4 precisam sair do mesmo lugar.</div>') +
         sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
@@ -6874,7 +6953,9 @@
     document.getElementById('twmgr-nb-horas').value = config.noble.maxHoras != null ? config.noble.maxHoras : 6;
     document.getElementById('twmgr-nb-nt').checked = !!config.noble.soNT;
     document.getElementById('twmgr-nb-int').value = Math.round((config.noble.interval || 900) / 60);
-    ['twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int'].forEach((id) => {
+    document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
+    document.getElementById('twmgr-nb-prodn').value = config.noble.maxAldeiasProd != null ? config.noble.maxAldeiasProd : 4;
+    ['twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-prodn'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();

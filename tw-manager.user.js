@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.31.0
+// @version      11.31.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -129,7 +129,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.31.0';
+  const VERSION = '11.31.1';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -918,7 +918,11 @@
   }
   function absUrl(raw) { try { return new URL(raw, location.href).href; } catch (e) { return raw; } }
 
-  // Converte a data do relatório do assistente ("hoje às 12:03:39", "ontem às ...", "13/07/26 às ...") em timestamp (ms). null se não der.
+  // Meses abreviados do pt-BR, do jeito que a LISTA de relatórios escreve ("ago. 05, 01:13").
+  const MES_PT = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+  // Converte a data do relatório ("hoje às 12:03:39", "ontem às ...", "13/07/26 às ...",
+  // "ago. 05, 01:13", "ago. 04, 2026 19:55:01") em timestamp (ms). null se não der.
   function parseReportDate(txt) {
     txt = (txt || '').trim().toLowerCase();
     if (!txt) return null;
@@ -927,6 +931,21 @@
     const d = new Date();
     if (txt.indexOf('hoje') >= 0) { d.setHours(hh, mm, ss, 0); return d.getTime(); }
     if (txt.indexOf('ontem') >= 0) { d.setDate(d.getDate() - 1); d.setHours(hh, mm, ss, 0); return d.getTime(); }
+    // Mês por NOME vem antes das numéricas: é o formato da lista de relatórios e não tem ambiguidade.
+    // O ano é opcional ali ("ago. 05, 01:13") — sem ele assume o ano corrente, e se isso jogar a data
+    // pro futuro é porque virou o ano (um relatório de dez. lido em jan.), então volta um.
+    // [^\s\d]* engole tanto o ponto de "ago." quanto o resto de um mês por extenso ("março") — \w
+    // não serviria, porque sem a flag /u ele não cobre letra acentuada.
+    const mn = txt.match(/\b(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[^\s\d]*\s+(\d{1,2})(?:\s*,\s*(\d{4}))?/);
+    if (mn) {
+      const mesIdx = MES_PT.indexOf(mn[1]);
+      if (mesIdx >= 0) {
+        const ano = mn[3] ? +mn[3] : (new Date()).getFullYear();
+        let t = new Date(ano, mesIdx, +mn[2], hh, mm, ss).getTime();
+        if (!mn[3] && t > Date.now() + 2 * 86400000) t = new Date(ano - 1, mesIdx, +mn[2], hh, mm, ss).getTime();
+        return t;
+      }
+    }
     const dm = txt.match(/(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})/);
     if (dm) { let y = +dm[3]; if (y < 100) y += 2000; return new Date(y, (+dm[2]) - 1, +dm[1], hh, mm, ss).getTime(); }
     const dm2 = txt.match(/(\d{1,2})[\/.](\d{1,2})/);

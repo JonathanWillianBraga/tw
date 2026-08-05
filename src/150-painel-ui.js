@@ -140,16 +140,32 @@
       // largo), o que deixava o cabeçalho desalinhado. Cada ícone vai dentro de uma caixa FIXA,
       // centrado, com o que passar cortado igualmente dos dois lados — as colunas ficam uniformes
       // independente do sprite.
-      ".twmgr-uicon{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;overflow:hidden;font-style:normal}",
+      ".twmgr-uicon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;font-style:normal;vertical-align:middle}",
+      // O sprite é ESCALADO por JS pra caber (ver rcAjustarIcones): só encaixotar igualava a
+      // coluna mas cortava os grandes. A origem central mantém o ícone alinhado com o número.
+      ".twmgr-uicon .unit_sprite{flex:0 0 auto;transform-origin:center}",
+
       ".twmgr-uicon .unit_sprite{flex:0 0 auto}",
       ".twmgr-rc-st{table-layout:fixed;width:100%}",
-      ".twmgr-rc-st th{padding:3px 1px;text-align:center;vertical-align:middle}",
-      ".twmgr-rc-st td{padding:4px 1px;text-align:center;vertical-align:middle;white-space:nowrap;font-size:9px}",
-      ".twmgr-rc-st td:first-child,.twmgr-rc-st th:first-child{text-align:left;padding-left:5px;white-space:normal}",
+      // `thead th`/`tbody td` (nao so `th`/`td`): a regra base .twmgr-bld-tab th tem a MESMA
+      // especificidade e vem depois no arquivo, entao ganhava por ordem e o alinhamento central
+      // simplesmente nao aplicava -- media 9px de desvio entre o icone e a coluna de numeros.
+      ".twmgr-rc-st thead th{padding:3px 1px;text-align:center;vertical-align:middle}",
+      ".twmgr-rc-st tbody td{padding:4px 1px;text-align:center;vertical-align:middle;white-space:nowrap;font-size:9px}",
+      ".twmgr-rc-st tbody td:first-child,.twmgr-rc-st thead th:first-child{text-align:left;padding-left:5px;white-space:normal}",
       ".twmgr-rc-st .sub{font-size:8px;color:#a08c6a;line-height:1.1}",
       ".twmgr-rc-st td b{font-size:10px;font-variant-numeric:tabular-nums}",
       // O alvo entre parênteses, menor e apagado: é referência, o número que importa é o atual.
-      ".twmgr-rc-st .alvo{font-size:8px;color:#a08c6a;margin-left:2px;font-variant-numeric:tabular-nums}",
+      // Alvo no MESMO tamanho do atual (pedido do usuário) — só a cor separa um do outro.
+      ".twmgr-rc-st .alvo{font-size:10px;color:#a89madeira;margin-left:3px;font-variant-numeric:tabular-nums}",
+      ".twmgr-rc-st .ordena{cursor:pointer;user-select:none}",
+      ".twmgr-rc-st .ordena:hover{background:rgba(0,0,0,.05)}",
+      // A seta sai do FLUXO: em linha, ela empurrava o ícone pro lado e o cabeçalho deixava de
+      // ficar centrado sobre a coluna de números (9px de desvio medido).
+      ".twmgr-rc-st th{position:relative}",
+      ".twmgr-rc-st .ord{position:absolute;top:1px;right:2px;font-size:7px;color:#8b5426;line-height:1}",
+      ".twmgr-rc-st .pctcel b{font-size:11px}",
+
       ".twmgr-rc-st .vazio{color:#d3c9b6}",
       // Faixas: <50% vermelho, 50-80% amarelo, >80% verde, cumprido com fundo pra saltar aos olhos.
       ".twmgr-rc-st .f-ruim b{color:#b03030}",

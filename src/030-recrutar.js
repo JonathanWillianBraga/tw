@@ -22,7 +22,11 @@
       const cont = el.closest('td, tr, span.quickedit') || el;
       const lbl = cont.querySelector('.quickedit-label');
       const cm = lbl ? (lbl.textContent || '').match(/(\d{1,3})\|(\d{1,3})/) : null;
-      seen[vid] = 1; vils.push({ vid: String(vid), coord: cm ? (cm[1] + '|' + cm[2]) : null });
+      // O rótulo vem como "Nome da aldeia (123|456) K12" — o nome é o que vem antes do parênteses.
+      // Antes só a coordenada era extraída, e por isso o nome não chegava em quem consome isto.
+      const txt = lbl ? (lbl.textContent || '').replace(/\s+/g, ' ').trim() : '';
+      const nome = txt ? txt.split('(')[0].trim() : '';
+      seen[vid] = 1; vils.push({ vid: String(vid), coord: cm ? (cm[1] + '|' + cm[2]) : null, name: nome || null });
     });
     return vils;
   }

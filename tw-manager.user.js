@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.47.1
+// @version      11.48.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.47.1';
+  const VERSION = '11.48.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2300,7 +2300,11 @@
       const cont = el.closest('td, tr, span.quickedit') || el;
       const lbl = cont.querySelector('.quickedit-label');
       const cm = lbl ? (lbl.textContent || '').match(/(\d{1,3})\|(\d{1,3})/) : null;
-      seen[vid] = 1; vils.push({ vid: String(vid), coord: cm ? (cm[1] + '|' + cm[2]) : null });
+      // O rótulo vem como "Nome da aldeia (123|456) K12" — o nome é o que vem antes do parênteses.
+      // Antes só a coordenada era extraída, e por isso o nome não chegava em quem consome isto.
+      const txt = lbl ? (lbl.textContent || '').replace(/\s+/g, ' ').trim() : '';
+      const nome = txt ? txt.split('(')[0].trim() : '';
+      seen[vid] = 1; vils.push({ vid: String(vid), coord: cm ? (cm[1] + '|' + cm[2]) : null, name: nome || null });
     });
     return vils;
   }
@@ -2491,7 +2495,8 @@
       try { vs = await getVillagesInGroup(t.grupo); }
       catch (e) { pushLog('Recrutar: erro no grupo do modelo "' + (t.name || id) + '": ' + (e.message || e), 'err', 'recruit'); continue; }
       usouGrupo = true;
-      (vs || []).forEach((v) => { map[v.vid] = { name: v.coord || v.name || v.vid, targets: t.targets || {}, tpl: id }; });
+      (vs || []).forEach((v) => { map[v.vid] = { name: v.name || v.coord || v.vid, coord: v.coord || null,
+                                                targets: t.targets || {}, tpl: id }; });
     }
     // Ler grupo deixa o jogo com aquele grupo selecionado; volta pra "todos" pra não afetar as
     // outras telas do usuário.
@@ -2638,7 +2643,8 @@
         if (alvo == null || tem < alvo) bateuTudo = false;
       });
       config.recruit.status = config.recruit.status || {};
-      config.recruit.status[vid] = { name: nm, at: Date.now(), tpl: map[vid].tpl || '', units: un, ok: bateuTudo };
+      config.recruit.status[vid] = { name: nm, coord: map[vid].coord || null, at: Date.now(),
+                                     tpl: map[vid].tpl || '', units: un, ok: bateuTudo };
       if (bateuTudo) metas++;
       if (Object.keys(amounts).length) {
         try {
@@ -2770,7 +2776,51 @@
     });
     return unitsDoMundo().filter((u) => usadas[u[0]]);
   }
+  // % de atingimento PONDERADO pelo alvo: soma(min(tem,alvo)) / soma(alvo).
+  //
+  // Ponderado, nao media simples das unidades: 7.000 lanceiros e 100 exploradores nao custam o
+  // mesmo, e a media simples diria 50% pra uma aldeia que so tem os exploradores. O elo mais
+  // fraco (a unidade mais atrasada) vai no tooltip, que e justamente o que a media ponderada
+  // esconde.
+  function rcPct(r) {
+    let tem = 0, alvo = 0, pior = null;
+    Object.keys(r.units || {}).forEach((u) => {
+      const c = r.units[u];
+      if (c.alvo == null || c.alvo <= 0) return;      // continuo nao entra na conta
+      alvo += c.alvo;
+      tem += Math.min(c.tem, c.alvo);
+      const p = c.tem / c.alvo;
+      if (!pior || p < pior.p) pior = { u: u, p: p };
+    });
+    return { pct: alvo > 0 ? (tem / alvo) : null, tem: tem, alvo: alvo, pior: pior };
+  }
+  // Ordenacao: clique no cabecalho. Guarda coluna + direcao entre renders.
+  let _rcOrd = { col: 'name', dir: 1 };
+  function rcOrdenar(col) {
+    if (_rcOrd.col === col) _rcOrd.dir = -_rcOrd.dir;
+    else _rcOrd = { col: col, dir: col === 'name' ? 1 : -1 };   // número começa do maior
+    rcRenderStatus();
+  }
+
+  // Iguala o tamanho VISUAL dos ícones. Os sprites do jogo têm dimensões naturais bem diferentes
+  // (medido no preview: de 10 a 34px de largura); só encaixotar alinhava a coluna mas cortava os
+  // grandes. Aqui cada um é medido e escalado pra caber na caixa, então todos ficam do mesmo
+  // tamanho e centrados sobre o número.
+  function rcAjustarIcones(box) {
+    const CAIXA = 18;
+    box.querySelectorAll('.twmgr-uicon .unit_sprite').forEach((el) => {
+      el.style.transform = '';                 // mede o natural, sem a escala anterior
+      const maior = Math.max(el.offsetWidth, el.offsetHeight);
+      if (!maior) return;                      // sprite sem CSS carregado: deixa como está
+      // Escala pros DOIS lados. Só encolher deixava o explorador (14px) menor que o resto, que era
+      // exatamente a falta de equilíbrio reclamada. O teto de 1.6x evita borrar um sprite minúsculo.
+      const k = Math.min(CAIXA / maior, 1.6);
+      el.style.transform = 'scale(' + k.toFixed(3) + ')';
+    });
+  }
+
   function rcRenderStatus() {
+
     const box = document.getElementById('twmgr-rc-status'); if (!box) return;
     const st = config.recruit.status || {};
     const gid = _rcStatusGrupo;
@@ -2783,30 +2833,53 @@
       return;
     }
     const uns = rcStatusUnidades();
-    vids.sort((a, b) => String(st[a].name).localeCompare(String(st[b].name), 'pt-BR', { numeric: true }));
-    // Faixas de cor pedidas pelo usuário: <50% vermelho, 50–80% amarelo, >80% verde, cumprido em
-    // destaque. O corte é sobre a RAZÃO tem/alvo, não sobre o valor absoluto — 500 de 600 e 5 de 6
-    // estão igualmente perto, e é isso que interessa olhando a tabela.
     const faixa = (tem, alvo) => {
       if (alvo == null || alvo <= 0) return 'inf';
       if (tem >= alvo) return 'ok';
       const p = tem / alvo;
       return p < 0.5 ? 'ruim' : (p < 0.8 ? 'meio' : 'bom');
     };
-    // Larguras fixas: a coluna da aldeia leva o resto, e as de unidade dividem igual. Sem isso cada
-    // coluna ficava do tamanho do seu conteúdo e os números não se alinhavam de uma linha pra outra.
-    const wUn = Math.max(9, Math.floor(62 / Math.max(1, uns.length)));
+    const pcts = {}; vids.forEach((v) => { pcts[v] = rcPct(st[v]); });
+    // Ordena pela coluna escolhida. Aldeia sem a unidade vai pro fim, sempre — se entrasse como
+    // zero, ela apareceria "pior" que uma que tem pouco, o que confunde.
+    const valor = (vid) => {
+      if (_rcOrd.col === 'name') return null;
+      if (_rcOrd.col === 'pct') { const p = pcts[vid].pct; return p == null ? null : p; }
+      const c = (st[vid].units || {})[_rcOrd.col];
+      return c ? c.tem : null;
+    };
+    vids.sort((a, b) => {
+      if (_rcOrd.col === 'name') {
+        return _rcOrd.dir * String(st[a].name).localeCompare(String(st[b].name), 'pt-BR', { numeric: true });
+      }
+      const va = valor(a), vb = valor(b);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return _rcOrd.dir * (va - vb);
+    });
+    const seta = (col) => _rcOrd.col === col ? '<span class="ord">' + (_rcOrd.dir > 0 ? '▲' : '▼') + '</span>' : '';
+    const wUn = Math.max(8, Math.floor(56 / Math.max(1, uns.length)));
     box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><colgroup>'
-      + '<col style="width:' + (100 - wUn * uns.length) + '%">'
-      + uns.map(() => '<col style="width:' + wUn + '%">').join('') + '</colgroup>'
-      + '<thead><tr><th>Aldeia</th>'
-      + uns.map((u) => '<th title="' + esc(u[1]) + '"><i class="twmgr-uicon">'
-        + '<span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span></i></th>').join('')
+      + '<col style="width:' + (100 - wUn * uns.length - 11) + '%">'
+      + uns.map(() => '<col style="width:' + wUn + '%">').join('')
+      + '<col style="width:11%"></colgroup>'
+      + '<thead><tr><th class="ordena" data-col="name">Aldeia' + seta('name') + '</th>'
+      + uns.map((u) => '<th class="ordena" data-col="' + u[0] + '" title="' + esc(u[1]) + ' — clique pra ordenar">'
+        + '<i class="twmgr-uicon"><span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span></i>'
+        + seta(u[0]) + '</th>').join('')
+      + '<th class="ordena" data-col="pct" title="% do alvo já cumprido — clique pra ordenar">%' + seta('pct') + '</th>'
       + '</tr></thead><tbody>' + vids.map((vid, i) => {
-        const r = st[vid];
+        const r = st[vid], P = pcts[vid];
+        const nome = esc(r.name || vid);
+        // Nome E coordenada: o nome diz o que a aldeia é, a coord diz onde ela está.
+        const coord = r.coord && r.coord !== r.name ? '<div class="sub">' + esc(r.coord)
+          + ' · ' + esc((config.recruit.templates[r.tpl] || {}).name || '—') + '</div>'
+          : '<div class="sub">' + esc((config.recruit.templates[r.tpl] || {}).name || '—') + '</div>';
+        const pTxt = P.pct == null ? '—' : Math.round(P.pct * 100) + '%';
+        const pDica = P.pior ? ('mais atrasada: ' + unitPt(P.pior.u) + ' ' + Math.round(P.pior.p * 100) + '%') : '';
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + (r.ok ? ' twmgr-rc-full' : '') + '">' +
-          '<td><b>' + esc(r.name) + '</b>' + (r.ok ? ' <span class="twmgr-rc-chk">✓</span>' : '')
-          + '<div class="sub">' + esc((config.recruit.templates[r.tpl] || {}).name || '—') + '</div></td>' +
+          '<td><b>' + nome + '</b>' + (r.ok ? ' <span class="twmgr-rc-chk">✓</span>' : '') + coord + '</td>' +
           uns.map((u) => {
             const c = (r.units || {})[u[0]];
             if (!c) return '<td class="vazio">—</td>';
@@ -2815,13 +2888,32 @@
             return '<td class="f-' + f + '" title="' + esc(unitPt(u[0]) + ': ' + pct) + '">'
               + '<b>' + fmtN(c.tem) + '</b>'
               + '<span class="alvo">(' + (c.alvo == null ? '∞' : fmtN(c.alvo)) + ')</span></td>';
-          }).join('') + '</tr>';
+          }).join('')
+          + '<td class="f-' + faixa(P.tem, P.alvo) + ' pctcel" title="' + esc(pDica) + '"><b>' + pTxt + '</b></td>'
+          + '</tr>';
       }).join('') + '</tbody></table>';
+
+    rcAjustarIcones(box);
+    // Delegado no container, e uma vez só: a tabela é refeita a cada ordenação e a cada filtro,
+    // então prender no <th> criaria um listener novo por render.
+    if (!box._rcOrdOn) {
+      box._rcOrdOn = true;
+      box.addEventListener('click', (e) => {
+        const th = e.target.closest ? e.target.closest('th.ordena') : null;
+        if (th) rcOrdenar(th.getAttribute('data-col'));
+      });
+    }
     const info = document.getElementById('twmgr-rc-status-info');
     if (info) {
       const quando = vids.length ? new Date(Math.max.apply(null, vids.map((v) => st[v].at || 0))).toLocaleTimeString('pt-BR') : '—';
       const ok = vids.filter((v) => st[v].ok).length;
-      info.textContent = vids.length + ' aldeia(s) · ' + ok + ' com a meta cheia · lido às ' + quando;
+      // TOTAL pela mesma conta de cada linha: soma tudo o que falta, nao a média dos percentuais.
+      // A média dos percentuais daria peso igual a uma aldeia de 100 tropas e a uma de 20.000.
+      let tTem = 0, tAlvo = 0;
+      vids.forEach((v) => { const P = rcPct(st[v]); tTem += P.tem; tAlvo += P.alvo; });
+      const tPct = tAlvo > 0 ? Math.round((tTem / tAlvo) * 100) + '%' : '—';
+      info.innerHTML = vids.length + ' aldeia(s) · ' + ok + ' com a meta cheia · <b>total ' + tPct
+        + '</b> (' + fmtN(tTem) + ' de ' + fmtN(tAlvo) + ') · lido às ' + quando;
     }
   }
 
@@ -2860,7 +2952,8 @@
           un[u] = { tem: tem, alvo: alvo };
           if (alvo == null || tem < alvo) ok = false;
         });
-        config.recruit.status[vid] = { name: map[vid].name || vid, at: Date.now(), tpl: map[vid].tpl || '', units: un, ok: ok };
+        config.recruit.status[vid] = { name: map[vid].name || vid, coord: map[vid].coord || null,
+                                       at: Date.now(), tpl: map[vid].tpl || '', units: un, ok: ok };
         await sleep(250);
       }
       Object.keys(config.recruit.status).forEach((v) => { if (!map[v]) delete config.recruit.status[v]; });
@@ -7791,16 +7884,32 @@
       // largo), o que deixava o cabeçalho desalinhado. Cada ícone vai dentro de uma caixa FIXA,
       // centrado, com o que passar cortado igualmente dos dois lados — as colunas ficam uniformes
       // independente do sprite.
-      ".twmgr-uicon{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;overflow:hidden;font-style:normal}",
+      ".twmgr-uicon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;font-style:normal;vertical-align:middle}",
+      // O sprite é ESCALADO por JS pra caber (ver rcAjustarIcones): só encaixotar igualava a
+      // coluna mas cortava os grandes. A origem central mantém o ícone alinhado com o número.
+      ".twmgr-uicon .unit_sprite{flex:0 0 auto;transform-origin:center}",
+
       ".twmgr-uicon .unit_sprite{flex:0 0 auto}",
       ".twmgr-rc-st{table-layout:fixed;width:100%}",
-      ".twmgr-rc-st th{padding:3px 1px;text-align:center;vertical-align:middle}",
-      ".twmgr-rc-st td{padding:4px 1px;text-align:center;vertical-align:middle;white-space:nowrap;font-size:9px}",
-      ".twmgr-rc-st td:first-child,.twmgr-rc-st th:first-child{text-align:left;padding-left:5px;white-space:normal}",
+      // `thead th`/`tbody td` (nao so `th`/`td`): a regra base .twmgr-bld-tab th tem a MESMA
+      // especificidade e vem depois no arquivo, entao ganhava por ordem e o alinhamento central
+      // simplesmente nao aplicava -- media 9px de desvio entre o icone e a coluna de numeros.
+      ".twmgr-rc-st thead th{padding:3px 1px;text-align:center;vertical-align:middle}",
+      ".twmgr-rc-st tbody td{padding:4px 1px;text-align:center;vertical-align:middle;white-space:nowrap;font-size:9px}",
+      ".twmgr-rc-st tbody td:first-child,.twmgr-rc-st thead th:first-child{text-align:left;padding-left:5px;white-space:normal}",
       ".twmgr-rc-st .sub{font-size:8px;color:#a08c6a;line-height:1.1}",
       ".twmgr-rc-st td b{font-size:10px;font-variant-numeric:tabular-nums}",
       // O alvo entre parênteses, menor e apagado: é referência, o número que importa é o atual.
-      ".twmgr-rc-st .alvo{font-size:8px;color:#a08c6a;margin-left:2px;font-variant-numeric:tabular-nums}",
+      // Alvo no MESMO tamanho do atual (pedido do usuário) — só a cor separa um do outro.
+      ".twmgr-rc-st .alvo{font-size:10px;color:#a89madeira;margin-left:3px;font-variant-numeric:tabular-nums}",
+      ".twmgr-rc-st .ordena{cursor:pointer;user-select:none}",
+      ".twmgr-rc-st .ordena:hover{background:rgba(0,0,0,.05)}",
+      // A seta sai do FLUXO: em linha, ela empurrava o ícone pro lado e o cabeçalho deixava de
+      // ficar centrado sobre a coluna de números (9px de desvio medido).
+      ".twmgr-rc-st th{position:relative}",
+      ".twmgr-rc-st .ord{position:absolute;top:1px;right:2px;font-size:7px;color:#8b5426;line-height:1}",
+      ".twmgr-rc-st .pctcel b{font-size:11px}",
+
       ".twmgr-rc-st .vazio{color:#d3c9b6}",
       // Faixas: <50% vermelho, 50-80% amarelo, >80% verde, cumprido com fundo pra saltar aos olhos.
       ".twmgr-rc-st .f-ruim b{color:#b03030}",

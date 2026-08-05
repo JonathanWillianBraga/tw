@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.35.1
+// @version      11.36.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.35.1';
+  const VERSION = '11.36.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -234,6 +234,11 @@
     templates: { padrao: defNobleTpl('Padrão') },
     ordem: ['padrao'],   // prioridade dos modelos; alvo com tpl:'' segue esta ordem
     lerRelatorios: true,
+    // Disparo automatico. O usuario pediu explicitamente (ago/2026), revertendo o
+    // "arma e espera meu OK" original. `autoMax` e o teto de comandos por ciclo: um bug
+    // de plano nao pode esvaziar a conta de nobre de uma vez.
+    autoEnviar: true, autoMax: 8,
+
     relatorios: {},   // { [coord]: { lealdade, de, at, reportId, dono, tropa } } — último lido
     vistos: {},       // { [reportId]: 1 } — já baixado, não rebaixa
     stats: {},
@@ -590,6 +595,9 @@
     void tplsNb;
 
     if (c.noble.lerRelatorios == null) c.noble.lerRelatorios = true;
+    if (c.noble.autoEnviar == null) c.noble.autoEnviar = true;
+    c.noble.autoMax = Math.max(1, Math.min(40, parseInt(c.noble.autoMax, 10) || 8));
+
     if (!c.noble.relatorios || typeof c.noble.relatorios !== 'object') c.noble.relatorios = {};
     if (!c.noble.vistos || typeof c.noble.vistos !== 'object') c.noble.vistos = {};
     // Relatório de alvo que saiu da lista não serve pra nada e cresceria pra sempre.

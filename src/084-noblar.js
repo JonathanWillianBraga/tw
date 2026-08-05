@@ -423,6 +423,7 @@
     // impede o mesmo nobre de aparecer no plano de dois alvos.
     const usados = {};
     const plano = [];
+    let enviadosNoCiclo = 0;
     let prontos = 0, completos = 0;
     for (const alvo of alvos) {
       { const pare = devoParar('noble'); if (pare) { pushLog('Noblar: ciclo interrompido — ' + pare + '.', '', 'noble'); break; } }
@@ -431,13 +432,40 @@
       plano.push({ coord: alvo.coord, x: alvo.x, y: alvo.y, pronto: r.pronto,
                    envios: r.envios, falta: r.falta, levando: r.levando, precisa: r.precisa,
                    tplId: r.tplId, tplNome: r.tplNome, motivo: r.motivo });
+      const item = plano[plano.length - 1];
       if (r.pronto) prontos++;
-      if (r.falta <= 0) { completos++; continue; }
-      // Faltou nobre: tenta FORMAR nas mais proximas (nunca cunhar). O nobre formado entra na
-      // fila da Academia, entao ele so aparece no plano do proximo ciclo -- de proposito.
-      if (config.noble.produzir !== false) {
-        try { await nobleRecrutar(alvo, r.dentroDoLimite || [], r.falta); }
+
+      let formou = 0;
+      if (r.falta <= 0) { completos++; }
+      else if (config.noble.produzir !== false) {
+        // Faltou nobre: tenta FORMAR nas mais proximas (nunca cunhar). O nobre formado entra na
+        // fila da Academia, entao ele so aparece no plano do proximo ciclo -- de proposito.
+        try { formou = await nobleRecrutar(alvo, r.dentroDoLimite || [], r.falta); }
         catch (e) { pushLog('Noblar (recruta) em ' + alvo.coord + ': ' + (e.message || e), 'err', 'noble'); }
+      }
+
+      // ---- decide o disparo automatico ----
+      if (config.noble.autoEnviar !== false && r.pronto && !devoParar('noble')) {
+        const qtd = r.envios.length;
+        if (enviadosNoCiclo + qtd > (config.noble.autoMax || 8)) {
+          item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'teto do ciclo';
+          pushLog('Noblar (auto): ' + alvo.coord + ' segurado — teto de ' + (config.noble.autoMax || 8)
+            + ' comando(s) por ciclo já batido.', '', 'noble');
+        } else if (r.falta > 0 && formou > 0) {
+          // Parcial COM nobre a caminho: segura. Mandar agora gasta o unico que existe e a
+          // lealdade (regen ~1/h) volta antes do proximo chegar. Foi a regra do usuario:
+          // parcial e pra quando nao da pra recrutar mais.
+          item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'segurando: +' + formou + ' em produção';
+          pushLog('Noblar (auto): ' + alvo.coord + ' segurado — leva ' + r.levando + ' de ' + r.precisa
+            + ' e tem ' + formou + ' nobre(s) em produção. Manda quando fechar (ou clique em Enviar).', '', 'noble');
+        } else {
+          const n = await nobleEnviarItem(item, ' (auto)');
+          enviadosNoCiclo += n;
+          if (r.falta > 0) {
+            pushLog('Noblar (auto): ' + alvo.coord + ' foi PARCIAL (' + r.levando + ' de ' + r.precisa
+              + ') porque não havia nobre pra recrutar.', '', 'noble');
+          }
+        }
       }
     }
 
@@ -450,7 +478,8 @@
     renderNoblePlano();
     refreshCards('noble');
     pushLog('Noblar: plano refeito — ' + prontos + ' de ' + alvos.length + ' alvo(s) com nobre pra enviar ('
-      + completos + ' completo(s)). Nada foi enviado.', 'ok', 'noble');
+      + completos + ' completo(s)). ' + (config.noble.autoEnviar === false ? 'Nada foi enviado (disparo manual).'
+        : enviadosNoCiclo + ' comando(s) enviado(s).'), 'ok', 'noble');
     scheduleNoble();
   }
   function scheduleNoble() {
@@ -459,42 +488,53 @@
     nobleTimer = setTimeout(nobleTick, Math.min(Math.max((config.noble.nextAt || 0) - Date.now(), 1000), 60000));
   }
 
-  // Disparo: so acontece por clique. Reprepara na hora em vez de reusar o payload do plano -- o CSRF
-  // muda a cada carregamento de pagina, e um payload velho falharia calado.
-  async function nobleDispararAlvo(coord) {
-    const item = (config.noble.plano || []).find((p) => p.coord === coord);
-    if (!item || !item.pronto) { alert('Esse alvo não está pronto no plano.'); return; }
-    const nomeUn = (u) => (unitPt(u));
-    const detalha = (un) => Object.keys(un).filter((u) => u !== 'snob')
-      .map((u) => un[u] + ' ' + nomeUn(u)).join(', ');
-    // Agrupa por aldeia SO pra mostrar: o disparo continua um comando por nobre.
-    const porAldeia = [];
+  // Resumo legivel de um plano, agrupado por aldeia. O disparo continua um comando por nobre;
+  // o agrupamento e so pra nao imprimir oito linhas iguais.
+  function nobleResumo(item) {
+    const detalha = (un) => Object.keys(un || {}).filter((u) => u !== 'snob')
+      .map((u) => un[u] + ' ' + unitPt(u)).join(', ');
+    const g = [];
     item.envios.forEach((e) => {
-      const j = porAldeia.find((x) => x.nome === e.nome && x.det === detalha(e.unidades || {}));
-      if (j) j.n++; else porAldeia.push({ nome: e.nome, det: detalha(e.unidades || {}), dur: e.durSec, n: 1 });
+      const j = g.find((x) => x.nome === e.nome && x.det === detalha(e.unidades));
+      if (j) j.n++; else g.push({ nome: e.nome, det: detalha(e.unidades), dur: e.durSec, n: 1 });
     });
-    const resumo = porAldeia.map((g) => g.n + ' comando(s) de ' + g.nome
-      + ' — 1 nobre' + (g.det ? ' + ' + g.det : '') + ' cada (' + fmtDur(g.dur) + ')').join('\n');
-    const totalNob = item.envios.reduce((a, e) => a + e.qtd, 0);
-    if (!confirm('Enviar ' + totalNob + ' nobre(s) para ' + coord + '?\n\n' + resumo
-      + '\n\nCada comando leva 1 nobre — a lealdade cai uma vez por ataque.'
-      + '\n\nIsso NÃO tem volta.')) return;
+    return g.map((x) => x.n + ' comando(s) de ' + x.nome
+      + ' — 1 nobre' + (x.det ? ' + ' + x.det : '') + ' cada (' + fmtDur(x.dur) + ')').join('\n');
+  }
 
+  // O envio de fato. Usado pelo clique E pelo automatico -- um caminho so, pra os dois nao
+  // divergirem com o tempo.
+  async function nobleEnviarItem(item, marca) {
     let ok = 0;
+    const total = item.envios.reduce((a, e) => a + e.qtd, 0);
     for (const e of item.envios) {
       try {
         // Sempre snob:1 — um envio É um comando. O fallback também, pra não reabrir a porta.
         await sendAttack(e.vid, item.x, item.y, e.unidades || { snob: 1 });
         ok += e.qtd;
-        pushLog('Noblar: ' + e.nome + ' → ' + coord + ' — ' + e.qtd + ' nobre(s) enviado(s), chega em ' + fmtDur(e.durSec) + '.', 'ok', 'noble');
+        pushLog('Noblar' + marca + ': ' + e.nome + ' → ' + item.coord + ' — 1 nobre enviado, chega em ' + fmtDur(e.durSec) + '.', 'ok', 'noble');
       } catch (err) {
-        pushLog('Noblar: ' + e.nome + ' → ' + coord + ' FALHOU: ' + (err.message || err), 'err', 'noble');
+        pushLog('Noblar' + marca + ': ' + e.nome + ' → ' + item.coord + ' FALHOU: ' + (err.message || err), 'err', 'noble');
       }
       await sleep(400);
     }
-    pushLog('Noblar: ' + coord + ' — ' + ok + ' de ' + totalNob + ' nobre(s) saíram.', ok >= totalNob ? 'ok' : 'err', 'noble');
+    pushLog('Noblar' + marca + ': ' + item.coord + ' — ' + ok + ' de ' + total + ' comando(s) saíram.',
+      ok >= total ? 'ok' : 'err', 'noble');
     item.pronto = false; item.motivo = 'enviado';   // nao oferece disparar de novo sem replanejar
-    save(); renderNoblePlano();
+    return ok;
+  }
+
+  // Disparo manual: pelo clique, com confirmacao. Continua existindo mesmo com o automatico
+  // ligado -- serve pra mandar um parcial que o automatico decidiu segurar.
+  async function nobleDispararAlvo(coord) {
+    const item = (config.noble.plano || []).find((p) => p.coord === coord);
+    if (!item || !item.pronto) { alert('Esse alvo não está pronto no plano.'); return; }
+    const total = item.envios.reduce((a, e) => a + e.qtd, 0);
+    if (!confirm('Enviar ' + total + ' nobre(s) para ' + coord + '?\n\n' + nobleResumo(item)
+      + '\n\nCada comando leva 1 nobre — a lealdade cai uma vez por ataque.'
+      + '\n\nIsso NÃO tem volta.')) return;
+    await nobleEnviarItem(item, '');
+    save(); renderNoblePlano(); refreshCards('noble');
   }
 
   function fmtDur(s) {

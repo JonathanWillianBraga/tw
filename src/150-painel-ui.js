@@ -510,7 +510,7 @@
         modLog('research') +
       '</div>' +
       '<div id="twmgr-tab-noble" style="display:none">' +
-        hint('👑 Cola as coordenadas, define o limite de viagem e ele monta o plano de conquista. <b>Não dispara sozinho</b> — o envio é seu. Serve os alvos <b>na ordem da lista</b>: com 6 nobres e 2 alvos, 4 no primeiro e 2 no segundo. Envia <b>parcial</b> se for o que há, e <b>nunca cunha</b> — só forma nobre onde a moeda já está guardada.') +
+        hint('👑 Cola as coordenadas, define o limite de viagem e ele monta o plano de conquista e <b>dispara sozinho</b>. Serve os alvos <b>na ordem da lista</b>: com 6 nobres e 2 alvos, 4 no primeiro e 2 no segundo. Envia <b>parcial</b> se for o que há, e <b>nunca cunha</b> — só forma nobre onde a moeda já está guardada.') +
         cardsDiv('noble') +
         sec('Alvos',
           '<textarea id="twmgr-nb-coords" class="twmgr-inp" style="width:100%;height:56px;font-family:monospace;font-size:11px" placeholder="555|444 555|445 555446 texto solto no meio"></textarea>' +
@@ -547,7 +547,12 @@
         '<div class="twmgr-cols">' +
           '<div class="twmgr-card2"><h4>⏱ Ciclo</h4>' +
             '<div class="twmgr-fld"><span>Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15"></div>' +
-            '<div class="twmgr-fld"><span title="Lê os relatórios de ataque pra saber a lealdade que sobrou">Ler relatórios <span style="color:#8a7d6d">(lealdade, dono, tropa)</span></span>' +
+            '<div class="twmgr-fld"><span title="Dispara sem pedir confirmação">Enviar automaticamente</span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-auto" type="checkbox"><i></i></label></div>' +
+            '<div class="twmgr-fld"><span title="Trava de segurança: um plano errado não esvazia a conta de nobre de uma vez">Teto de comandos por ciclo</span><input id="twmgr-nb-automax" class="twmgr-inp" type="number" min="1" max="40" value="8"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Envio <b>parcial</b> só sai sozinho quando <b>não há nobre em produção</b>. Se tem nobre vindo, ele segura — a lealdade regenera ~1/h e um nobre derruba ~28, então mandar sozinho queima o nobre à toa. O botão <b>Enviar</b> continua lá se você quiser forçar.</div>' +
+            '<div class="twmgr-fld" style="margin-top:9px"><span title="Lê os relatórios de ataque pra saber a lealdade que sobrou">Ler relatórios <span style="color:#8a7d6d">(lealdade, dono, tropa)</span></span>' +
+
               '<label class="twmgr-sw"><input id="twmgr-nb-rel" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Lealdade só aparece em relatório de <b>ataque com nobre</b> — exploração não mostra. Por isso a coluna fica <b>?</b> até o primeiro nobre bater.</div>' +
           '</div>' +
@@ -833,8 +838,12 @@
     document.getElementById('twmgr-nb-esc').addEventListener('change', () => { nobleLerTplEditor(); save(); });
     document.getElementById('twmgr-nb-int').value = Math.round((config.noble.interval || 900) / 60);
     document.getElementById('twmgr-nb-rel').checked = config.noble.lerRelatorios !== false;
+    document.getElementById('twmgr-nb-auto').checked = config.noble.autoEnviar !== false;
+    document.getElementById('twmgr-nb-automax').value = config.noble.autoMax != null ? config.noble.autoMax : 8;
+
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
-    ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel'].forEach((id) => {
+    ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
+     'twmgr-nb-auto', 'twmgr-nb-automax'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();

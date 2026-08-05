@@ -551,6 +551,13 @@
       if (c.build.templates[id] && c.build.templates[id].grupo == null) c.build.templates[id].grupo = '';
     });
     if (!c.build.status || typeof c.build.status !== 'object') c.build.status = {};
+    // Demolição DESLIGADA por padrão, e explicitamente. Não devolve recurso e não tem desfazer:
+    // tem que ser escolha consciente, nunca herdada de um `undefined` que por acaso é falso.
+    if (c.build.demolir == null) c.build.demolir = false;
+    // `dem` por item do modelo, também explicito. Modelo importado de fora vem sem o campo.
+    Object.keys(c.build.templates || {}).forEach((id) => {
+      ((c.build.templates[id] || {}).plan || []).forEach((it) => { if (it.dem == null) it.dem = false; });
+    });
 
     if (c.build.grupoTpl == null) c.build.grupoTpl = '';
 

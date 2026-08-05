@@ -155,6 +155,8 @@
       // marcada que a horizontal — a comparação que importa é dentro da coluna (uma unidade entre
       // aldeias), então é a coluna que precisa ficar delimitada.
       ".twmgr-rc-st{border-collapse:collapse}",
+      // O container ja rolava na vertical; sem o horizontal a tabela larga vazaria do painel.
+      ".twmgr-bld-vils{overflow-x:auto}",
       ".twmgr-rc-st tbody td{border-right:1px solid #e6dbc6;border-bottom:1px solid #efe7d8}",
       ".twmgr-rc-st tbody td:last-child{border-right:0}",
       ".twmgr-rc-st tbody tr:last-child td{border-bottom:0}",
@@ -165,6 +167,8 @@
       // O alvo entre parênteses, menor e apagado: é referência, o número que importa é o atual.
       // Alvo no MESMO tamanho do atual (pedido do usuário) — só a cor separa um do outro.
       ".twmgr-rc-st .alvo{font-size:10px;color:#a89madeira;margin-left:3px;font-variant-numeric:tabular-nums}",
+      ".twmgr-bld-dem{display:inline-flex;align-items:center;gap:2px;cursor:pointer;font-size:10px;color:#b03030}",
+      ".twmgr-bld-dem input{margin:0}",
       ".twmgr-rc-st .ordena{cursor:pointer;user-select:none}",
       ".twmgr-rc-st .ordena:hover{background:rgba(0,0,0,.05)}",
       // A seta sai do FLUXO: em linha, ela empurrava o ícone pro lado e o cabeçalho deixava de
@@ -563,7 +567,12 @@
             '<div class="twmgr-fld" style="margin-top:7px"><span title="Todas as aldeias deste grupo seguem este modelo">Aplicar ao grupo</span>' +
               '<select id="twmgr-bld-tplgrp" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
             '<div id="twmgr-bld-plano-resumo" style="font-size:9px;color:#8a7d6d;margin-top:5px"></div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Aldeia que entra no grupo no jogo entra na gestão <b>sozinha</b>, no ciclo seguinte — não precisa marcar nada aqui.</div>') +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Aldeia que entra no grupo no jogo entra na gestão <b>sozinha</b>, no ciclo seguinte — não precisa marcar nada aqui.</div>' +
+            '<div class="twmgr-fld" style="margin-top:9px"><span title="Derruba nível acima do alvo">Demolir excedente</span>' +
+              '<label class="twmgr-sw"><input id="twmgr-bld-demolir" type="checkbox"><i></i></label></div>' +
+            '<div style="font-size:9px;color:#b03030;margin-top:4px">⚠ Demolir <b>não devolve recurso</b> e reconstruir custa o preço cheio. Não há desfazer.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Só começa depois que a aldeia <b>bate o alvo em todos os prédios</b> (a linha com ✓ no Status). Marque quais prédios podem cair no <b>⬇</b> de cada item, em Gerenciar modelos — sem marcar, nada é demolido.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px"><b>Um nível por aldeia por ciclo</b>, e só com a fila de demolição vazia — dá tempo de ver acontecendo e desligar.</div>') +
         '</div>' +
         '<div id="twmgr-sub-bldstatus" style="display:none">' +
           sec('Status por aldeia',
@@ -964,6 +973,11 @@
     });
     document.getElementById('twmgr-bld-stgroup').addEventListener('change', (e) => bldStatusFiltrar(e.target.value));
     document.getElementById('twmgr-bld-st-reload').addEventListener('click', bldAtualizarStatus);
+    document.getElementById('twmgr-bld-demolir').checked = !!config.build.demolir;
+    document.getElementById('twmgr-bld-demolir').addEventListener('change', (e) => {
+      config.build.demolir = e.target.checked; save();
+      if (e.target.checked) pushLog('Construções: demolição de excedente LIGADA — só age em aldeia já completa, 1 nível por ciclo.', '', 'build');
+    });
     bindBuildPlanHandlers();
     bldRenderTplSelect();
     bldSwitchProf(_bldActiveProf);

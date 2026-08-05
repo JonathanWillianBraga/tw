@@ -551,6 +551,13 @@
       if (c.build.templates[id] && c.build.templates[id].grupo == null) c.build.templates[id].grupo = '';
     });
     if (!c.build.status || typeof c.build.status !== 'object') c.build.status = {};
+    // Demolição DESLIGADA por padrão, e explicitamente. Não devolve recurso e não tem desfazer:
+    // tem que ser escolha consciente, nunca herdada de um `undefined` que por acaso é falso.
+    if (c.build.demolir == null) c.build.demolir = false;
+    // `dem` por item do modelo, também explicito. Modelo importado de fora vem sem o campo.
+    Object.keys(c.build.templates || {}).forEach((id) => {
+      ((c.build.templates[id] || {}).plan || []).forEach((it) => { if (it.dem == null) it.dem = false; });
+    });
 
     if (c.build.grupoTpl == null) c.build.grupoTpl = '';
 
@@ -2873,11 +2880,15 @@
       return _rcOrd.dir * (va - vb);
     });
     const seta = (col) => _rcOrd.col === col ? '<span class="ord">' + (_rcOrd.dir > 0 ? '▲' : '▼') + '</span>' : '';
-    const wUn = Math.max(8, Math.floor(56 / Math.max(1, uns.length)));
-    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><colgroup>'
-      + '<col style="width:' + (100 - wUn * uns.length - 11) + '%">'
-      + uns.map(() => '<col style="width:' + wUn + '%">').join('')
-      + '<col style="width:11%"></colgroup>'
+    // Mesma correcao do Status das Construcoes: em % a coluna da aldeia ficava negativa quando
+    // havia colunas demais. Aqui ainda nao tinha estourado (7 unidades), mas a partir de 11
+    // quebraria igual -- e mundo com arqueiro tem 11.
+    const W_VILA = 132, W_COL = 56, W_PCT = 54;
+    const minW = W_VILA + uns.length * W_COL + W_PCT;
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st" style="min-width:' + minW + 'px"><colgroup>'
+      + '<col style="width:' + W_VILA + 'px">'
+      + uns.map(() => '<col style="width:' + W_COL + 'px">').join('')
+      + '<col style="width:' + W_PCT + 'px"></colgroup>'
       + '<thead><tr><th class="ordena" data-col="name">Aldeia' + seta('name') + '</th>'
       + uns.map((u) => '<th class="ordena" data-col="' + u[0] + '" title="' + esc(u[1]) + ' — clique pra ordenar">'
         + '<i class="twmgr-uicon"><span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span></i>'
@@ -3895,6 +3906,49 @@
     await res.text();
     return true;
   }
+
+  // ===== Demolição =====
+  // Endpoint CONFIRMADO pelo dump do usuário: é o espelho do upgrade, sem o `type=main`. O
+  // `mode=destroy` é só da TELA — a ação não leva.
+  async function demolirPredio(vid, b) {
+    const res = await fetch('/game.php?village=' + vid + '&screen=main&action=downgrade_building&id=' + b + '&h=' + CSRF,
+      { credentials: 'include' });
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    // O jogo devolve a própria tela; erro vem numa caixa. Sem conferir, falha passaria por sucesso
+    // — e aqui isso seria pior que na obra, porque o log diria "demoli" sem ter demolido.
+    const err = doc.querySelector('.error_box, .error');
+    if (err && (err.textContent || '').trim()) throw new Error((err.textContent || '').trim().slice(0, 90));
+    return true;
+  }
+
+  // Quantos itens há na fila de DEMOLIÇÃO da aldeia. Tela própria (mode=destroy), fila própria: as
+  // linhas são tr#buildorder_N, cada uma com link de cancelar.
+  //
+  // Ler isto não é luxo. O nível só cai quando a demolição TERMINA, então sem a fila o módulo
+  // pediria a mesma demolição a cada ciclo — o mesmo erro que o `levelEff` corrigiu do lado da
+  // construção, e aqui com consequência pior.
+  async function getDemolicaoFila(vid) {
+    const res = await fetch('/game.php?village=' + vid + '&screen=main&mode=destroy', { credentials: 'include' });
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const linhas = doc.querySelectorAll('tr[id^="buildorder_"]').length;
+    // Nem toda leva ganha id na tela; conta também os "cancelar" e fica com o maior dos dois.
+    const cancels = doc.querySelectorAll('a[href*="action=cancel"][href*="mode=destroy"]').length;
+    return Math.max(linhas, cancels);
+  }
+
+  // O que demolir nesta aldeia, se é que há algo. Devolve no máximo UM prédio.
+  //
+  // Só entra item MARCADO (`it.dem`): passar do alvo, sozinho, não autoriza derrubar nada. E usa o
+  // nível REAL, não o efetivo com fila de construção — considerar obra que nem ficou pronta
+  // derrubaria o prédio errado.
+  function bldExcedente(st, plan) {
+    for (const it of plan) {
+      if (it.en === false || !it.dem) continue;
+      const atual = st.level[it.b] || 0;
+      if (atual > it.lvl) return { b: it.b, de: atual, para: it.lvl };
+    }
+    return null;
+  }
   // Select de grupo do MODELO ativo: todas as aldeias do grupo passam a seguir esse modelo.
   function fillBldTplGrupo() {
     const sel = document.getElementById('twmgr-bld-tplgrp'); if (!sel) return;
@@ -3981,11 +4035,15 @@
       return _bldOrd.dir * (va - vb);
     });
     const seta = (col) => _bldOrd.col === col ? '<span class="ord">' + (_bldOrd.dir > 0 ? '▲' : '▼') + '</span>' : '';
-    const wp = Math.max(7, Math.floor(56 / Math.max(1, preds.length)));
-    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><colgroup>'
-      + '<col style="width:' + (100 - wp * preds.length - 11) + '%">'
-      + preds.map(() => '<col style="width:' + wp + '%">').join('')
-      + '<col style="width:11%"></colgroup>'
+    // Pixel, nao porcentagem: com muitos predios a conta em % dava largura NEGATIVA pra coluna
+    // da aldeia e ela sumia (14 predios -> 100 - 7*14 - 11 = -9%). Com min-width + overflow-x a
+    // tabela rola e toda coluna mantem tamanho legivel, pra qualquer quantidade.
+    const W_VILA = 132, W_COL = 52, W_PCT = 54;
+    const minW = W_VILA + preds.length * W_COL + W_PCT;
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st" style="min-width:' + minW + 'px"><colgroup>'
+      + '<col style="width:' + W_VILA + 'px">'
+      + preds.map(() => '<col style="width:' + W_COL + 'px">').join('')
+      + '<col style="width:' + W_PCT + 'px"></colgroup>'
       + '<thead><tr><th class="ordena" data-col="name">Aldeia' + seta('name') + '</th>'
       + preds.map((b) => '<th class="ordena" data-col="' + b + '" title="' + esc(BUILD_META[b].name) + ' — clique pra ordenar">'
         + '<i class="twmgr-uicon">' + buildingIcon(b, BUILD_META[b].ico) + '</i>' + seta(b) + '</th>').join('')
@@ -4151,6 +4209,55 @@
       const ativos = plan.filter((it) => it.en !== false);
       alvo.total = ativos.length;
       alvo.done = ativos.filter((it) => (st.level[it.b] || 0) >= it.lvl).length;
+
+      // Snapshot pra aba Status. Nada custa aqui — o estado já foi lido pra decidir a obra.
+      //
+      // Este bloco tinha se perdido: um patch anterior falhou no meio e a escrita nunca chegou ao
+      // arquivo, então o ciclo podava e contava `config.build.status` sem NUNCA preencher. A aba
+      // só enchia pelo botão de reler, e depois de um ciclo continuava vazia.
+      const preds = {};
+      let tudoOk = true;
+      ativos.forEach((it) => {
+        const tem = st.level[it.b] || 0;
+        preds[it.b] = { tem: tem, alvo: it.lvl, fila: (st.queued || {})[it.b] || 0 };
+        if (tem < it.lvl) tudoOk = false;
+      });
+      config.build.status = config.build.status || {};
+      config.build.status[vid] = { name: alvo.name || vid, coord: alvo.coord || null, at: Date.now(),
+                                   tpl: alvo.tpl, preds: preds, ok: tudoOk };
+
+      // DEMOLIÇÃO. Três travas, e a mais importante é a primeira:
+      //
+      //   1. só depois que a aldeia atinge o alvo em TODOS os prédios do modelo (`tudoOk`).
+      //      Enquanto ainda está subindo, demolir seria trabalhar contra si mesmo — e, pior, um
+      //      alvo digitado errado só derruba coisa depois que a aldeia já está pronta, quando o
+      //      erro é visível na tabela (é a linha com ✓).
+      //   2. no máximo um nível por aldeia por ciclo.
+      //   3. só com a fila de demolição vazia.
+      //
+      // Vem depois do snapshot pra tabela mostrar o estado ANTES do pedido — o nível só cai quando
+      // a demolição termina, então mostrar o de agora é o honesto.
+      const exc = (config.build.demolir && tudoOk) ? bldExcedente(st, plan) : null;
+      if (exc) {
+        let filaDem = 0;
+        try { filaDem = await getDemolicaoFila(vid); }
+        catch (e) { filaDem = 99; pushLog('Construções: não li a fila de demolição de ' + rotulo + ' — não demoli nada.', '', 'build'); }
+        if (filaDem > 0) {
+          pushLog('Construções: ' + rotulo + ' — ' + BUILD_META[exc.b].name + ' excedente, mas já há '
+            + filaDem + ' na fila de demolição.', '', 'build');
+        } else {
+          try {
+            await demolirPredio(vid, exc.b);
+            pushLog('Construções: ' + rotulo + ' — DEMOLINDO ' + BUILD_META[exc.b].name
+              + ' (nível ' + exc.de + ' → alvo ' + exc.para + '). Um nível por ciclo.', 'ok', 'build');
+          } catch (e) {
+            pushLog('Construções: ' + rotulo + ' — não consegui demolir ' + BUILD_META[exc.b].name
+              + ' (' + (e.message || e) + ').', 'err', 'build');
+          }
+          await sleep(400);
+        }
+      }
+
       // ENCHE A FILA no mesmo ciclo, até o "Máx na fila" escolhido pelo usuário. Reler o estado a
       // cada obra é necessário e não é desperdício: enfileirar já debita o recurso, então só o
       // servidor sabe se ainda dá pra pagar a próxima. Na prática o recurso acaba antes dos slots
@@ -4235,6 +4342,8 @@
         '<span class="twmgr-bld-ico">' + buildingIcon(it.b, meta.ico) + '</span>' +
         '<span class="twmgr-bld-name" title="' + esc(meta.name) + ' (máx ' + meta.max + ')">' + esc(meta.name) + '</span>' +
         '<input type="number" class="twmgr-bld-lvl twmgr-inp" data-i="' + i + '" min="1" max="' + meta.max + '" value="' + it.lvl + '" title="nível alvo">' +
+        '<label class="twmgr-bld-dem" title="demolir excedente: quando a aldeia estiver COMPLETA, derruba este prédio até o nível alvo">'
+          + '<input type="checkbox" class="twmgr-bld-demck" data-i="' + i + '"' + (it.dem ? ' checked' : '') + '><span>⬇</span></label>' +
         '<span class="twmgr-bld-up" data-i="' + i + '" title="subir prioridade">▲</span>' +
         '<span class="twmgr-bld-down" data-i="' + i + '" title="descer prioridade">▼</span>' +
         '<span class="twmgr-bld-rm" data-i="' + i + '" title="remover">✕</span>' +
@@ -4247,6 +4356,13 @@
     box.addEventListener('change', (e) => {
       const el = e.target; const i = parseInt(el.getAttribute('data-i'), 10);
       const plan = bldPlanAtual(); if (!plan || isNaN(i) || !plan[i]) return;
+      if (el.classList.contains('twmgr-bld-demck')) {
+        // Demolir e por PREDIO, nunca global: marcar "tudo que passar do alvo" transformaria um
+        // numero digitado errado em estrago em serie.
+        plan[i].dem = el.checked;
+        save(); renderBuildPlan();
+        return;
+      }
       if (el.classList.contains('twmgr-bld-en')) plan[i].en = !!el.checked;
       else if (el.classList.contains('twmgr-bld-lvl')) {
         const meta = BUILD_META[plan[i].b]; const max = meta ? meta.max : 30;
@@ -7999,6 +8115,8 @@
       // marcada que a horizontal — a comparação que importa é dentro da coluna (uma unidade entre
       // aldeias), então é a coluna que precisa ficar delimitada.
       ".twmgr-rc-st{border-collapse:collapse}",
+      // O container ja rolava na vertical; sem o horizontal a tabela larga vazaria do painel.
+      ".twmgr-bld-vils{overflow-x:auto}",
       ".twmgr-rc-st tbody td{border-right:1px solid #e6dbc6;border-bottom:1px solid #efe7d8}",
       ".twmgr-rc-st tbody td:last-child{border-right:0}",
       ".twmgr-rc-st tbody tr:last-child td{border-bottom:0}",
@@ -8009,6 +8127,8 @@
       // O alvo entre parênteses, menor e apagado: é referência, o número que importa é o atual.
       // Alvo no MESMO tamanho do atual (pedido do usuário) — só a cor separa um do outro.
       ".twmgr-rc-st .alvo{font-size:10px;color:#a89madeira;margin-left:3px;font-variant-numeric:tabular-nums}",
+      ".twmgr-bld-dem{display:inline-flex;align-items:center;gap:2px;cursor:pointer;font-size:10px;color:#b03030}",
+      ".twmgr-bld-dem input{margin:0}",
       ".twmgr-rc-st .ordena{cursor:pointer;user-select:none}",
       ".twmgr-rc-st .ordena:hover{background:rgba(0,0,0,.05)}",
       // A seta sai do FLUXO: em linha, ela empurrava o ícone pro lado e o cabeçalho deixava de
@@ -8407,7 +8527,12 @@
             '<div class="twmgr-fld" style="margin-top:7px"><span title="Todas as aldeias deste grupo seguem este modelo">Aplicar ao grupo</span>' +
               '<select id="twmgr-bld-tplgrp" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
             '<div id="twmgr-bld-plano-resumo" style="font-size:9px;color:#8a7d6d;margin-top:5px"></div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Aldeia que entra no grupo no jogo entra na gestão <b>sozinha</b>, no ciclo seguinte — não precisa marcar nada aqui.</div>') +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Aldeia que entra no grupo no jogo entra na gestão <b>sozinha</b>, no ciclo seguinte — não precisa marcar nada aqui.</div>' +
+            '<div class="twmgr-fld" style="margin-top:9px"><span title="Derruba nível acima do alvo">Demolir excedente</span>' +
+              '<label class="twmgr-sw"><input id="twmgr-bld-demolir" type="checkbox"><i></i></label></div>' +
+            '<div style="font-size:9px;color:#b03030;margin-top:4px">⚠ Demolir <b>não devolve recurso</b> e reconstruir custa o preço cheio. Não há desfazer.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Só começa depois que a aldeia <b>bate o alvo em todos os prédios</b> (a linha com ✓ no Status). Marque quais prédios podem cair no <b>⬇</b> de cada item, em Gerenciar modelos — sem marcar, nada é demolido.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px"><b>Um nível por aldeia por ciclo</b>, e só com a fila de demolição vazia — dá tempo de ver acontecendo e desligar.</div>') +
         '</div>' +
         '<div id="twmgr-sub-bldstatus" style="display:none">' +
           sec('Status por aldeia',
@@ -8808,6 +8933,11 @@
     });
     document.getElementById('twmgr-bld-stgroup').addEventListener('change', (e) => bldStatusFiltrar(e.target.value));
     document.getElementById('twmgr-bld-st-reload').addEventListener('click', bldAtualizarStatus);
+    document.getElementById('twmgr-bld-demolir').checked = !!config.build.demolir;
+    document.getElementById('twmgr-bld-demolir').addEventListener('change', (e) => {
+      config.build.demolir = e.target.checked; save();
+      if (e.target.checked) pushLog('Construções: demolição de excedente LIGADA — só age em aldeia já completa, 1 nível por ciclo.', '', 'build');
+    });
     bindBuildPlanHandlers();
     bldRenderTplSelect();
     bldSwitchProf(_bldActiveProf);

@@ -178,8 +178,29 @@
       faltam: mFalta ? parseInt(mFalta[2], 10) : null,
       tem: mTem ? parseInt(mTem[1], 10) : null,
     };
+    // Fila de nobres da Academia. Confirmado no dump (br143, ago/2026): cada leva e uma linha
+    //   "1 Nobre 3:08:41 hoje às 07:51:18 cancelar"
+    // e a linha do FORMULÁRIO tem texto parecido ("Nobre 40.000 50.000 50.000 100 3:08:41 ...")
+    // mas NÃO tem o "cancelar" — é ele que separa fila de formulário. Sem esse filtro o form
+    // entraria como se fosse uma leva em produção.
+    //
+    // Isto não é enfeite: sem ler a fila, um nobre já encomendado é invisível. O Noblar acha que
+    // nada vem, forma outro, e no ciclo seguinte outro — o dump do usuário mostrou 5 na fila de
+    // uma aldeia por causa disso.
+    const fila = { nobres: 0, prontoEm: null, cada: [] };
+    doc.querySelectorAll('tr').forEach((tr) => {
+      const t = (tr.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!/cancelar/i.test(t)) return;
+      const m = t.match(/^(\d+)\s+\S+\s+(\d+:\d{2}:\d{2})/);
+      if (!m) return;
+      const quando = parseReportDate(t.replace(/^.*?\d+:\d{2}:\d{2}/, ''));
+      const n = parseInt(m[1], 10) || 0;
+      fila.nobres += n;
+      fila.cada.push({ n: n, at: quando });
+      if (quando && (fila.prontoEm == null || quando < fila.prontoEm)) fila.prontoEm = quando;
+    });
     return { resNow: resNow, hasForm: !!form, action: action, fields: fields,
-             countName: countName, maxMint: maxMint, moedas: moedas };
+             countName: countName, maxMint: maxMint, moedas: moedas, fila: fila };
 
   }
   async function mintCoins(vid) {

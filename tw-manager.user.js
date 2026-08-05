@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.36.0
+// @version      11.37.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.36.0';
+  const VERSION = '11.37.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -3156,8 +3156,29 @@
       faltam: mFalta ? parseInt(mFalta[2], 10) : null,
       tem: mTem ? parseInt(mTem[1], 10) : null,
     };
+    // Fila de nobres da Academia. Confirmado no dump (br143, ago/2026): cada leva e uma linha
+    //   "1 Nobre 3:08:41 hoje às 07:51:18 cancelar"
+    // e a linha do FORMULÁRIO tem texto parecido ("Nobre 40.000 50.000 50.000 100 3:08:41 ...")
+    // mas NÃO tem o "cancelar" — é ele que separa fila de formulário. Sem esse filtro o form
+    // entraria como se fosse uma leva em produção.
+    //
+    // Isto não é enfeite: sem ler a fila, um nobre já encomendado é invisível. O Noblar acha que
+    // nada vem, forma outro, e no ciclo seguinte outro — o dump do usuário mostrou 5 na fila de
+    // uma aldeia por causa disso.
+    const fila = { nobres: 0, prontoEm: null, cada: [] };
+    doc.querySelectorAll('tr').forEach((tr) => {
+      const t = (tr.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!/cancelar/i.test(t)) return;
+      const m = t.match(/^(\d+)\s+\S+\s+(\d+:\d{2}:\d{2})/);
+      if (!m) return;
+      const quando = parseReportDate(t.replace(/^.*?\d+:\d{2}:\d{2}/, ''));
+      const n = parseInt(m[1], 10) || 0;
+      fila.nobres += n;
+      fila.cada.push({ n: n, at: quando });
+      if (quando && (fila.prontoEm == null || quando < fila.prontoEm)) fila.prontoEm = quando;
+    });
     return { resNow: resNow, hasForm: !!form, action: action, fields: fields,
-             countName: countName, maxMint: maxMint, moedas: moedas };
+             countName: countName, maxMint: maxMint, moedas: moedas, fila: fila };
 
   }
   async function mintCoins(vid) {
@@ -4734,15 +4755,32 @@
   // Tenta formar ate `faltam` nobres, da aldeia mais PERTO do alvo pra mais longe.
   // Aldeia que nao consegue agora (sem recurso, sem populacao, moeda insuficiente) nao interrompe:
   // segue pra proxima mais proxima -- foi o pedido explicito do usuario.
+  //
+  // CONTA A FILA DA ACADEMIA antes de formar. Nobre encomendado nao entra na tropa disponivel,
+  // entao sem ler a fila ele e INVISIVEL: o modulo acha que nada vem, forma outro, e no ciclo
+  // seguinte outro. O dump do usuario mostrou 5 nobres na fila de uma aldeia por causa disso.
+  //
+  // Devolve { formados, naFila, prontoEm }. `naFila + formados` responde "vem mais nobre?", que
+  // e o que decide se um envio parcial espera ou sai.
   async function nobleRecrutar(alvo, origensOrdenadas, faltam) {
     const feitas = [];
-    let formados = 0;
+    let formados = 0, naFila = 0, prontoEm = null;
     for (const o of origensOrdenadas) {
-      if (formados >= faltam) break;
+      // O que ja esta na fila conta como feito: nao precisa encomendar de novo.
+      if (formados + naFila >= faltam) break;
       let st;
       try { st = await getSnobState(o.vid); }
       catch (e) { continue; }                       // sem Academia: proxima aldeia
       if (!st.hasForm) continue;
+      const fl = st.fila || { nobres: 0 };
+      if (fl.nobres > 0) {
+        naFila += fl.nobres;
+        if (fl.prontoEm && (prontoEm == null || fl.prontoEm < prontoEm)) prontoEm = fl.prontoEm;
+        feitas.push({ nome: o.nome, ok: false, motivo: fl.nobres + ' já na fila'
+          + (fl.prontoEm ? ' (1º às ' + new Date(fl.prontoEm).toLocaleTimeString('pt-BR') + ')' : '') });
+        await sleep(200);
+        continue;                                   // ja tem nobre vindo daqui; nao empilha mais
+      }
       const m = st.moedas || {};
       if (!(m.podemFormar > 0)) {
         // Sem moeda guardada o bastante. NAO cunha -- so registra o quanto falta, pro usuario
@@ -4763,7 +4801,7 @@
       const resumo = feitas.map((f) => f.nome + ': ' + (f.ok ? 'NOBRE em produção' : f.motivo)).join(' \u00b7 ');
       pushLog('Noblar (recruta) → ' + alvo.coord + ' — ' + resumo, formados ? 'ok' : '', 'noble');
     }
-    return formados;
+    return { formados: formados, naFila: naFila, prontoEm: prontoEm };
   }
 
   async function nobleTick() {
@@ -4811,12 +4849,19 @@
       const item = plano[plano.length - 1];
       if (r.pronto) prontos++;
 
-      let formou = 0;
+      // `vindo` = nobre que ainda vai existir: o que formei agora MAIS o que ja estava na fila.
+      // Os dois contam igual pra decisao do parcial -- o que importa e se vale esperar, nao quem
+      // encomendou.
+      let vindo = 0, prontoEm = null;
       if (r.falta <= 0) { completos++; }
       else if (config.noble.produzir !== false) {
         // Faltou nobre: tenta FORMAR nas mais proximas (nunca cunhar). O nobre formado entra na
         // fila da Academia, entao ele so aparece no plano do proximo ciclo -- de proposito.
-        try { formou = await nobleRecrutar(alvo, r.dentroDoLimite || [], r.falta); }
+        try {
+          const rec = await nobleRecrutar(alvo, r.dentroDoLimite || [], r.falta);
+          vindo = (rec.formados || 0) + (rec.naFila || 0);
+          prontoEm = rec.prontoEm || null;
+        }
         catch (e) { pushLog('Noblar (recruta) em ' + alvo.coord + ': ' + (e.message || e), 'err', 'noble'); }
       }
 
@@ -4827,13 +4872,16 @@
           item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'teto do ciclo';
           pushLog('Noblar (auto): ' + alvo.coord + ' segurado — teto de ' + (config.noble.autoMax || 8)
             + ' comando(s) por ciclo já batido.', '', 'noble');
-        } else if (r.falta > 0 && formou > 0) {
+        } else if (r.falta > 0 && vindo > 0) {
           // Parcial COM nobre a caminho: segura. Mandar agora gasta o unico que existe e a
           // lealdade (regen ~1/h) volta antes do proximo chegar. Foi a regra do usuario:
           // parcial e pra quando nao da pra recrutar mais.
-          item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'segurando: +' + formou + ' em produção';
+          const quando = prontoEm ? ' 1º às ' + new Date(prontoEm).toLocaleTimeString('pt-BR') : '';
+          item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'segurando: +' + vindo + ' em produção';
+          item.prontoEm = prontoEm;
           pushLog('Noblar (auto): ' + alvo.coord + ' segurado — leva ' + r.levando + ' de ' + r.precisa
-            + ' e tem ' + formou + ' nobre(s) em produção. Manda quando fechar (ou clique em Enviar).', '', 'noble');
+            + ' e tem ' + vindo + ' nobre(s) em produção.' + quando
+            + ' Manda quando fechar (ou clique em Enviar).', '', 'noble');
         } else {
           const n = await nobleEnviarItem(item, ' (auto)');
           enviadosNoCiclo += n;
@@ -4996,6 +5044,7 @@
           : (p.pronto && p.falta <= 0) ? '<b style="color:#3f8f52">completo</b>'
           : p.pronto ? '<b style="color:#b5651d" title="envia assim mesmo — não conquista sozinho">'
             + esc(p.motivo || 'parcial') + '</b>'
+            + (p.prontoEm ? '<div class="sub">nobre pronto às ' + new Date(p.prontoEm).toLocaleTimeString('pt-BR') + '</div>' : '')
           : '<span style="color:#8a7340">' + esc(p.motivo || 'sem nobre') + '</span>';
         const acao = (p && p.pronto)
           ? '<a class="twmgr-nb-fire" data-coord="' + esc(a.coord) + '">Enviar</a><div class="sub"><a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '">remover</a></div>'

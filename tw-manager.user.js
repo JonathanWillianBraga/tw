@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.48.0
+// @version      11.49.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.48.0';
+  const VERSION = '11.49.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2808,6 +2808,10 @@
   // tamanho e centrados sobre o número.
   function rcAjustarIcones(box) {
     const CAIXA = 18;
+    // Elemento em display:none mede ZERO. Se a aba ainda não apareceu, não adianta medir: sai e
+    // deixa pro showTab/showSub chamar de novo quando ela abrir. Antes isso passava batido e o
+    // usuário via os ícones tortos até reordenar a tabela por acaso.
+    if (box.offsetParent === null) return false;
     box.querySelectorAll('.twmgr-uicon .unit_sprite').forEach((el) => {
       el.style.transform = '';                 // mede o natural, sem a escala anterior
       const maior = Math.max(el.offsetWidth, el.offsetHeight);
@@ -2817,6 +2821,7 @@
       const k = Math.min(CAIXA / maior, 1.6);
       el.style.transform = 'scale(' + k.toFixed(3) + ')';
     });
+    return true;
   }
 
   function rcRenderStatus() {
@@ -7894,7 +7899,14 @@
       // `thead th`/`tbody td` (nao so `th`/`td`): a regra base .twmgr-bld-tab th tem a MESMA
       // especificidade e vem depois no arquivo, entao ganhava por ordem e o alinhamento central
       // simplesmente nao aplicava -- media 9px de desvio entre o icone e a coluna de numeros.
-      ".twmgr-rc-st thead th{padding:3px 1px;text-align:center;vertical-align:middle}",
+      ".twmgr-rc-st thead th{padding:3px 1px;text-align:center;vertical-align:middle;border:1px solid #d8c9ac;border-top:0}",
+      // Grade: com 9 colunas de número, o olho perde a linha sem as divisórias. Vertical mais
+      // marcada que a horizontal — a comparação que importa é dentro da coluna (uma unidade entre
+      // aldeias), então é a coluna que precisa ficar delimitada.
+      ".twmgr-rc-st{border-collapse:collapse}",
+      ".twmgr-rc-st tbody td{border-right:1px solid #e6dbc6;border-bottom:1px solid #efe7d8}",
+      ".twmgr-rc-st tbody td:last-child{border-right:0}",
+      ".twmgr-rc-st tbody tr:last-child td{border-bottom:0}",
       ".twmgr-rc-st tbody td{padding:4px 1px;text-align:center;vertical-align:middle;white-space:nowrap;font-size:9px}",
       ".twmgr-rc-st tbody td:first-child,.twmgr-rc-st thead th:first-child{text-align:left;padding-left:5px;white-space:normal}",
       ".twmgr-rc-st .sub{font-size:8px;color:#a08c6a;line-height:1.1}",
@@ -7988,6 +8000,15 @@
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
+    // Elemento em display:none mede ZERO. Quem depende de medida real (a escala dos ícones do
+    // Status) precisa refazer a conta quando a aba aparece — senão o ajuste só acontecia por
+    // acidente, na primeira vez que o usuário reordenava a tabela.
+    if (name === 'recruit') aoAparecer();
+  }
+  // Rotinas que só funcionam com o elemento visível. Chamado por showTab e showSub.
+  function aoAparecer() {
+    const st = document.getElementById('twmgr-rc-status');
+    if (st && st.offsetParent !== null && typeof rcAjustarIcones === 'function') rcAjustarIcones(st);
   }
 
   // Sub-aba do Saque. Guarda a escolha no localStorage (preferência de tela, igual à largura do
@@ -8003,6 +8024,7 @@
       const b = document.getElementById('twmgr-sbtab-' + n); if (b) b.classList.toggle('active', n === name);
     });
     try { localStorage.setItem(FARM_SUB_KEY + '_' + mod, name); } catch (e) {}
+    aoAparecer();   // a sub-aba que acabou de abrir agora tem medida real
   }
   // O Saque salvava a sub-aba numa chave sem sufixo; mantida pra não resetar quem já usa.
   function showFarmSub(name) {
@@ -8229,8 +8251,7 @@
             '</div>' +
             '<div id="twmgr-rc-status" class="twmgr-bld-vils" style="margin-top:5px"></div>' +
             '<div id="twmgr-rc-status-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Número de cima = o que a aldeia <b>tem</b>; embaixo = o <b>alvo</b> do modelo. Verde = cumprido. O ✓ no nome sai quando <b>todas</b> as unidades chegaram.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vem da leitura do último ciclo, sem custo. O ↻ relê agora e <b>não recruta nada</b>.</div>') +
+            '') +
         '</div>' +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Fila alvo (h)</span><input id="twmgr-r-hours" class="twmgr-inp" type="number" min="0.5" step="0.5" value="2" style="width:66px"></div>' +

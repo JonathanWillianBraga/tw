@@ -455,6 +455,10 @@
   // tamanho e centrados sobre o número.
   function rcAjustarIcones(box) {
     const CAIXA = 18;
+    // Elemento em display:none mede ZERO. Se a aba ainda não apareceu, não adianta medir: sai e
+    // deixa pro showTab/showSub chamar de novo quando ela abrir. Antes isso passava batido e o
+    // usuário via os ícones tortos até reordenar a tabela por acaso.
+    if (box.offsetParent === null) return false;
     box.querySelectorAll('.twmgr-uicon .unit_sprite').forEach((el) => {
       el.style.transform = '';                 // mede o natural, sem a escala anterior
       const maior = Math.max(el.offsetWidth, el.offsetHeight);
@@ -464,6 +468,7 @@
       const k = Math.min(CAIXA / maior, 1.6);
       el.style.transform = 'scale(' + k.toFixed(3) + ')';
     });
+    return true;
   }
 
   function rcRenderStatus() {

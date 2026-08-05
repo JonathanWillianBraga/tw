@@ -601,7 +601,13 @@
             '<div class="twmgr-fld"><span>Grupo</span><select id="twmgr-nb-posgid" class="twmgr-inp" style="flex:0 0 140px;width:140px"></select></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Só grupo <b>estático</b>. Grupo dinâmico é montado por regra e não aceita aldeia na mão — mandar pra lá falharia calado.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A conquista é detectada pela <b>lealdade ≤ 0</b> no relatório, então depende de <b>Ler relatórios</b> estar ligado. Cada aldeia entra <b>uma vez</b> só.</div>' +
-            '<div style="font-size:9px;color:#b5651d;margin-top:7px">⚠ <b>Bandeira ainda não.</b> A tela de bandeiras não tem formulário nenhum, então eu não sei como o jogo equipa uma. Falta um dump.</div>') +
+            '<div class="twmgr-fld" style="margin-top:11px"><span>Equipar bandeira</span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-posband" type="checkbox"><i></i></label></div>' +
+            '<div class="twmgr-fld"><span title="O identificador do tipo de bandeira — use o botão abaixo pra descobrir">Tipo</span><input id="twmgr-nb-bandtipo" class="twmgr-inp" type="text" placeholder="ex: 1"></div>' +
+            '<div class="twmgr-fld"><span>Nível</span><input id="twmgr-nb-bandnivel" class="twmgr-inp" type="number" min="1" max="10" value="1"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Pra descobrir o <b>tipo</b>: abra a tela de <b>Bandeiras</b>, passe o mouse na que você quer e veja o número no link, ou rode <code>FlagsScreen.getFlagInfo</code> no console. Ainda não virou um seletor porque eu não vi a marcação do inventário — chutar ali levaria a equipar a bandeira errada.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A chamada é a mesma que o botão do jogo usa (<code>assign_flag</code>), só sem o diálogo de confirmação. Se o jogo recusar (bandeira em uso, nível inexistente), o log diz o motivo e a aldeia continua na fila pro próximo ciclo.</div>') +
+
         '</div>' +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
@@ -886,13 +892,18 @@
     document.getElementById('twmgr-nb-cunhar-ate').value = config.noble.cunharAte != null ? config.noble.cunharAte : 4;
     document.getElementById('twmgr-nb-cunhar-n').value = config.noble.cunharMaxAldeias != null ? config.noble.cunharMaxAldeias : 3;
     document.getElementById('twmgr-nb-posgrupo').checked = !!config.noble.posGrupo;
+    document.getElementById('twmgr-nb-posband').checked = !!config.noble.posBandeira;
+    document.getElementById('twmgr-nb-bandtipo').value = config.noble.posBandeiraTipo || '';
+    document.getElementById('twmgr-nb-bandnivel').value = config.noble.posBandeiraNivel != null ? config.noble.posBandeiraNivel : 1;
+
     fillNobleGrupos();
 
 
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
      'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen',
-     'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid'].forEach((id) => {
+     'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid',
+     'twmgr-nb-posband', 'twmgr-nb-bandtipo', 'twmgr-nb-bandnivel'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();

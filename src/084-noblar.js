@@ -108,7 +108,35 @@
     if (config.noble.posGrupoId) sel.value = String(config.noble.posGrupoId);
   }
 
+  // Equipa bandeira. Chamada CONFIRMADA pelo dump do FlagsScreen.assignFlag:
+  //   TribalWars.post("flags", {ajaxaction:"assign_flag"}, {flag_type, level, village_id}, cb)
+  // O assignFlag do jogo e so um wrapper com dialogo de confirmacao em volta disso.
+  //
+  // Chama a funcao DO JOGO em vez de remontar a requisicao: ela ja resolve CSRF, formato do
+  // corpo e o que o servidor espera de brinde. Remontar na mao seria adivinhar exatamente o
+  // que evitei a sessao inteira -- e aqui nem precisa, porque a funcao esta na pagina.
+  function nobleEquiparBandeira(vid, tipo, nivel) {
+    return new Promise((resolve, reject) => {
+      const TW = window.TribalWars;
+      if (!TW || typeof TW.post !== 'function') {
+        reject(new Error('TribalWars.post nao esta disponivel nesta pagina'));
+        return;
+      }
+      let respondeu = false;
+      try {
+        TW.post('flags', { ajaxaction: 'assign_flag' },
+          { flag_type: tipo, level: nivel, village_id: vid },
+          (r) => { respondeu = true; resolve(r); },
+          (e) => { respondeu = true; reject(new Error(String((e && e.error) || e || 'recusado'))); });
+      } catch (e) { respondeu = true; reject(e); return; }
+      // O post do jogo e por callback: sem isso, um erro que nao chame nenhum dos dois
+      // deixaria a Promise pendurada e o ciclo travado.
+      setTimeout(() => { if (!respondeu) reject(new Error('sem resposta em 15s')); }, 15000);
+    });
+  }
+
   async function nobleAddGrupo(vid, gid) {
+
 
     const body = new URLSearchParams();
     body.append('village_ids[]', String(vid));
@@ -127,21 +155,40 @@
   // agora é minha (aparece no getAllVillages). `posFeitos` impede repetir — sem ele, cada
   // releitura do relatório antigo re-adicionaria a aldeia ao grupo.
   async function noblePosConquista(todas) {
-    if (!config.noble.posGrupo || !config.noble.posGrupoId) return;
+    const querGrupo = config.noble.posGrupo && config.noble.posGrupoId;
+    const querBandeira = config.noble.posBandeira && config.noble.posBandeiraTipo;
+    if (!querGrupo && !querBandeira) return;
     const rel = config.noble.relatorios || {};
     for (const coord of Object.keys(rel)) {
       if (rel[coord].lealdade == null || rel[coord].lealdade > 0) continue;
       if (config.noble.posFeitos[coord]) continue;
       const v = (todas || []).find((x) => (x.coord || '') === coord);
       if (!v) continue;                 // ainda não entrou na lista de aldeias; tenta no próximo ciclo
-      try {
-        await nobleAddGrupo(v.vid, config.noble.posGrupoId);
-        config.noble.posFeitos[coord] = Date.now();
-        pushLog('Noblar: ' + coord + ' conquistada — adicionada ao grupo.', 'ok', 'noble');
-      } catch (e) {
-        pushLog('Noblar: não consegui pôr ' + coord + ' no grupo (' + (e.message || e) + ').', 'err', 'noble');
+      const feito = [];
+      if (config.noble.posGrupo && config.noble.posGrupoId) {
+        try {
+          await nobleAddGrupo(v.vid, config.noble.posGrupoId);
+          feito.push('grupo');
+        } catch (e) {
+          pushLog('Noblar: não consegui pôr ' + coord + ' no grupo (' + (e.message || e) + ').', 'err', 'noble');
+        }
+        await sleep(400);
       }
-      await sleep(400);
+      if (config.noble.posBandeira && config.noble.posBandeiraTipo) {
+        try {
+          await nobleEquiparBandeira(v.vid, config.noble.posBandeiraTipo, config.noble.posBandeiraNivel || 1);
+          feito.push('bandeira');
+        } catch (e) {
+          pushLog('Noblar: não consegui equipar bandeira em ' + coord + ' (' + (e.message || e) + ').', 'err', 'noble');
+        }
+        await sleep(400);
+      }
+      // Só marca como feito se ALGO deu certo — senão uma falha de rede aposentaria a aldeia
+      // pra sempre e ela nunca entraria no grupo.
+      if (feito.length) {
+        config.noble.posFeitos[coord] = Date.now();
+        pushLog('Noblar: ' + coord + ' conquistada — ' + feito.join(' + ') + ' aplicado(s).', 'ok', 'noble');
+      }
     }
     save();
   }
@@ -1022,6 +1069,10 @@
     if (g('twmgr-nb-cunhar-n')) c.cunharMaxAldeias = Math.max(1, Math.min(12, parseInt(g('twmgr-nb-cunhar-n').value, 10) || 3));
     if (g('twmgr-nb-posgrupo')) c.posGrupo = g('twmgr-nb-posgrupo').checked;
     if (g('twmgr-nb-posgid')) c.posGrupoId = g('twmgr-nb-posgid').value;
+    if (g('twmgr-nb-posband')) c.posBandeira = g('twmgr-nb-posband').checked;
+    if (g('twmgr-nb-bandtipo')) c.posBandeiraTipo = g('twmgr-nb-bandtipo').value.trim();
+    if (g('twmgr-nb-bandnivel')) c.posBandeiraNivel = Math.max(1, Math.min(10, parseInt(g('twmgr-nb-bandnivel').value, 10) || 1));
+
 
     save();
   }

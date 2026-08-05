@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.40.0
+// @version      11.41.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.40.0';
+  const VERSION = '11.41.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -246,6 +246,7 @@
     cunhar: false, cunharAte: 4, cunharMaxAldeias: 3,
     // Pós-conquista: joga a aldeia tomada num grupo estático.
     posGrupo: false, posGrupoId: '', posFeitos: {},
+    posBandeira: false, posBandeiraTipo: '', posBandeiraNivel: 1,
 
     emVoo: {},        // { [coord]: [{at, chega, n}] } — comandos meus que ainda não pousaram
 
@@ -617,6 +618,10 @@
     if (c.noble.posGrupo == null) c.noble.posGrupo = false;
     if (c.noble.posGrupoId == null) c.noble.posGrupoId = '';
     if (!c.noble.posFeitos || typeof c.noble.posFeitos !== 'object') c.noble.posFeitos = {};
+    if (c.noble.posBandeira == null) c.noble.posBandeira = false;
+    if (c.noble.posBandeiraTipo == null) c.noble.posBandeiraTipo = '';
+    c.noble.posBandeiraNivel = Math.max(1, Math.min(10, parseInt(c.noble.posBandeiraNivel, 10) || 1));
+
 
     // Registro de alvo que saiu da lista não serve pra nada e cresceria pra sempre.
     Object.keys(c.noble.emVoo).forEach((k) => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.40.0
+// @version      11.41.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.40.0';
+  const VERSION = '11.41.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -246,6 +246,7 @@
     cunhar: false, cunharAte: 4, cunharMaxAldeias: 3,
     // Pós-conquista: joga a aldeia tomada num grupo estático.
     posGrupo: false, posGrupoId: '', posFeitos: {},
+    posBandeira: false, posBandeiraTipo: '', posBandeiraNivel: 1,
 
     emVoo: {},        // { [coord]: [{at, chega, n}] } — comandos meus que ainda não pousaram
 
@@ -617,6 +618,10 @@
     if (c.noble.posGrupo == null) c.noble.posGrupo = false;
     if (c.noble.posGrupoId == null) c.noble.posGrupoId = '';
     if (!c.noble.posFeitos || typeof c.noble.posFeitos !== 'object') c.noble.posFeitos = {};
+    if (c.noble.posBandeira == null) c.noble.posBandeira = false;
+    if (c.noble.posBandeiraTipo == null) c.noble.posBandeiraTipo = '';
+    c.noble.posBandeiraNivel = Math.max(1, Math.min(10, parseInt(c.noble.posBandeiraNivel, 10) || 1));
+
 
     // Registro de alvo que saiu da lista não serve pra nada e cresceria pra sempre.
     Object.keys(c.noble.emVoo).forEach((k) => {
@@ -4551,7 +4556,35 @@
     if (config.noble.posGrupoId) sel.value = String(config.noble.posGrupoId);
   }
 
+  // Equipa bandeira. Chamada CONFIRMADA pelo dump do FlagsScreen.assignFlag:
+  //   TribalWars.post("flags", {ajaxaction:"assign_flag"}, {flag_type, level, village_id}, cb)
+  // O assignFlag do jogo e so um wrapper com dialogo de confirmacao em volta disso.
+  //
+  // Chama a funcao DO JOGO em vez de remontar a requisicao: ela ja resolve CSRF, formato do
+  // corpo e o que o servidor espera de brinde. Remontar na mao seria adivinhar exatamente o
+  // que evitei a sessao inteira -- e aqui nem precisa, porque a funcao esta na pagina.
+  function nobleEquiparBandeira(vid, tipo, nivel) {
+    return new Promise((resolve, reject) => {
+      const TW = window.TribalWars;
+      if (!TW || typeof TW.post !== 'function') {
+        reject(new Error('TribalWars.post nao esta disponivel nesta pagina'));
+        return;
+      }
+      let respondeu = false;
+      try {
+        TW.post('flags', { ajaxaction: 'assign_flag' },
+          { flag_type: tipo, level: nivel, village_id: vid },
+          (r) => { respondeu = true; resolve(r); },
+          (e) => { respondeu = true; reject(new Error(String((e && e.error) || e || 'recusado'))); });
+      } catch (e) { respondeu = true; reject(e); return; }
+      // O post do jogo e por callback: sem isso, um erro que nao chame nenhum dos dois
+      // deixaria a Promise pendurada e o ciclo travado.
+      setTimeout(() => { if (!respondeu) reject(new Error('sem resposta em 15s')); }, 15000);
+    });
+  }
+
   async function nobleAddGrupo(vid, gid) {
+
 
     const body = new URLSearchParams();
     body.append('village_ids[]', String(vid));
@@ -4570,21 +4603,40 @@
   // agora é minha (aparece no getAllVillages). `posFeitos` impede repetir — sem ele, cada
   // releitura do relatório antigo re-adicionaria a aldeia ao grupo.
   async function noblePosConquista(todas) {
-    if (!config.noble.posGrupo || !config.noble.posGrupoId) return;
+    const querGrupo = config.noble.posGrupo && config.noble.posGrupoId;
+    const querBandeira = config.noble.posBandeira && config.noble.posBandeiraTipo;
+    if (!querGrupo && !querBandeira) return;
     const rel = config.noble.relatorios || {};
     for (const coord of Object.keys(rel)) {
       if (rel[coord].lealdade == null || rel[coord].lealdade > 0) continue;
       if (config.noble.posFeitos[coord]) continue;
       const v = (todas || []).find((x) => (x.coord || '') === coord);
       if (!v) continue;                 // ainda não entrou na lista de aldeias; tenta no próximo ciclo
-      try {
-        await nobleAddGrupo(v.vid, config.noble.posGrupoId);
-        config.noble.posFeitos[coord] = Date.now();
-        pushLog('Noblar: ' + coord + ' conquistada — adicionada ao grupo.', 'ok', 'noble');
-      } catch (e) {
-        pushLog('Noblar: não consegui pôr ' + coord + ' no grupo (' + (e.message || e) + ').', 'err', 'noble');
+      const feito = [];
+      if (config.noble.posGrupo && config.noble.posGrupoId) {
+        try {
+          await nobleAddGrupo(v.vid, config.noble.posGrupoId);
+          feito.push('grupo');
+        } catch (e) {
+          pushLog('Noblar: não consegui pôr ' + coord + ' no grupo (' + (e.message || e) + ').', 'err', 'noble');
+        }
+        await sleep(400);
       }
-      await sleep(400);
+      if (config.noble.posBandeira && config.noble.posBandeiraTipo) {
+        try {
+          await nobleEquiparBandeira(v.vid, config.noble.posBandeiraTipo, config.noble.posBandeiraNivel || 1);
+          feito.push('bandeira');
+        } catch (e) {
+          pushLog('Noblar: não consegui equipar bandeira em ' + coord + ' (' + (e.message || e) + ').', 'err', 'noble');
+        }
+        await sleep(400);
+      }
+      // Só marca como feito se ALGO deu certo — senão uma falha de rede aposentaria a aldeia
+      // pra sempre e ela nunca entraria no grupo.
+      if (feito.length) {
+        config.noble.posFeitos[coord] = Date.now();
+        pushLog('Noblar: ' + coord + ' conquistada — ' + feito.join(' + ') + ' aplicado(s).', 'ok', 'noble');
+      }
     }
     save();
   }
@@ -5465,6 +5517,10 @@
     if (g('twmgr-nb-cunhar-n')) c.cunharMaxAldeias = Math.max(1, Math.min(12, parseInt(g('twmgr-nb-cunhar-n').value, 10) || 3));
     if (g('twmgr-nb-posgrupo')) c.posGrupo = g('twmgr-nb-posgrupo').checked;
     if (g('twmgr-nb-posgid')) c.posGrupoId = g('twmgr-nb-posgid').value;
+    if (g('twmgr-nb-posband')) c.posBandeira = g('twmgr-nb-posband').checked;
+    if (g('twmgr-nb-bandtipo')) c.posBandeiraTipo = g('twmgr-nb-bandtipo').value.trim();
+    if (g('twmgr-nb-bandnivel')) c.posBandeiraNivel = Math.max(1, Math.min(10, parseInt(g('twmgr-nb-bandnivel').value, 10) || 1));
+
 
     save();
   }
@@ -7695,7 +7751,13 @@
             '<div class="twmgr-fld"><span>Grupo</span><select id="twmgr-nb-posgid" class="twmgr-inp" style="flex:0 0 140px;width:140px"></select></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Só grupo <b>estático</b>. Grupo dinâmico é montado por regra e não aceita aldeia na mão — mandar pra lá falharia calado.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A conquista é detectada pela <b>lealdade ≤ 0</b> no relatório, então depende de <b>Ler relatórios</b> estar ligado. Cada aldeia entra <b>uma vez</b> só.</div>' +
-            '<div style="font-size:9px;color:#b5651d;margin-top:7px">⚠ <b>Bandeira ainda não.</b> A tela de bandeiras não tem formulário nenhum, então eu não sei como o jogo equipa uma. Falta um dump.</div>') +
+            '<div class="twmgr-fld" style="margin-top:11px"><span>Equipar bandeira</span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-posband" type="checkbox"><i></i></label></div>' +
+            '<div class="twmgr-fld"><span title="O identificador do tipo de bandeira — use o botão abaixo pra descobrir">Tipo</span><input id="twmgr-nb-bandtipo" class="twmgr-inp" type="text" placeholder="ex: 1"></div>' +
+            '<div class="twmgr-fld"><span>Nível</span><input id="twmgr-nb-bandnivel" class="twmgr-inp" type="number" min="1" max="10" value="1"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Pra descobrir o <b>tipo</b>: abra a tela de <b>Bandeiras</b>, passe o mouse na que você quer e veja o número no link, ou rode <code>FlagsScreen.getFlagInfo</code> no console. Ainda não virou um seletor porque eu não vi a marcação do inventário — chutar ali levaria a equipar a bandeira errada.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A chamada é a mesma que o botão do jogo usa (<code>assign_flag</code>), só sem o diálogo de confirmação. Se o jogo recusar (bandeira em uso, nível inexistente), o log diz o motivo e a aldeia continua na fila pro próximo ciclo.</div>') +
+
         '</div>' +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
@@ -7980,13 +8042,18 @@
     document.getElementById('twmgr-nb-cunhar-ate').value = config.noble.cunharAte != null ? config.noble.cunharAte : 4;
     document.getElementById('twmgr-nb-cunhar-n').value = config.noble.cunharMaxAldeias != null ? config.noble.cunharMaxAldeias : 3;
     document.getElementById('twmgr-nb-posgrupo').checked = !!config.noble.posGrupo;
+    document.getElementById('twmgr-nb-posband').checked = !!config.noble.posBandeira;
+    document.getElementById('twmgr-nb-bandtipo').value = config.noble.posBandeiraTipo || '';
+    document.getElementById('twmgr-nb-bandnivel').value = config.noble.posBandeiraNivel != null ? config.noble.posBandeiraNivel : 1;
+
     fillNobleGrupos();
 
 
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
      'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen',
-     'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid'].forEach((id) => {
+     'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid',
+     'twmgr-nb-posband', 'twmgr-nb-bandtipo', 'twmgr-nb-bandnivel'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();

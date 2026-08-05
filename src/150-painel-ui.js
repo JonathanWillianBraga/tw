@@ -135,10 +135,32 @@
       ".twmgr-ug .lock input{background:#f0ebe0;color:#a09480}",
       // Tabela de alvos: célula de duas linhas (o valor e o seu contexto embaixo, menor).
       ".twmgr-nb-tab td{vertical-align:top;padding:4px 4px}",
-      // Status do Recrutar: uma coluna por unidade, tem em cima e alvo embaixo.
-      ".twmgr-rc-st td,.twmgr-rc-st th{text-align:center;padding:3px 2px;vertical-align:top}",
-      ".twmgr-rc-st td:first-child,.twmgr-rc-st th:first-child{text-align:left}",
-      ".twmgr-rc-st .sub{font-size:8px;color:#8a7340;line-height:1.1}",
+      // ---- Status do Recrutar ----
+      // Os sprites do jogo têm tamanhos naturais bem diferentes (a lança é estreita, o cavalo é
+      // largo), o que deixava o cabeçalho desalinhado. Cada ícone vai dentro de uma caixa FIXA,
+      // centrado, com o que passar cortado igualmente dos dois lados — as colunas ficam uniformes
+      // independente do sprite.
+      ".twmgr-uicon{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;overflow:hidden;font-style:normal}",
+      ".twmgr-uicon .unit_sprite{flex:0 0 auto}",
+      ".twmgr-rc-st{table-layout:fixed;width:100%}",
+      ".twmgr-rc-st th{padding:3px 1px;text-align:center;vertical-align:middle}",
+      ".twmgr-rc-st td{padding:4px 1px;text-align:center;vertical-align:middle;white-space:nowrap;font-size:9px}",
+      ".twmgr-rc-st td:first-child,.twmgr-rc-st th:first-child{text-align:left;padding-left:5px;white-space:normal}",
+      ".twmgr-rc-st .sub{font-size:8px;color:#a08c6a;line-height:1.1}",
+      ".twmgr-rc-st td b{font-size:10px;font-variant-numeric:tabular-nums}",
+      // O alvo entre parênteses, menor e apagado: é referência, o número que importa é o atual.
+      ".twmgr-rc-st .alvo{font-size:8px;color:#a08c6a;margin-left:2px;font-variant-numeric:tabular-nums}",
+      ".twmgr-rc-st .vazio{color:#d3c9b6}",
+      // Faixas: <50% vermelho, 50-80% amarelo, >80% verde, cumprido com fundo pra saltar aos olhos.
+      ".twmgr-rc-st .f-ruim b{color:#b03030}",
+      ".twmgr-rc-st .f-meio b{color:#b5651d}",
+      ".twmgr-rc-st .f-bom b{color:#3f8f52}",
+      ".twmgr-rc-st .f-ok{background:#e6f3e6}.twmgr-rc-st .f-ok b{color:#2e7d3a}",
+      ".twmgr-rc-st .f-inf b{color:#6f6153}",
+      // Aldeia com TODAS as unidades no alvo: linha inteira destacada, não só as células.
+      ".twmgr-rc-st tr.twmgr-rc-full td{background:#dff0df}",
+      ".twmgr-rc-st tr.twmgr-rc-full td:first-child{box-shadow:inset 3px 0 0 #3f8f52}",
+      ".twmgr-rc-chk{color:#2e7d3a;font-weight:700;font-size:11px}",
       ".twmgr-nb-tab .sub{font-size:8px;color:#8a7340;margin-top:1px;line-height:1.2;word-break:break-word}",
       ".twmgr-nb-tab select{width:100%;min-width:0;font-size:9px;padding:1px 2px;text-overflow:ellipsis}",
       // Ícone de bandeira: o arquivo do jogo já vem no tamanho certo, só precisa caber na célula.

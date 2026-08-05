@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.47.0
+// @version      11.47.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.47.0';
+  const VERSION = '11.47.1';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2784,19 +2784,37 @@
     }
     const uns = rcStatusUnidades();
     vids.sort((a, b) => String(st[a].name).localeCompare(String(st[b].name), 'pt-BR', { numeric: true }));
-    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><thead><tr><th>Aldeia</th>'
-      + uns.map((u) => '<th title="' + esc(u[1]) + '"><span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span></th>').join('')
+    // Faixas de cor pedidas pelo usuário: <50% vermelho, 50–80% amarelo, >80% verde, cumprido em
+    // destaque. O corte é sobre a RAZÃO tem/alvo, não sobre o valor absoluto — 500 de 600 e 5 de 6
+    // estão igualmente perto, e é isso que interessa olhando a tabela.
+    const faixa = (tem, alvo) => {
+      if (alvo == null || alvo <= 0) return 'inf';
+      if (tem >= alvo) return 'ok';
+      const p = tem / alvo;
+      return p < 0.5 ? 'ruim' : (p < 0.8 ? 'meio' : 'bom');
+    };
+    // Larguras fixas: a coluna da aldeia leva o resto, e as de unidade dividem igual. Sem isso cada
+    // coluna ficava do tamanho do seu conteúdo e os números não se alinhavam de uma linha pra outra.
+    const wUn = Math.max(9, Math.floor(62 / Math.max(1, uns.length)));
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><colgroup>'
+      + '<col style="width:' + (100 - wUn * uns.length) + '%">'
+      + uns.map(() => '<col style="width:' + wUn + '%">').join('') + '</colgroup>'
+      + '<thead><tr><th>Aldeia</th>'
+      + uns.map((u) => '<th title="' + esc(u[1]) + '"><i class="twmgr-uicon">'
+        + '<span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span></i></th>').join('')
       + '</tr></thead><tbody>' + vids.map((vid, i) => {
         const r = st[vid];
-        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
-          '<td><b>' + esc(r.name) + '</b>' + (r.ok ? ' <span style="color:#3f8f52">✓</span>' : '')
+        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + (r.ok ? ' twmgr-rc-full' : '') + '">' +
+          '<td><b>' + esc(r.name) + '</b>' + (r.ok ? ' <span class="twmgr-rc-chk">✓</span>' : '')
           + '<div class="sub">' + esc((config.recruit.templates[r.tpl] || {}).name || '—') + '</div></td>' +
           uns.map((u) => {
             const c = (r.units || {})[u[0]];
-            if (!c) return '<td><span style="color:#c9bda6">—</span></td>';
-            const cheio = (c.alvo != null && c.tem >= c.alvo);
-            return '<td><b style="color:' + (cheio ? '#3f8f52' : '#8b5426') + '">' + fmtN(c.tem) + '</b>'
-              + '<div class="sub">' + (c.alvo == null ? '∞' : fmtN(c.alvo)) + '</div></td>';
+            if (!c) return '<td class="vazio">—</td>';
+            const f = faixa(c.tem, c.alvo);
+            const pct = (c.alvo && c.alvo > 0) ? Math.round((c.tem / c.alvo) * 100) + '%' : '∞';
+            return '<td class="f-' + f + '" title="' + esc(unitPt(u[0]) + ': ' + pct) + '">'
+              + '<b>' + fmtN(c.tem) + '</b>'
+              + '<span class="alvo">(' + (c.alvo == null ? '∞' : fmtN(c.alvo)) + ')</span></td>';
           }).join('') + '</tr>';
       }).join('') + '</tbody></table>';
     const info = document.getElementById('twmgr-rc-status-info');
@@ -7768,10 +7786,32 @@
       ".twmgr-ug .lock input{background:#f0ebe0;color:#a09480}",
       // Tabela de alvos: célula de duas linhas (o valor e o seu contexto embaixo, menor).
       ".twmgr-nb-tab td{vertical-align:top;padding:4px 4px}",
-      // Status do Recrutar: uma coluna por unidade, tem em cima e alvo embaixo.
-      ".twmgr-rc-st td,.twmgr-rc-st th{text-align:center;padding:3px 2px;vertical-align:top}",
-      ".twmgr-rc-st td:first-child,.twmgr-rc-st th:first-child{text-align:left}",
-      ".twmgr-rc-st .sub{font-size:8px;color:#8a7340;line-height:1.1}",
+      // ---- Status do Recrutar ----
+      // Os sprites do jogo têm tamanhos naturais bem diferentes (a lança é estreita, o cavalo é
+      // largo), o que deixava o cabeçalho desalinhado. Cada ícone vai dentro de uma caixa FIXA,
+      // centrado, com o que passar cortado igualmente dos dois lados — as colunas ficam uniformes
+      // independente do sprite.
+      ".twmgr-uicon{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;overflow:hidden;font-style:normal}",
+      ".twmgr-uicon .unit_sprite{flex:0 0 auto}",
+      ".twmgr-rc-st{table-layout:fixed;width:100%}",
+      ".twmgr-rc-st th{padding:3px 1px;text-align:center;vertical-align:middle}",
+      ".twmgr-rc-st td{padding:4px 1px;text-align:center;vertical-align:middle;white-space:nowrap;font-size:9px}",
+      ".twmgr-rc-st td:first-child,.twmgr-rc-st th:first-child{text-align:left;padding-left:5px;white-space:normal}",
+      ".twmgr-rc-st .sub{font-size:8px;color:#a08c6a;line-height:1.1}",
+      ".twmgr-rc-st td b{font-size:10px;font-variant-numeric:tabular-nums}",
+      // O alvo entre parênteses, menor e apagado: é referência, o número que importa é o atual.
+      ".twmgr-rc-st .alvo{font-size:8px;color:#a08c6a;margin-left:2px;font-variant-numeric:tabular-nums}",
+      ".twmgr-rc-st .vazio{color:#d3c9b6}",
+      // Faixas: <50% vermelho, 50-80% amarelo, >80% verde, cumprido com fundo pra saltar aos olhos.
+      ".twmgr-rc-st .f-ruim b{color:#b03030}",
+      ".twmgr-rc-st .f-meio b{color:#b5651d}",
+      ".twmgr-rc-st .f-bom b{color:#3f8f52}",
+      ".twmgr-rc-st .f-ok{background:#e6f3e6}.twmgr-rc-st .f-ok b{color:#2e7d3a}",
+      ".twmgr-rc-st .f-inf b{color:#6f6153}",
+      // Aldeia com TODAS as unidades no alvo: linha inteira destacada, não só as células.
+      ".twmgr-rc-st tr.twmgr-rc-full td{background:#dff0df}",
+      ".twmgr-rc-st tr.twmgr-rc-full td:first-child{box-shadow:inset 3px 0 0 #3f8f52}",
+      ".twmgr-rc-chk{color:#2e7d3a;font-weight:700;font-size:11px}",
       ".twmgr-nb-tab .sub{font-size:8px;color:#8a7340;margin-top:1px;line-height:1.2;word-break:break-word}",
       ".twmgr-nb-tab select{width:100%;min-width:0;font-size:9px;padding:1px 2px;text-overflow:ellipsis}",
       // Ícone de bandeira: o arquivo do jogo já vem no tamanho certo, só precisa caber na célula.

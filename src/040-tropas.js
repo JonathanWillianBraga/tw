@@ -435,19 +435,37 @@
     }
     const uns = rcStatusUnidades();
     vids.sort((a, b) => String(st[a].name).localeCompare(String(st[b].name), 'pt-BR', { numeric: true }));
-    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><thead><tr><th>Aldeia</th>'
-      + uns.map((u) => '<th title="' + esc(u[1]) + '"><span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span></th>').join('')
+    // Faixas de cor pedidas pelo usuário: <50% vermelho, 50–80% amarelo, >80% verde, cumprido em
+    // destaque. O corte é sobre a RAZÃO tem/alvo, não sobre o valor absoluto — 500 de 600 e 5 de 6
+    // estão igualmente perto, e é isso que interessa olhando a tabela.
+    const faixa = (tem, alvo) => {
+      if (alvo == null || alvo <= 0) return 'inf';
+      if (tem >= alvo) return 'ok';
+      const p = tem / alvo;
+      return p < 0.5 ? 'ruim' : (p < 0.8 ? 'meio' : 'bom');
+    };
+    // Larguras fixas: a coluna da aldeia leva o resto, e as de unidade dividem igual. Sem isso cada
+    // coluna ficava do tamanho do seu conteúdo e os números não se alinhavam de uma linha pra outra.
+    const wUn = Math.max(9, Math.floor(62 / Math.max(1, uns.length)));
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><colgroup>'
+      + '<col style="width:' + (100 - wUn * uns.length) + '%">'
+      + uns.map(() => '<col style="width:' + wUn + '%">').join('') + '</colgroup>'
+      + '<thead><tr><th>Aldeia</th>'
+      + uns.map((u) => '<th title="' + esc(u[1]) + '"><i class="twmgr-uicon">'
+        + '<span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span></i></th>').join('')
       + '</tr></thead><tbody>' + vids.map((vid, i) => {
         const r = st[vid];
-        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
-          '<td><b>' + esc(r.name) + '</b>' + (r.ok ? ' <span style="color:#3f8f52">✓</span>' : '')
+        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + (r.ok ? ' twmgr-rc-full' : '') + '">' +
+          '<td><b>' + esc(r.name) + '</b>' + (r.ok ? ' <span class="twmgr-rc-chk">✓</span>' : '')
           + '<div class="sub">' + esc((config.recruit.templates[r.tpl] || {}).name || '—') + '</div></td>' +
           uns.map((u) => {
             const c = (r.units || {})[u[0]];
-            if (!c) return '<td><span style="color:#c9bda6">—</span></td>';
-            const cheio = (c.alvo != null && c.tem >= c.alvo);
-            return '<td><b style="color:' + (cheio ? '#3f8f52' : '#8b5426') + '">' + fmtN(c.tem) + '</b>'
-              + '<div class="sub">' + (c.alvo == null ? '∞' : fmtN(c.alvo)) + '</div></td>';
+            if (!c) return '<td class="vazio">—</td>';
+            const f = faixa(c.tem, c.alvo);
+            const pct = (c.alvo && c.alvo > 0) ? Math.round((c.tem / c.alvo) * 100) + '%' : '∞';
+            return '<td class="f-' + f + '" title="' + esc(unitPt(u[0]) + ': ' + pct) + '">'
+              + '<b>' + fmtN(c.tem) + '</b>'
+              + '<span class="alvo">(' + (c.alvo == null ? '∞' : fmtN(c.alvo)) + ')</span></td>';
           }).join('') + '</tr>';
       }).join('') + '</tbody></table>';
     const info = document.getElementById('twmgr-rc-status-info');

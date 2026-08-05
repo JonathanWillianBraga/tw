@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.52.1
+// @version      11.53.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.52.1';
+  const VERSION = '11.53.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -551,6 +551,13 @@
       if (c.build.templates[id] && c.build.templates[id].grupo == null) c.build.templates[id].grupo = '';
     });
     if (!c.build.status || typeof c.build.status !== 'object') c.build.status = {};
+    // Demolição DESLIGADA por padrão, e explicitamente. Não devolve recurso e não tem desfazer:
+    // tem que ser escolha consciente, nunca herdada de um `undefined` que por acaso é falso.
+    if (c.build.demolir == null) c.build.demolir = false;
+    // `dem` por item do modelo, também explicito. Modelo importado de fora vem sem o campo.
+    Object.keys(c.build.templates || {}).forEach((id) => {
+      ((c.build.templates[id] || {}).plan || []).forEach((it) => { if (it.dem == null) it.dem = false; });
+    });
 
     if (c.build.grupoTpl == null) c.build.grupoTpl = '';
 

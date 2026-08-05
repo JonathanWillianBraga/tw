@@ -490,6 +490,8 @@
             '<select id="twmgr-nb-tpl-sel" class="twmgr-inp" style="flex:1"></select>' +
             '<button id="twmgr-nb-tpl-new" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="criar modelo">✚</button>' +
             '<button id="twmgr-nb-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
+            '<button id="twmgr-nb-tpl-up" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="subir na ordem de prioridade">▲</button>' +
+            '<button id="twmgr-nb-tpl-dn" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="descer na ordem de prioridade">▼</button>' +
             '<button id="twmgr-nb-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
           '</div>' +
           '<div class="twmgr-row" style="margin-top:5px"><span class="twmgr-lbl">Nobres por alvo</span><input id="twmgr-nb-nob" class="twmgr-inp" type="number" min="1" max="8" value="4" style="width:56px"></div>' +
@@ -498,7 +500,8 @@
           '<div class="twmgr-lbl" style="margin-top:7px">Escolta — vai no <b>mesmo comando</b> dos nobres</div>' +
           '<div id="twmgr-nb-esc" class="twmgr-nb-esc"></div>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">A escolta sai da aldeia <b>mais próxima</b> do alvo, uma vez só (não se repete por comando). Se a origem não tiver a tropa toda, vai o que houver e o log avisa.</div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A duração vem do próprio jogo, já <b>com a escolta dentro</b> — aríete e catapulta são mais lentos que o nobre e mudam a chegada.</div>') +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A duração vem do próprio jogo, já <b>com a escolta dentro</b> — aríete e catapulta são mais lentos que o nobre e mudam a chegada.</div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">O número do modelo é a <b>ordem de prioridade</b> (▲▼ pra mudar). Alvo em <b>⇅ seguir ordem</b> tenta os modelos de cima pra baixo e fica no primeiro cuja escolta <b>couber inteira</b> na aldeia que vai mandar. Se nenhum couber, usa o 1º com o que houver.</div>') +
         sec('Recrutar nobre quando faltar', '<label class="twmgr-check" title="Forma o nobre onde JÁ existe moeda guardada — não cunha"><input id="twmgr-nb-prod" type="checkbox"> Formar nobre nas aldeias mais próximas do alvo</label>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:4px"><b>Nunca cunha.</b> Cunhar converte recurso em moeda sem volta, num alvo que pode nem sair — isso fica com você, no modo <b>Cunhar</b> do Mercado. Aqui ele só <b>forma</b> nobre onde a moeda já está guardada.</div>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto do alvo pra mais longe, e a que não conseguir agora (sem recurso, sem população) <b>não interrompe</b> — ele tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>') +
@@ -766,6 +769,8 @@
     document.getElementById('twmgr-nb-tpl-sel').addEventListener('change', (e) => nobleSwitchTpl(e.target.value));
     document.getElementById('twmgr-nb-tpl-new').addEventListener('click', nobleNovoModelo);
     document.getElementById('twmgr-nb-tpl-ren').addEventListener('click', nobleRenomearModelo);
+    document.getElementById('twmgr-nb-tpl-up').addEventListener('click', () => nobleMoverModelo(-1));
+    document.getElementById('twmgr-nb-tpl-dn').addEventListener('click', () => nobleMoverModelo(1));
     document.getElementById('twmgr-nb-tpl-del').addEventListener('click', nobleApagarModelo);
     nobleFillTplSel(); nobleRenderTplEditor();
     // A grade de escolta e redesenhada a cada troca de modelo, entao o listener fica no PAI:

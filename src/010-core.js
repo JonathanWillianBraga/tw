@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.32.0
+// @version      11.33.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -129,7 +129,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.32.0';
+  const VERSION = '11.33.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -221,6 +221,7 @@
     maxHoras: 6, soNT: false,
     produzir: true,   // formar nobre quando faltar (NUNCA cunhar — decisão do usuário)
     templates: { padrao: defNobleTpl('Padrão') },
+    ordem: ['padrao'],   // prioridade dos modelos; alvo com tpl:'' segue esta ordem
     lerRelatorios: true,
     relatorios: {},   // { [coord]: { lealdade, de, at, reportId, dono, tropa } } — último lido
     vistos: {},       // { [reportId]: 1 } — já baixado, não rebaixa
@@ -563,8 +564,20 @@
     });
     // Alvo apontando pra modelo que não existe mais volta pro primeiro — senão o plano ficaria
     // sem regra nenhuma e o alvo sumiria da tela em silêncio.
+    // A ordem tem que espelhar EXATAMENTE os modelos existentes: modelo novo entra no fim,
+    // modelo apagado sai. Se ela dessincronizar, um alvo em modo prioridade tentaria um
+    // modelo que nao existe mais e ficaria sem plano em silencio.
+    if (!Array.isArray(c.noble.ordem)) c.noble.ordem = [];
+    c.noble.ordem = c.noble.ordem.filter((id, i) => c.noble.templates[id] && c.noble.ordem.indexOf(id) === i);
+    Object.keys(c.noble.templates).forEach((id) => { if (c.noble.ordem.indexOf(id) < 0) c.noble.ordem.push(id); });
     const tplsNb = Object.keys(c.noble.templates);
-    c.noble.alvos.forEach((a) => { if (!a.tpl || !c.noble.templates[a.tpl]) a.tpl = tplsNb[0]; });
+
+    // tpl '' NAO e erro: significa "segue a ordem de prioridade", que e o padrao. So um
+    // tpl que aponta pra modelo inexistente e corrigido -- pra '' , nao pro primeiro modelo,
+    // senao apagar um modelo fixaria todos os alvos dele num outro sem o usuario pedir.
+    c.noble.alvos.forEach((a) => { if (a.tpl && !c.noble.templates[a.tpl]) a.tpl = ''; });
+    void tplsNb;
+
     if (c.noble.lerRelatorios == null) c.noble.lerRelatorios = true;
     if (!c.noble.relatorios || typeof c.noble.relatorios !== 'object') c.noble.relatorios = {};
     if (!c.noble.vistos || typeof c.noble.vistos !== 'object') c.noble.vistos = {};

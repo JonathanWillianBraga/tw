@@ -35,6 +35,25 @@
     return ids.length ? config.noble.templates[ids[0]] : defNobleTpl('Padrão');
   }
   function nobleTplDe(alvo) { return nobleTpl(alvo && alvo.tpl); }
+  // Os modelos que este alvo pode usar, JA na ordem de tentativa. Alvo fixado num modelo
+  // tenta so aquele; alvo em modo prioridade (tpl vazio) tenta todos, na ordem do usuario.
+  function nobleTplsDe(alvo) {
+    if (alvo && alvo.tpl && (config.noble.templates || {})[alvo.tpl]) {
+      return [{ id: alvo.tpl, t: config.noble.templates[alvo.tpl] }];
+    }
+    const ids = (config.noble.ordem || []).filter((id) => (config.noble.templates || {})[id]);
+    if (ids.length) return ids.map((id) => ({ id: id, t: config.noble.templates[id] }));
+    const k = Object.keys(config.noble.templates || {});
+    return k.length ? [{ id: k[0], t: config.noble.templates[k[0]] }] : [];
+  }
+  // A escolta sai da aldeia mais perto COM NOBRE. Cabe inteira ali? Sem requisicao nenhuma:
+  // o `avail` ja veio no cache das origens.
+  function nobleEscoltaCabe(tpl, origens) {
+    const o = origens.filter((x) => x.nobres > 0)[0];
+    if (!o) return false;
+    return Object.keys(tpl.escolta || {}).every((u) => ((o.avail || {})[u] || 0) >= tpl.escolta[u]);
+  }
+
   function unitPt(u) { const r = UNITS.filter((p) => p[0] === u)[0]; return r ? r[1] : u; }
   function nobleEscoltaTxt(t) {
     const ks = Object.keys((t && t.escolta) || {});
@@ -82,18 +101,42 @@
     return perto;
   }
 
-  // Monta o plano de UM alvo. Devolve { pronto, envios[], falta, motivo }.
-  //   pronto  = da pra conquistar agora com o que existe dentro do limite de horas
-  //   envios  = [{vid, nome, coord, qtd, durSec}]
-  //   falta   = quantos nobres ainda faltam (do total que o MODELO do alvo pede)
+  // Escolhe o modelo e monta o plano de UM alvo.
+  //
+  // Ordem de prioridade: tenta os modelos na ordem do usuario e fica com o PRIMEIRO cuja escolta
+  // cabe INTEIRA na aldeia que vai mandar. O teste e de graca (usa o `avail` em cache), entao so
+  // o modelo escolhido paga fakePrepare.
+  //
+  // Exigir a escolta inteira e o que faz a ordem existir: se "cabe pela metade" contasse, o 1o
+  // modelo venceria sempre mandando um pedaco (100 barbaro virando 12) e os outros nunca seriam
+  // alcancados. Se NENHUM couber, cai no primeiro da ordem com o que houver -- "envio parcial
+  // vale" continua de pe, so perde pra um modelo que caiba inteiro.
   async function noblePlanejarAlvo(alvo, todas, cacheTropa, usados) {
-    const tpl = nobleTplDe(alvo);
+    const opcoes = nobleTplsDe(alvo);
+    if (!opcoes.length) return { pronto: false, envios: [], falta: 0, dentroDoLimite: [], motivo: 'nenhum modelo' };
+    const origens = await nobleOrigensPerto(alvo, todas, cacheTropa, usados);
+    for (const op of opcoes) {
+      if (opcoes.length > 1 && !nobleEscoltaCabe(op.t, origens)) continue;
+      const r = await noblePlanejarComTpl(alvo, op, origens);
+      if (r.envios.length) return r;      // deu envio: e esse
+    }
+    // Nenhum coube inteiro (ou nenhum rendeu envio dentro do limite de horas): primeiro da ordem.
+    const r = await noblePlanejarComTpl(alvo, opcoes[0], origens);
+    if (opcoes.length > 1 && r.envios.length) r.motivo = (r.motivo ? r.motivo + ' · ' : '') + 'nenhum modelo coube inteiro';
+    return r;
+  }
+
+  // Plano com UM modelo ja escolhido. Devolve { pronto, envios[], falta, motivo }.
+  //   pronto  = ha ao menos 1 nobre pra mandar (parcial vale)
+  //   envios  = [{vid, nome, coord, qtd, unidades, durSec}]
+  //   falta   = quantos nobres ainda faltam do que o modelo pede
+  async function noblePlanejarComTpl(alvo, op, origens) {
+    const tpl = op.t;
     const precisa = tpl.nobres || NOBLE_POR_CONQUISTA;
     const limite = Math.max(1, tpl.maxHoras || 6) * 3600;
-    const origens = await nobleOrigensPerto(alvo, todas, cacheTropa, usados);
     const comNobre = origens.filter((o) => o.nobres > 0);
     if (!comNobre.length) {
-      return { pronto: false, envios: [], falta: precisa, dentroDoLimite: origens, tpl: tpl, motivo: 'nenhum nobre disponível' };
+      return { pronto: false, envios: [], falta: precisa, dentroDoLimite: origens, tpl: tpl, tplId: op.id, tplNome: tpl.name, motivo: 'nenhum nobre disponível' };
     }
 
     // "So NT" exige os nobres todos saindo da MESMA aldeia; senao pode somar de varias, da mais
@@ -102,7 +145,7 @@
       ? comNobre.filter((o) => o.nobres >= precisa).slice(0, 1)
       : comNobre;
     if (!candidatos.length) {
-      return { pronto: false, envios: [], falta: precisa, dentroDoLimite: origens, tpl: tpl,
+      return { pronto: false, envios: [], falta: precisa, dentroDoLimite: origens, tpl: tpl, tplId: op.id, tplNome: tpl.name,
                motivo: 'nenhuma aldeia com ' + precisa + ' nobres (modo só NT)' };
     }
 
@@ -149,7 +192,7 @@
     return {
       pronto: envios.length > 0,
       envios: envios, falta: Math.max(0, faltam), levando: levando, precisa: precisa,
-      dentroDoLimite: origens, tpl: tpl,
+      dentroDoLimite: origens, tpl: tpl, tplId: op.id, tplNome: tpl.name,
       motivo: faltam > 0
         ? ('parcial: ' + levando + ' de ' + precisa + ' nobre(s)')
         : null,
@@ -250,7 +293,7 @@
       r.envios.forEach((e) => { usados[e.vid] = (usados[e.vid] || 0) + e.qtd; });
       plano.push({ coord: alvo.coord, x: alvo.x, y: alvo.y, pronto: r.pronto,
                    envios: r.envios, falta: r.falta, levando: r.levando, precisa: r.precisa,
-                   motivo: r.motivo });
+                   tplId: r.tplId, tplNome: r.tplNome, motivo: r.motivo });
       if (r.pronto) prontos++;
       if (r.falta <= 0) { completos++; continue; }
       // Faltou nobre: tenta FORMAR nas mais proximas (nunca cunhar). O nobre formado entra na
@@ -324,9 +367,9 @@
     if (!novos.length) { alert('Nenhuma coordenada válida no texto.'); return; }
     const jaTem = {}; (config.noble.alvos || []).forEach((a) => { jaTem[a.coord] = 1; });
     let n = 0;
-    const tplAtivo = (document.getElementById('twmgr-nb-tpl-sel') || {}).value
-      || Object.keys(config.noble.templates || {})[0];
-    novos.forEach((a) => { if (!jaTem[a.coord]) { a.tpl = tplAtivo; config.noble.alvos.push(a); n++; } });
+    // Nasce em modo PRIORIDADE (tpl vazio), nao fixado no modelo que esta aberto no painel: o
+    // select ali em cima e o que voce esta EDITANDO, nao o que voce escolheu pro alvo.
+    novos.forEach((a) => { if (!jaTem[a.coord]) { a.tpl = ''; config.noble.alvos.push(a); n++; } });
     ta.value = '';
     save(); renderNoblePlano();
     pushLog('Noblar: ' + n + ' alvo(s) adicionado(s)' + (novos.length - n ? ' (' + (novos.length - n) + ' já estavam na lista)' : '') + '.', 'ok', 'noble');
@@ -360,7 +403,7 @@
       box.innerHTML = '<div style="color:#8a7340;text-align:center;padding:10px;font-size:10px">— nenhum alvo na lista —</div>';
       return;
     }
-    const tpls = Object.keys(config.noble.templates || {});
+    const tpls = nobleOrdemIds();
     const porCoord = {}; plano.forEach((p) => { porCoord[p.coord] = p; });
     box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr>' +
       '<th>Alvo</th><th>Modelo</th><th>Dono</th><th>Lealdade</th><th>Tropas</th>' +
@@ -368,9 +411,14 @@
       alvos.map((a, i) => {
         const p = porCoord[a.coord];
         const rel = (config.noble.relatorios || {})[a.coord] || {};
+        // Em modo prioridade mostra QUAL modelo o plano acabou escolhendo -- sem isso o usuario
+        // ve "seguir ordem" e nao tem como saber o que vai sair.
+        const escolhido = (!a.tpl && p && p.tplNome)
+          ? '<div style="font-size:9px;color:#8a7340">→ ' + esc(p.tplNome) + '</div>' : '';
         const sel = '<select class="twmgr-nb-tpl twmgr-inp" data-coord="' + esc(a.coord) + '" style="font-size:10px;padding:1px 2px">'
+          + '<option value=""' + (!a.tpl ? ' selected' : '') + '>⇅ seguir ordem</option>'
           + tpls.map((id) => '<option value="' + esc(id) + '"' + (id === a.tpl ? ' selected' : '') + '>'
-            + esc(config.noble.templates[id].name || id) + '</option>').join('') + '</select>';
+            + esc(config.noble.templates[id].name || id) + '</option>').join('') + '</select>' + escolhido;
         const dono = rel.dono ? esc(rel.dono) : '<span style="color:#8a7340">?</span>';
         const tropa = rel.tropa == null ? '<span style="color:#8a7340">?</span>' : String(rel.tropa);
         const nobres = p && p.envios.length
@@ -411,7 +459,7 @@
       const coord = el.getAttribute('data-coord');
       const a = (config.noble.alvos || []).find((x) => x.coord === coord);
       if (!a) return;
-      a.tpl = el.value;
+      a.tpl = el.value;                  // '' = seguir a ordem de prioridade
       // Modelo trocado invalida o plano daquele alvo: as regras mudaram, o plano velho mentiria.
       config.noble.plano = (config.noble.plano || []).filter((p) => p.coord !== coord);
       save(); renderNoblePlano();
@@ -436,13 +484,35 @@
     if (ids.indexOf(_nbTplAtivo) < 0) _nbTplAtivo = ids[0] || '';
     return config.noble.templates[_nbTplAtivo] || null;
   }
+  // Lista os modelos NA ORDEM de prioridade, numerados. O numero e o unico jeito de o usuario
+  // ver que a ordem mudou depois de clicar nas setas -- o nome do modelo nao muda.
+  function nobleOrdemIds() {
+    const ord = (config.noble.ordem || []).filter((id) => (config.noble.templates || {})[id]);
+    nobleTplIds().forEach((id) => { if (ord.indexOf(id) < 0) ord.push(id); });
+    return ord;
+  }
   function nobleFillTplSel() {
     const sel = document.getElementById('twmgr-nb-tpl-sel'); if (!sel) return;
-    const ids = nobleTplIds();
-    sel.innerHTML = ids.map((id) => '<option value="' + esc(id) + '">'
+    const ids = nobleOrdemIds();
+    sel.innerHTML = ids.map((id, i) => '<option value="' + esc(id) + '">' + (i + 1) + '. '
       + esc(config.noble.templates[id].name || id) + '</option>').join('');
     if (ids.indexOf(_nbTplAtivo) < 0) _nbTplAtivo = ids[0] || '';
     sel.value = _nbTplAtivo;
+  }
+  // Sobe/desce o modelo ativo na ordem de prioridade.
+  function nobleMoverModelo(passo) {
+    const ord = nobleOrdemIds();
+    const i = ord.indexOf(_nbTplAtivo);
+    const j = i + passo;
+    if (i < 0 || j < 0 || j >= ord.length) return;
+    ord.splice(j, 0, ord.splice(i, 1)[0]);
+    config.noble.ordem = ord;
+    // A ordem mudou: o plano de quem segue a prioridade pode ter outro modelo agora.
+    config.noble.plano = (config.noble.plano || []).filter((p) => {
+      const a = (config.noble.alvos || []).find((x) => x.coord === p.coord);
+      return a && a.tpl;                 // alvo fixado num modelo nao e afetado
+    });
+    save(); nobleFillTplSel(); renderNoblePlano();
   }
   // Editor: grade de escolta + os campos do modelo. Nobre fica FORA da grade — quantos nobres vão
   // é campo próprio, e deixar ele na escolta abriria caminho pra contar nobre duas vezes.
@@ -487,6 +557,7 @@
           escolta: JSON.parse(JSON.stringify(at.escolta || {})) }
       : defNobleTpl(nome.trim().slice(0, 40));
     _nbTplAtivo = id;
+    config.noble.ordem = nobleOrdemIds();      // entra no fim da prioridade
     save(); nobleFillTplSel(); nobleRenderTplEditor(); renderNoblePlano();
   }
   function nobleRenomearModelo() {
@@ -503,8 +574,9 @@
     if (!confirm('Apagar o modelo "' + t.name + '"?'
       + (usando.length ? '\n\n' + usando.length + ' alvo(s) usam ele e vão cair no primeiro modelo da lista.' : ''))) return;
     delete config.noble.templates[_nbTplAtivo];
-    _nbTplAtivo = nobleTplIds()[0];
-    usando.forEach((a) => { a.tpl = _nbTplAtivo; });
+    config.noble.ordem = (config.noble.ordem || []).filter((x) => x !== _nbTplAtivo);
+    _nbTplAtivo = nobleOrdemIds()[0];
+    usando.forEach((a) => { a.tpl = ''; });   // volta pra ordem de prioridade
     config.noble.plano = [];   // as regras mudaram pra esses alvos; plano velho mentiria
     save(); nobleFillTplSel(); nobleRenderTplEditor(); renderNoblePlano();
   }

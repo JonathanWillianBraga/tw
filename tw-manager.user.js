@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.38.0
+// @version      11.38.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.38.0';
+  const VERSION = '11.38.1';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -4457,6 +4457,14 @@
   // config porque é estado do jogo, não escolha do usuário — mas vai pro stats pro card mostrar.
   let _nbTotalConta = null;
 
+  // A coordenada e de uma aldeia MINHA? Alvo assim nao da erro claro no jogo: o `try=confirm`
+  // simplesmente nao devolve duracao pra um ataque da aldeia contra ela mesma, e isso chegava
+  // aqui como "origem descartada" — mensagem que nao ajuda e que se repetiria pra sempre.
+  function nobleMinhaAldeia(coord, todas) {
+    return (todas || []).some((v) => (v.coord || '') === coord);
+  }
+
+
 
   function nobleTpl(id) {
     const t = (config.noble.templates || {})[id];
@@ -4525,6 +4533,7 @@
     todas.forEach((v) => {
       const m = (v.coord || '').match(/(\d+)\|(\d+)/);
       if (!m) return;
+      if (+m[1] === alvo.x && +m[2] === alvo.y) return;   // a propria aldeia do alvo nao e origem
       perto.push({ vid: v.vid, nome: v.name || v.coord, coord: v.coord,
                    d: fieldDist(+m[1], +m[2], alvo.x, alvo.y) });
     });
@@ -4556,6 +4565,12 @@
   async function noblePlanejarAlvo(alvo, todas, cacheTropa, usados) {
     const opcoes = nobleTplsDe(alvo);
     if (!opcoes.length) return { pronto: false, envios: [], falta: 0, dentroDoLimite: [], motivo: 'nenhum modelo' };
+    // Aldeia propria: para aqui. Antes do fakePrepare, antes do recrutamento — nao ha o que
+    // planejar e cada ciclo gastaria requisicao e uma linha de log enganosa.
+    if (nobleMinhaAldeia(alvo.coord, todas)) {
+      return { pronto: false, envios: [], falta: 0, dentroDoLimite: [], propria: true,
+               motivo: 'é sua aldeia' };
+    }
     const origens = await nobleOrigensPerto(alvo, todas, cacheTropa, usados);
     // Melhor = mais comandos completos. Empate fica com quem vem antes na ordem do usuario.
     let melhor = null, melhorCap = -1;
@@ -4869,7 +4884,7 @@
       r.envios.forEach((e) => { usados[e.vid] = (usados[e.vid] || 0) + e.qtd; });
       plano.push({ coord: alvo.coord, x: alvo.x, y: alvo.y, pronto: r.pronto,
                    envios: r.envios, falta: r.falta, levando: r.levando, precisa: r.precisa,
-                   tplId: r.tplId, tplNome: r.tplNome, motivo: r.motivo });
+                   tplId: r.tplId, tplNome: r.tplNome, propria: r.propria, motivo: r.motivo });
       const item = plano[plano.length - 1];
       if (r.pronto) prontos++;
 
@@ -4877,7 +4892,8 @@
       // Os dois contam igual pra decisao do parcial -- o que importa e se vale esperar, nao quem
       // encomendou.
       let vindo = 0, prontoEm = null;
-      if (r.falta <= 0) { completos++; }
+      if (r.propria) { /* aldeia minha: nada a produzir nem a enviar */ }
+      else if (r.falta <= 0) { completos++; }
       else if (config.noble.produzir !== false) {
         // Faltou nobre: tenta FORMAR nas mais proximas (nunca cunhar). O nobre formado entra na
         // fila da Academia, entao ele so aparece no plano do proximo ciclo -- de proposito.
@@ -5005,6 +5021,15 @@
     ta.value = '';
     save(); renderNoblePlano();
     pushLog('Noblar: ' + n + ' alvo(s) adicionado(s)' + (novos.length - n ? ' (' + (novos.length - n) + ' já estavam na lista)' : '') + '.', 'ok', 'noble');
+    // Avisa AGORA, que e quando voce ainda lembra por que colou aquela coordenada. O cache de
+    // aldeias pode nao estar quente, entao isto e best-effort: quem garante e o plano.
+    getAllVillagesCached().then((todas) => {
+      const minhas = novos.filter((a) => nobleMinhaAldeia(a.coord, todas)).map((a) => a.coord);
+      if (minhas.length) {
+        pushLog('Noblar: ' + minhas.join(', ') + ' — ' + (minhas.length === 1 ? 'essa é uma aldeia SUA' : 'essas são aldeias SUAS')
+          + '. Não dá pra noblar aldeia própria; remova da lista.', 'err', 'noble');
+      }
+    }).catch(() => {});
   }
   function nobleContarCoords() {
     const ta = document.getElementById('twmgr-nb-coords');
@@ -5066,6 +5091,7 @@
         // ENVIA) e sem nobre. O parcial precisa saltar aos olhos — é envio de verdade, com nobre
         // sendo gasto, só que não conquista sozinho.
         const estado = !p ? '<span style="color:#8a7340">sem plano</span>'
+          : p.propria ? '<b style="color:#b03030" title="não dá pra noblar aldeia própria">é sua aldeia</b>'
           : (p.pronto && p.falta <= 0) ? '<b style="color:#3f8f52">completo</b>'
           : p.pronto ? '<b style="color:#b5651d" title="envia assim mesmo — não conquista sozinho">'
             + esc(p.motivo || 'parcial') + '</b>'

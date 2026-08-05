@@ -155,6 +155,8 @@
       // marcada que a horizontal — a comparação que importa é dentro da coluna (uma unidade entre
       // aldeias), então é a coluna que precisa ficar delimitada.
       ".twmgr-rc-st{border-collapse:collapse}",
+      // O container ja rolava na vertical; sem o horizontal a tabela larga vazaria do painel.
+      ".twmgr-bld-vils{overflow-x:auto}",
       ".twmgr-rc-st tbody td{border-right:1px solid #e6dbc6;border-bottom:1px solid #efe7d8}",
       ".twmgr-rc-st tbody td:last-child{border-right:0}",
       ".twmgr-rc-st tbody tr:last-child td{border-bottom:0}",

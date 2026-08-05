@@ -211,11 +211,15 @@
       return _bldOrd.dir * (va - vb);
     });
     const seta = (col) => _bldOrd.col === col ? '<span class="ord">' + (_bldOrd.dir > 0 ? '▲' : '▼') + '</span>' : '';
-    const wp = Math.max(7, Math.floor(56 / Math.max(1, preds.length)));
-    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><colgroup>'
-      + '<col style="width:' + (100 - wp * preds.length - 11) + '%">'
-      + preds.map(() => '<col style="width:' + wp + '%">').join('')
-      + '<col style="width:11%"></colgroup>'
+    // Pixel, nao porcentagem: com muitos predios a conta em % dava largura NEGATIVA pra coluna
+    // da aldeia e ela sumia (14 predios -> 100 - 7*14 - 11 = -9%). Com min-width + overflow-x a
+    // tabela rola e toda coluna mantem tamanho legivel, pra qualquer quantidade.
+    const W_VILA = 132, W_COL = 52, W_PCT = 54;
+    const minW = W_VILA + preds.length * W_COL + W_PCT;
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st" style="min-width:' + minW + 'px"><colgroup>'
+      + '<col style="width:' + W_VILA + 'px">'
+      + preds.map(() => '<col style="width:' + W_COL + 'px">').join('')
+      + '<col style="width:' + W_PCT + 'px"></colgroup>'
       + '<thead><tr><th class="ordena" data-col="name">Aldeia' + seta('name') + '</th>'
       + preds.map((b) => '<th class="ordena" data-col="' + b + '" title="' + esc(BUILD_META[b].name) + ' — clique pra ordenar">'
         + '<i class="twmgr-uicon">' + buildingIcon(b, BUILD_META[b].ico) + '</i>' + seta(b) + '</th>').join('')

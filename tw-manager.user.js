@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.53.0
+// @version      11.53.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.53.0';
+  const VERSION = '11.53.1';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2880,11 +2880,15 @@
       return _rcOrd.dir * (va - vb);
     });
     const seta = (col) => _rcOrd.col === col ? '<span class="ord">' + (_rcOrd.dir > 0 ? '▲' : '▼') + '</span>' : '';
-    const wUn = Math.max(8, Math.floor(56 / Math.max(1, uns.length)));
-    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><colgroup>'
-      + '<col style="width:' + (100 - wUn * uns.length - 11) + '%">'
-      + uns.map(() => '<col style="width:' + wUn + '%">').join('')
-      + '<col style="width:11%"></colgroup>'
+    // Mesma correcao do Status das Construcoes: em % a coluna da aldeia ficava negativa quando
+    // havia colunas demais. Aqui ainda nao tinha estourado (7 unidades), mas a partir de 11
+    // quebraria igual -- e mundo com arqueiro tem 11.
+    const W_VILA = 132, W_COL = 56, W_PCT = 54;
+    const minW = W_VILA + uns.length * W_COL + W_PCT;
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st" style="min-width:' + minW + 'px"><colgroup>'
+      + '<col style="width:' + W_VILA + 'px">'
+      + uns.map(() => '<col style="width:' + W_COL + 'px">').join('')
+      + '<col style="width:' + W_PCT + 'px"></colgroup>'
       + '<thead><tr><th class="ordena" data-col="name">Aldeia' + seta('name') + '</th>'
       + uns.map((u) => '<th class="ordena" data-col="' + u[0] + '" title="' + esc(u[1]) + ' — clique pra ordenar">'
         + '<i class="twmgr-uicon"><span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span></i>'
@@ -4031,11 +4035,15 @@
       return _bldOrd.dir * (va - vb);
     });
     const seta = (col) => _bldOrd.col === col ? '<span class="ord">' + (_bldOrd.dir > 0 ? '▲' : '▼') + '</span>' : '';
-    const wp = Math.max(7, Math.floor(56 / Math.max(1, preds.length)));
-    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><colgroup>'
-      + '<col style="width:' + (100 - wp * preds.length - 11) + '%">'
-      + preds.map(() => '<col style="width:' + wp + '%">').join('')
-      + '<col style="width:11%"></colgroup>'
+    // Pixel, nao porcentagem: com muitos predios a conta em % dava largura NEGATIVA pra coluna
+    // da aldeia e ela sumia (14 predios -> 100 - 7*14 - 11 = -9%). Com min-width + overflow-x a
+    // tabela rola e toda coluna mantem tamanho legivel, pra qualquer quantidade.
+    const W_VILA = 132, W_COL = 52, W_PCT = 54;
+    const minW = W_VILA + preds.length * W_COL + W_PCT;
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st" style="min-width:' + minW + 'px"><colgroup>'
+      + '<col style="width:' + W_VILA + 'px">'
+      + preds.map(() => '<col style="width:' + W_COL + 'px">').join('')
+      + '<col style="width:' + W_PCT + 'px"></colgroup>'
       + '<thead><tr><th class="ordena" data-col="name">Aldeia' + seta('name') + '</th>'
       + preds.map((b) => '<th class="ordena" data-col="' + b + '" title="' + esc(BUILD_META[b].name) + ' — clique pra ordenar">'
         + '<i class="twmgr-uicon">' + buildingIcon(b, BUILD_META[b].ico) + '</i>' + seta(b) + '</th>').join('')
@@ -8107,6 +8115,8 @@
       // marcada que a horizontal — a comparação que importa é dentro da coluna (uma unidade entre
       // aldeias), então é a coluna que precisa ficar delimitada.
       ".twmgr-rc-st{border-collapse:collapse}",
+      // O container ja rolava na vertical; sem o horizontal a tabela larga vazaria do painel.
+      ".twmgr-bld-vils{overflow-x:auto}",
       ".twmgr-rc-st tbody td{border-right:1px solid #e6dbc6;border-bottom:1px solid #efe7d8}",
       ".twmgr-rc-st tbody td:last-child{border-right:0}",
       ".twmgr-rc-st tbody tr:last-child td{border-bottom:0}",

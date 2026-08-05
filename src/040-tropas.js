@@ -513,11 +513,15 @@
       return _rcOrd.dir * (va - vb);
     });
     const seta = (col) => _rcOrd.col === col ? '<span class="ord">' + (_rcOrd.dir > 0 ? '▲' : '▼') + '</span>' : '';
-    const wUn = Math.max(8, Math.floor(56 / Math.max(1, uns.length)));
-    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st"><colgroup>'
-      + '<col style="width:' + (100 - wUn * uns.length - 11) + '%">'
-      + uns.map(() => '<col style="width:' + wUn + '%">').join('')
-      + '<col style="width:11%"></colgroup>'
+    // Mesma correcao do Status das Construcoes: em % a coluna da aldeia ficava negativa quando
+    // havia colunas demais. Aqui ainda nao tinha estourado (7 unidades), mas a partir de 11
+    // quebraria igual -- e mundo com arqueiro tem 11.
+    const W_VILA = 132, W_COL = 56, W_PCT = 54;
+    const minW = W_VILA + uns.length * W_COL + W_PCT;
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-rc-st" style="min-width:' + minW + 'px"><colgroup>'
+      + '<col style="width:' + W_VILA + 'px">'
+      + uns.map(() => '<col style="width:' + W_COL + 'px">').join('')
+      + '<col style="width:' + W_PCT + 'px"></colgroup>'
       + '<thead><tr><th class="ordena" data-col="name">Aldeia' + seta('name') + '</th>'
       + uns.map((u) => '<th class="ordena" data-col="' + u[0] + '" title="' + esc(u[1]) + ' — clique pra ordenar">'
         + '<i class="twmgr-uicon"><span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span></i>'

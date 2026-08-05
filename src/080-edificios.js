@@ -450,6 +450,7 @@
     if (!bldTpl(id)) return;
     _bldActiveProf = id;
     const sel = document.getElementById('twmgr-bld-tpl'); if (sel) sel.value = id;
+    const selAba = document.getElementById('twmgr-bld-tplsel'); if (selAba) selAba.value = id;
     const fp = document.getElementById('twmgr-bld-farmpct');
     if (fp) fp.value = bldTpl().farmPct != null ? bldTpl().farmPct : 0;
     renderBuildPlan();
@@ -477,6 +478,11 @@
     sel.value = _bldActiveProf;
     // O seletor de modelo da barra de ação em massa espelha a mesma lista
     // Sem seletor de massa: o modelo se aplica por GRUPO.
+    // O MESMO seletor existe em dois lugares: na aba (escolha do dia a dia) e na tela de
+    // Gerenciar modelos. Ids diferentes de proposito -- id repetido faz o getElementById
+    // devolver so o primeiro, e foi assim que a select da aba nasceu vazia (v11.50.0).
+    const selAba = document.getElementById('twmgr-bld-tplsel');
+    if (selAba) { selAba.innerHTML = sel.innerHTML; selAba.value = _bldActiveProf; }
   }
   function bldNovoModelo() {
     const nome = (prompt('Nome do novo modelo:', '') || '').trim();

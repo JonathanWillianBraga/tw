@@ -557,7 +557,7 @@
         '<div id="twmgr-sub-bldmodelos">' +
           sec('Modelo',
             '<div class="twmgr-row" style="gap:4px">' +
-              '<select id="twmgr-bld-tpl" class="twmgr-inp" style="flex:1"></select>' +
+              '<select id="twmgr-bld-tplsel" class="twmgr-inp" style="flex:1"></select>' +
               '<a id="twmgr-bld-abrir-tpl" class="twmgr-btn twmgr-ghost" style="padding:5px 10px;white-space:nowrap">Gerenciar modelos</a>' +
             '</div>' +
             '<div class="twmgr-fld" style="margin-top:7px"><span title="Todas as aldeias deste grupo seguem este modelo">Aplicar ao grupo</span>' +
@@ -946,9 +946,20 @@
       });
     });
     // O modelo é amarrado ao GRUPO: mudar aqui muda quem o ciclo atende no próximo tick.
+    document.getElementById('twmgr-bld-tplsel').addEventListener('change', (e) => bldSwitchProf(e.target.value));
     document.getElementById('twmgr-bld-tplgrp').addEventListener('change', (e) => {
       const t = config.build.templates[_bldActiveProf];
-      if (t) { t.grupo = e.target.value || ''; save(); }
+      if (!t) {
+        // Sem modelo escolhido nao ha onde gravar o grupo. Antes isso falhava CALADO e parecia
+        // que o painel tinha ignorado o clique.
+        alert('Escolha um modelo primeiro — o grupo é gravado no modelo.');
+        e.target.value = '';
+        return;
+      }
+      t.grupo = e.target.value || '';
+      save();
+      pushLog('Construções: modelo "' + (t.name || _bldActiveProf) + '" '
+        + (t.grupo ? 'aplicado ao grupo selecionado.' : 'desamarrado do grupo.'), 'ok', 'build');
     });
     document.getElementById('twmgr-bld-stgroup').addEventListener('change', (e) => bldStatusFiltrar(e.target.value));
     bindBuildPlanHandlers();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.50.0
+// @version      11.50.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.50.0';
+  const VERSION = '11.50.1';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -4261,6 +4261,7 @@
     if (!bldTpl(id)) return;
     _bldActiveProf = id;
     const sel = document.getElementById('twmgr-bld-tpl'); if (sel) sel.value = id;
+    const selAba = document.getElementById('twmgr-bld-tplsel'); if (selAba) selAba.value = id;
     const fp = document.getElementById('twmgr-bld-farmpct');
     if (fp) fp.value = bldTpl().farmPct != null ? bldTpl().farmPct : 0;
     renderBuildPlan();
@@ -4288,6 +4289,11 @@
     sel.value = _bldActiveProf;
     // O seletor de modelo da barra de ação em massa espelha a mesma lista
     // Sem seletor de massa: o modelo se aplica por GRUPO.
+    // O MESMO seletor existe em dois lugares: na aba (escolha do dia a dia) e na tela de
+    // Gerenciar modelos. Ids diferentes de proposito -- id repetido faz o getElementById
+    // devolver so o primeiro, e foi assim que a select da aba nasceu vazia (v11.50.0).
+    const selAba = document.getElementById('twmgr-bld-tplsel');
+    if (selAba) { selAba.innerHTML = sel.innerHTML; selAba.value = _bldActiveProf; }
   }
   function bldNovoModelo() {
     const nome = (prompt('Nome do novo modelo:', '') || '').trim();
@@ -8346,7 +8352,7 @@
         '<div id="twmgr-sub-bldmodelos">' +
           sec('Modelo',
             '<div class="twmgr-row" style="gap:4px">' +
-              '<select id="twmgr-bld-tpl" class="twmgr-inp" style="flex:1"></select>' +
+              '<select id="twmgr-bld-tplsel" class="twmgr-inp" style="flex:1"></select>' +
               '<a id="twmgr-bld-abrir-tpl" class="twmgr-btn twmgr-ghost" style="padding:5px 10px;white-space:nowrap">Gerenciar modelos</a>' +
             '</div>' +
             '<div class="twmgr-fld" style="margin-top:7px"><span title="Todas as aldeias deste grupo seguem este modelo">Aplicar ao grupo</span>' +
@@ -8735,9 +8741,20 @@
       });
     });
     // O modelo é amarrado ao GRUPO: mudar aqui muda quem o ciclo atende no próximo tick.
+    document.getElementById('twmgr-bld-tplsel').addEventListener('change', (e) => bldSwitchProf(e.target.value));
     document.getElementById('twmgr-bld-tplgrp').addEventListener('change', (e) => {
       const t = config.build.templates[_bldActiveProf];
-      if (t) { t.grupo = e.target.value || ''; save(); }
+      if (!t) {
+        // Sem modelo escolhido nao ha onde gravar o grupo. Antes isso falhava CALADO e parecia
+        // que o painel tinha ignorado o clique.
+        alert('Escolha um modelo primeiro — o grupo é gravado no modelo.');
+        e.target.value = '';
+        return;
+      }
+      t.grupo = e.target.value || '';
+      save();
+      pushLog('Construções: modelo "' + (t.name || _bldActiveProf) + '" '
+        + (t.grupo ? 'aplicado ao grupo selecionado.' : 'desamarrado do grupo.'), 'ok', 'build');
     });
     document.getElementById('twmgr-bld-stgroup').addEventListener('change', (e) => bldStatusFiltrar(e.target.value));
     bindBuildPlanHandlers();

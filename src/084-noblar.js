@@ -977,14 +977,17 @@
           '<td>' + estado + '</td></tr>';
       }).join('') + '</tbody></table>';
   }
-  // Botão da célula: mostra o ícone da bandeira escolhida, ou um tracinho se não há.
+  // Botão da célula. Um traço cinza não parecia clicável — o usuário achou que estava quebrado.
+  // Agora tem cara de botão: borda tracejada e a palavra "escolher" quando está vazio, borda
+  // sólida com o ícone quando tem bandeira.
   function nobleBandBtn(coord, tipo, nivel) {
     const b = (_nbBandeiras || []).find((x) => x.tipo === String(tipo) && x.nivel === (nivel || 1));
     const dentro = b
       ? '<span class="twmgr-flag" style="background-image:url(\'' + esc(b.img) + '\')"></span>'
-      : (tipo ? '<span style="font-size:9px">' + esc(tipo) + '/' + (nivel || 1) + '</span>'
-              : '<span style="color:#8a7340">—</span>');
-    return '<a class="twmgr-nb-pband" data-coord="' + esc(coord) + '" title="escolher bandeira">' + dentro + '</a>';
+        + '<em>nível ' + b.nivel + '</em>'
+      : (tipo ? '<em>' + esc(tipo) + '/' + (nivel || 1) + '</em>' : '<em>escolher</em>');
+    return '<a class="twmgr-nb-pband' + (b ? ' tem' : '') + '" data-coord="' + esc(coord) + '"'
+      + ' title="' + (b ? esc(b.desc || '') : 'escolher bandeira') + '">' + dentro + '</a>';
   }
 
   // Grade de escolha. Abre embaixo da tabela em vez de num popup: o painel já é flutuante, e
@@ -1003,15 +1006,30 @@
       box.innerHTML = '<div style="font-size:10px;color:#8a7340;padding:6px">nenhuma bandeira na conta.</div>';
       return;
     }
+    // AGRUPA POR TIPO. A conta do usuário tem 6 tipos × 9 níveis = 54 ícones; soltos numa grade
+    // única não dá pra achar nada. O título do grupo é a descrição do efeito sem o percentual
+    // ("+8% na produção de recursos" → "na produção de recursos"), que é a única parte que não
+    // muda entre os níveis do mesmo tipo.
+    const porTipo = {};
+    lista.forEach((b) => { (porTipo[b.tipo] = porTipo[b.tipo] || []).push(b); });
+    const rotulo = (bs) => {
+      const d = (bs.find((x) => x.desc) || {}).desc || '';
+      const semPct = d.replace(/^\s*[+\-]?\s*[\d.,]+\s*%\s*/, '').trim();
+      return semPct || ('tipo ' + bs[0].tipo);
+    };
     const alvo = coord === '*' ? 'padrão' : coord;
-    box.innerHTML = '<div style="font-size:10px;color:#6f6153;margin-bottom:5px">Bandeira para <b>' + esc(alvo) + '</b>'
+    box.innerHTML = '<div style="font-size:10px;color:#6f6153;margin-bottom:6px">Bandeira para <b>' + esc(alvo) + '</b>'
       + ' · <a class="twmgr-nb-flagnone" data-coord="' + esc(coord) + '">nenhuma</a>'
       + ' · <a class="twmgr-nb-flagfech">fechar</a></div>'
-      + '<div class="twmgr-flaggrid">' + lista.map((b) =>
-        '<a class="twmgr-nb-flagsel" data-coord="' + esc(coord) + '" data-tipo="' + esc(b.tipo) + '"'
-        + ' data-nivel="' + b.nivel + '" title="' + esc(b.desc || (b.tipo + '/' + b.nivel)) + '">'
-        + '<span class="twmgr-flag" style="background-image:url(\'' + esc(b.img) + '\')"></span>'
-        + '<em>nível ' + b.nivel + '</em></a>').join('') + '</div>';
+      + Object.keys(porTipo).map((t) => {
+        const bs = porTipo[t];
+        return '<div class="twmgr-flaggrp">' + esc(rotulo(bs)) + '</div>'
+          + '<div class="twmgr-flaggrid">' + bs.map((b) =>
+            '<a class="twmgr-nb-flagsel" data-coord="' + esc(coord) + '" data-tipo="' + esc(b.tipo) + '"'
+            + ' data-nivel="' + b.nivel + '" title="' + esc(b.desc || (b.tipo + '/' + b.nivel)) + '">'
+            + '<span class="twmgr-flag" style="background-image:url(\'' + esc(b.img) + '\')"></span>'
+            + '<em>nível ' + b.nivel + '</em></a>').join('') + '</div>';
+      }).join('');
   }
 
   function bindNoblePosHandlers() {
@@ -1024,9 +1042,12 @@
       if (el.classList.contains('twmgr-nb-pgrp')) a.posGrupoId = el.value;
       save(); renderNoblePos();
     });
-    // Cliques do seletor de bandeira. Delegado no container inteiro porque a grade é
-    // redesenhada a cada abertura.
-    const pai = box.parentNode || box;
+    // Cliques do seletor de bandeira, delegados porque a grade é redesenhada a cada abertura.
+    //
+    // Prende na SUB-ABA inteira, não no pai da tabela: o botão da bandeira padrão vive na seção
+    // "Quando a aldeia cair", fora da tabela, e com o listener no pai dela o clique no padrão
+    // simplesmente não chegava — o botão parecia morto.
+    const pai = document.getElementById('twmgr-sub-pos') || box.parentNode || box;
     pai.addEventListener('click', (e) => {
       const el = e.target.closest ? e.target.closest('a') : null;
       if (!el) return;

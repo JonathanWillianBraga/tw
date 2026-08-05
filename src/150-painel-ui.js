@@ -143,7 +143,14 @@
       ".twmgr-flaggrid a{display:block;text-align:center;padding:3px 1px;border:1px solid transparent;border-radius:6px;cursor:pointer}",
       ".twmgr-flaggrid a:hover{border-color:#c9a56a;background:#f5e6cd}",
       ".twmgr-flaggrid em{display:block;font-style:normal;font-size:8px;color:#8a7340}",
-      ".twmgr-nb-pband{cursor:pointer;display:inline-block;min-width:32px}",
+      // Botão da bandeira: um traço cinza não parecia clicável. Tracejado = vazio, sólido = tem.
+      ".twmgr-nb-pband{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;min-width:46px;min-height:38px;padding:2px 5px;border:1px dashed #c9a56a;border-radius:6px;background:#fbf7ef;color:#a07a42;cursor:pointer;line-height:1.1}",
+      ".twmgr-nb-pband:hover{background:#f5e6cd;border-style:solid}",
+      ".twmgr-nb-pband.tem{border-style:solid;border-color:#c08a3e;background:#fff}",
+      ".twmgr-nb-pband em{font-style:normal;font-size:8px;color:#8a7340}",
+      // Cabeçalho de cada tipo na grade — sem ele são 54 ícones soltos.
+      ".twmgr-flaggrp{font-size:9px;color:#a07a42;font-weight:700;margin:7px 0 3px;border-bottom:1px solid #eee3cf;padding-bottom:2px}",
+      ".twmgr-flaggrp:first-child{margin-top:0}",
 
       ".twmgr-log{height:150px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:8px;padding:7px 8px;font-family:Consolas,'Courier New',monospace;font-size:10px;line-height:1.45}",
       ".twmgr-log::-webkit-scrollbar{width:8px}.twmgr-log::-webkit-scrollbar-thumb{background:#e0d6c6;border-radius:4px}",

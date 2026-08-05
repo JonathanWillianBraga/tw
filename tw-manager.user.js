@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.43.0
+// @version      11.43.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.43.0';
+  const VERSION = '11.43.1';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5425,14 +5425,17 @@
           '<td>' + estado + '</td></tr>';
       }).join('') + '</tbody></table>';
   }
-  // Botão da célula: mostra o ícone da bandeira escolhida, ou um tracinho se não há.
+  // Botão da célula. Um traço cinza não parecia clicável — o usuário achou que estava quebrado.
+  // Agora tem cara de botão: borda tracejada e a palavra "escolher" quando está vazio, borda
+  // sólida com o ícone quando tem bandeira.
   function nobleBandBtn(coord, tipo, nivel) {
     const b = (_nbBandeiras || []).find((x) => x.tipo === String(tipo) && x.nivel === (nivel || 1));
     const dentro = b
       ? '<span class="twmgr-flag" style="background-image:url(\'' + esc(b.img) + '\')"></span>'
-      : (tipo ? '<span style="font-size:9px">' + esc(tipo) + '/' + (nivel || 1) + '</span>'
-              : '<span style="color:#8a7340">—</span>');
-    return '<a class="twmgr-nb-pband" data-coord="' + esc(coord) + '" title="escolher bandeira">' + dentro + '</a>';
+        + '<em>nível ' + b.nivel + '</em>'
+      : (tipo ? '<em>' + esc(tipo) + '/' + (nivel || 1) + '</em>' : '<em>escolher</em>');
+    return '<a class="twmgr-nb-pband' + (b ? ' tem' : '') + '" data-coord="' + esc(coord) + '"'
+      + ' title="' + (b ? esc(b.desc || '') : 'escolher bandeira') + '">' + dentro + '</a>';
   }
 
   // Grade de escolha. Abre embaixo da tabela em vez de num popup: o painel já é flutuante, e
@@ -5451,15 +5454,30 @@
       box.innerHTML = '<div style="font-size:10px;color:#8a7340;padding:6px">nenhuma bandeira na conta.</div>';
       return;
     }
+    // AGRUPA POR TIPO. A conta do usuário tem 6 tipos × 9 níveis = 54 ícones; soltos numa grade
+    // única não dá pra achar nada. O título do grupo é a descrição do efeito sem o percentual
+    // ("+8% na produção de recursos" → "na produção de recursos"), que é a única parte que não
+    // muda entre os níveis do mesmo tipo.
+    const porTipo = {};
+    lista.forEach((b) => { (porTipo[b.tipo] = porTipo[b.tipo] || []).push(b); });
+    const rotulo = (bs) => {
+      const d = (bs.find((x) => x.desc) || {}).desc || '';
+      const semPct = d.replace(/^\s*[+\-]?\s*[\d.,]+\s*%\s*/, '').trim();
+      return semPct || ('tipo ' + bs[0].tipo);
+    };
     const alvo = coord === '*' ? 'padrão' : coord;
-    box.innerHTML = '<div style="font-size:10px;color:#6f6153;margin-bottom:5px">Bandeira para <b>' + esc(alvo) + '</b>'
+    box.innerHTML = '<div style="font-size:10px;color:#6f6153;margin-bottom:6px">Bandeira para <b>' + esc(alvo) + '</b>'
       + ' · <a class="twmgr-nb-flagnone" data-coord="' + esc(coord) + '">nenhuma</a>'
       + ' · <a class="twmgr-nb-flagfech">fechar</a></div>'
-      + '<div class="twmgr-flaggrid">' + lista.map((b) =>
-        '<a class="twmgr-nb-flagsel" data-coord="' + esc(coord) + '" data-tipo="' + esc(b.tipo) + '"'
-        + ' data-nivel="' + b.nivel + '" title="' + esc(b.desc || (b.tipo + '/' + b.nivel)) + '">'
-        + '<span class="twmgr-flag" style="background-image:url(\'' + esc(b.img) + '\')"></span>'
-        + '<em>nível ' + b.nivel + '</em></a>').join('') + '</div>';
+      + Object.keys(porTipo).map((t) => {
+        const bs = porTipo[t];
+        return '<div class="twmgr-flaggrp">' + esc(rotulo(bs)) + '</div>'
+          + '<div class="twmgr-flaggrid">' + bs.map((b) =>
+            '<a class="twmgr-nb-flagsel" data-coord="' + esc(coord) + '" data-tipo="' + esc(b.tipo) + '"'
+            + ' data-nivel="' + b.nivel + '" title="' + esc(b.desc || (b.tipo + '/' + b.nivel)) + '">'
+            + '<span class="twmgr-flag" style="background-image:url(\'' + esc(b.img) + '\')"></span>'
+            + '<em>nível ' + b.nivel + '</em></a>').join('') + '</div>';
+      }).join('');
   }
 
   function bindNoblePosHandlers() {
@@ -5472,9 +5490,12 @@
       if (el.classList.contains('twmgr-nb-pgrp')) a.posGrupoId = el.value;
       save(); renderNoblePos();
     });
-    // Cliques do seletor de bandeira. Delegado no container inteiro porque a grade é
-    // redesenhada a cada abertura.
-    const pai = box.parentNode || box;
+    // Cliques do seletor de bandeira, delegados porque a grade é redesenhada a cada abertura.
+    //
+    // Prende na SUB-ABA inteira, não no pai da tabela: o botão da bandeira padrão vive na seção
+    // "Quando a aldeia cair", fora da tabela, e com o listener no pai dela o clique no padrão
+    // simplesmente não chegava — o botão parecia morto.
+    const pai = document.getElementById('twmgr-sub-pos') || box.parentNode || box;
     pai.addEventListener('click', (e) => {
       const el = e.target.closest ? e.target.closest('a') : null;
       if (!el) return;
@@ -7456,7 +7477,14 @@
       ".twmgr-flaggrid a{display:block;text-align:center;padding:3px 1px;border:1px solid transparent;border-radius:6px;cursor:pointer}",
       ".twmgr-flaggrid a:hover{border-color:#c9a56a;background:#f5e6cd}",
       ".twmgr-flaggrid em{display:block;font-style:normal;font-size:8px;color:#8a7340}",
-      ".twmgr-nb-pband{cursor:pointer;display:inline-block;min-width:32px}",
+      // Botão da bandeira: um traço cinza não parecia clicável. Tracejado = vazio, sólido = tem.
+      ".twmgr-nb-pband{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;min-width:46px;min-height:38px;padding:2px 5px;border:1px dashed #c9a56a;border-radius:6px;background:#fbf7ef;color:#a07a42;cursor:pointer;line-height:1.1}",
+      ".twmgr-nb-pband:hover{background:#f5e6cd;border-style:solid}",
+      ".twmgr-nb-pband.tem{border-style:solid;border-color:#c08a3e;background:#fff}",
+      ".twmgr-nb-pband em{font-style:normal;font-size:8px;color:#8a7340}",
+      // Cabeçalho de cada tipo na grade — sem ele são 54 ícones soltos.
+      ".twmgr-flaggrp{font-size:9px;color:#a07a42;font-weight:700;margin:7px 0 3px;border-bottom:1px solid #eee3cf;padding-bottom:2px}",
+      ".twmgr-flaggrp:first-child{margin-top:0}",
 
       ".twmgr-log{height:150px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:8px;padding:7px 8px;font-family:Consolas,'Courier New',monospace;font-size:10px;line-height:1.45}",
       ".twmgr-log::-webkit-scrollbar{width:8px}.twmgr-log::-webkit-scrollbar-thumb{background:#e0d6c6;border-radius:4px}",

@@ -143,6 +143,44 @@
   // Iniciar com um ciclo em voo fazia DOIS lacos concorrentes na mesma conta -- no log real deu
   // linha duplicada pra mesma aldeia no mesmo segundo, e o mesmo POST tentado duas vezes.
   let _pesqEmVoo = false;
+  // Select do modelo aplicado às aldeias que entram pelo grupo.
+  function fillPesqGrupoTpl() {
+    const sel = document.getElementById('twmgr-pq-grptpl'); if (!sel) return;
+    const ids = Object.keys(config.research.templates || {});
+    sel.innerHTML = '<option value="">— escolha —</option>'
+      + ids.map((id) => '<option value="' + esc(id) + '">'
+        + esc(config.research.templates[id].name || id) + '</option>').join('');
+    sel.value = config.research.grupoTpl || '';
+  }
+
+  // Gemea da bldSincronizarGrupo, com as MESMAS regras: so adiciona, nunca remove (tirar
+  // pararia a pesquisa em silencio, e uma leitura falha do grupo esvaziaria a gestao); modelo
+  // unico e usado sozinho, varios sem escolha viram aviso em vez de chute.
+  async function pesqSincronizarGrupo() {
+    const membros = await getVillagesInGroup(config.research.filterGroup);
+    if (!membros || !membros.length) return 0;
+    const assign = config.research.villages || (config.research.villages = {});
+    const tpls = Object.keys(config.research.templates || {});
+    let tpl = config.research.grupoTpl;
+    if (!tpl || !config.research.templates[tpl]) tpl = (tpls.length === 1) ? tpls[0] : '';
+    const novas = membros.filter((v) => !assign[String(v.vid)]);
+    if (!novas.length) return 0;
+    if (!tpl) {
+      pushLog('Pesquisa: ' + novas.length + ' aldeia(s) novas no grupo, mas nenhum modelo definido pra elas'
+        + ' — escolha o "modelo pra aldeia nova" na aba.', 'err', 'research');
+      return 0;
+    }
+    novas.forEach((v) => {
+      assign[String(v.vid)] = { tpl: tpl, paused: false,
+                                coord: v.coord || null, name: v.name || v.coord || String(v.vid) };
+    });
+    save();
+    pushLog('Pesquisa: ' + novas.length + ' aldeia(s) entraram pelo grupo ('
+      + novas.map((v) => v.name || v.coord).join(', ') + ') com o modelo "'
+      + (config.research.templates[tpl].name || tpl) + '".', 'ok', 'research');
+    renderResearchVillages();
+    return novas.length;
+  }
   async function researchTick() {
     clearTimeout(researchTimer);
     if (!config.research.running) return;
@@ -153,6 +191,11 @@
     const now = Date.now();
     if ((config.research.nextAt || 0) > now) { scheduleResearch(); return; }
 
+    // Antes de listar as ativas: quem entrou no grupo desde o último ciclo entra na gestão.
+    if (config.research.seguirGrupo && config.research.filterGroup) {
+      try { await pesqSincronizarGrupo(); }
+      catch (e) { pushLog('Pesquisa: não consegui ler o grupo (' + (e.message || e) + ') — sigo com a lista atual.', '', 'research'); }
+    }
     const assign = config.research.villages || {};
     const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.research.templates[assign[v].tpl]);
     if (!ativas.length) {
@@ -277,6 +320,7 @@
     sel.innerHTML = ids.map((id) => '<option value="' + esc(id) + '">' + esc(config.research.templates[id].name) + ' (' + (config.research.templates[id].order || []).length + ')</option>').join('');
     if (ids.indexOf(_pesqTplAtivo) < 0 && ids.length) _pesqTplAtivo = ids[0];
     sel.value = _pesqTplAtivo;
+    fillPesqGrupoTpl();   // modelo novo tem que aparecer no "pra aldeia nova" tambem
     const mass = document.getElementById('twmgr-pq-mass-tpl');
     if (mass) { const antes = mass.value; mass.innerHTML = sel.innerHTML; if (ids.indexOf(antes) >= 0) mass.value = antes; }
   }

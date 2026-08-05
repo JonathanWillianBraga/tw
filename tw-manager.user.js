@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.44.0
+// @version      11.45.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.44.0';
+  const VERSION = '11.45.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -217,7 +217,7 @@
   // excedente (acima de feedReserve% do armazém dela), respeitando feedMaxDist campos.
   const defResearch = () => ({
     running: false, nextAt: 0, interval: 900,
-    templates: {}, villages: {}, filterGroup: '',
+    templates: {}, villages: {}, filterGroup: '', seguirGrupo: false, grupoTpl: '',
     feedOn: true, feedReserve: 40, feedMaxDist: 20, feedFillPct: 60,
     blocked: {}, blockTtlH: 6,   // pesquisa recusada por requisito: nao insiste por N horas
     stats: {},
@@ -562,6 +562,8 @@
     if (c.research.feedFillPct == null) c.research.feedFillPct = 60;
     if (!c.research.blocked || typeof c.research.blocked !== 'object') c.research.blocked = {};
     if (c.research.blockTtlH == null) c.research.blockTtlH = 6;
+    if (c.research.seguirGrupo == null) c.research.seguirGrupo = false;
+    if (c.research.grupoTpl == null) c.research.grupoTpl = '';
     // Bloqueio de aldeia que saiu da gestão não serve pra nada e cresceria pra sempre.
     Object.keys(c.research.blocked).forEach((vid) => { if (!c.research.villages[vid]) delete c.research.blocked[vid]; });
     if (!c.noble) c.noble = defNoble();
@@ -4183,6 +4185,44 @@
   // Iniciar com um ciclo em voo fazia DOIS lacos concorrentes na mesma conta -- no log real deu
   // linha duplicada pra mesma aldeia no mesmo segundo, e o mesmo POST tentado duas vezes.
   let _pesqEmVoo = false;
+  // Select do modelo aplicado às aldeias que entram pelo grupo.
+  function fillPesqGrupoTpl() {
+    const sel = document.getElementById('twmgr-pq-grptpl'); if (!sel) return;
+    const ids = Object.keys(config.research.templates || {});
+    sel.innerHTML = '<option value="">— escolha —</option>'
+      + ids.map((id) => '<option value="' + esc(id) + '">'
+        + esc(config.research.templates[id].name || id) + '</option>').join('');
+    sel.value = config.research.grupoTpl || '';
+  }
+
+  // Gemea da bldSincronizarGrupo, com as MESMAS regras: so adiciona, nunca remove (tirar
+  // pararia a pesquisa em silencio, e uma leitura falha do grupo esvaziaria a gestao); modelo
+  // unico e usado sozinho, varios sem escolha viram aviso em vez de chute.
+  async function pesqSincronizarGrupo() {
+    const membros = await getVillagesInGroup(config.research.filterGroup);
+    if (!membros || !membros.length) return 0;
+    const assign = config.research.villages || (config.research.villages = {});
+    const tpls = Object.keys(config.research.templates || {});
+    let tpl = config.research.grupoTpl;
+    if (!tpl || !config.research.templates[tpl]) tpl = (tpls.length === 1) ? tpls[0] : '';
+    const novas = membros.filter((v) => !assign[String(v.vid)]);
+    if (!novas.length) return 0;
+    if (!tpl) {
+      pushLog('Pesquisa: ' + novas.length + ' aldeia(s) novas no grupo, mas nenhum modelo definido pra elas'
+        + ' — escolha o "modelo pra aldeia nova" na aba.', 'err', 'research');
+      return 0;
+    }
+    novas.forEach((v) => {
+      assign[String(v.vid)] = { tpl: tpl, paused: false,
+                                coord: v.coord || null, name: v.name || v.coord || String(v.vid) };
+    });
+    save();
+    pushLog('Pesquisa: ' + novas.length + ' aldeia(s) entraram pelo grupo ('
+      + novas.map((v) => v.name || v.coord).join(', ') + ') com o modelo "'
+      + (config.research.templates[tpl].name || tpl) + '".', 'ok', 'research');
+    renderResearchVillages();
+    return novas.length;
+  }
   async function researchTick() {
     clearTimeout(researchTimer);
     if (!config.research.running) return;
@@ -4193,6 +4233,11 @@
     const now = Date.now();
     if ((config.research.nextAt || 0) > now) { scheduleResearch(); return; }
 
+    // Antes de listar as ativas: quem entrou no grupo desde o último ciclo entra na gestão.
+    if (config.research.seguirGrupo && config.research.filterGroup) {
+      try { await pesqSincronizarGrupo(); }
+      catch (e) { pushLog('Pesquisa: não consegui ler o grupo (' + (e.message || e) + ') — sigo com a lista atual.', '', 'research'); }
+    }
     const assign = config.research.villages || {};
     const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.research.templates[assign[v].tpl]);
     if (!ativas.length) {
@@ -4317,6 +4362,7 @@
     sel.innerHTML = ids.map((id) => '<option value="' + esc(id) + '">' + esc(config.research.templates[id].name) + ' (' + (config.research.templates[id].order || []).length + ')</option>').join('');
     if (ids.indexOf(_pesqTplAtivo) < 0 && ids.length) _pesqTplAtivo = ids[0];
     sel.value = _pesqTplAtivo;
+    fillPesqGrupoTpl();   // modelo novo tem que aparecer no "pra aldeia nova" tambem
     const mass = document.getElementById('twmgr-pq-mass-tpl');
     if (mass) { const antes = mass.value; mass.innerHTML = sel.innerHTML; if (ids.indexOf(antes) >= 0) mass.value = antes; }
   }
@@ -7906,6 +7952,10 @@
             '<select id="twmgr-pq-group" class="twmgr-inp" style="flex:1"></select>' +
             '<button id="twmgr-pq-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
           '</div>' +
+          '<div class="twmgr-fld" style="margin-top:6px"><span title="Aldeia adicionada ao grupo no jogo entra sozinha na gestão">Seguir o grupo <span style="color:#8a7d6d">(entrar sozinha)</span></span>' +
+            '<label class="twmgr-sw"><input id="twmgr-pq-seguir" type="checkbox"><i></i></label></div>' +
+          '<div class="twmgr-fld"><span>Modelo pra aldeia nova</span><select id="twmgr-pq-grptpl" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin:2px 0 7px">Ele só <b>adiciona</b>. Aldeia que sai do grupo <b>continua</b> na gestão — tirar sozinho pararia a pesquisa dela em silêncio.</div>' +
           '<div id="twmgr-pq-vils" class="twmgr-bld-vils"></div>' +
           '<div id="twmgr-pq-vils-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>' +
           '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
@@ -8268,7 +8318,11 @@
     document.getElementById('twmgr-pq-tpl-del').addEventListener('click', pesqApagarModelo);
     document.getElementById('twmgr-pq-add-btn').addEventListener('click', pesqAddUnidade);
     document.getElementById('twmgr-pq-reset').addEventListener('click', pesqResetOrdem);
-    document.getElementById('twmgr-pq-group').addEventListener('change', (e) => { config.research.filterGroup = e.target.value; save(); pesqCarregarAldeias(); });
+    document.getElementById('twmgr-pq-group').addEventListener('change', (e) => { config.research.filterGroup = e.target.value; save(); pesqCarregarAldeias(); fillPesqGrupoTpl(); });
+    document.getElementById('twmgr-pq-seguir').checked = !!config.research.seguirGrupo;
+    document.getElementById('twmgr-pq-seguir').addEventListener('change', (e) => { config.research.seguirGrupo = e.target.checked; save(); });
+    document.getElementById('twmgr-pq-grptpl').addEventListener('change', (e) => { config.research.grupoTpl = e.target.value; save(); });
+    fillPesqGrupoTpl();
     document.getElementById('twmgr-pq-vil-reload').addEventListener('click', pesqCarregarAldeias);
     document.getElementById('twmgr-pq-mass-go').addEventListener('click', pesqAcaoEmMassa);
     document.getElementById('twmgr-pq-feed').checked = config.research.feedOn !== false;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.44.0
+// @version      11.45.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.44.0';
+  const VERSION = '11.45.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -217,7 +217,7 @@
   // excedente (acima de feedReserve% do armazém dela), respeitando feedMaxDist campos.
   const defResearch = () => ({
     running: false, nextAt: 0, interval: 900,
-    templates: {}, villages: {}, filterGroup: '',
+    templates: {}, villages: {}, filterGroup: '', seguirGrupo: false, grupoTpl: '',
     feedOn: true, feedReserve: 40, feedMaxDist: 20, feedFillPct: 60,
     blocked: {}, blockTtlH: 6,   // pesquisa recusada por requisito: nao insiste por N horas
     stats: {},
@@ -562,6 +562,8 @@
     if (c.research.feedFillPct == null) c.research.feedFillPct = 60;
     if (!c.research.blocked || typeof c.research.blocked !== 'object') c.research.blocked = {};
     if (c.research.blockTtlH == null) c.research.blockTtlH = 6;
+    if (c.research.seguirGrupo == null) c.research.seguirGrupo = false;
+    if (c.research.grupoTpl == null) c.research.grupoTpl = '';
     // Bloqueio de aldeia que saiu da gestão não serve pra nada e cresceria pra sempre.
     Object.keys(c.research.blocked).forEach((vid) => { if (!c.research.villages[vid]) delete c.research.blocked[vid]; });
     if (!c.noble) c.noble = defNoble();

@@ -513,6 +513,10 @@
             '<select id="twmgr-pq-group" class="twmgr-inp" style="flex:1"></select>' +
             '<button id="twmgr-pq-vil-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="carregar aldeias">↻</button>' +
           '</div>' +
+          '<div class="twmgr-fld" style="margin-top:6px"><span title="Aldeia adicionada ao grupo no jogo entra sozinha na gestão">Seguir o grupo <span style="color:#8a7d6d">(entrar sozinha)</span></span>' +
+            '<label class="twmgr-sw"><input id="twmgr-pq-seguir" type="checkbox"><i></i></label></div>' +
+          '<div class="twmgr-fld"><span>Modelo pra aldeia nova</span><select id="twmgr-pq-grptpl" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin:2px 0 7px">Ele só <b>adiciona</b>. Aldeia que sai do grupo <b>continua</b> na gestão — tirar sozinho pararia a pesquisa dela em silêncio.</div>' +
           '<div id="twmgr-pq-vils" class="twmgr-bld-vils"></div>' +
           '<div id="twmgr-pq-vils-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>' +
           '<div class="twmgr-row" style="gap:4px;margin-top:5px">' +
@@ -875,7 +879,11 @@
     document.getElementById('twmgr-pq-tpl-del').addEventListener('click', pesqApagarModelo);
     document.getElementById('twmgr-pq-add-btn').addEventListener('click', pesqAddUnidade);
     document.getElementById('twmgr-pq-reset').addEventListener('click', pesqResetOrdem);
-    document.getElementById('twmgr-pq-group').addEventListener('change', (e) => { config.research.filterGroup = e.target.value; save(); pesqCarregarAldeias(); });
+    document.getElementById('twmgr-pq-group').addEventListener('change', (e) => { config.research.filterGroup = e.target.value; save(); pesqCarregarAldeias(); fillPesqGrupoTpl(); });
+    document.getElementById('twmgr-pq-seguir').checked = !!config.research.seguirGrupo;
+    document.getElementById('twmgr-pq-seguir').addEventListener('change', (e) => { config.research.seguirGrupo = e.target.checked; save(); });
+    document.getElementById('twmgr-pq-grptpl').addEventListener('change', (e) => { config.research.grupoTpl = e.target.value; save(); });
+    fillPesqGrupoTpl();
     document.getElementById('twmgr-pq-vil-reload').addEventListener('click', pesqCarregarAldeias);
     document.getElementById('twmgr-pq-mass-go').addEventListener('click', pesqAcaoEmMassa);
     document.getElementById('twmgr-pq-feed').checked = config.research.feedOn !== false;

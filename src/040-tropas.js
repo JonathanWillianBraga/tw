@@ -46,8 +46,10 @@
   function enhanceUnitsPage() {
     const gd = window.game_data;
     if (!gd || gd.screen !== 'overview_villages' || gd.mode !== 'units') return;
-    const anterior = document.getElementById('twmgr-units-total');
-    if (anterior && anterior.parentNode) anterior.parentNode.removeChild(anterior);
+    ['twmgr-units-total', 'twmgr-units-topo'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    });
 
     const table = document.getElementById('units_table'); if (!table) return;
     const cabecalhos = table.querySelectorAll('thead th img[src*="/unit_"]');
@@ -61,13 +63,35 @@
     const r = unitsSomaVisivel(table, colUnits);
     if (!r.aldeias) return;
     const fmt = (n) => Number(n).toLocaleString('pt-BR');
-
-    const tbody = document.createElement('tbody');
-    tbody.id = 'twmgr-units-total';
-    // O titulo carrega o diagnostico: quantas aldeias e linhas entraram na conta. Se algum dia a
-    // tabela do jogo mudar, da pra ver na hora que a soma esta pegando pouca coisa.
+    // Diagnostico usado nos dois lugares: se a tabela do jogo mudar, da pra ver na hora que a
+    // soma pegou pouca coisa, em vez de mostrar um numero errado calado.
     const diag = r.aldeias + ' aldeia(s), ' + r.linhas + ' linha(s) somada(s)'
       + (r.usouTotal ? ' \u2014 ' + r.usouTotal + ' pela linha de total' : '');
+
+    // Painel do topo: mesmos numeros, visiveis sem rolar. Os icones saem do proprio cabecalho
+    // da tabela do jogo -- assim valem pro mundo em que voce esta (br141 nao tem arqueiro,
+    // por exemplo) e nunca apontam pra imagem que nao existe.
+    const topo = document.createElement('div');
+    topo.id = 'twmgr-units-topo';
+    let chips = '';
+    colUnits.forEach((u, i) => {
+      if (!u) return;
+      const n = r.totais[u] || 0;
+      const img = cabecalhos[i] ? cabecalhos[i].getAttribute('src') : '';
+      const nome = cabecalhos[i] ? (cabecalhos[i].getAttribute('title')
+        || cabecalhos[i].getAttribute('alt') || u) : u;
+      chips += '<span class="twmgr-ut-chip' + (n ? '' : ' twmgr-ut-zero') + '" title="' + esc(nome) + '">'
+        + (img ? '<img src="' + esc(img) + '" alt="">' : '')
+        + '<b>' + fmt(n) + '</b></span>';
+    });
+    topo.innerHTML = '<div class="twmgr-ut-topo-cab">\u03a3 ' + esc(unitsAbaAtiva())
+      + '<span class="twmgr-ut-topo-sub">' + esc(diag) + '</span></div>'
+      + '<div class="twmgr-ut-chips">' + chips + '</div>';
+    table.parentNode.insertBefore(topo, table);
+
+    const tbody = document.createElement('tbody');
+
+    tbody.id = 'twmgr-units-total';
     const nCols = table.querySelectorAll('thead th').length;
     let cells = '<td class="twmgr-ut-cel twmgr-ut-rot" colspan="2" title="' + esc(diag) + '">'
       + '\u03a3 ' + esc(unitsAbaAtiva()) + '</td>';
@@ -83,7 +107,14 @@
     // (nao no TR -- em tabela o sticky so pega na celula) mantem a linha visivel enquanto rola.
     if (!document.getElementById('twmgr-ut-css')) {
       const st = document.createElement('style'); st.id = 'twmgr-ut-css';
-      st.textContent = '.twmgr-ut-cel{position:sticky;bottom:0;z-index:5;background:#fbf6ee;'
+      st.textContent = '#twmgr-units-topo{margin:0 0 8px;padding:8px 10px;background:#fbf6ee;' + 'border:1px solid #e8d9bf;border-radius:8px;font-family:Verdana,Arial,sans-serif}'
+        + '.twmgr-ut-topo-cab{font-size:11px;font-weight:bold;color:#8b5426;margin-bottom:6px;' + 'display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}'
+        + '.twmgr-ut-topo-sub{font-weight:normal;font-size:10px;color:#8a7d6d}'
+        + '.twmgr-ut-chips{display:flex;flex-wrap:wrap;gap:6px}'
+        + '.twmgr-ut-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 8px 3px 5px;' + 'background:#fff;border:1px solid #ece4d8;border-radius:6px;font-size:12px;color:#463b30;' + 'font-variant-numeric:tabular-nums}'
+        + '.twmgr-ut-chip img{width:16px;height:16px;display:block}'
+        + '.twmgr-ut-chip.twmgr-ut-zero{opacity:.42}'
+        + '.twmgr-ut-cel{position:sticky;bottom:0;z-index:5;background:#fbf6ee;'
         + 'border-top:2px solid #a2643a;padding:5px 6px;font-weight:bold;color:#463b30}'
         + '.twmgr-ut-rot{text-align:left;color:#8b5426;white-space:nowrap}'
         + '.twmgr-ut-num{text-align:center;font-variant-numeric:tabular-nums}';

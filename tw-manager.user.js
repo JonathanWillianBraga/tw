@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.29.0
+// @version      11.30.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -129,7 +129,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.29.0';
+  const VERSION = '11.30.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -4382,6 +4382,20 @@
   // ESPALHA de proposito: cada aldeia cunha com o PROPRIO recurso e guarda o PROPRIO estoque, entao
   // quatro aldeias juntam quatro vezes mais rapido que uma. Quando o modo "so NT" esta ligado isso
   // se inverte -- os 4 nobres precisam sair da mesma aldeia, entao concentra na mais proxima.
+  // "Formar unidade" da Academia. Confirmado no dump: e um LINK simples, nao um form --
+  //   /game.php?village=<vid>&screen=snob&action=train&h=<csrf>
+  // Mesmo padrao do enqueueBuild do Construcoes. Consome recurso e 100 de população.
+  async function nobleFormar(vid) {
+    const res = await fetch('/game.php?village=' + vid + '&screen=snob&action=train&h=' + CSRF,
+      { credentials: 'include' });
+    const t = await res.text();
+    // O jogo devolve a propria tela; erro vem numa caixa. Sem isso, falha passaria por sucesso.
+    const doc = new DOMParser().parseFromString(t, 'text/html');
+    const err = doc.querySelector('.error_box, .error');
+    if (err && (err.textContent || '').trim()) throw new Error((err.textContent || '').trim().slice(0, 90));
+    return true;
+  }
+
   async function nobleProduzir(alvo, origensOrdenadas) {
     const quantas = config.noble.soNT ? 1 : Math.max(1, config.noble.maxAldeiasProd || 4);
     const escolhidas = origensOrdenadas.slice(0, quantas);
@@ -4392,10 +4406,16 @@
       catch (e) { continue; }                       // sem Academia: proxima aldeia
       if (!st.hasForm) continue;
       const m = st.moedas || {};
-      // Ja da pra formar nobre aqui: cunhar mais seria queimar recurso a toa.
+      // Ja da pra formar nobre aqui: FORMA, em vez de cunhar. Cunhar seria queimar recurso a toa,
+      // porque o que falta nao e moeda.
       if (m.podemFormar > 0) {
-        feitas.push({ nome: o.nome, cunhou: 0, podemFormar: m.podemFormar, motivo: 'ja pode formar' });
-        await sleep(200); continue;
+        try {
+          await nobleFormar(o.vid);
+          feitas.push({ nome: o.nome, cunhou: 0, formou: true });
+        } catch (e) {
+          feitas.push({ nome: o.nome, cunhou: 0, motivo: 'não formou: ' + (e.message || e) });
+        }
+        await sleep(400); continue;
       }
       if (st.maxMint < 1) {
         feitas.push({ nome: o.nome, cunhou: 0, faltam: m.faltam, tem: m.tem, motivo: 'sem recurso' });
@@ -4410,7 +4430,7 @@
       await sleep(400);
     }
     if (feitas.length) {
-      const resumo = feitas.map((f) => f.nome + ': ' + (f.cunhou ? '+' + f.cunhou + ' moeda(s)' : (f.motivo || 'nada'))
+      const resumo = feitas.map((f) => f.nome + ': ' + (f.formou ? 'NOBRE em produção' : (f.cunhou ? '+' + f.cunhou + ' moeda(s)' : (f.motivo || 'nada')))
         + (f.faltam != null ? ' (faltam ' + f.faltam + ' p/ o nobre)' : '')).join(' \u00b7 ');
       pushLog('Noblar (produz) \u2192 ' + alvo.coord + ' \u2014 ' + resumo, 'ok', 'noble');
     }

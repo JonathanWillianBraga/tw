@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.46.0
+// @version      11.46.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.46.0';
+  const VERSION = '11.46.1';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2667,6 +2667,7 @@
   // antes — assim quem já usava perfil-por-grupo não precisa marcar aldeia por aldeia.
   let _rcTplAtivo = '';
   let _rcPool = [];              // aldeias disponíveis pra marcar na tabela
+  let _rcPorGrupo = {};          // { vid: tplId } — quem já é atendido por um modelo-com-grupo
   let _twGroupsCache = [];
 
   function rcTplIds() { return Object.keys(config.recruit.templates || {}); }
@@ -2767,6 +2768,17 @@
       const gid = config.recruit.filterGroup || '';
       const vs = gid ? await getVillagesInGroup(gid) : await getAllVillagesCached();
       _rcPool = (vs || []).map((v) => ({ vid: String(v.vid), coord: v.coord || null, name: v.name || v.coord || String(v.vid) }));
+      // Descobre quem cada modelo-com-grupo cobre, pra tabela poder mostrar o modelo EFETIVO
+      // em vez de "fora". Uma leitura por modelo, só no ↻ — não entra no ciclo.
+      _rcPorGrupo = {};
+      for (const id of rcTplIds()) {
+        const t = config.recruit.templates[id];
+        if (!t.grupo) continue;
+        try {
+          const membros = await getVillagesInGroup(t.grupo);
+          (membros || []).forEach((v) => { _rcPorGrupo[String(v.vid)] = id; });
+        } catch (e) { /* grupo ilegivel: a linha só não mostra a cobertura */ }
+      }
       pushLog('Recrutar: ' + _rcPool.length + ' aldeia(s) carregadas' + (gid ? ' do grupo selecionado' : '') + '.', '', 'recruit');
     } catch (e) {
       pushLog('Recrutar: erro ao carregar as aldeias (' + (e.message || e) + ').', 'err', 'recruit');
@@ -2786,21 +2798,31 @@
     box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr><th style="width:18px"></th><th>Aldeia</th><th>Modelo</th><th>Estado</th></tr></thead><tbody>' +
       linhas.map((vid, i) => {
         const v = mapa[vid], a = assign[vid];
+        const doGrupo = _rcPorGrupo[vid];
+        // Sem escolha individual, o rótulo do "vazio" diz a verdade: herda do grupo, ou está fora.
+        const vazio = doGrupo ? ('← grupo: ' + (tpls[doGrupo] ? tpls[doGrupo].name : doGrupo)) : '— fora —';
         const sel = '<select class="twmgr-rc-vtpl twmgr-inp" data-vid="' + esc(vid) + '" style="font-size:9px">'
-          + '<option value=""' + (!a ? ' selected' : '') + '>— fora —</option>'
+          + '<option value=""' + (!a ? ' selected' : '') + '>' + esc(vazio) + '</option>'
           + ids.map((id) => '<option value="' + esc(id) + '"' + (a && a.tpl === id ? ' selected' : '') + '>'
             + esc(tpls[id].name || id) + '</option>').join('') + '</select>';
-        const est = !a ? '<span style="color:#8a7340">—</span>'
-          : a.paused ? '<a class="twmgr-rc-pause" data-vid="' + esc(vid) + '" style="color:#b5651d">pausada</a>'
-          : '<a class="twmgr-rc-pause" data-vid="' + esc(vid) + '" style="color:#3f8f52">ativa</a>';
+        const est = a
+          ? (a.paused ? '<a class="twmgr-rc-pause" data-vid="' + esc(vid) + '" style="color:#b5651d">pausada</a>'
+                      : '<a class="twmgr-rc-pause" data-vid="' + esc(vid) + '" style="color:#3f8f52">ativa</a>')
+          : (doGrupo ? '<span style="color:#3f8f52">ativa</span><div class="sub">pelo grupo</div>'
+                     : '<span style="color:#8a7340">fora</span>');
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
           '<td><input type="checkbox" class="twmgr-rc-ck" data-vid="' + esc(vid) + '"></td>' +
           '<td>' + esc(v.name) + '</td><td>' + sel + '</td><td>' + est + '</td></tr>';
       }).join('') + '</tbody></table>';
     const info = document.getElementById('twmgr-rc-vils-info');
     if (info) {
-      const ativas = Object.keys(assign).filter((v) => !assign[v].paused).length;
-      info.textContent = linhas.length + ' aldeia(s) · ' + ativas + ' na gestão';
+      // Conta a UNIAO: individuais ativas + cobertas por grupo que nao foram pausadas.
+      const efetivas = {};
+      Object.keys(_rcPorGrupo).forEach((v) => { efetivas[v] = 1; });
+      Object.keys(assign).forEach((v) => { if (assign[v].paused) delete efetivas[v]; else efetivas[v] = 1; });
+      const porGrupo = Object.keys(_rcPorGrupo).filter((v) => efetivas[v] && !assign[v]).length;
+      info.textContent = linhas.length + ' aldeia(s) · ' + Object.keys(efetivas).length + ' recrutando'
+        + (porGrupo ? ' (' + porGrupo + ' pelo grupo)' : '');
     }
   }
   function rcMarcadas() {

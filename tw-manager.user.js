@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.33.0
+// @version      11.34.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -42,6 +42,17 @@
     ['spy', 'Expl.'], ['light', 'C.leve'], ['marcher', 'A.cav.'], ['heavy', 'C.pes.'],
     ['ram', 'Aríete'], ['catapult', 'Catap.'], ['knight', 'Palad.'], ['snob', 'Nobre'],
   ];
+
+  // As unidades que ESTE mundo tem, na ordem do UNITS. O br143 não tem arqueiro nem arqueiro a
+  // cavalo, e o `game_data.units` do próprio jogo é quem sabe disso — a lista fixa acima é o
+  // universo possível, não o do mundo. Sem isso uma tela de escolha ofereceria unidade inexistente.
+  // Cai pro UNITS inteiro se o jogo não expuser nada, porque oferecer demais é menos ruim que
+  // oferecer nada.
+  function unitsDoMundo() {
+    const g = (window.game_data && window.game_data.units) || null;
+    if (!g || !g.length) return UNITS.slice();
+    return UNITS.filter((u) => g.indexOf(u[0]) >= 0);
+  }
 
   // Stats canônicos do Tribal Wars — usado pra calcular força off/def e pop ocupada por tropa.
   const UNIT_STATS = {
@@ -129,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.33.0';
+  const VERSION = '11.34.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -4762,26 +4773,31 @@
     }
     const tpls = nobleOrdemIds();
     const porCoord = {}; plano.forEach((p) => { porCoord[p.coord] = p; });
-    box.innerHTML = '<table class="twmgr-bld-tab"><thead><tr>' +
-      '<th>Alvo</th><th>Modelo</th><th>Dono</th><th>Lealdade</th><th>Tropas</th>' +
-      '<th>Nobres</th><th>Chegada</th><th>Último rel.</th><th>Estado</th><th></th></tr></thead><tbody>' +
+    // 7 colunas, não 10. Numa largura de ~560px a versão de 10 colunas dava 48px por célula e o
+    // conteúdo vazava do painel. Os pares que sempre são lidos juntos viraram uma célula de duas
+    // linhas: coord + dono, e origem + hora de chegada.
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-nb-tab"><thead><tr>' +
+      '<th>Alvo</th><th>Modelo</th><th>Leald.</th><th>Def.</th>' +
+      '<th>Envio</th><th>Estado</th><th></th></tr></thead><tbody>' +
       alvos.map((a, i) => {
         const p = porCoord[a.coord];
         const rel = (config.noble.relatorios || {})[a.coord] || {};
         // Em modo prioridade mostra QUAL modelo o plano acabou escolhendo -- sem isso o usuario
         // ve "seguir ordem" e nao tem como saber o que vai sair.
         const escolhido = (!a.tpl && p && p.tplNome)
-          ? '<div style="font-size:9px;color:#8a7340">→ ' + esc(p.tplNome) + '</div>' : '';
-        const sel = '<select class="twmgr-nb-tpl twmgr-inp" data-coord="' + esc(a.coord) + '" style="font-size:10px;padding:1px 2px">'
-          + '<option value=""' + (!a.tpl ? ' selected' : '') + '>⇅ seguir ordem</option>'
+          ? '<div class="sub" style="color:#a07a42">→ ' + esc(p.tplNome) + '</div>' : '';
+        const sel = '<select class="twmgr-nb-tpl twmgr-inp" data-coord="' + esc(a.coord) + '">'
+          + '<option value=""' + (!a.tpl ? ' selected' : '') + '>⇅ ordem</option>'
           + tpls.map((id) => '<option value="' + esc(id) + '"' + (id === a.tpl ? ' selected' : '') + '>'
             + esc(config.noble.templates[id].name || id) + '</option>').join('') + '</select>' + escolhido;
-        const dono = rel.dono ? esc(rel.dono) : '<span style="color:#8a7340">?</span>';
-        const tropa = rel.tropa == null ? '<span style="color:#8a7340">?</span>' : String(rel.tropa);
-        const nobres = p && p.envios.length
-          ? p.envios.map((e) => e.qtd + '× ' + esc(e.nome)).join(', ') : '<span style="color:#8a7340">—</span>';
-        const chegada = p && p.envios.length
-          ? p.envios.map((e) => fmtDur(e.durSec)).join(' / ') : '—';
+        const alvoCel = '<b>' + esc(a.coord) + '</b>'
+          + '<div class="sub">' + (rel.dono ? esc(rel.dono) : '—') + '</div>';
+        const tropa = rel.tropa == null ? '<span style="color:#8a7340">?</span>' : fmtN(rel.tropa);
+        const defCel = tropa + '<div class="sub">' + nobleQuandoTxt(rel.at) + '</div>';
+        const envio = p && p.envios.length
+          ? p.envios.map((e) => e.qtd + '× ' + esc(e.nome)).join(', ')
+            + '<div class="sub">chega em ' + p.envios.map((e) => fmtDur(e.durSec)).join(' / ') + '</div>'
+          : '<span style="color:#8a7340">—</span>';
         // Três estados, não dois: completo (leva o que o modelo pede), parcial (leva menos, mas
         // ENVIA) e sem nobre. O parcial precisa saltar aos olhos — é envio de verdade, com nobre
         // sendo gasto, só que não conquista sozinho.
@@ -4791,14 +4807,12 @@
             + esc(p.motivo || 'parcial') + '</b>'
           : '<span style="color:#8a7340">' + esc(p.motivo || 'sem nobre') + '</span>';
         const acao = (p && p.pronto)
-          ? '<a class="twmgr-nb-fire" data-coord="' + esc(a.coord) + '">Enviar</a> · <a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '">✕</a>'
+          ? '<a class="twmgr-nb-fire" data-coord="' + esc(a.coord) + '">Enviar</a><div class="sub"><a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '">remover</a></div>'
           : '<a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '">✕</a>';
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
-          '<td><b>' + esc(a.coord) + '</b></td><td>' + sel + '</td><td>' + dono + '</td>' +
-          '<td>' + nobleLealdadeCel(a.coord) + '</td><td>' + tropa + '</td>' +
-          '<td>' + nobres + '</td><td>' + chegada + '</td>' +
-          '<td>' + nobleQuandoTxt(rel.at) + '</td>' +
-          '<td>' + estado + '</td><td>' + acao + '</td></tr>';
+          '<td>' + alvoCel + '</td><td>' + sel + '</td>' +
+          '<td>' + nobleLealdadeCel(a.coord) + '</td><td>' + defCel + '</td>' +
+          '<td>' + envio + '</td><td>' + estado + '</td><td>' + acao + '</td></tr>';
       }).join('') + '</tbody></table>';
     const info = document.getElementById('twmgr-nb-info');
     if (info) {
@@ -4848,13 +4862,29 @@
     nobleTplIds().forEach((id) => { if (ord.indexOf(id) < 0) ord.push(id); });
     return ord;
   }
+  // Resumo da escolta pro chip: "50 Bárb. · 4👑". E o que deixa a lista de modelos legivel sem
+  // abrir cada um -- que era o problema do <select>, onde so cabia o nome.
+  function nobleChipTxt(t) {
+    const ks = Object.keys((t && t.escolta) || {});
+    const esc2 = ks.length ? ks.map((u) => t.escolta[u] + ' ' + unitPt(u)).join(' · ') : 'sem escolta';
+    return esc2 + ' · ' + (t.nobres || 4) + '👑';
+  }
   function nobleFillTplSel() {
-    const sel = document.getElementById('twmgr-nb-tpl-sel'); if (!sel) return;
+    const box = document.getElementById('twmgr-nb-chips'); if (!box) return;
     const ids = nobleOrdemIds();
-    sel.innerHTML = ids.map((id, i) => '<option value="' + esc(id) + '">' + (i + 1) + '. '
-      + esc(config.noble.templates[id].name || id) + '</option>').join('');
     if (ids.indexOf(_nbTplAtivo) < 0) _nbTplAtivo = ids[0] || '';
-    sel.value = _nbTplAtivo;
+    box.innerHTML = ids.map((id, i) => {
+      const t = config.noble.templates[id];
+      return '<span class="twmgr-chip' + (id === _nbTplAtivo ? ' on' : '') + '" data-id="' + esc(id) + '"'
+        + ' title="' + esc(t.name || id) + ' — ' + esc(nobleChipTxt(t)) + '">'
+        + '<b>' + (i + 1) + '</b>' + esc(nobleChipTxt(t)) + '</span>';
+    }).join('') + '<span class="twmgr-chip twmgr-chip-add" title="criar modelo">✚</span>';
+    const nm = document.getElementById('twmgr-nb-tpl-nome');
+    if (nm) {
+      const t = config.noble.templates[_nbTplAtivo];
+      const pos = ids.indexOf(_nbTplAtivo) + 1;
+      nm.textContent = t ? (pos + '. ' + (t.name || _nbTplAtivo)) : '—';
+    }
   }
   // Sobe/desce o modelo ativo na ordem de prioridade.
   function nobleMoverModelo(passo) {
@@ -4871,8 +4901,8 @@
     });
     save(); nobleFillTplSel(); renderNoblePlano();
   }
-  // Editor: grade de escolta + os campos do modelo. Nobre fica FORA da grade — quantos nobres vão
-  // é campo próprio, e deixar ele na escolta abriria caminho pra contar nobre duas vezes.
+  // Editor: grade no formato do jogo (icone em cima, campo embaixo). Nobre aparece como coluna
+  // TRAVADA -- mostra que ele vai junto, sem deixar edita-lo aqui e contar nobre duas vezes.
   function nobleRenderTplEditor() {
     const t = nobleTplAtivo();
     const g = (id) => document.getElementById(id);
@@ -4880,28 +4910,42 @@
     if (g('twmgr-nb-horas')) g('twmgr-nb-horas').value = t ? t.maxHoras : 6;
     if (g('twmgr-nb-nt')) g('twmgr-nb-nt').checked = !!(t && t.soNT);
     const box = g('twmgr-nb-esc'); if (!box) return;
-    box.innerHTML = UNITS.filter((u) => u[0] !== 'snob' && u[0] !== 'knight').map((u) =>
-      '<label class="twmgr-nb-escit"><span>' + esc(u[1]) + '</span>'
-      + '<input class="twmgr-nb-escq twmgr-inp" data-unit="' + u[0] + '" type="number" min="0" step="1" value="'
-      + (((t && t.escolta) || {})[u[0]] || 0) + '"></label>').join('');
+    box.innerHTML = unitsDoMundo().filter((u) => u[0] !== 'knight').map((u) => {
+      const nobre = (u[0] === 'snob');
+      const val = nobre ? (t ? t.nobres : 4) : (((t && t.escolta) || {})[u[0]] || '');
+      return '<div' + (nobre ? ' class="lock"' : '') + '>'
+        + '<div class="h" title="' + esc(u[1]) + '">'
+        + '<span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span>'
+        + '<em>' + esc(u[1]) + '</em></div>'
+        + '<input class="twmgr-nb-escq twmgr-inp" data-unit="' + u[0] + '" type="number" min="0" step="1"'
+        + (nobre ? ' disabled title="definido no campo Nobres por alvo"' : '')
+        + ' value="' + val + '"></div>';
+    }).join('');
   }
   function nobleLerTplEditor() {
     const t = nobleTplAtivo(); if (!t) return;
     const g = (id) => document.getElementById(id);
     if (g('twmgr-nb-nob')) t.nobres = Math.max(1, Math.min(8, parseInt(g('twmgr-nb-nob').value, 10) || 4));
+    const colNob = document.querySelector('.twmgr-nb-escq[data-unit="snob"]');
+    if (colNob) colNob.value = t.nobres;   // espelha na coluna travada da grade
     if (g('twmgr-nb-horas')) t.maxHoras = Math.max(1, parseInt(g('twmgr-nb-horas').value, 10) || 6);
     if (g('twmgr-nb-nt')) t.soNT = g('twmgr-nb-nt').checked;
     const esc2 = {};
     document.querySelectorAll('.twmgr-nb-escq').forEach((i) => {
+      const u = i.getAttribute('data-unit');
+      if (u === 'snob') return;          // coluna travada: quem manda e o campo Nobres por alvo
       const q = Math.max(0, parseInt(i.value, 10) || 0);
-      if (q > 0) esc2[i.getAttribute('data-unit')] = q;
+      if (q > 0) esc2[u] = q;
     });
     t.escolta = esc2;
   }
   function nobleSwitchTpl(id) {
     if (!config.noble.templates[id]) return;
+    // Salva o que estava na tela ANTES de trocar, senao a edicao do modelo anterior se perde
+    // ao clicar no chip do lado.
+    nobleLerTplEditor(); save();
     _nbTplAtivo = id;
-    nobleRenderTplEditor();
+    nobleFillTplSel(); nobleRenderTplEditor();
   }
   function nobleNovoModelo() {
     const nome = prompt('Nome do modelo de envio:', 'Nobre + nuke');
@@ -6668,11 +6712,47 @@
       ".twmgr-units label{display:flex;align-items:center;gap:7px;font-size:11px;color:#6f6153;cursor:pointer}",
       ".twmgr-res{display:flex;gap:6px;margin:5px 0 9px}.twmgr-res label{flex:1;display:flex;align-items:center;gap:4px;font-size:13px}.twmgr-res .twmgr-inp{width:100%;font-size:11px !important}",
       ".twmgr-check{display:flex;align-items:center;gap:8px;font-size:11px;color:#6f6153;margin-bottom:10px;cursor:pointer}",
-      // Grade de escolta do Noblar: cabe em qualquer largura sem quebrar o rótulo da unidade.
-      ".twmgr-nb-esc{display:grid;grid-template-columns:repeat(auto-fill,minmax(94px,1fr));gap:4px;margin-top:4px}",
-      ".twmgr-nb-escit{display:flex;align-items:center;gap:4px;font-size:10px;color:#6f6153}",
-      ".twmgr-nb-escit span{flex:0 0 44px}",
-      ".twmgr-nb-escit input{width:100%;min-width:0;padding:2px 4px;font-size:10px}",
+      // ---- Blocos reaproveitáveis (estreados no Noblar) ----
+      // Cards lado a lado. auto-fit em vez de "1fr 1fr" porque o painel muda de largura: abaixo de
+      // ~2 colunas ele empilha sozinho, sem media query.
+      ".twmgr-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:8px;margin-bottom:9px}",
+      ".twmgr-card2{background:#fdfaf4;border:1px solid #e8dfcc;border-radius:9px;padding:10px 12px}",
+      ".twmgr-card2 h4{margin:0 0 9px;font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#a07a42;font-weight:700}",
+      // Linha rótulo → controle. O controle encosta à direita em todos os cards, alinhado.
+      ".twmgr-fld{display:flex;align-items:center;gap:8px;margin-bottom:8px}",
+      ".twmgr-fld:last-child{margin-bottom:0}",
+      ".twmgr-fld>span{flex:1;font-size:11px;color:#6f6153;line-height:1.25}",
+      ".twmgr-fld .twmgr-inp{width:74px;text-align:center;flex:0 0 74px}",
+      // Interruptor. Só CSS — o <input> continua um checkbox comum, então .checked segue valendo.
+      ".twmgr-sw{position:relative;display:inline-block;width:32px;height:17px;flex:0 0 32px;cursor:pointer}",
+      ".twmgr-sw input{position:absolute;opacity:0;width:0;height:0}",
+      ".twmgr-sw i{position:absolute;inset:0;background:#ded3bf;border-radius:9px;transition:background .15s}",
+      ".twmgr-sw i:after{content:'';position:absolute;width:13px;height:13px;left:2px;top:2px;background:#fff;border-radius:50%;transition:transform .15s;box-shadow:0 1px 2px rgba(0,0,0,.25)}",
+      ".twmgr-sw input:checked+i{background:#b5651d}",
+      ".twmgr-sw input:checked+i:after{transform:translateX(15px)}",
+      // Chips dos modelos: a ordem da esquerda pra direita É a prioridade.
+      ".twmgr-chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}",
+      ".twmgr-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid #e2d7c1;background:#fbf7ef;border-radius:14px;padding:3px 10px 3px 5px;font-size:10px;color:#6f6153;cursor:pointer;white-space:nowrap}",
+      ".twmgr-chip:hover{border-color:#c9a56a}",
+      ".twmgr-chip.on{background:#f5e6cd;border-color:#c08a3e;color:#7a5320;font-weight:700}",
+      ".twmgr-chip b{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#b5651d;color:#fff;font-size:9px;font-weight:700;flex:0 0 15px}",
+      ".twmgr-chip-add{border-style:dashed;border-color:#a9c9a9;background:#f5faf5;color:#3f8f52;padding:3px 11px;font-weight:700}",
+      // Grade de tropas no formato do jogo: ícone em cima, campo embaixo, uma coluna por unidade.
+      ".twmgr-ug{display:grid;grid-template-columns:repeat(auto-fit,minmax(42px,1fr));gap:3px;margin-top:5px}",
+      // min-width:0 é obrigatório: sem ele o item da grade nunca encolhe abaixo do próprio conteúdo,
+      // e o rótulo ("C.leve") empurrava a coluna pra 68px dentro de um espaço de 48 — estourando a
+      // largura do painel inteiro em cascata.
+      ".twmgr-ug>div{min-width:0}",
+      ".twmgr-ug .h{background:#efe4cd;border:1px solid #e2d7c1;border-bottom:0;border-radius:5px 5px 0 0;padding:2px 1px 1px;text-align:center;line-height:1;overflow:hidden}",
+      // A abreviação embaixo do ícone é rede de segurança: se o sprite do jogo não carregar, a
+      // coluna continua identificável em vez de virar um quadrado vazio.
+      ".twmgr-ug .h em{display:block;font-style:normal;font-size:8px;color:#8a7340;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      ".twmgr-ug input{width:100%;min-width:0;text-align:center;border-radius:0 0 5px 5px;padding:3px 0;font-size:10px}",
+      ".twmgr-ug .lock input{background:#f0ebe0;color:#a09480}",
+      // Tabela de alvos: célula de duas linhas (o valor e o seu contexto embaixo, menor).
+      ".twmgr-nb-tab td{vertical-align:top;padding:4px 4px}",
+      ".twmgr-nb-tab .sub{font-size:8px;color:#8a7340;margin-top:1px;line-height:1.2;word-break:break-word}",
+      ".twmgr-nb-tab select{width:100%;min-width:0;font-size:9px;padding:1px 2px;text-overflow:ellipsis}",
       ".twmgr-log{height:150px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:8px;padding:7px 8px;font-family:Consolas,'Courier New',monospace;font-size:10px;line-height:1.45}",
       ".twmgr-log::-webkit-scrollbar{width:8px}.twmgr-log::-webkit-scrollbar-thumb{background:#e0d6c6;border-radius:4px}",
       "#twmgr-panel.twmgr-collapsed{width:auto}",
@@ -7057,29 +7137,42 @@
           '</div>' +
           '<div id="twmgr-nb-lista" class="twmgr-bld-vils" style="margin-top:6px"></div>' +
           '<div id="twmgr-nb-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>') +
-        sec('Modelo de envio',
-          '<div class="twmgr-row" style="gap:4px">' +
-            '<select id="twmgr-nb-tpl-sel" class="twmgr-inp" style="flex:1"></select>' +
-            '<button id="twmgr-nb-tpl-new" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="criar modelo">✚</button>' +
-            '<button id="twmgr-nb-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
-            '<button id="twmgr-nb-tpl-up" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="subir na ordem de prioridade">▲</button>' +
-            '<button id="twmgr-nb-tpl-dn" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="descer na ordem de prioridade">▼</button>' +
-            '<button id="twmgr-nb-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
+        sec('Modelos de envio',
+          '<div id="twmgr-nb-chips" class="twmgr-chips"></div>' +
+          '<div class="twmgr-card2">' +
+            '<div class="twmgr-row" style="gap:4px;margin-bottom:9px">' +
+              '<span id="twmgr-nb-tpl-nome" style="flex:1;font-size:11px;font-weight:700;color:#7a5320"></span>' +
+              '<button id="twmgr-nb-tpl-up" class="twmgr-btn twmgr-ghost" style="padding:4px 7px" title="subir na prioridade">◀</button>' +
+              '<button id="twmgr-nb-tpl-dn" class="twmgr-btn twmgr-ghost" style="padding:4px 7px" title="descer na prioridade">▶</button>' +
+              '<button id="twmgr-nb-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:4px 7px" title="renomear">✎</button>' +
+              '<button id="twmgr-nb-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:4px 7px" title="apagar modelo">🗑</button>' +
+            '</div>' +
+            '<div class="twmgr-cols" style="margin-bottom:0">' +
+              '<div class="twmgr-fld"><span>Nobres por alvo</span><input id="twmgr-nb-nob" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
+              '<div class="twmgr-fld"><span>Viagem máx. (h)</span><input id="twmgr-nb-horas" class="twmgr-inp" type="number" min="1" max="72" value="6"></div>' +
+            '</div>' +
+            '<div class="twmgr-fld" style="margin-top:8px"><span title="NT = todos os nobres saindo da MESMA aldeia">Só enviar NT <span style="color:#8a7d6d">(todos da mesma aldeia)</span></span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-nt" type="checkbox"><i></i></label></div>' +
+            '<div style="font-size:10px;color:#6f6153;margin-top:9px">Escolta — vai no <b>mesmo comando</b> dos nobres</div>' +
+            '<div id="twmgr-nb-esc" class="twmgr-ug"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:6px;text-align:center;font-style:italic">O número do chip é a ordem de prioridade (◀▶ pra mudar) · Nobre não entra na escolta — é o campo próprio</div>' +
           '</div>' +
-          '<div class="twmgr-row" style="margin-top:5px"><span class="twmgr-lbl">Nobres por alvo</span><input id="twmgr-nb-nob" class="twmgr-inp" type="number" min="1" max="8" value="4" style="width:56px"></div>' +
-          '<div class="twmgr-row"><span class="twmgr-lbl">Viagem máx. do comando (h)</span><input id="twmgr-nb-horas" class="twmgr-inp" type="number" min="1" max="72" value="6" style="width:56px"></div>' +
-          '<label class="twmgr-check" title="NT = todos os nobres saindo da MESMA aldeia"><input id="twmgr-nb-nt" type="checkbox"> Só enviar NT (todos da mesma aldeia)</label>' +
-          '<div class="twmgr-lbl" style="margin-top:7px">Escolta — vai no <b>mesmo comando</b> dos nobres</div>' +
-          '<div id="twmgr-nb-esc" class="twmgr-nb-esc"></div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">A escolta sai da aldeia <b>mais próxima</b> do alvo, uma vez só (não se repete por comando). Se a origem não tiver a tropa toda, vai o que houver e o log avisa.</div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A duração vem do próprio jogo, já <b>com a escolta dentro</b> — aríete e catapulta são mais lentos que o nobre e mudam a chegada.</div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">O número do modelo é a <b>ordem de prioridade</b> (▲▼ pra mudar). Alvo em <b>⇅ seguir ordem</b> tenta os modelos de cima pra baixo e fica no primeiro cuja escolta <b>couber inteira</b> na aldeia que vai mandar. Se nenhum couber, usa o 1º com o que houver.</div>') +
-        sec('Recrutar nobre quando faltar', '<label class="twmgr-check" title="Forma o nobre onde JÁ existe moeda guardada — não cunha"><input id="twmgr-nb-prod" type="checkbox"> Formar nobre nas aldeias mais próximas do alvo</label>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:4px"><b>Nunca cunha.</b> Cunhar converte recurso em moeda sem volta, num alvo que pode nem sair — isso fica com você, no modo <b>Cunhar</b> do Mercado. Aqui ele só <b>forma</b> nobre onde a moeda já está guardada.</div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto do alvo pra mais longe, e a que não conseguir agora (sem recurso, sem população) <b>não interrompe</b> — ele tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>') +
-        sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>' +
-          '<label class="twmgr-check" title="Lê os relatórios de ataque pra saber a lealdade que sobrou"><input id="twmgr-nb-rel" type="checkbox"> Ler relatórios (lealdade, dono e tropa do alvo)</label>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">Lealdade só aparece em relatório de <b>ataque com nobre</b> — exploração não mostra. Por isso a coluna fica <b>?</b> até o primeiro nobre bater.</div>') +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:6px">Alvo em <b>⇅ seguir ordem</b> tenta os modelos da esquerda pra direita e fica no primeiro cuja escolta <b>couber inteira</b> na aldeia que vai mandar. Se nenhum couber, usa o 1º com o que houver.</div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A escolta sai da aldeia <b>mais próxima</b> do alvo, uma vez só. A duração vem do próprio jogo já <b>com ela dentro</b> — aríete e catapulta são mais lentos que o nobre e mudam a chegada.</div>') +
+        '<div class="twmgr-cols">' +
+          '<div class="twmgr-card2"><h4>⏱ Ciclo</h4>' +
+            '<div class="twmgr-fld"><span>Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15"></div>' +
+            '<div class="twmgr-fld"><span title="Lê os relatórios de ataque pra saber a lealdade que sobrou">Ler relatórios <span style="color:#8a7d6d">(lealdade, dono, tropa)</span></span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-rel" type="checkbox"><i></i></label></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Lealdade só aparece em relatório de <b>ataque com nobre</b> — exploração não mostra. Por isso a coluna fica <b>?</b> até o primeiro nobre bater.</div>' +
+          '</div>' +
+          '<div class="twmgr-card2"><h4>⚒ Produção</h4>' +
+            '<div class="twmgr-fld"><span title="Forma o nobre onde JÁ existe moeda guardada">Formar nobre quando faltar</span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-prod" type="checkbox"><i></i></label></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px"><b>Nunca cunha.</b> Cunhar converte recurso em moeda sem volta, num alvo que pode nem sair — isso fica com você, no modo <b>Cunhar</b> do Mercado.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto pra mais longe, e a que não conseguir agora <b>não interrompe</b> — tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>' +
+          '</div>' +
+        '</div>' +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
         modLog('noble') +
@@ -7338,8 +7431,13 @@
     // ---- Noblar ----
     document.getElementById('twmgr-nb-add').addEventListener('click', nobleAddCoords);
     document.getElementById('twmgr-nb-coords').addEventListener('input', nobleContarCoords);
-    document.getElementById('twmgr-nb-tpl-sel').addEventListener('change', (e) => nobleSwitchTpl(e.target.value));
-    document.getElementById('twmgr-nb-tpl-new').addEventListener('click', nobleNovoModelo);
+    // Chips: um listener no pai, porque eles sao redesenhados a cada mudanca de modelo.
+    document.getElementById('twmgr-nb-chips').addEventListener('click', (e) => {
+      const el = e.target.closest ? e.target.closest('.twmgr-chip') : null;
+      if (!el) return;
+      if (el.classList.contains('twmgr-chip-add')) nobleNovoModelo();
+      else nobleSwitchTpl(el.getAttribute('data-id'));
+    });
     document.getElementById('twmgr-nb-tpl-ren').addEventListener('click', nobleRenomearModelo);
     document.getElementById('twmgr-nb-tpl-up').addEventListener('click', () => nobleMoverModelo(-1));
     document.getElementById('twmgr-nb-tpl-dn').addEventListener('click', () => nobleMoverModelo(1));

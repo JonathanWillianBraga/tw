@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.33.0
+// @version      11.34.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -42,6 +42,17 @@
     ['spy', 'Expl.'], ['light', 'C.leve'], ['marcher', 'A.cav.'], ['heavy', 'C.pes.'],
     ['ram', 'Aríete'], ['catapult', 'Catap.'], ['knight', 'Palad.'], ['snob', 'Nobre'],
   ];
+
+  // As unidades que ESTE mundo tem, na ordem do UNITS. O br143 não tem arqueiro nem arqueiro a
+  // cavalo, e o `game_data.units` do próprio jogo é quem sabe disso — a lista fixa acima é o
+  // universo possível, não o do mundo. Sem isso uma tela de escolha ofereceria unidade inexistente.
+  // Cai pro UNITS inteiro se o jogo não expuser nada, porque oferecer demais é menos ruim que
+  // oferecer nada.
+  function unitsDoMundo() {
+    const g = (window.game_data && window.game_data.units) || null;
+    if (!g || !g.length) return UNITS.slice();
+    return UNITS.filter((u) => g.indexOf(u[0]) >= 0);
+  }
 
   // Stats canônicos do Tribal Wars — usado pra calcular força off/def e pop ocupada por tropa.
   const UNIT_STATS = {
@@ -129,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.33.0';
+  const VERSION = '11.34.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';

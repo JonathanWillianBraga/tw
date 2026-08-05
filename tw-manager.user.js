@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.37.0
+// @version      11.38.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.37.0';
+  const VERSION = '11.38.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -852,6 +852,9 @@
         { v: fmtN(s.completos), l: 'com envio completo' },
         { v: fmtN(s.prontos), l: 'prontos p/ enviar' },
         { v: fmtN(s.faltando), l: 'sem nobre' },
+        // Total da conta: 14 nobres = 3 alvos completos e 2 de sobra. Vem de passagem na
+        // Academia ("Na Aldeia/Total"), sem requisição dedicada.
+        { v: s.nobresConta != null ? fmtN(s.nobresConta) : '—', l: 'nobres na conta' },
       ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});
@@ -3177,8 +3180,24 @@
       fila.cada.push({ n: n, at: quando });
       if (quando && (fila.prontoEm == null || quando < fila.prontoEm)) fila.prontoEm = quando;
     });
+    // "Na Aldeia/Total" da linha do formulário: "1/14" = 1 nobre NESTA aldeia / 14 na CONTA toda
+    // (confirmado pelo usuário). O total é da conta, então ler de qualquer aldeia serve — e não
+    // custa requisição nenhuma, porque esta tela já está aberta.
+    //
+    // Não substitui o `avail.snob` pro "nesta aldeia" (aquele já respeita as reservas dos outros
+    // módulos); o que só se descobre aqui é o TOTAL.
+    let naAldeia = null, totalConta = null;
+    doc.querySelectorAll('tr').forEach((tr) => {
+      const t = (tr.textContent || '').replace(/\s+/g, ' ').trim();
+      if (/cancelar/i.test(t) || totalConta != null) return;   // linha de fila não tem esse par
+      const m = t.match(/(\d+)\s*\/\s*(\d+)/);
+      if (!m) return;
+      naAldeia = parseInt(m[1], 10);
+      totalConta = parseInt(m[2], 10);
+    });
     return { resNow: resNow, hasForm: !!form, action: action, fields: fields,
-             countName: countName, maxMint: maxMint, moedas: moedas, fila: fila };
+             countName: countName, maxMint: maxMint, moedas: moedas, fila: fila,
+             naAldeia: naAldeia, totalConta: totalConta };
 
   }
   async function mintCoins(vid) {
@@ -4434,6 +4453,9 @@
   // Quem pode ir de escolta. Explorador nao briga; ariete e catapulta servem pra muralha e
   // predio, nao pra proteger nobre. Fica so tropa de campo.
   const NOBLE_ESCOLTA = ['spear', 'sword', 'axe', 'light', 'heavy'];
+  // Total de nobres da conta, lido de passagem na Academia ("Na Aldeia/Total"). Vive fora do
+  // config porque é estado do jogo, não escolha do usuário — mas vai pro stats pro card mostrar.
+  let _nbTotalConta = null;
 
 
   function nobleTpl(id) {
@@ -4772,6 +4794,8 @@
       try { st = await getSnobState(o.vid); }
       catch (e) { continue; }                       // sem Academia: proxima aldeia
       if (!st.hasForm) continue;
+      // O total é da CONTA, então qualquer aldeia que a gente abrir serve pra saber.
+      if (st.totalConta != null) _nbTotalConta = st.totalConta;
       const fl = st.fila || { nobres: 0 };
       if (fl.nobres > 0) {
         naFila += fl.nobres;
@@ -4896,7 +4920,8 @@
     config.noble.plano = plano;
     config.noble.planoAt = now;
     config.noble.stats = { alvos: alvos.length, prontos: prontos, completos: completos,
-                           faltando: alvos.length - prontos };
+                           faltando: alvos.length - prontos,
+                           nobresConta: _nbTotalConta != null ? _nbTotalConta : (config.noble.stats || {}).nobresConta };
     config.noble.nextAt = now + Math.max(60, config.noble.interval || 900) * 1000;
     save();
     renderNoblePlano();

@@ -199,8 +199,24 @@
       fila.cada.push({ n: n, at: quando });
       if (quando && (fila.prontoEm == null || quando < fila.prontoEm)) fila.prontoEm = quando;
     });
+    // "Na Aldeia/Total" da linha do formulário: "1/14" = 1 nobre NESTA aldeia / 14 na CONTA toda
+    // (confirmado pelo usuário). O total é da conta, então ler de qualquer aldeia serve — e não
+    // custa requisição nenhuma, porque esta tela já está aberta.
+    //
+    // Não substitui o `avail.snob` pro "nesta aldeia" (aquele já respeita as reservas dos outros
+    // módulos); o que só se descobre aqui é o TOTAL.
+    let naAldeia = null, totalConta = null;
+    doc.querySelectorAll('tr').forEach((tr) => {
+      const t = (tr.textContent || '').replace(/\s+/g, ' ').trim();
+      if (/cancelar/i.test(t) || totalConta != null) return;   // linha de fila não tem esse par
+      const m = t.match(/(\d+)\s*\/\s*(\d+)/);
+      if (!m) return;
+      naAldeia = parseInt(m[1], 10);
+      totalConta = parseInt(m[2], 10);
+    });
     return { resNow: resNow, hasForm: !!form, action: action, fields: fields,
-             countName: countName, maxMint: maxMint, moedas: moedas, fila: fila };
+             countName: countName, maxMint: maxMint, moedas: moedas, fila: fila,
+             naAldeia: naAldeia, totalConta: totalConta };
 
   }
   async function mintCoins(vid) {

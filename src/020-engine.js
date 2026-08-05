@@ -59,6 +59,9 @@
         { v: fmtN(s.completos), l: 'com envio completo' },
         { v: fmtN(s.prontos), l: 'prontos p/ enviar' },
         { v: fmtN(s.faltando), l: 'sem nobre' },
+        // Total da conta: 14 nobres = 3 alvos completos e 2 de sobra. Vem de passagem na
+        // Academia ("Na Aldeia/Total"), sem requisição dedicada.
+        { v: s.nobresConta != null ? fmtN(s.nobresConta) : '—', l: 'nobres na conta' },
       ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});

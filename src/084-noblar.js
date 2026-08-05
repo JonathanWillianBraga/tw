@@ -37,6 +37,9 @@
   // Quem pode ir de escolta. Explorador nao briga; ariete e catapulta servem pra muralha e
   // predio, nao pra proteger nobre. Fica so tropa de campo.
   const NOBLE_ESCOLTA = ['spear', 'sword', 'axe', 'light', 'heavy'];
+  // Total de nobres da conta, lido de passagem na Academia ("Na Aldeia/Total"). Vive fora do
+  // config porque é estado do jogo, não escolha do usuário — mas vai pro stats pro card mostrar.
+  let _nbTotalConta = null;
 
 
   function nobleTpl(id) {
@@ -375,6 +378,8 @@
       try { st = await getSnobState(o.vid); }
       catch (e) { continue; }                       // sem Academia: proxima aldeia
       if (!st.hasForm) continue;
+      // O total é da CONTA, então qualquer aldeia que a gente abrir serve pra saber.
+      if (st.totalConta != null) _nbTotalConta = st.totalConta;
       const fl = st.fila || { nobres: 0 };
       if (fl.nobres > 0) {
         naFila += fl.nobres;
@@ -499,7 +504,8 @@
     config.noble.plano = plano;
     config.noble.planoAt = now;
     config.noble.stats = { alvos: alvos.length, prontos: prontos, completos: completos,
-                           faltando: alvos.length - prontos };
+                           faltando: alvos.length - prontos,
+                           nobresConta: _nbTotalConta != null ? _nbTotalConta : (config.noble.stats || {}).nobresConta };
     config.noble.nextAt = now + Math.max(60, config.noble.interval || 900) * 1000;
     save();
     renderNoblePlano();

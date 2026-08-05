@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.38.1
+// @version      11.39.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.38.1';
+  const VERSION = '11.39.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -238,6 +238,11 @@
     // "arma e espera meu OK" original. `autoMax` e o teto de comandos por ciclo: um bug
     // de plano nao pode esvaziar a conta de nobre de uma vez.
     autoEnviar: true, autoMax: 8,
+    // Quanto um nobre derruba de lealdade (no jogo varia 20-35) e quanto ela regenera por
+    // hora. Os dois viram "quantos nobres ainda faltam" — ver noblePrecisaDe.
+    lealdadePorAtk: 28, lealdadeRegen: 1,
+    emVoo: {},        // { [coord]: [{at, chega, n}] } — comandos meus que ainda não pousaram
+
 
     relatorios: {},   // { [coord]: { lealdade, de, at, reportId, dono, tropa } } — último lido
     vistos: {},       // { [reportId]: 1 } — já baixado, não rebaixa
@@ -596,6 +601,15 @@
 
     if (c.noble.lerRelatorios == null) c.noble.lerRelatorios = true;
     if (c.noble.autoEnviar == null) c.noble.autoEnviar = true;
+    c.noble.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(c.noble.lealdadePorAtk, 10) || 28));
+    if (c.noble.lealdadeRegen == null) c.noble.lealdadeRegen = 1;
+    c.noble.lealdadeRegen = Math.max(0, Math.min(10, parseFloat(c.noble.lealdadeRegen) || 0));
+    if (!c.noble.emVoo || typeof c.noble.emVoo !== 'object') c.noble.emVoo = {};
+    // Registro de alvo que saiu da lista não serve pra nada e cresceria pra sempre.
+    Object.keys(c.noble.emVoo).forEach((k) => {
+      if (!c.noble.alvos.some((a) => a.coord === k)) delete c.noble.emVoo[k];
+    });
+
     c.noble.autoMax = Math.max(1, Math.min(40, parseInt(c.noble.autoMax, 10) || 8));
 
     if (!c.noble.relatorios || typeof c.noble.relatorios !== 'object') c.noble.relatorios = {};
@@ -4460,7 +4474,56 @@
   // A coordenada e de uma aldeia MINHA? Alvo assim nao da erro claro no jogo: o `try=confirm`
   // simplesmente nao devolve duracao pra um ataque da aldeia contra ela mesma, e isso chegava
   // aqui como "origem descartada" — mensagem que nao ajuda e que se repetiria pra sempre.
+  // ===== Quantos nobres o alvo ainda precisa =====
+  // A lealdade LIDA envelhece: regenera ~1/h, entao a leitura de 2 dias atras nao vale mais.
+  // Projeta pra AGORA, com teto 100. Devolve null quando nunca houve relatorio com lealdade
+  // (so ataque com nobre traz esse campo).
+  function nobleLealdadeAgora(coord) {
+    const r = (config.noble.relatorios || {})[coord];
+    if (!r || r.lealdade == null || !r.at) return null;
+    const h = Math.max(0, (Date.now() - r.at) / 3600000);
+    return Math.min(100, r.lealdade + h * (config.noble.lealdadeRegen || 0));
+  }
+
+  // Comandos que EU mandei e que ainda nao aparecem no numero da lealdade.
+  //
+  // NAO poda quando o comando pousa: entre pousar e o relatorio ser lido existe uma janela em
+  // que a lealdade ainda e a antiga E o comando ja sumiu -- podar ali contaria o mesmo nobre
+  // duas vezes e mandaria um a mais. So sai quando ha relatorio MAIS NOVO que o envio.
+  // Expiracao dura de 48h pra um registro perdido (envio que falhou calado, relatorio
+  // apagado) nao travar o alvo pra sempre.
+  function nobleEmVoo(coord) {
+    const lista = (config.noble.emVoo || {})[coord] || [];
+    const rel = (config.noble.relatorios || {})[coord];
+    const agora = Date.now();
+    const vivos = lista.filter((e) => {
+      if (agora - e.at > 48 * 3600000) return false;
+      if (rel && rel.at && rel.at > e.at) return false;   // ja apareceu num relatorio
+      return true;
+    });
+    if (vivos.length !== lista.length) {
+      if (vivos.length) config.noble.emVoo[coord] = vivos; else delete config.noble.emVoo[coord];
+    }
+    return vivos.reduce((a, e) => a + (e.n || 1), 0);
+  }
+  function nobleRegistraEnvio(coord, n, durSec) {
+    if (!config.noble.emVoo[coord]) config.noble.emVoo[coord] = [];
+    config.noble.emVoo[coord].push({ at: Date.now(), chega: Date.now() + (durSec || 0) * 1000, n: n });
+  }
+
+  // Quantos comandos ainda faltam. Com lealdade conhecida a conta manda; sem ela cai no
+  // `nobres` do modelo -- unico palpite honesto, ja que exploracao nao traz lealdade.
+  function noblePrecisaDe(alvo, tpl) {
+    const l = nobleLealdadeAgora(alvo.coord);
+    const voando = nobleEmVoo(alvo.coord);
+    const base = (l == null)
+      ? (tpl.nobres || NOBLE_POR_CONQUISTA)
+      : Math.ceil(l / (config.noble.lealdadePorAtk || 28));
+    return { precisa: Math.max(0, base - voando), lealdade: l, voando: voando, bruto: base };
+  }
+
   function nobleMinhaAldeia(coord, todas) {
+
     return (todas || []).some((v) => (v.coord || '') === coord);
   }
 
@@ -4592,7 +4655,17 @@
   //   falta   = quantos nobres ainda faltam do que o modelo pede
   async function noblePlanejarComTpl(alvo, op, origens) {
     const tpl = op.t;
-    const precisa = tpl.nobres || NOBLE_POR_CONQUISTA;
+    // Quantos AINDA faltam, nao quantos o modelo pede: lealdade baixa precisa de menos, e
+    // comando ja a caminho conta como se tivesse pousado.
+    const need = noblePrecisaDe(alvo, tpl);
+    const precisa = need.precisa;
+    if (precisa <= 0) {
+      return { pronto: false, envios: [], falta: 0, dentroDoLimite: origens, tpl: tpl,
+               tplId: op.id, tplNome: tpl.name, coberto: true,
+               lealdade: need.lealdade, voando: need.voando,
+               motivo: need.voando ? ('coberto: ' + need.voando + ' a caminho') : 'lealdade zerada' };
+    }
+
     const limite = Math.max(1, tpl.maxHoras || 6) * 3600;
     const comNobre = origens.filter((o) => o.nobres > 0);
     if (!comNobre.length) {
@@ -4661,6 +4734,7 @@
     return {
       pronto: envios.length > 0,
       envios: envios, falta: Math.max(0, faltam), levando: levando, precisa: precisa,
+      lealdade: need.lealdade, voando: need.voando,
       dentroDoLimite: origens, tpl: tpl, tplId: op.id, tplNome: tpl.name,
       motivo: faltam > 0
         ? ('parcial: ' + levando + ' de ' + precisa + ' nobre(s)')
@@ -4884,7 +4958,8 @@
       r.envios.forEach((e) => { usados[e.vid] = (usados[e.vid] || 0) + e.qtd; });
       plano.push({ coord: alvo.coord, x: alvo.x, y: alvo.y, pronto: r.pronto,
                    envios: r.envios, falta: r.falta, levando: r.levando, precisa: r.precisa,
-                   tplId: r.tplId, tplNome: r.tplNome, propria: r.propria, motivo: r.motivo });
+                   tplId: r.tplId, tplNome: r.tplNome, propria: r.propria, coberto: r.coberto,
+                   lealdade: r.lealdade, voando: r.voando, motivo: r.motivo });
       const item = plano[plano.length - 1];
       if (r.pronto) prontos++;
 
@@ -4893,6 +4968,7 @@
       // encomendou.
       let vindo = 0, prontoEm = null;
       if (r.propria) { /* aldeia minha: nada a produzir nem a enviar */ }
+      else if (r.coberto) { completos++; /* lealdade ja coberta pelo que esta a caminho */ }
       else if (r.falta <= 0) { completos++; }
       else if (config.noble.produzir !== false) {
         // Faltou nobre: tenta FORMAR nas mais proximas (nunca cunhar). O nobre formado entra na
@@ -4977,6 +5053,8 @@
         // Sempre snob:1 — um envio É um comando. O fallback também, pra não reabrir a porta.
         await sendAttack(e.vid, item.x, item.y, e.unidades || { snob: 1 });
         ok += e.qtd;
+        // Registra comando a comando: se o laco morrer no meio, o que ja saiu continua contado.
+        nobleRegistraEnvio(item.coord, e.qtd, e.durSec);
         pushLog('Noblar' + marca + ': ' + e.nome + ' → ' + item.coord + ' — 1 nobre enviado, chega em ' + fmtDur(e.durSec) + '.', 'ok', 'noble');
       } catch (err) {
         pushLog('Noblar' + marca + ': ' + e.nome + ' → ' + item.coord + ' FALHOU: ' + (err.message || err), 'err', 'noble');
@@ -5038,13 +5116,21 @@
     const n = nobleParseCoords(ta.value).length;
     el.textContent = n + ' coordenada' + (n === 1 ? '' : 's');
   }
+  // Mostra a lealdade PROJETADA pra agora, nao a lida: e o numero que o motor usa pra decidir.
+  // Exibir a lida faria a tela discordar da decisao sem explicacao visivel.
   function nobleLealdadeCel(coord) {
     const r = (config.noble.relatorios || {})[coord];
-    if (!r || r.lealdade == null) return '<span style="color:#8a7340" title="lealdade só aparece em relatório de ataque com nobre">?</span>';
-    const v = r.lealdade;
+    const voando = nobleEmVoo(coord);
+    const extra = voando ? '<div class="sub">' + voando + ' a caminho</div>' : '';
+    if (!r || r.lealdade == null) {
+      return '<span style="color:#8a7340" title="lealdade só aparece em relatório de ataque com nobre">?</span>' + extra;
+    }
+    const v = Math.round(nobleLealdadeAgora(coord));
     const cor = v <= 0 ? '#3f8f52' : v <= 35 ? '#b5651d' : '#8a7340';
-    return '<b style="color:' + cor + '" title="caiu de ' + r.de + ' para ' + v + '">'
-      + (v <= 0 ? 'conquistada' : v) + '</b>';
+    const dica = 'relatório: caiu de ' + r.de + ' para ' + r.lealdade
+      + (v !== r.lealdade ? ' · projetado pra agora com regen: ' + v : '');
+    return '<b style="color:' + cor + '" title="' + esc(dica) + '">'
+      + (v <= 0 ? 'conquistada' : v) + '</b>' + extra;
   }
   function nobleQuandoTxt(ts) {
     if (!ts) return '<span style="color:#8a7340">—</span>';
@@ -5281,6 +5367,8 @@
     if (g('twmgr-nb-int')) c.interval = Math.max(1, parseInt(g('twmgr-nb-int').value, 10) || 15) * 60;
     if (g('twmgr-nb-prod')) c.produzir = g('twmgr-nb-prod').checked;
     if (g('twmgr-nb-rel')) c.lerRelatorios = g('twmgr-nb-rel').checked;
+    if (g('twmgr-nb-lpa')) c.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(g('twmgr-nb-lpa').value, 10) || 28));
+    if (g('twmgr-nb-regen')) c.lealdadeRegen = Math.max(0, Math.min(10, parseFloat(g('twmgr-nb-regen').value) || 0));
     save();
   }
   function setNobleStatus(on) { setBtnState('twmgr-nb-start', 'twmgr-nb-stop', on, '● Planejando', '▶ Planejar'); }
@@ -7454,6 +7542,12 @@
           '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Alvo em <b>⇅ seguir ordem</b> fica com o modelo que armar <b>mais comandos completos</b> — vale mais um que rende 4 do que um que rende 1. Empate fica com quem vem antes.</div>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Só tropa de campo na escolta: explorador não briga, e aríete e catapulta servem pra muralha, não pra proteger nobre. Como o nobre é a unidade <b>mais lenta do jogo</b>, a escolta não atrasa a chegada.</div>') +
         '<div class="twmgr-cols">' +
+          '<div class="twmgr-card2"><h4>⚖ Lealdade</h4>' +
+            '<div class="twmgr-fld"><span title="Quanto um nobre derruba. No jogo varia de 20 a 35 — um valor MAIOR arrisca mandar de menos; menor manda de sobra">Queda por ataque</span><input id="twmgr-nb-lpa" class="twmgr-inp" type="number" min="1" max="100" value="28"></div>' +
+            '<div class="twmgr-fld"><span title="Quanto a lealdade sobe por hora sozinha">Regenera por hora</span><input id="twmgr-nb-regen" class="twmgr-inp" type="number" min="0" max="10" step="0.5" value="1"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">O número de nobres sai da <b>lealdade atual</b>, não do modelo: lealdade 19 pede <b>1</b>, não 4. Comando já a caminho <b>conta como se tivesse pousado</b> — com 30 de lealdade e 1 voando, sai mais 1; com 27 e 1 voando, não sai nada.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A lealdade lida <b>envelhece</b>: a tela mostra o valor projetado pra agora com a regeneração. Sem relatório de nobre (lealdade <b>?</b>) ele usa o número do modelo.</div>' +
+          '</div>' +
           '<div class="twmgr-card2"><h4>⏱ Ciclo</h4>' +
             '<div class="twmgr-fld"><span>Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15"></div>' +
             '<div class="twmgr-fld"><span title="Dispara sem pedir confirmação">Enviar automaticamente</span>' +
@@ -7749,10 +7843,12 @@
     document.getElementById('twmgr-nb-rel').checked = config.noble.lerRelatorios !== false;
     document.getElementById('twmgr-nb-auto').checked = config.noble.autoEnviar !== false;
     document.getElementById('twmgr-nb-automax').value = config.noble.autoMax != null ? config.noble.autoMax : 8;
+    document.getElementById('twmgr-nb-lpa').value = config.noble.lealdadePorAtk != null ? config.noble.lealdadePorAtk : 28;
+    document.getElementById('twmgr-nb-regen').value = config.noble.lealdadeRegen != null ? config.noble.lealdadeRegen : 1;
 
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
-     'twmgr-nb-auto', 'twmgr-nb-automax'].forEach((id) => {
+     'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();

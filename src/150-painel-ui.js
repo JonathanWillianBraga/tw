@@ -545,6 +545,12 @@
           '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Alvo em <b>⇅ seguir ordem</b> fica com o modelo que armar <b>mais comandos completos</b> — vale mais um que rende 4 do que um que rende 1. Empate fica com quem vem antes.</div>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Só tropa de campo na escolta: explorador não briga, e aríete e catapulta servem pra muralha, não pra proteger nobre. Como o nobre é a unidade <b>mais lenta do jogo</b>, a escolta não atrasa a chegada.</div>') +
         '<div class="twmgr-cols">' +
+          '<div class="twmgr-card2"><h4>⚖ Lealdade</h4>' +
+            '<div class="twmgr-fld"><span title="Quanto um nobre derruba. No jogo varia de 20 a 35 — um valor MAIOR arrisca mandar de menos; menor manda de sobra">Queda por ataque</span><input id="twmgr-nb-lpa" class="twmgr-inp" type="number" min="1" max="100" value="28"></div>' +
+            '<div class="twmgr-fld"><span title="Quanto a lealdade sobe por hora sozinha">Regenera por hora</span><input id="twmgr-nb-regen" class="twmgr-inp" type="number" min="0" max="10" step="0.5" value="1"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">O número de nobres sai da <b>lealdade atual</b>, não do modelo: lealdade 19 pede <b>1</b>, não 4. Comando já a caminho <b>conta como se tivesse pousado</b> — com 30 de lealdade e 1 voando, sai mais 1; com 27 e 1 voando, não sai nada.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A lealdade lida <b>envelhece</b>: a tela mostra o valor projetado pra agora com a regeneração. Sem relatório de nobre (lealdade <b>?</b>) ele usa o número do modelo.</div>' +
+          '</div>' +
           '<div class="twmgr-card2"><h4>⏱ Ciclo</h4>' +
             '<div class="twmgr-fld"><span>Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15"></div>' +
             '<div class="twmgr-fld"><span title="Dispara sem pedir confirmação">Enviar automaticamente</span>' +
@@ -840,10 +846,12 @@
     document.getElementById('twmgr-nb-rel').checked = config.noble.lerRelatorios !== false;
     document.getElementById('twmgr-nb-auto').checked = config.noble.autoEnviar !== false;
     document.getElementById('twmgr-nb-automax').value = config.noble.autoMax != null ? config.noble.autoMax : 8;
+    document.getElementById('twmgr-nb-lpa').value = config.noble.lealdadePorAtk != null ? config.noble.lealdadePorAtk : 28;
+    document.getElementById('twmgr-nb-regen').value = config.noble.lealdadeRegen != null ? config.noble.lealdadeRegen : 1;
 
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
-     'twmgr-nb-auto', 'twmgr-nb-automax'].forEach((id) => {
+     'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();

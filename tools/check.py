@@ -275,6 +275,44 @@ def checa_chamadas_orfas(limpo):
                      % (nome, linha))
 
 
+# Id repetido que NAO e bug: mesmo elemento em ramos mutuamente exclusivos de um if/else, onde
+# so um chega ao DOM. Cada entrada precisa dizer POR QUE e seguro.
+IDS_OK_REPETIDOS = {
+    # 170-mapa: painel do mapa tem layout inline (dentro da tabela do TW) OU flutuante.
+    # O if (inline)/else monta um dos dois, nunca os dois.
+    "twmgr-map-collapse",
+}
+
+def checa_ids_repetidos(src):
+    """id="..." literal usado 2x no HTML do painel.
+
+    getElementById devolve o PRIMEIRO do documento, entao o segundo elemento nunca recebe nada:
+    fica vazio, sem listener, e sem erro nenhum no console. O proprio codigo ja avisava disso num
+    comentario ("sintoma dificilimo de diagnosticar") e mesmo assim aconteceu de novo na v11.50.0
+    -- a select de modelo da aba Construcoes nasceu vazia porque a tela de Gerenciar modelos ja
+    usava o mesmo id, e o usuario so percebeu tentando usar.
+
+    So olha id LITERAL em atributo HTML. Id montado por concatenacao no JS fica de fora: ali a
+    repeticao do trecho e o objetivo, cada modulo gera o seu.
+
+    A lista de excecoes existe porque ha um caso legitimo: o mesmo id em ramos MUTUAMENTE
+    EXCLUSIVOS de um if/else, onde so um chega ao DOM. Detectar isso no texto seria fragil, e
+    rebaixar o check pra aviso o tornaria inutil -- avisos sao ignorados. Entao a excecao e
+    explicita e justificada, uma a uma.
+    """
+    vistos = {}
+    for m in re.finditer(r'id="([a-zA-Z][\w-]*)"', src):
+        nome = m.group(1)
+        linha = src.count("\n", 0, m.start()) + 1
+        if nome in IDS_OK_REPETIDOS:
+            continue
+        if nome in vistos:
+            erros.append('id "%s" aparece 2x (linhas %d e %d) — getElementById so acha o primeiro, '
+                         'o segundo fica morto sem erro no console' % (nome, vistos[nome], linha))
+        else:
+            vistos[nome] = linha
+
+
 def main():
     if not os.path.exists(ALVO):
         print("nao achei", ALVO)
@@ -289,6 +327,7 @@ def main():
     checa_versao(src)
     checa_painel_inteiro(src, limpo)
     checa_chamadas_orfas(limpo)
+    checa_ids_repetidos(src)
 
     for a in avisos:
         print("  aviso: %s" % a)

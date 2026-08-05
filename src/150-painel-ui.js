@@ -570,6 +570,7 @@
             '<div class="twmgr-row" style="gap:4px">' +
               '<span class="twmgr-lbl" style="flex:0 0 auto">Grupo</span>' +
               '<select id="twmgr-bld-stgroup" class="twmgr-inp" style="flex:1"></select>' +
+              '<button id="twmgr-bld-st-reload" class="twmgr-btn twmgr-ghost" style="padding:5px 9px" title="reler agora (não constrói)">↻</button>' +
             '</div>' +
             '<div id="twmgr-bld-sttab" class="twmgr-bld-vils" style="margin-top:5px"></div>' +
             '<div id="twmgr-bld-sttab-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>') +
@@ -962,6 +963,7 @@
         + (t.grupo ? 'aplicado ao grupo selecionado.' : 'desamarrado do grupo.'), 'ok', 'build');
     });
     document.getElementById('twmgr-bld-stgroup').addEventListener('change', (e) => bldStatusFiltrar(e.target.value));
+    document.getElementById('twmgr-bld-st-reload').addEventListener('click', bldAtualizarStatus);
     bindBuildPlanHandlers();
     bldRenderTplSelect();
     bldSwitchProf(_bldActiveProf);

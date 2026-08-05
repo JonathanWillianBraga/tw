@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.30.0
+// @version      11.31.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -129,7 +129,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.30.0';
+  const VERSION = '11.31.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -209,11 +209,21 @@
   });
   // Noblar — alvos colados pelo usuário + o plano montado no último ciclo. `plano` é cache de
   // exibição: o disparo reprepara o comando na hora, porque o CSRF morre a cada recarregamento.
+  // Modelo de envio: o quanto se manda num alvo. `escolta` vai NO MESMO comando dos nobres
+  // (confirmado pelo usuário) — nobre viaja na velocidade da unidade mais lenta do comando,
+  // então separar escolta em outro ataque só serviria pra ela chegar antes e morrer sozinha.
+  const defNobleTpl = (name) => ({
+    name: name, nobres: 4, escolta: {}, maxHoras: 6, soNT: false,
+  });
   const defNoble = () => ({
     running: false, nextAt: 0, interval: 900,
     alvos: [], plano: [], planoAt: 0,
     maxHoras: 6, soNT: false,
     produzir: true, maxAldeiasProd: 4,   // cunha em N aldeias ao mesmo tempo (paralelo)
+    templates: { padrao: defNobleTpl('Padrão') },
+    lerRelatorios: true,
+    relatorios: {},   // { [coord]: { lealdade, de, at, reportId, dono, tropa } } — último lido
+    vistos: {},       // { [reportId]: 1 } — já baixado, não rebaixa
     stats: {},
   });
   const defCaptcha = () => ({ enabled: true, browserNotif: true, ntfyTopic: '', cooldownSec: 300, lastNotifiedAt: 0, reloadMin: 0 });
@@ -530,6 +540,39 @@
       return true;
     });
     if (!Array.isArray(c.noble.plano)) c.noble.plano = [];
+    // Modelos: quem já usava o Noblar antes da v11.31.0 vira o modelo 'padrao' com a config
+    // que ele tinha — nada de resetar pra 6h/não-NT em cima de quem já tinha escolhido.
+    if (!c.noble.templates || typeof c.noble.templates !== 'object') c.noble.templates = {};
+    if (!Object.keys(c.noble.templates).length) {
+      c.noble.templates.padrao = defNobleTpl('Padrão');
+      if (c.noble.maxHoras != null) c.noble.templates.padrao.maxHoras = c.noble.maxHoras;
+      if (c.noble.soNT != null) c.noble.templates.padrao.soNT = !!c.noble.soNT;
+    }
+    Object.keys(c.noble.templates).forEach((id) => {
+      const t = c.noble.templates[id];
+      if (!t || typeof t !== 'object') { delete c.noble.templates[id]; return; }
+      if (!t.name) t.name = id;
+      t.nobres = Math.max(1, Math.min(8, parseInt(t.nobres, 10) || 4));
+      t.maxHoras = Math.max(1, parseInt(t.maxHoras, 10) || 6);
+      t.soNT = !!t.soNT;
+      if (!t.escolta || typeof t.escolta !== 'object') t.escolta = {};
+      Object.keys(t.escolta).forEach((u) => {
+        const q = parseInt(t.escolta[u], 10) || 0;
+        if (q > 0) t.escolta[u] = q; else delete t.escolta[u];
+      });
+    });
+    // Alvo apontando pra modelo que não existe mais volta pro primeiro — senão o plano ficaria
+    // sem regra nenhuma e o alvo sumiria da tela em silêncio.
+    const tplsNb = Object.keys(c.noble.templates);
+    c.noble.alvos.forEach((a) => { if (!a.tpl || !c.noble.templates[a.tpl]) a.tpl = tplsNb[0]; });
+    if (c.noble.lerRelatorios == null) c.noble.lerRelatorios = true;
+    if (!c.noble.relatorios || typeof c.noble.relatorios !== 'object') c.noble.relatorios = {};
+    if (!c.noble.vistos || typeof c.noble.vistos !== 'object') c.noble.vistos = {};
+    // Relatório de alvo que saiu da lista não serve pra nada e cresceria pra sempre.
+    Object.keys(c.noble.relatorios).forEach((k) => {
+      if (!c.noble.alvos.some((a) => a.coord === k)) delete c.noble.relatorios[k];
+    });
+
     if (c.noble.maxHoras == null) c.noble.maxHoras = 6;
     if (c.noble.soNT == null) c.noble.soNT = false;
     if (c.noble.produzir == null) c.noble.produzir = true;

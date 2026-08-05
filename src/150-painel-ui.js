@@ -96,6 +96,11 @@
       ".twmgr-units label{display:flex;align-items:center;gap:7px;font-size:11px;color:#6f6153;cursor:pointer}",
       ".twmgr-res{display:flex;gap:6px;margin:5px 0 9px}.twmgr-res label{flex:1;display:flex;align-items:center;gap:4px;font-size:13px}.twmgr-res .twmgr-inp{width:100%;font-size:11px !important}",
       ".twmgr-check{display:flex;align-items:center;gap:8px;font-size:11px;color:#6f6153;margin-bottom:10px;cursor:pointer}",
+      // Grade de escolta do Noblar: cabe em qualquer largura sem quebrar o rótulo da unidade.
+      ".twmgr-nb-esc{display:grid;grid-template-columns:repeat(auto-fill,minmax(94px,1fr));gap:4px;margin-top:4px}",
+      ".twmgr-nb-escit{display:flex;align-items:center;gap:4px;font-size:10px;color:#6f6153}",
+      ".twmgr-nb-escit span{flex:0 0 44px}",
+      ".twmgr-nb-escit input{width:100%;min-width:0;padding:2px 4px;font-size:10px}",
       ".twmgr-log{height:150px;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:8px;padding:7px 8px;font-family:Consolas,'Courier New',monospace;font-size:10px;line-height:1.45}",
       ".twmgr-log::-webkit-scrollbar{width:8px}.twmgr-log::-webkit-scrollbar-thumb{background:#e0d6c6;border-radius:4px}",
       "#twmgr-panel.twmgr-collapsed{width:auto}",
@@ -480,14 +485,26 @@
           '</div>' +
           '<div id="twmgr-nb-lista" class="twmgr-bld-vils" style="margin-top:6px"></div>' +
           '<div id="twmgr-nb-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>') +
-        sec('Regras',
-          '<div class="twmgr-row"><span class="twmgr-lbl">Viagem máx. do nobre (h)</span><input id="twmgr-nb-horas" class="twmgr-inp" type="number" min="1" max="72" value="6" style="width:56px"></div>' +
-          '<label class="twmgr-check" title="NT = os 4 nobres saindo da MESMA aldeia"><input id="twmgr-nb-nt" type="checkbox"> Só enviar NT (4 nobres da mesma aldeia)</label>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">A duração vem do próprio jogo: o plano prepara o comando e lê o tempo real, então o limite vale em qualquer mundo.</div>') +
+        sec('Modelo de envio',
+          '<div class="twmgr-row" style="gap:4px">' +
+            '<select id="twmgr-nb-tpl-sel" class="twmgr-inp" style="flex:1"></select>' +
+            '<button id="twmgr-nb-tpl-new" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="criar modelo">✚</button>' +
+            '<button id="twmgr-nb-tpl-ren" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="renomear">✎</button>' +
+            '<button id="twmgr-nb-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:5px 8px" title="apagar modelo">🗑</button>' +
+          '</div>' +
+          '<div class="twmgr-row" style="margin-top:5px"><span class="twmgr-lbl">Nobres por alvo</span><input id="twmgr-nb-nob" class="twmgr-inp" type="number" min="1" max="8" value="4" style="width:56px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">Viagem máx. do comando (h)</span><input id="twmgr-nb-horas" class="twmgr-inp" type="number" min="1" max="72" value="6" style="width:56px"></div>' +
+          '<label class="twmgr-check" title="NT = todos os nobres saindo da MESMA aldeia"><input id="twmgr-nb-nt" type="checkbox"> Só enviar NT (todos da mesma aldeia)</label>' +
+          '<div class="twmgr-lbl" style="margin-top:7px">Escolta — vai no <b>mesmo comando</b> dos nobres</div>' +
+          '<div id="twmgr-nb-esc" class="twmgr-nb-esc"></div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">A escolta sai da aldeia <b>mais próxima</b> do alvo, uma vez só (não se repete por comando). Se a origem não tiver a tropa toda, vai o que houver e o log avisa.</div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A duração vem do próprio jogo, já <b>com a escolta dentro</b> — aríete e catapulta são mais lentos que o nobre e mudam a chegada.</div>') +
         sec('Produzir nobre quando faltar', '<label class="twmgr-check" title="Cunha moeda de ouro nas aldeias mais próximas do alvo"><input id="twmgr-nb-prod" type="checkbox"> Cunhar moeda pra fazer nobre</label>' +
           '<div class="twmgr-row"><span class="twmgr-lbl" title="Cada aldeia cunha com o próprio recurso, então espalhar acelera de verdade">Cunhar em até (aldeias)</span><input id="twmgr-nb-prodn" class="twmgr-inp" type="number" min="1" max="12" value="4" style="width:56px"></div>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">Nobre recruta em <b>paralelo</b> entre aldeias e em série dentro de uma. Com <b>só NT</b> ligado ele concentra numa só, porque os 4 precisam sair do mesmo lugar.</div>') +
-        sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>') +
+        sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15" style="width:56px"></div>' +
+          '<label class="twmgr-check" title="Lê os relatórios de ataque pra saber a lealdade que sobrou"><input id="twmgr-nb-rel" type="checkbox"> Ler relatórios (lealdade, dono e tropa do alvo)</label>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">Lealdade só aparece em relatório de <b>ataque com nobre</b> — exploração não mostra. Por isso a coluna fica <b>?</b> até o primeiro nobre bater.</div>') +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
         modLog('noble') +
@@ -746,12 +763,19 @@
     // ---- Noblar ----
     document.getElementById('twmgr-nb-add').addEventListener('click', nobleAddCoords);
     document.getElementById('twmgr-nb-coords').addEventListener('input', nobleContarCoords);
-    document.getElementById('twmgr-nb-horas').value = config.noble.maxHoras != null ? config.noble.maxHoras : 6;
-    document.getElementById('twmgr-nb-nt').checked = !!config.noble.soNT;
+    document.getElementById('twmgr-nb-tpl-sel').addEventListener('change', (e) => nobleSwitchTpl(e.target.value));
+    document.getElementById('twmgr-nb-tpl-new').addEventListener('click', nobleNovoModelo);
+    document.getElementById('twmgr-nb-tpl-ren').addEventListener('click', nobleRenomearModelo);
+    document.getElementById('twmgr-nb-tpl-del').addEventListener('click', nobleApagarModelo);
+    nobleFillTplSel(); nobleRenderTplEditor();
+    // A grade de escolta e redesenhada a cada troca de modelo, entao o listener fica no PAI:
+    // amarrar em cada input morreria no proximo render.
+    document.getElementById('twmgr-nb-esc').addEventListener('change', () => { nobleLerTplEditor(); save(); });
     document.getElementById('twmgr-nb-int').value = Math.round((config.noble.interval || 900) / 60);
+    document.getElementById('twmgr-nb-rel').checked = config.noble.lerRelatorios !== false;
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
     document.getElementById('twmgr-nb-prodn').value = config.noble.maxAldeiasProd != null ? config.noble.maxAldeiasProd : 4;
-    ['twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-prodn'].forEach((id) => {
+    ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-prodn', 'twmgr-nb-rel'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();

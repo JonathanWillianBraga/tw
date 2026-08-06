@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.60.0
+// @version      11.61.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.60.0';
+  const VERSION = '11.61.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -8498,7 +8498,8 @@
   // Sub-abas por módulo. Era só do Saque; virou genérico quando o Noblar também passou a ter —
   // duplicar a função daria duas cópias pra manter em sincronia.
   const SUBS = { farm: ['farm', 'wall', 'map'], noble: ['alvos', 'cunhar', 'pos'],
-                 recruit: ['rcmodelos', 'rcstatus'], build: ['bldmodelos', 'bldstatus'] };
+                 recruit: ['rcmodelos', 'rcstatus'], build: ['bldmodelos', 'bldstatus'],
+                 market: ['cunhagem', 'equilibrio', 'solidario'] };
   function showSub(mod, name) {
     (SUBS[mod] || []).forEach((n) => {
       const c = document.getElementById('twmgr-sub-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
@@ -8751,6 +8752,12 @@
       '</div>' +
       '<div id="twmgr-tab-market" style="display:none">' +
         hint('Mercado: cada modo roda de forma <b>independente</b> — pode ligar quantos quiser ao mesmo tempo (ex.: Equilíbrio + Solidário juntos). <b>Cunhagem</b> junta recurso de grupos de origem em uma ou mais aldeias destino (e pode cunhar moedas de ouro automaticamente nelas); <b>Equilíbrio</b> nivela as aldeias por %; <b>Solidário</b> abastece só o grupo escolhido (que só recebe) com qualquer outra aldeia sua doando.') +
+        '<div class="twmgr-subtabs">' +
+          subBtn('cunhagem', '💰', 'Cunhagem', 'market') +
+          subBtn('equilibrio', '⚖️', 'Equilíbrio', 'market') +
+          subBtn('solidario', '🤝', 'Solidário', 'market') +
+        '</div>' +
+        '<div id="twmgr-sub-cunhagem">' +
         sec('💰 Cunhagem',
             '<div class="twmgr-row"><span class="twmgr-lbl">Grupos de origem</span></div>' +
             '<div id="twmgr-mk-srcgroups" style="max-height:100px;overflow-y:auto;border:1px solid #ece4d8;border-radius:6px;padding:4px;margin-bottom:6px"></div>' +
@@ -8769,6 +8776,8 @@
             '<div class="twmgr-actions"><button id="twmgr-mk-cunhagem-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-cunhagem-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
             '<div id="twmgr-mk-cunhagem-status" class="twmgr-cstatus"></div>' +
             '<div id="twmgr-mk-cunhagem-coins" style="font-size:10px;color:#8a7d6d;margin-top:2px"></div>') +
+        '</div>' +
+        '<div id="twmgr-sub-equilibrio" style="display:none">' +
         sec('⚖️ Equilíbrio',
             '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Aldeia acima do limiar doa o excedente pras abaixo, por recurso. Da mais perto primeiro.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Encher armazém até (%)</span><input id="twmgr-mk-thr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
@@ -8788,6 +8797,8 @@
                 '<span>aldeia</span><span>déficit (abaixo do limiar)</span><span>risco</span></div>' +
               '<div id="twmgr-mk-eq-problemas" style="height:160px;min-height:70px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
             '</div>') +
+        '</div>' +
+        '<div id="twmgr-sub-solidario" style="display:none">' +
         sec('🤝 Solidário',
             '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Aldeias do grupo escolhido SÓ RECEBEM (nunca doam). Doadora é qualquer OUTRA aldeia sua — testa da mais perto pra mais longe, e pula pra próxima se a mais perto não tiver mercador/recurso suficiente. Doadora só cede acima de "% do recurso mais baixo dela" (protege quem já tá capenga). Se ninguém qualificar, a mais próxima cede só a fatia acima de "% que fica na doadora" mesmo assim (nunca esvazia), pra nunca travar construção/pesquisa numa aldeia nova ou bárbara conquistada.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Grupo Solidário</span><select id="twmgr-mk-g-solid" class="twmgr-inp" style="width:140px"></select></div>' +
@@ -8798,6 +8809,7 @@
             '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-sdist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:56px"></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-solidario-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-solidario-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
             '<div id="twmgr-mk-solidario-status" class="twmgr-cstatus"></div>') +
+        '</div>' +
         sec('Ritmo (compartilhado pelos modos ligados)', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-mk-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         modLog('market') +
       '</div>' +
@@ -9376,6 +9388,9 @@
     }));
     showSub('noble', (function () {
       try { return localStorage.getItem(FARM_SUB_KEY + '_noble') || 'alvos'; } catch (e) { return 'alvos'; }
+    })());
+    showSub('market', (function () {
+      try { return localStorage.getItem(FARM_SUB_KEY + '_market') || 'cunhagem'; } catch (e) { return 'cunhagem'; }
     })());
 
     // Toggle expandir/recolher o log por módulo

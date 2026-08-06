@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.59.0
+// @version      11.60.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.59.0';
+  const VERSION = '11.60.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -3749,7 +3749,9 @@
   // ciclo REAL anterior (config.market.modes.equilibrio.stats, ainda intacta quando isto roda no
   // início do ciclo) — é uma estimativa honesta baseada no que de fato saiu da última vez, não
   // um modelo teórico; se nada saiu daquele recurso no último ciclo, o ETA fica "sem dado".
-  const EQ_RISCO_PCT = 0.9;   // 90% do armazém = "quase estourando"
+  const EQ_RISCO_PCT = 0.9;      // 90% do armazém = "quase estourando"
+  const EQ_MARGEM_PCT = 15;      // pontos percentuais de folga na sugestão (baixa ANTES de chegar no risco)
+  const EQ_LIMIAR_MIN = 20;      // nunca sugere abaixo disto (limiar baixo demais vira spam de transferência trivial)
   function equilibrioAtualizarSaudeCom(st, pct) {
     const RES = ['wood', 'stone', 'iron'];
     const anterior = (config.market.modes.equilibrio.stats) || {};
@@ -3758,6 +3760,11 @@
     const deficitTotal = { wood: 0, stone: 0, iron: 0 };
     const excedenteTotal = { wood: 0, stone: 0, iron: 0 };
     const problemas = [];
+    // Sugestão REATIVA (sem dado de produção/hora — só olha o snapshot de agora): a aldeia que
+    // já bateu a zona de risco mostra o quanto ela enche ANTES do limiar atual conseguir reagir.
+    // A menor % entre as aldeias em risco, menos uma margem de segurança, vira o limiar sugerido
+    // — assim ELAS virariam doadoras mais cedo, antes de chegar perto do teto.
+    let menorFillRisco = null, aldeiasRisco = 0;
     st.forEach((s) => {
       let ok = true;
       const def = {}, risco = {};
@@ -3767,10 +3774,16 @@
         deficitTotal[r] += d;
         excedenteTotal[r] += Math.max(0, Math.round(s.cur[r] - s.thr));
         if (d > 0) ok = false;
-        if (s.storage > 0 && s.cur[r] >= s.storage * EQ_RISCO_PCT) { risco[r] = true; ok = false; }
+        if (s.storage > 0) {
+          const fill = s.cur[r] / s.storage;
+          if (fill >= EQ_RISCO_PCT) {
+            risco[r] = true; ok = false;
+            if (menorFillRisco == null || fill < menorFillRisco) menorFillRisco = fill;
+          }
+        }
       });
       if (ok) aldeiasOk++;
-      else problemas.push({ coord: s.coord, name: s.name, def: def, risco: risco });
+      else { problemas.push({ coord: s.coord, name: s.name, def: def, risco: risco }); if (Object.keys(risco).length) aldeiasRisco++; }
     });
     problemas.sort((a, b) => (b.def.wood + b.def.stone + b.def.iron) - (a.def.wood + a.def.stone + a.def.iron));
     const eta = {};
@@ -3779,11 +3792,25 @@
       const taxa = anterior[r] || 0;
       eta[r] = taxa > 0 ? Math.ceil(deficitTotal[r] / taxa) * intervalSec : null;   // null = sem dado de vazão
     });
+    // Só sugere quando há sinal de risco E a sugestão de fato baixaria o limiar atual — sem
+    // aldeia em risco, ficar quieto é mais honesto que inventar ajuste sem necessidade.
+    let sugestao = null;
+    const limiarAtualPct = Math.round(pct * 100);
+    if (menorFillRisco != null) {
+      const proposto = Math.max(EQ_LIMIAR_MIN, Math.round(menorFillRisco * 100) - EQ_MARGEM_PCT);
+      if (proposto < limiarAtualPct) {
+        sugestao = {
+          limiarPct: proposto,
+          motivo: aldeiasRisco + ' aldeia(s) já bateram ' + Math.round(menorFillRisco * 100) + '%+ do armazém antes de virar doadora — com ' +
+            proposto + '%, elas cedem o excedente mais cedo.',
+        };
+      }
+    }
     config.market.modes.equilibrio.saude = {
       at: Date.now(), total: st.length, ok: aldeiasOk,
       pct: st.length ? Math.round(100 * aldeiasOk / st.length) : 100,
-      limiarPct: Math.round(pct * 100), deficitTotal: deficitTotal, excedenteTotal: excedenteTotal,
-      eta: eta, problemas: problemas,
+      limiarPct: limiarAtualPct, deficitTotal: deficitTotal, excedenteTotal: excedenteTotal,
+      eta: eta, problemas: problemas, sugestao: sugestao,
     };
     save();
     if (typeof equilibrioRenderSaude === 'function') equilibrioRenderSaude();
@@ -8071,9 +8098,10 @@
   function equilibrioRenderSaude() {
     const resumo = document.getElementById('twmgr-mk-eq-resumo'); if (!resumo) return;
     const etaBox = document.getElementById('twmgr-mk-eq-eta');
+    const sugBox = document.getElementById('twmgr-mk-eq-sugestao');
     const box = document.getElementById('twmgr-mk-eq-problemas');
     const s = config.market.modes.equilibrio.saude;
-    if (!s) { resumo.textContent = '— rode o diagnóstico ou ligue o Equilíbrio —'; if (etaBox) etaBox.textContent = ''; if (box) box.innerHTML = ''; return; }
+    if (!s) { resumo.textContent = '— rode o diagnóstico ou ligue o Equilíbrio —'; if (etaBox) etaBox.textContent = ''; if (sugBox) sugBox.innerHTML = ''; if (box) box.innerHTML = ''; return; }
     const ROT = { wood: 'madeira', stone: 'argila', iron: 'ferro' };
     const RES = ['wood', 'stone', 'iron'];
     const defTxt = RES.filter((r) => s.deficitTotal[r] > 0).map((r) => fmtN(s.deficitTotal[r]) + ' ' + ROT[r]).join(', ') || 'nenhum';
@@ -8087,6 +8115,19 @@
       });
       etaBox.textContent = 'ETA pro limiar, no ritmo do último ciclo: ' + partes.join(' · ');
     }
+    // Sugestão reativa: só aparece quando há aldeia em risco de estourar E baixar o limiar de
+    // fato ajudaria. Sem dado de produção/hora — olha só o snapshot de agora, por isso é
+    // conservadora (não sugere SUBIR o limiar, só baixar quando há sinal de risco real).
+    if (sugBox) {
+      if (s.sugestao) {
+        sugBox.innerHTML = '💡 Sugestão: baixar o limiar pra <b>' + s.sugestao.limiarPct + '%</b> — ' + esc(s.sugestao.motivo) +
+          ' <a id="twmgr-mk-eq-sug-aplicar" style="cursor:pointer;color:#2e7d3a;text-decoration:underline">aplicar</a>';
+        const btn = document.getElementById('twmgr-mk-eq-sug-aplicar');
+        if (btn) btn.onclick = () => equilibrioAplicarSugestao(s.sugestao.limiarPct);
+      } else {
+        sugBox.textContent = '';
+      }
+    }
     if (!box) return;
     if (!s.problemas.length) { box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma aldeia com problema —</div>'; return; }
     box.innerHTML = s.problemas.map((p) => {
@@ -8098,6 +8139,14 @@
         '<span style="color:#c0483a">' + (riscoTxt ? '⚠ quase estourando: ' + esc(riscoTxt) : '') + '</span>' +
       '</div>';
     }).join('');
+  }
+  // Aplica a sugestão de limiar e já roda o diagnóstico de novo — senão o resumo na tela ficaria
+  // mostrando os números calculados contra o limiar VELHO, o que confundiria mais que ajudaria.
+  function equilibrioAplicarSugestao(pct) {
+    const el = document.getElementById('twmgr-mk-thr'); if (el) el.value = pct;
+    config.market.thresholdPct = pct; save();
+    pushLog('Equilíbrio: limiar aplicado — ' + pct + '%. Atualizando o diagnóstico…', 'ok', 'market');
+    equilibrioDiagnostico();
   }
 
   function readScavUnits() {
@@ -8734,6 +8783,7 @@
               '</div>' +
               '<div id="twmgr-mk-eq-resumo" style="font-size:10px;color:#6f6153;margin-bottom:2px">— rode o diagnóstico ou ligue o Equilíbrio —</div>' +
               '<div id="twmgr-mk-eq-eta" style="font-size:9px;color:#8a7d6d;margin-bottom:4px"></div>' +
+              '<div id="twmgr-mk-eq-sugestao" style="font-size:9px;color:#8b5426;margin-bottom:4px"></div>' +
               '<div style="display:grid;grid-template-columns:66px 1fr 1fr;gap:4px;font-size:9px;color:#8a7d6d;padding:0 4px 2px">' +
                 '<span>aldeia</span><span>déficit (abaixo do limiar)</span><span>risco</span></div>' +
               '<div id="twmgr-mk-eq-problemas" style="height:160px;min-height:70px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +

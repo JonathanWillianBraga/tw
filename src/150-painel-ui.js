@@ -557,6 +557,7 @@
               '</div>' +
               '<div id="twmgr-mk-eq-resumo" style="font-size:10px;color:#6f6153;margin-bottom:2px">— rode o diagnóstico ou ligue o Equilíbrio —</div>' +
               '<div id="twmgr-mk-eq-eta" style="font-size:9px;color:#8a7d6d;margin-bottom:4px"></div>' +
+              '<div id="twmgr-mk-eq-sugestao" style="font-size:9px;color:#8b5426;margin-bottom:4px"></div>' +
               '<div style="display:grid;grid-template-columns:66px 1fr 1fr;gap:4px;font-size:9px;color:#8a7d6d;padding:0 4px 2px">' +
                 '<span>aldeia</span><span>déficit (abaixo do limiar)</span><span>risco</span></div>' +
               '<div id="twmgr-mk-eq-problemas" style="height:160px;min-height:70px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +

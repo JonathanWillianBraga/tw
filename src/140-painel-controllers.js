@@ -174,9 +174,10 @@
   function equilibrioRenderSaude() {
     const resumo = document.getElementById('twmgr-mk-eq-resumo'); if (!resumo) return;
     const etaBox = document.getElementById('twmgr-mk-eq-eta');
+    const sugBox = document.getElementById('twmgr-mk-eq-sugestao');
     const box = document.getElementById('twmgr-mk-eq-problemas');
     const s = config.market.modes.equilibrio.saude;
-    if (!s) { resumo.textContent = '— rode o diagnóstico ou ligue o Equilíbrio —'; if (etaBox) etaBox.textContent = ''; if (box) box.innerHTML = ''; return; }
+    if (!s) { resumo.textContent = '— rode o diagnóstico ou ligue o Equilíbrio —'; if (etaBox) etaBox.textContent = ''; if (sugBox) sugBox.innerHTML = ''; if (box) box.innerHTML = ''; return; }
     const ROT = { wood: 'madeira', stone: 'argila', iron: 'ferro' };
     const RES = ['wood', 'stone', 'iron'];
     const defTxt = RES.filter((r) => s.deficitTotal[r] > 0).map((r) => fmtN(s.deficitTotal[r]) + ' ' + ROT[r]).join(', ') || 'nenhum';
@@ -190,6 +191,19 @@
       });
       etaBox.textContent = 'ETA pro limiar, no ritmo do último ciclo: ' + partes.join(' · ');
     }
+    // Sugestão reativa: só aparece quando há aldeia em risco de estourar E baixar o limiar de
+    // fato ajudaria. Sem dado de produção/hora — olha só o snapshot de agora, por isso é
+    // conservadora (não sugere SUBIR o limiar, só baixar quando há sinal de risco real).
+    if (sugBox) {
+      if (s.sugestao) {
+        sugBox.innerHTML = '💡 Sugestão: baixar o limiar pra <b>' + s.sugestao.limiarPct + '%</b> — ' + esc(s.sugestao.motivo) +
+          ' <a id="twmgr-mk-eq-sug-aplicar" style="cursor:pointer;color:#2e7d3a;text-decoration:underline">aplicar</a>';
+        const btn = document.getElementById('twmgr-mk-eq-sug-aplicar');
+        if (btn) btn.onclick = () => equilibrioAplicarSugestao(s.sugestao.limiarPct);
+      } else {
+        sugBox.textContent = '';
+      }
+    }
     if (!box) return;
     if (!s.problemas.length) { box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma aldeia com problema —</div>'; return; }
     box.innerHTML = s.problemas.map((p) => {
@@ -201,6 +215,14 @@
         '<span style="color:#c0483a">' + (riscoTxt ? '⚠ quase estourando: ' + esc(riscoTxt) : '') + '</span>' +
       '</div>';
     }).join('');
+  }
+  // Aplica a sugestão de limiar e já roda o diagnóstico de novo — senão o resumo na tela ficaria
+  // mostrando os números calculados contra o limiar VELHO, o que confundiria mais que ajudaria.
+  function equilibrioAplicarSugestao(pct) {
+    const el = document.getElementById('twmgr-mk-thr'); if (el) el.value = pct;
+    config.market.thresholdPct = pct; save();
+    pushLog('Equilíbrio: limiar aplicado — ' + pct + '%. Atualizando o diagnóstico…', 'ok', 'market');
+    equilibrioDiagnostico();
   }
 
   function readScavUnits() {

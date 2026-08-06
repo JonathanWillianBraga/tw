@@ -333,7 +333,9 @@
   // ciclo REAL anterior (config.market.modes.equilibrio.stats, ainda intacta quando isto roda no
   // início do ciclo) — é uma estimativa honesta baseada no que de fato saiu da última vez, não
   // um modelo teórico; se nada saiu daquele recurso no último ciclo, o ETA fica "sem dado".
-  const EQ_RISCO_PCT = 0.9;   // 90% do armazém = "quase estourando"
+  const EQ_RISCO_PCT = 0.9;      // 90% do armazém = "quase estourando"
+  const EQ_MARGEM_PCT = 15;      // pontos percentuais de folga na sugestão (baixa ANTES de chegar no risco)
+  const EQ_LIMIAR_MIN = 20;      // nunca sugere abaixo disto (limiar baixo demais vira spam de transferência trivial)
   function equilibrioAtualizarSaudeCom(st, pct) {
     const RES = ['wood', 'stone', 'iron'];
     const anterior = (config.market.modes.equilibrio.stats) || {};
@@ -342,6 +344,11 @@
     const deficitTotal = { wood: 0, stone: 0, iron: 0 };
     const excedenteTotal = { wood: 0, stone: 0, iron: 0 };
     const problemas = [];
+    // Sugestão REATIVA (sem dado de produção/hora — só olha o snapshot de agora): a aldeia que
+    // já bateu a zona de risco mostra o quanto ela enche ANTES do limiar atual conseguir reagir.
+    // A menor % entre as aldeias em risco, menos uma margem de segurança, vira o limiar sugerido
+    // — assim ELAS virariam doadoras mais cedo, antes de chegar perto do teto.
+    let menorFillRisco = null, aldeiasRisco = 0;
     st.forEach((s) => {
       let ok = true;
       const def = {}, risco = {};
@@ -351,10 +358,16 @@
         deficitTotal[r] += d;
         excedenteTotal[r] += Math.max(0, Math.round(s.cur[r] - s.thr));
         if (d > 0) ok = false;
-        if (s.storage > 0 && s.cur[r] >= s.storage * EQ_RISCO_PCT) { risco[r] = true; ok = false; }
+        if (s.storage > 0) {
+          const fill = s.cur[r] / s.storage;
+          if (fill >= EQ_RISCO_PCT) {
+            risco[r] = true; ok = false;
+            if (menorFillRisco == null || fill < menorFillRisco) menorFillRisco = fill;
+          }
+        }
       });
       if (ok) aldeiasOk++;
-      else problemas.push({ coord: s.coord, name: s.name, def: def, risco: risco });
+      else { problemas.push({ coord: s.coord, name: s.name, def: def, risco: risco }); if (Object.keys(risco).length) aldeiasRisco++; }
     });
     problemas.sort((a, b) => (b.def.wood + b.def.stone + b.def.iron) - (a.def.wood + a.def.stone + a.def.iron));
     const eta = {};
@@ -363,11 +376,25 @@
       const taxa = anterior[r] || 0;
       eta[r] = taxa > 0 ? Math.ceil(deficitTotal[r] / taxa) * intervalSec : null;   // null = sem dado de vazão
     });
+    // Só sugere quando há sinal de risco E a sugestão de fato baixaria o limiar atual — sem
+    // aldeia em risco, ficar quieto é mais honesto que inventar ajuste sem necessidade.
+    let sugestao = null;
+    const limiarAtualPct = Math.round(pct * 100);
+    if (menorFillRisco != null) {
+      const proposto = Math.max(EQ_LIMIAR_MIN, Math.round(menorFillRisco * 100) - EQ_MARGEM_PCT);
+      if (proposto < limiarAtualPct) {
+        sugestao = {
+          limiarPct: proposto,
+          motivo: aldeiasRisco + ' aldeia(s) já bateram ' + Math.round(menorFillRisco * 100) + '%+ do armazém antes de virar doadora — com ' +
+            proposto + '%, elas cedem o excedente mais cedo.',
+        };
+      }
+    }
     config.market.modes.equilibrio.saude = {
       at: Date.now(), total: st.length, ok: aldeiasOk,
       pct: st.length ? Math.round(100 * aldeiasOk / st.length) : 100,
-      limiarPct: Math.round(pct * 100), deficitTotal: deficitTotal, excedenteTotal: excedenteTotal,
-      eta: eta, problemas: problemas,
+      limiarPct: limiarAtualPct, deficitTotal: deficitTotal, excedenteTotal: excedenteTotal,
+      eta: eta, problemas: problemas, sugestao: sugestao,
     };
     save();
     if (typeof equilibrioRenderSaude === 'function') equilibrioRenderSaude();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.57.0
+// @version      11.58.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.57.0';
+  const VERSION = '11.58.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -208,6 +208,9 @@
   const defMarket = () => ({
     modes: { cunhagem: defMarketModeState(), equilibrio: defMarketModeState(), solidario: defMarketModeState() },
     interval: 600, destCoords: [], reserveWood: 0, reserveStone: 0, reserveIron: 0,
+    // Peso pra dividir o que cada aldeia manda na Cunhagem — pensado pro custo de formar o
+    // nobre (não muda entre mundos com bandeira de desconto, que corta os 3 igual).
+    cunhagemPesoWood: 28000, cunhagemPesoStone: 30000, cunhagemPesoIron: 25000,
     cunhagemSourceGroups: [], cunhagemStopEnabled: false, cunhagemStopHours: 2, autoMint: false,
     thresholdPct: 50, maxDist: 15,
     groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {},
@@ -497,6 +500,9 @@
     if (c.market.reserveWood == null) c.market.reserveWood = 0;
     if (c.market.reserveStone == null) c.market.reserveStone = 0;
     if (c.market.reserveIron == null) c.market.reserveIron = 0;
+    if (c.market.cunhagemPesoWood == null) c.market.cunhagemPesoWood = 28000;
+    if (c.market.cunhagemPesoStone == null) c.market.cunhagemPesoStone = 30000;
+    if (c.market.cunhagemPesoIron == null) c.market.cunhagemPesoIron = 25000;
     if (!Array.isArray(c.market.cunhagemSourceGroups)) c.market.cunhagemSourceGroups = [];
     if (c.market.cunhagemStopEnabled == null) c.market.cunhagemStopEnabled = false;
     if (c.market.cunhagemStopHours == null) c.market.cunhagemStopHours = 2;
@@ -3415,21 +3421,38 @@
     const numOf = (id) => { const el = doc.getElementById(id); return el ? (parseInt((el.textContent || '').replace(/\D/g, ''), 10) || 0) : 0; };
     return { wood: numOf('wood'), stone: numOf('stone'), iron: numOf('iron'), storage: numOf('storage'), capacity: numOf('market_merchant_max_transport') };
   }
-  function balancedSplit(totalCapacity, avail, reserve) {
+  // weights ausente/zerado = split IGUAL entre os 3 (comportamento de sempre, usado por
+  // Equilíbrio/Solidário). Com weights, cada iteração reparte a capacidade RESTANTE na
+  // proporção do peso entre quem ainda tem espaço — não é "pega o peso e pronto": se um
+  // recurso já bateu no teto de estoque disponível, a sobra da capacidade do mercador
+  // vai pros outros dois, na proporção entre eles, em vez de ficar sem uso.
+  function balancedSplit(totalCapacity, avail, reserve, weights) {
     const keys = ['wood', 'stone', 'iron'];
     const cap = {}; keys.forEach((k) => { cap[k] = Math.max(0, (avail[k] || 0) - (reserve[k] || 0)); });
+    const w = {}; let wSum = 0;
+    keys.forEach((k) => { w[k] = Math.max(0, (weights && weights[k]) || 0); wSum += w[k]; });
+    const pesado = wSum > 0;
     const alloc = { wood: 0, stone: 0, iron: 0 };
     let remaining = totalCapacity;
     let active = keys.filter((k) => cap[k] > 0);
+    // share >= 1 sempre (Math.max) e cap[k]-alloc[k] >= 1 pra quem está em "active" — então
+    // give >= 1 em todo membro ativo, remaining cai pelo menos len(active) a cada volta.
+    // Termina sozinho: ou remaining zera, ou os ativos vão saindo por falta de espaço.
     while (remaining > 0 && active.length) {
-      const share = Math.max(1, Math.floor(remaining / active.length));
-      let progressed = false;
+      const pesoAtivo = pesado ? active.reduce((s, k) => s + w[k], 0) : 0;
+      // A fatia da RODADA usa o remaining FIXO no início dela — se recalculasse a cada membro
+      // (remaining já reduzido pelo anterior na mesma rodada), o primeiro da vez levaria mais
+      // que o combinado e o resto cascateava pra menos. É a mesma pegadinha do split antigo,
+      // que por isso computava "share" uma vez só, fora do filter.
+      const totalRodada = remaining;
+      // Sem peso configurado (ou peso zerado nos que sobraram), cai pro igual entre os ativos —
+      // é exatamente a conta antiga.
       active = active.filter((k) => {
-        const give = Math.min(share, cap[k] - alloc[k], remaining);
-        if (give > 0) { alloc[k] += give; remaining -= give; progressed = true; }
+        const fatia = (pesado && pesoAtivo > 0) ? (w[k] / pesoAtivo) : (1 / active.length);
+        const give = Math.min(Math.max(1, Math.floor(totalRodada * fatia)), cap[k] - alloc[k], remaining);
+        alloc[k] += give; remaining -= give;
         return cap[k] - alloc[k] > 0 && remaining > 0;
       });
-      if (!progressed) break;
     }
     return alloc;
   }
@@ -3493,6 +3516,14 @@
       stone: Math.max(0, config.market.reserveStone || 0),
       iron: Math.max(0, config.market.reserveIron || 0),
     };
+    // Peso entre os recursos ao enviar — pensado pro custo de formar o nobre (a proporção
+    // não muda entre mundos com bandeira de desconto, que corta os 3 igual). Default 28k/30k/
+    // 25k; zerar os 3 campos volta pro split igual de antes.
+    const weights = {
+      wood: Math.max(0, config.market.cunhagemPesoWood != null ? config.market.cunhagemPesoWood : 28000),
+      stone: Math.max(0, config.market.cunhagemPesoStone != null ? config.market.cunhagemPesoStone : 30000),
+      iron: Math.max(0, config.market.cunhagemPesoIron != null ? config.market.cunhagemPesoIron : 25000),
+    };
     let vils = [];
     try { vils = await getAllVillagesCached(); } catch (e) { pushLog('Cunhagem: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
 
@@ -3519,7 +3550,7 @@
       let state;
       try { state = await getMarketState(v.vid); } catch (e) { pushLog('Cunhagem em ' + v.name + ': erro ao ler o mercado (' + (e.message || e) + ').', 'err', 'market'); continue; }
       if (!state.capacity) continue;
-      const amounts = balancedSplit(state.capacity, state, reserve);
+      const amounts = balancedSplit(state.capacity, state, reserve, weights);
       if ((amounts.wood + amounts.stone + amounts.iron) <= 0) continue;
       try {
         await sendMarketResources(v.vid, coord, amounts);
@@ -3841,6 +3872,9 @@
     if (g('twmgr-mk-rwood')) c.reserveWood = Math.max(0, parseInt(g('twmgr-mk-rwood').value, 10) || 0);
     if (g('twmgr-mk-rstone')) c.reserveStone = Math.max(0, parseInt(g('twmgr-mk-rstone').value, 10) || 0);
     if (g('twmgr-mk-riron')) c.reserveIron = Math.max(0, parseInt(g('twmgr-mk-riron').value, 10) || 0);
+    if (g('twmgr-mk-pwood')) c.cunhagemPesoWood = Math.max(0, parseInt(g('twmgr-mk-pwood').value, 10) || 0);
+    if (g('twmgr-mk-pstone')) c.cunhagemPesoStone = Math.max(0, parseInt(g('twmgr-mk-pstone').value, 10) || 0);
+    if (g('twmgr-mk-piron')) c.cunhagemPesoIron = Math.max(0, parseInt(g('twmgr-mk-piron').value, 10) || 0);
     if (g('twmgr-mk-stopon')) c.cunhagemStopEnabled = g('twmgr-mk-stopon').checked;
     if (g('twmgr-mk-stophours')) c.cunhagemStopHours = Math.max(0.1, parseFloat((g('twmgr-mk-stophours').value || '').replace(',', '.')) || 2);
     if (g('twmgr-mk-automint')) c.autoMint = g('twmgr-mk-automint').checked;
@@ -8575,6 +8609,10 @@
               '<input id="twmgr-mk-rwood" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px">' +
               '<input id="twmgr-mk-rstone" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px">' +
               '<input id="twmgr-mk-riron" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px"></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl" title="Proporção pra dividir o que cada aldeia manda — pensado pro custo de formar o nobre, pra não sobrar recurso parado no destino. Zerar os 3 volta pra divisão igual entre os três.">Peso mad/arg/fer (custo do nobre)</span>' +
+              '<input id="twmgr-mk-pwood" class="twmgr-inp" type="number" min="0" step="1000" value="28000" style="width:64px">' +
+              '<input id="twmgr-mk-pstone" class="twmgr-inp" type="number" min="0" step="1000" value="30000" style="width:64px">' +
+              '<input id="twmgr-mk-piron" class="twmgr-inp" type="number" min="0" step="1000" value="25000" style="width:64px"></div>' +
             '<div class="twmgr-row"><label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#6f6153"><input id="twmgr-mk-automint" type="checkbox">Cunhagem automática (moedas de ouro nas aldeias destino)</label></div>' +
             '<div class="twmgr-row"><label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#6f6153"><input id="twmgr-mk-stopon" type="checkbox">Parada programada, após</label><input id="twmgr-mk-stophours" class="twmgr-inp" type="number" min="0.1" step="0.5" value="2" style="width:56px"><span class="twmgr-lbl">h</span></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-cunhagem-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-cunhagem-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
@@ -8962,6 +9000,9 @@
     document.getElementById('twmgr-mk-rwood').value = config.market.reserveWood || 0;
     document.getElementById('twmgr-mk-rstone').value = config.market.reserveStone || 0;
     document.getElementById('twmgr-mk-riron').value = config.market.reserveIron || 0;
+    document.getElementById('twmgr-mk-pwood').value = config.market.cunhagemPesoWood != null ? config.market.cunhagemPesoWood : 28000;
+    document.getElementById('twmgr-mk-pstone').value = config.market.cunhagemPesoStone != null ? config.market.cunhagemPesoStone : 30000;
+    document.getElementById('twmgr-mk-piron').value = config.market.cunhagemPesoIron != null ? config.market.cunhagemPesoIron : 25000;
     document.getElementById('twmgr-mk-automint').checked = !!config.market.autoMint;
     document.getElementById('twmgr-mk-stopon').checked = !!config.market.cunhagemStopEnabled;
     document.getElementById('twmgr-mk-stophours').value = config.market.cunhagemStopHours != null ? config.market.cunhagemStopHours : 2;
@@ -8976,7 +9017,7 @@
     document.getElementById('twmgr-mk-sdist').value = config.market.solidarioMaxDist != null ? config.market.solidarioMaxDist : 20;
     renderMarketCunhagemGroups();
     fillMarketSolidarioGroupSelect();
-    ['twmgr-mk-destcoords', 'twmgr-mk-rwood', 'twmgr-mk-rstone', 'twmgr-mk-riron', 'twmgr-mk-automint', 'twmgr-mk-stopon', 'twmgr-mk-stophours', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
+    ['twmgr-mk-destcoords', 'twmgr-mk-rwood', 'twmgr-mk-rstone', 'twmgr-mk-riron', 'twmgr-mk-pwood', 'twmgr-mk-pstone', 'twmgr-mk-piron', 'twmgr-mk-automint', 'twmgr-mk-stopon', 'twmgr-mk-stophours', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
     // Cada modo tem seu próprio par Iniciar/Parar — rodam independentes, pode ligar vários ao mesmo tempo.
     MARKET_MODES.forEach((mkKey) => {
       document.getElementById('twmgr-mk-' + mkKey + '-start').addEventListener('click', () => marketStart(mkKey));

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.57.0
+// @version      11.58.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.57.0';
+  const VERSION = '11.58.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -208,6 +208,9 @@
   const defMarket = () => ({
     modes: { cunhagem: defMarketModeState(), equilibrio: defMarketModeState(), solidario: defMarketModeState() },
     interval: 600, destCoords: [], reserveWood: 0, reserveStone: 0, reserveIron: 0,
+    // Peso pra dividir o que cada aldeia manda na Cunhagem — pensado pro custo de formar o
+    // nobre (não muda entre mundos com bandeira de desconto, que corta os 3 igual).
+    cunhagemPesoWood: 28000, cunhagemPesoStone: 30000, cunhagemPesoIron: 25000,
     cunhagemSourceGroups: [], cunhagemStopEnabled: false, cunhagemStopHours: 2, autoMint: false,
     thresholdPct: 50, maxDist: 15,
     groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {},
@@ -497,6 +500,9 @@
     if (c.market.reserveWood == null) c.market.reserveWood = 0;
     if (c.market.reserveStone == null) c.market.reserveStone = 0;
     if (c.market.reserveIron == null) c.market.reserveIron = 0;
+    if (c.market.cunhagemPesoWood == null) c.market.cunhagemPesoWood = 28000;
+    if (c.market.cunhagemPesoStone == null) c.market.cunhagemPesoStone = 30000;
+    if (c.market.cunhagemPesoIron == null) c.market.cunhagemPesoIron = 25000;
     if (!Array.isArray(c.market.cunhagemSourceGroups)) c.market.cunhagemSourceGroups = [];
     if (c.market.cunhagemStopEnabled == null) c.market.cunhagemStopEnabled = false;
     if (c.market.cunhagemStopHours == null) c.market.cunhagemStopHours = 2;

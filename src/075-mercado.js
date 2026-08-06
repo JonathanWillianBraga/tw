@@ -5,21 +5,38 @@
     const numOf = (id) => { const el = doc.getElementById(id); return el ? (parseInt((el.textContent || '').replace(/\D/g, ''), 10) || 0) : 0; };
     return { wood: numOf('wood'), stone: numOf('stone'), iron: numOf('iron'), storage: numOf('storage'), capacity: numOf('market_merchant_max_transport') };
   }
-  function balancedSplit(totalCapacity, avail, reserve) {
+  // weights ausente/zerado = split IGUAL entre os 3 (comportamento de sempre, usado por
+  // Equilíbrio/Solidário). Com weights, cada iteração reparte a capacidade RESTANTE na
+  // proporção do peso entre quem ainda tem espaço — não é "pega o peso e pronto": se um
+  // recurso já bateu no teto de estoque disponível, a sobra da capacidade do mercador
+  // vai pros outros dois, na proporção entre eles, em vez de ficar sem uso.
+  function balancedSplit(totalCapacity, avail, reserve, weights) {
     const keys = ['wood', 'stone', 'iron'];
     const cap = {}; keys.forEach((k) => { cap[k] = Math.max(0, (avail[k] || 0) - (reserve[k] || 0)); });
+    const w = {}; let wSum = 0;
+    keys.forEach((k) => { w[k] = Math.max(0, (weights && weights[k]) || 0); wSum += w[k]; });
+    const pesado = wSum > 0;
     const alloc = { wood: 0, stone: 0, iron: 0 };
     let remaining = totalCapacity;
     let active = keys.filter((k) => cap[k] > 0);
+    // share >= 1 sempre (Math.max) e cap[k]-alloc[k] >= 1 pra quem está em "active" — então
+    // give >= 1 em todo membro ativo, remaining cai pelo menos len(active) a cada volta.
+    // Termina sozinho: ou remaining zera, ou os ativos vão saindo por falta de espaço.
     while (remaining > 0 && active.length) {
-      const share = Math.max(1, Math.floor(remaining / active.length));
-      let progressed = false;
+      const pesoAtivo = pesado ? active.reduce((s, k) => s + w[k], 0) : 0;
+      // A fatia da RODADA usa o remaining FIXO no início dela — se recalculasse a cada membro
+      // (remaining já reduzido pelo anterior na mesma rodada), o primeiro da vez levaria mais
+      // que o combinado e o resto cascateava pra menos. É a mesma pegadinha do split antigo,
+      // que por isso computava "share" uma vez só, fora do filter.
+      const totalRodada = remaining;
+      // Sem peso configurado (ou peso zerado nos que sobraram), cai pro igual entre os ativos —
+      // é exatamente a conta antiga.
       active = active.filter((k) => {
-        const give = Math.min(share, cap[k] - alloc[k], remaining);
-        if (give > 0) { alloc[k] += give; remaining -= give; progressed = true; }
+        const fatia = (pesado && pesoAtivo > 0) ? (w[k] / pesoAtivo) : (1 / active.length);
+        const give = Math.min(Math.max(1, Math.floor(totalRodada * fatia)), cap[k] - alloc[k], remaining);
+        alloc[k] += give; remaining -= give;
         return cap[k] - alloc[k] > 0 && remaining > 0;
       });
-      if (!progressed) break;
     }
     return alloc;
   }
@@ -83,6 +100,14 @@
       stone: Math.max(0, config.market.reserveStone || 0),
       iron: Math.max(0, config.market.reserveIron || 0),
     };
+    // Peso entre os recursos ao enviar — pensado pro custo de formar o nobre (a proporção
+    // não muda entre mundos com bandeira de desconto, que corta os 3 igual). Default 28k/30k/
+    // 25k; zerar os 3 campos volta pro split igual de antes.
+    const weights = {
+      wood: Math.max(0, config.market.cunhagemPesoWood != null ? config.market.cunhagemPesoWood : 28000),
+      stone: Math.max(0, config.market.cunhagemPesoStone != null ? config.market.cunhagemPesoStone : 30000),
+      iron: Math.max(0, config.market.cunhagemPesoIron != null ? config.market.cunhagemPesoIron : 25000),
+    };
     let vils = [];
     try { vils = await getAllVillagesCached(); } catch (e) { pushLog('Cunhagem: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
 
@@ -109,7 +134,7 @@
       let state;
       try { state = await getMarketState(v.vid); } catch (e) { pushLog('Cunhagem em ' + v.name + ': erro ao ler o mercado (' + (e.message || e) + ').', 'err', 'market'); continue; }
       if (!state.capacity) continue;
-      const amounts = balancedSplit(state.capacity, state, reserve);
+      const amounts = balancedSplit(state.capacity, state, reserve, weights);
       if ((amounts.wood + amounts.stone + amounts.iron) <= 0) continue;
       try {
         await sendMarketResources(v.vid, coord, amounts);
@@ -431,6 +456,9 @@
     if (g('twmgr-mk-rwood')) c.reserveWood = Math.max(0, parseInt(g('twmgr-mk-rwood').value, 10) || 0);
     if (g('twmgr-mk-rstone')) c.reserveStone = Math.max(0, parseInt(g('twmgr-mk-rstone').value, 10) || 0);
     if (g('twmgr-mk-riron')) c.reserveIron = Math.max(0, parseInt(g('twmgr-mk-riron').value, 10) || 0);
+    if (g('twmgr-mk-pwood')) c.cunhagemPesoWood = Math.max(0, parseInt(g('twmgr-mk-pwood').value, 10) || 0);
+    if (g('twmgr-mk-pstone')) c.cunhagemPesoStone = Math.max(0, parseInt(g('twmgr-mk-pstone').value, 10) || 0);
+    if (g('twmgr-mk-piron')) c.cunhagemPesoIron = Math.max(0, parseInt(g('twmgr-mk-piron').value, 10) || 0);
     if (g('twmgr-mk-stopon')) c.cunhagemStopEnabled = g('twmgr-mk-stopon').checked;
     if (g('twmgr-mk-stophours')) c.cunhagemStopHours = Math.max(0.1, parseFloat((g('twmgr-mk-stophours').value || '').replace(',', '.')) || 2);
     if (g('twmgr-mk-automint')) c.autoMint = g('twmgr-mk-automint').checked;

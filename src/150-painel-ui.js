@@ -534,6 +534,10 @@
               '<input id="twmgr-mk-rwood" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px">' +
               '<input id="twmgr-mk-rstone" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px">' +
               '<input id="twmgr-mk-riron" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px"></div>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl" title="Proporção pra dividir o que cada aldeia manda — pensado pro custo de formar o nobre, pra não sobrar recurso parado no destino. Zerar os 3 volta pra divisão igual entre os três.">Peso mad/arg/fer (custo do nobre)</span>' +
+              '<input id="twmgr-mk-pwood" class="twmgr-inp" type="number" min="0" step="1000" value="28000" style="width:64px">' +
+              '<input id="twmgr-mk-pstone" class="twmgr-inp" type="number" min="0" step="1000" value="30000" style="width:64px">' +
+              '<input id="twmgr-mk-piron" class="twmgr-inp" type="number" min="0" step="1000" value="25000" style="width:64px"></div>' +
             '<div class="twmgr-row"><label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#6f6153"><input id="twmgr-mk-automint" type="checkbox">Cunhagem automática (moedas de ouro nas aldeias destino)</label></div>' +
             '<div class="twmgr-row"><label style="display:flex;align-items:center;gap:4px;font-size:10px;color:#6f6153"><input id="twmgr-mk-stopon" type="checkbox">Parada programada, após</label><input id="twmgr-mk-stophours" class="twmgr-inp" type="number" min="0.1" step="0.5" value="2" style="width:56px"><span class="twmgr-lbl">h</span></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-cunhagem-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-cunhagem-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
@@ -921,6 +925,9 @@
     document.getElementById('twmgr-mk-rwood').value = config.market.reserveWood || 0;
     document.getElementById('twmgr-mk-rstone').value = config.market.reserveStone || 0;
     document.getElementById('twmgr-mk-riron').value = config.market.reserveIron || 0;
+    document.getElementById('twmgr-mk-pwood').value = config.market.cunhagemPesoWood != null ? config.market.cunhagemPesoWood : 28000;
+    document.getElementById('twmgr-mk-pstone').value = config.market.cunhagemPesoStone != null ? config.market.cunhagemPesoStone : 30000;
+    document.getElementById('twmgr-mk-piron').value = config.market.cunhagemPesoIron != null ? config.market.cunhagemPesoIron : 25000;
     document.getElementById('twmgr-mk-automint').checked = !!config.market.autoMint;
     document.getElementById('twmgr-mk-stopon').checked = !!config.market.cunhagemStopEnabled;
     document.getElementById('twmgr-mk-stophours').value = config.market.cunhagemStopHours != null ? config.market.cunhagemStopHours : 2;
@@ -935,7 +942,7 @@
     document.getElementById('twmgr-mk-sdist').value = config.market.solidarioMaxDist != null ? config.market.solidarioMaxDist : 20;
     renderMarketCunhagemGroups();
     fillMarketSolidarioGroupSelect();
-    ['twmgr-mk-destcoords', 'twmgr-mk-rwood', 'twmgr-mk-rstone', 'twmgr-mk-riron', 'twmgr-mk-automint', 'twmgr-mk-stopon', 'twmgr-mk-stophours', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
+    ['twmgr-mk-destcoords', 'twmgr-mk-rwood', 'twmgr-mk-rstone', 'twmgr-mk-riron', 'twmgr-mk-pwood', 'twmgr-mk-pstone', 'twmgr-mk-piron', 'twmgr-mk-automint', 'twmgr-mk-stopon', 'twmgr-mk-stophours', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
     // Cada modo tem seu próprio par Iniciar/Parar — rodam independentes, pode ligar vários ao mesmo tempo.
     MARKET_MODES.forEach((mkKey) => {
       document.getElementById('twmgr-mk-' + mkKey + '-start').addEventListener('click', () => marketStart(mkKey));

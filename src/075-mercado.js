@@ -259,14 +259,34 @@
     return { minted: n, res: st.resNow };
   }
   function coordDist(a, b) { const pa = a.split('|').map(Number), pb = b.split('|').map(Number); return Math.sqrt((pa[0] - pb[0]) * (pa[0] - pb[0]) + (pa[1] - pb[1]) * (pa[1] - pb[1])); }
-  async function equilibrioPass() {
-    let vils = [];
-    try { vils = await getAllVillagesCached(); } catch (e) { pushLog('Equilíbrio: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
+  // Lê o mercado de todas as aldeias — usado tanto pelo ciclo real (equilibrioPass) quanto
+  // pelo diagnóstico sob demanda (equilibrioDiagnostico), sem mandar nada em nenhum dos dois.
+  // "storage" guardado À PARTE de "thr": thr já vem escalado pelo limiar (storage*pct), mas
+  // pra saber se uma aldeia está perto de ESTOURAR o armazém preciso do valor bruto.
+  async function getEquilibrioSnapshot() {
+    let vils = await getAllVillagesCached();
     vils = vils.filter((v) => v.coord);
-    const donorSet = {}, recvSet = {}, totRes = { wood: 0, stone: 0, iron: 0 };
     const pct = (config.market.thresholdPct != null ? config.market.thresholdPct : 50) / 100;
+    const st = [];
+    for (const v of vils) {
+      let m; try { m = await getMarketState(v.vid); } catch (e) { continue; }
+      if (!m.storage) continue;                 // sem armazém lido -> pula
+      st.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron },
+        cap: m.capacity, storage: m.storage, thr: m.storage * pct });
+      await sleep(120);
+    }
+    return { st: st, pct: pct };
+  }
+  async function equilibrioPass() {
+    let snap;
+    try { snap = await getEquilibrioSnapshot(); } catch (e) { pushLog('Equilíbrio: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
+    const st = snap.st, pct = snap.pct;
+    const donorSet = {}, recvSet = {}, totRes = { wood: 0, stone: 0, iron: 0 };
     const maxDist = config.market.maxDist != null ? config.market.maxDist : 15;
     const now = Date.now();
+    // Saúde ANTES de mexer em qualquer coisa — é o estado real, e a vazão do ciclo ANTERIOR
+    // (config.market.modes.equilibrio.stats ainda não foi sobrescrita) alimenta o ETA.
+    equilibrioAtualizarSaudeCom(st, pct);
     // recursos em trânsito (que eu já mandei e ainda não chegaram)
     config.market.inflight = config.market.inflight || {};
     Object.keys(config.market.inflight).forEach((vid) => {
@@ -274,13 +294,6 @@
       if (!config.market.inflight[vid].length) delete config.market.inflight[vid];
     });
     const inSum = (vid, r) => (config.market.inflight[vid] || []).reduce((s, e) => s + (e.r === r ? e.amt : 0), 0);
-    const st = [];
-    for (const v of vils) {
-      let m; try { m = await getMarketState(v.vid); } catch (e) { continue; }
-      if (!m.storage) continue;                 // sem armazém lido -> pula
-      st.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, thr: m.storage * pct });
-      await sleep(120);
-    }
     let sent = 0;
     for (const r of ['wood', 'stone', 'iron']) {
       // carente = (atual + o que já vem chegando) abaixo do limiar
@@ -313,6 +326,61 @@
     config.market.modes.equilibrio.stats = { sending: Object.keys(donorSet).length, receiving: Object.keys(recvSet).length, wood: totRes.wood, stone: totRes.stone, iron: totRes.iron };
     save();
     pushLog('Equilíbrio: ciclo concluído — ' + sent + ' transferência(s), limiar ' + Math.round(pct * 100) + '%.', 'ok', 'market');
+  }
+
+  // Saúde: quão perto do limiar cada aldeia está (déficit) e quão perto do TETO do armazém
+  // (excedente/risco de estourar — o "problema contínuo" que motivou isto). ETA usa a vazão do
+  // ciclo REAL anterior (config.market.modes.equilibrio.stats, ainda intacta quando isto roda no
+  // início do ciclo) — é uma estimativa honesta baseada no que de fato saiu da última vez, não
+  // um modelo teórico; se nada saiu daquele recurso no último ciclo, o ETA fica "sem dado".
+  const EQ_RISCO_PCT = 0.9;   // 90% do armazém = "quase estourando"
+  function equilibrioAtualizarSaudeCom(st, pct) {
+    const RES = ['wood', 'stone', 'iron'];
+    const anterior = (config.market.modes.equilibrio.stats) || {};
+    const intervalSec = Math.max(60, config.market.interval || 600);
+    let aldeiasOk = 0;
+    const deficitTotal = { wood: 0, stone: 0, iron: 0 };
+    const excedenteTotal = { wood: 0, stone: 0, iron: 0 };
+    const problemas = [];
+    st.forEach((s) => {
+      let ok = true;
+      const def = {}, risco = {};
+      RES.forEach((r) => {
+        const d = Math.max(0, Math.round(s.thr - s.cur[r]));
+        def[r] = d;
+        deficitTotal[r] += d;
+        excedenteTotal[r] += Math.max(0, Math.round(s.cur[r] - s.thr));
+        if (d > 0) ok = false;
+        if (s.storage > 0 && s.cur[r] >= s.storage * EQ_RISCO_PCT) { risco[r] = true; ok = false; }
+      });
+      if (ok) aldeiasOk++;
+      else problemas.push({ coord: s.coord, name: s.name, def: def, risco: risco });
+    });
+    problemas.sort((a, b) => (b.def.wood + b.def.stone + b.def.iron) - (a.def.wood + a.def.stone + a.def.iron));
+    const eta = {};
+    RES.forEach((r) => {
+      if (deficitTotal[r] <= 0) { eta[r] = 0; return; }
+      const taxa = anterior[r] || 0;
+      eta[r] = taxa > 0 ? Math.ceil(deficitTotal[r] / taxa) * intervalSec : null;   // null = sem dado de vazão
+    });
+    config.market.modes.equilibrio.saude = {
+      at: Date.now(), total: st.length, ok: aldeiasOk,
+      pct: st.length ? Math.round(100 * aldeiasOk / st.length) : 100,
+      limiarPct: Math.round(pct * 100), deficitTotal: deficitTotal, excedenteTotal: excedenteTotal,
+      eta: eta, problemas: problemas,
+    };
+    save();
+    if (typeof equilibrioRenderSaude === 'function') equilibrioRenderSaude();
+  }
+  // Botão "🔄 diagnóstico": lê tudo de novo, na hora, SEM mandar nada — útil mesmo com o
+  // Equilíbrio desligado, pra só olhar o estado sem ligar a automação.
+  async function equilibrioDiagnostico() {
+    pushLog('Equilíbrio: lendo o mercado de todas as aldeias pro diagnóstico…', '', 'market');
+    let snap;
+    try { snap = await getEquilibrioSnapshot(); }
+    catch (e) { pushLog('Equilíbrio: erro ao ler o diagnóstico (' + (e.message || e) + ').', 'err', 'market'); return; }
+    equilibrioAtualizarSaudeCom(snap.st, snap.pct);
+    pushLog('Equilíbrio: diagnóstico atualizado — ' + snap.st.length + ' aldeia(s) lida(s).', 'ok', 'market');
   }
 
   // ---- Solidário: as aldeias do grupo escolhido SÓ RECEBEM (nunca doam). Doadoras são TODAS as outras

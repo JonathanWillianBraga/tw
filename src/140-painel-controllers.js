@@ -169,6 +169,40 @@
     }).join('');
   }
 
+  // Saúde do Equilíbrio: resumo global + ETA por recurso (na vazão do ciclo anterior) + tabela
+  // das aldeias com problema (déficit e/ou risco de estourar o armazém).
+  function equilibrioRenderSaude() {
+    const resumo = document.getElementById('twmgr-mk-eq-resumo'); if (!resumo) return;
+    const etaBox = document.getElementById('twmgr-mk-eq-eta');
+    const box = document.getElementById('twmgr-mk-eq-problemas');
+    const s = config.market.modes.equilibrio.saude;
+    if (!s) { resumo.textContent = '— rode o diagnóstico ou ligue o Equilíbrio —'; if (etaBox) etaBox.textContent = ''; if (box) box.innerHTML = ''; return; }
+    const ROT = { wood: 'madeira', stone: 'argila', iron: 'ferro' };
+    const RES = ['wood', 'stone', 'iron'];
+    const defTxt = RES.filter((r) => s.deficitTotal[r] > 0).map((r) => fmtN(s.deficitTotal[r]) + ' ' + ROT[r]).join(', ') || 'nenhum';
+    resumo.innerHTML = '<b style="color:' + (s.pct >= 90 ? '#2e7d3a' : s.pct >= 60 ? '#a2643a' : '#a8564a') + '">' + s.ok + ' de ' + s.total + ' aldeia(s)</b> no limiar (' + s.pct + '%, ≥' + s.limiarPct + '% do armazém)' +
+      ' · déficit total: ' + defTxt + ' · atualizado ' + new Date(s.at).toLocaleTimeString('pt-BR').slice(0, 5);
+    if (etaBox) {
+      const partes = RES.map((r) => {
+        const e = s.eta[r];
+        const txt = e === 0 ? 'ok' : e == null ? 'sem dado de vazão' : '~' + fmt(e * 1000);
+        return ROT[r] + ' ' + txt;
+      });
+      etaBox.textContent = 'ETA pro limiar, no ritmo do último ciclo: ' + partes.join(' · ');
+    }
+    if (!box) return;
+    if (!s.problemas.length) { box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma aldeia com problema —</div>'; return; }
+    box.innerHTML = s.problemas.map((p) => {
+      const defTxt2 = RES.filter((r) => p.def[r] > 0).map((r) => fmtN(p.def[r]) + ' ' + ROT[r]).join(', ') || '—';
+      const riscoTxt = RES.filter((r) => p.risco[r]).map((r) => ROT[r]).join(', ');
+      return '<div style="display:grid;grid-template-columns:66px 1fr 1fr;gap:4px;align-items:center;padding:3px 4px;border-bottom:1px solid rgba(0,0,0,.05);font-size:10px">' +
+        '<span style="color:#a2643a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(p.name) + '">' + esc(p.coord) + '</span>' +
+        '<span style="color:#a8564a">' + esc(defTxt2) + '</span>' +
+        '<span style="color:#c0483a">' + (riscoTxt ? '⚠ quase estourando: ' + esc(riscoTxt) : '') + '</span>' +
+      '</div>';
+    }).join('');
+  }
+
   function readScavUnits() {
     config.scav.units = config.scav.units || {};
     SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) config.scav.units[u] = el.checked; });

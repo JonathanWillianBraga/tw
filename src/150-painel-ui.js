@@ -548,7 +548,19 @@
             '<div class="twmgr-row"><span class="twmgr-lbl">Encher armazém até (%)</span><input id="twmgr-mk-thr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="15" style="width:56px"></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-equilibrio-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-equilibrio-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
-            '<div id="twmgr-mk-equilibrio-status" class="twmgr-cstatus"></div>') +
+            '<div id="twmgr-mk-equilibrio-status" class="twmgr-cstatus"></div>' +
+            // Saúde: funciona mesmo com o Equilíbrio desligado (só lê, não manda nada).
+            '<div style="margin-top:8px;border-top:1px solid #ece4d8;padding-top:6px">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
+                '<span style="font-size:10px;color:#8b5426;font-weight:600">Saúde dos recursos</span>' +
+                '<a id="twmgr-mk-eq-diag" style="cursor:pointer;color:#a2643a;font-size:9px">🔄 diagnóstico</a>' +
+              '</div>' +
+              '<div id="twmgr-mk-eq-resumo" style="font-size:10px;color:#6f6153;margin-bottom:2px">— rode o diagnóstico ou ligue o Equilíbrio —</div>' +
+              '<div id="twmgr-mk-eq-eta" style="font-size:9px;color:#8a7d6d;margin-bottom:4px"></div>' +
+              '<div style="display:grid;grid-template-columns:66px 1fr 1fr;gap:4px;font-size:9px;color:#8a7d6d;padding:0 4px 2px">' +
+                '<span>aldeia</span><span>déficit (abaixo do limiar)</span><span>risco</span></div>' +
+              '<div id="twmgr-mk-eq-problemas" style="height:160px;min-height:70px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+            '</div>') +
         sec('🤝 Solidário',
             '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Aldeias do grupo escolhido SÓ RECEBEM (nunca doam). Doadora é qualquer OUTRA aldeia sua — testa da mais perto pra mais longe, e pula pra próxima se a mais perto não tiver mercador/recurso suficiente. Doadora só cede acima de "% do recurso mais baixo dela" (protege quem já tá capenga). Se ninguém qualificar, a mais próxima cede só a fatia acima de "% que fica na doadora" mesmo assim (nunca esvazia), pra nunca travar construção/pesquisa numa aldeia nova ou bárbara conquistada.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Grupo Solidário</span><select id="twmgr-mk-g-solid" class="twmgr-inp" style="width:140px"></select></div>' +
@@ -949,6 +961,8 @@
       document.getElementById('twmgr-mk-' + mkKey + '-stop').addEventListener('click', () => marketStop(mkKey));
       setMarketStatus(mkKey, config.market.modes[mkKey].running);
     });
+    document.getElementById('twmgr-mk-eq-diag').addEventListener('click', equilibrioDiagnostico);
+    equilibrioRenderSaude();   // mostra o diagnóstico salvo da última vez, sem esperar um novo
 
     document.getElementById('twmgr-bld-max').value = config.build.maxQueue || 5;
     document.getElementById('twmgr-bld-int').value = Math.round((config.build.interval || 600) / 60);

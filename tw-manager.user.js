@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.58.0
+// @version      11.59.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.58.0';
+  const VERSION = '11.59.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -3675,14 +3675,34 @@
     return { minted: n, res: st.resNow };
   }
   function coordDist(a, b) { const pa = a.split('|').map(Number), pb = b.split('|').map(Number); return Math.sqrt((pa[0] - pb[0]) * (pa[0] - pb[0]) + (pa[1] - pb[1]) * (pa[1] - pb[1])); }
-  async function equilibrioPass() {
-    let vils = [];
-    try { vils = await getAllVillagesCached(); } catch (e) { pushLog('Equilíbrio: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
+  // Lê o mercado de todas as aldeias — usado tanto pelo ciclo real (equilibrioPass) quanto
+  // pelo diagnóstico sob demanda (equilibrioDiagnostico), sem mandar nada em nenhum dos dois.
+  // "storage" guardado À PARTE de "thr": thr já vem escalado pelo limiar (storage*pct), mas
+  // pra saber se uma aldeia está perto de ESTOURAR o armazém preciso do valor bruto.
+  async function getEquilibrioSnapshot() {
+    let vils = await getAllVillagesCached();
     vils = vils.filter((v) => v.coord);
-    const donorSet = {}, recvSet = {}, totRes = { wood: 0, stone: 0, iron: 0 };
     const pct = (config.market.thresholdPct != null ? config.market.thresholdPct : 50) / 100;
+    const st = [];
+    for (const v of vils) {
+      let m; try { m = await getMarketState(v.vid); } catch (e) { continue; }
+      if (!m.storage) continue;                 // sem armazém lido -> pula
+      st.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron },
+        cap: m.capacity, storage: m.storage, thr: m.storage * pct });
+      await sleep(120);
+    }
+    return { st: st, pct: pct };
+  }
+  async function equilibrioPass() {
+    let snap;
+    try { snap = await getEquilibrioSnapshot(); } catch (e) { pushLog('Equilíbrio: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
+    const st = snap.st, pct = snap.pct;
+    const donorSet = {}, recvSet = {}, totRes = { wood: 0, stone: 0, iron: 0 };
     const maxDist = config.market.maxDist != null ? config.market.maxDist : 15;
     const now = Date.now();
+    // Saúde ANTES de mexer em qualquer coisa — é o estado real, e a vazão do ciclo ANTERIOR
+    // (config.market.modes.equilibrio.stats ainda não foi sobrescrita) alimenta o ETA.
+    equilibrioAtualizarSaudeCom(st, pct);
     // recursos em trânsito (que eu já mandei e ainda não chegaram)
     config.market.inflight = config.market.inflight || {};
     Object.keys(config.market.inflight).forEach((vid) => {
@@ -3690,13 +3710,6 @@
       if (!config.market.inflight[vid].length) delete config.market.inflight[vid];
     });
     const inSum = (vid, r) => (config.market.inflight[vid] || []).reduce((s, e) => s + (e.r === r ? e.amt : 0), 0);
-    const st = [];
-    for (const v of vils) {
-      let m; try { m = await getMarketState(v.vid); } catch (e) { continue; }
-      if (!m.storage) continue;                 // sem armazém lido -> pula
-      st.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, thr: m.storage * pct });
-      await sleep(120);
-    }
     let sent = 0;
     for (const r of ['wood', 'stone', 'iron']) {
       // carente = (atual + o que já vem chegando) abaixo do limiar
@@ -3729,6 +3742,61 @@
     config.market.modes.equilibrio.stats = { sending: Object.keys(donorSet).length, receiving: Object.keys(recvSet).length, wood: totRes.wood, stone: totRes.stone, iron: totRes.iron };
     save();
     pushLog('Equilíbrio: ciclo concluído — ' + sent + ' transferência(s), limiar ' + Math.round(pct * 100) + '%.', 'ok', 'market');
+  }
+
+  // Saúde: quão perto do limiar cada aldeia está (déficit) e quão perto do TETO do armazém
+  // (excedente/risco de estourar — o "problema contínuo" que motivou isto). ETA usa a vazão do
+  // ciclo REAL anterior (config.market.modes.equilibrio.stats, ainda intacta quando isto roda no
+  // início do ciclo) — é uma estimativa honesta baseada no que de fato saiu da última vez, não
+  // um modelo teórico; se nada saiu daquele recurso no último ciclo, o ETA fica "sem dado".
+  const EQ_RISCO_PCT = 0.9;   // 90% do armazém = "quase estourando"
+  function equilibrioAtualizarSaudeCom(st, pct) {
+    const RES = ['wood', 'stone', 'iron'];
+    const anterior = (config.market.modes.equilibrio.stats) || {};
+    const intervalSec = Math.max(60, config.market.interval || 600);
+    let aldeiasOk = 0;
+    const deficitTotal = { wood: 0, stone: 0, iron: 0 };
+    const excedenteTotal = { wood: 0, stone: 0, iron: 0 };
+    const problemas = [];
+    st.forEach((s) => {
+      let ok = true;
+      const def = {}, risco = {};
+      RES.forEach((r) => {
+        const d = Math.max(0, Math.round(s.thr - s.cur[r]));
+        def[r] = d;
+        deficitTotal[r] += d;
+        excedenteTotal[r] += Math.max(0, Math.round(s.cur[r] - s.thr));
+        if (d > 0) ok = false;
+        if (s.storage > 0 && s.cur[r] >= s.storage * EQ_RISCO_PCT) { risco[r] = true; ok = false; }
+      });
+      if (ok) aldeiasOk++;
+      else problemas.push({ coord: s.coord, name: s.name, def: def, risco: risco });
+    });
+    problemas.sort((a, b) => (b.def.wood + b.def.stone + b.def.iron) - (a.def.wood + a.def.stone + a.def.iron));
+    const eta = {};
+    RES.forEach((r) => {
+      if (deficitTotal[r] <= 0) { eta[r] = 0; return; }
+      const taxa = anterior[r] || 0;
+      eta[r] = taxa > 0 ? Math.ceil(deficitTotal[r] / taxa) * intervalSec : null;   // null = sem dado de vazão
+    });
+    config.market.modes.equilibrio.saude = {
+      at: Date.now(), total: st.length, ok: aldeiasOk,
+      pct: st.length ? Math.round(100 * aldeiasOk / st.length) : 100,
+      limiarPct: Math.round(pct * 100), deficitTotal: deficitTotal, excedenteTotal: excedenteTotal,
+      eta: eta, problemas: problemas,
+    };
+    save();
+    if (typeof equilibrioRenderSaude === 'function') equilibrioRenderSaude();
+  }
+  // Botão "🔄 diagnóstico": lê tudo de novo, na hora, SEM mandar nada — útil mesmo com o
+  // Equilíbrio desligado, pra só olhar o estado sem ligar a automação.
+  async function equilibrioDiagnostico() {
+    pushLog('Equilíbrio: lendo o mercado de todas as aldeias pro diagnóstico…', '', 'market');
+    let snap;
+    try { snap = await getEquilibrioSnapshot(); }
+    catch (e) { pushLog('Equilíbrio: erro ao ler o diagnóstico (' + (e.message || e) + ').', 'err', 'market'); return; }
+    equilibrioAtualizarSaudeCom(snap.st, snap.pct);
+    pushLog('Equilíbrio: diagnóstico atualizado — ' + snap.st.length + ' aldeia(s) lida(s).', 'ok', 'market');
   }
 
   // ---- Solidário: as aldeias do grupo escolhido SÓ RECEBEM (nunca doam). Doadoras são TODAS as outras
@@ -7998,6 +8066,40 @@
     }).join('');
   }
 
+  // Saúde do Equilíbrio: resumo global + ETA por recurso (na vazão do ciclo anterior) + tabela
+  // das aldeias com problema (déficit e/ou risco de estourar o armazém).
+  function equilibrioRenderSaude() {
+    const resumo = document.getElementById('twmgr-mk-eq-resumo'); if (!resumo) return;
+    const etaBox = document.getElementById('twmgr-mk-eq-eta');
+    const box = document.getElementById('twmgr-mk-eq-problemas');
+    const s = config.market.modes.equilibrio.saude;
+    if (!s) { resumo.textContent = '— rode o diagnóstico ou ligue o Equilíbrio —'; if (etaBox) etaBox.textContent = ''; if (box) box.innerHTML = ''; return; }
+    const ROT = { wood: 'madeira', stone: 'argila', iron: 'ferro' };
+    const RES = ['wood', 'stone', 'iron'];
+    const defTxt = RES.filter((r) => s.deficitTotal[r] > 0).map((r) => fmtN(s.deficitTotal[r]) + ' ' + ROT[r]).join(', ') || 'nenhum';
+    resumo.innerHTML = '<b style="color:' + (s.pct >= 90 ? '#2e7d3a' : s.pct >= 60 ? '#a2643a' : '#a8564a') + '">' + s.ok + ' de ' + s.total + ' aldeia(s)</b> no limiar (' + s.pct + '%, ≥' + s.limiarPct + '% do armazém)' +
+      ' · déficit total: ' + defTxt + ' · atualizado ' + new Date(s.at).toLocaleTimeString('pt-BR').slice(0, 5);
+    if (etaBox) {
+      const partes = RES.map((r) => {
+        const e = s.eta[r];
+        const txt = e === 0 ? 'ok' : e == null ? 'sem dado de vazão' : '~' + fmt(e * 1000);
+        return ROT[r] + ' ' + txt;
+      });
+      etaBox.textContent = 'ETA pro limiar, no ritmo do último ciclo: ' + partes.join(' · ');
+    }
+    if (!box) return;
+    if (!s.problemas.length) { box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma aldeia com problema —</div>'; return; }
+    box.innerHTML = s.problemas.map((p) => {
+      const defTxt2 = RES.filter((r) => p.def[r] > 0).map((r) => fmtN(p.def[r]) + ' ' + ROT[r]).join(', ') || '—';
+      const riscoTxt = RES.filter((r) => p.risco[r]).map((r) => ROT[r]).join(', ');
+      return '<div style="display:grid;grid-template-columns:66px 1fr 1fr;gap:4px;align-items:center;padding:3px 4px;border-bottom:1px solid rgba(0,0,0,.05);font-size:10px">' +
+        '<span style="color:#a2643a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(p.name) + '">' + esc(p.coord) + '</span>' +
+        '<span style="color:#a8564a">' + esc(defTxt2) + '</span>' +
+        '<span style="color:#c0483a">' + (riscoTxt ? '⚠ quase estourando: ' + esc(riscoTxt) : '') + '</span>' +
+      '</div>';
+    }).join('');
+  }
+
   function readScavUnits() {
     config.scav.units = config.scav.units || {};
     SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) config.scav.units[u] = el.checked; });
@@ -8623,7 +8725,19 @@
             '<div class="twmgr-row"><span class="twmgr-lbl">Encher armazém até (%)</span><input id="twmgr-mk-thr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="15" style="width:56px"></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-equilibrio-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-equilibrio-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
-            '<div id="twmgr-mk-equilibrio-status" class="twmgr-cstatus"></div>') +
+            '<div id="twmgr-mk-equilibrio-status" class="twmgr-cstatus"></div>' +
+            // Saúde: funciona mesmo com o Equilíbrio desligado (só lê, não manda nada).
+            '<div style="margin-top:8px;border-top:1px solid #ece4d8;padding-top:6px">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
+                '<span style="font-size:10px;color:#8b5426;font-weight:600">Saúde dos recursos</span>' +
+                '<a id="twmgr-mk-eq-diag" style="cursor:pointer;color:#a2643a;font-size:9px">🔄 diagnóstico</a>' +
+              '</div>' +
+              '<div id="twmgr-mk-eq-resumo" style="font-size:10px;color:#6f6153;margin-bottom:2px">— rode o diagnóstico ou ligue o Equilíbrio —</div>' +
+              '<div id="twmgr-mk-eq-eta" style="font-size:9px;color:#8a7d6d;margin-bottom:4px"></div>' +
+              '<div style="display:grid;grid-template-columns:66px 1fr 1fr;gap:4px;font-size:9px;color:#8a7d6d;padding:0 4px 2px">' +
+                '<span>aldeia</span><span>déficit (abaixo do limiar)</span><span>risco</span></div>' +
+              '<div id="twmgr-mk-eq-problemas" style="height:160px;min-height:70px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+            '</div>') +
         sec('🤝 Solidário',
             '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Aldeias do grupo escolhido SÓ RECEBEM (nunca doam). Doadora é qualquer OUTRA aldeia sua — testa da mais perto pra mais longe, e pula pra próxima se a mais perto não tiver mercador/recurso suficiente. Doadora só cede acima de "% do recurso mais baixo dela" (protege quem já tá capenga). Se ninguém qualificar, a mais próxima cede só a fatia acima de "% que fica na doadora" mesmo assim (nunca esvazia), pra nunca travar construção/pesquisa numa aldeia nova ou bárbara conquistada.</div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Grupo Solidário</span><select id="twmgr-mk-g-solid" class="twmgr-inp" style="width:140px"></select></div>' +
@@ -9024,6 +9138,8 @@
       document.getElementById('twmgr-mk-' + mkKey + '-stop').addEventListener('click', () => marketStop(mkKey));
       setMarketStatus(mkKey, config.market.modes[mkKey].running);
     });
+    document.getElementById('twmgr-mk-eq-diag').addEventListener('click', equilibrioDiagnostico);
+    equilibrioRenderSaude();   // mostra o diagnóstico salvo da última vez, sem esperar um novo
 
     document.getElementById('twmgr-bld-max').value = config.build.maxQueue || 5;
     document.getElementById('twmgr-bld-int').value = Math.round((config.build.interval || 600) / 60);

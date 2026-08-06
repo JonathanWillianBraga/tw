@@ -1334,7 +1334,15 @@
     // Tropa por aldeia (sob demanda, com cache) — descontada conforme vai assinando alvos.
     const availCache = {};
     const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
+    // Usa o alcance do Saque como padrão (mesma frota, mesma lógica de vizinhança). Fixo pro
+    // ciclo inteiro — não depende do alvo, então sai do loop (antes era recalculado à toa a
+    // cada alvo).
+    const wallMaxDist = config.wall.maxDist != null ? config.wall.maxDist : (config.farm.maxDist != null ? config.farm.maxDist : 13);
     let count = 0, semTropa = 0, foraAlcance = 0, incertos = 0;
+    // Exemplos pros logs de resumo — sem isso "87 alvos sem tropa" não diz QUAIS nem POR QUÊ.
+    // Teto de 6 porque o log é texto corrido, não uma tela; o "e mais N" cobre o resto.
+    const EX_MAX = 6;
+    const semTropaEx = [], foraAlcanceEx = [];
     for (const t of eligible) {
       const pare = devoParar('wall');
       if (pare) { pushLog('Muralha: ciclo interrompido — ' + pare + '.', '', 'wall'); break; }
@@ -1344,10 +1352,12 @@
       // aldeias candidatas, da MAIS PRÓXIMA pra mais longe; usa a 1ª que tiver bárbaro + aríete.
       // FILTRO DE DISTÂNCIA: sem ele, quando nenhuma aldeia perto tinha tropa, saíam 80 bárbaros +
       // ~24 aríetes de dezenas de campos de distância — dias de viagem e tropa fácil de interceptar.
-      // Usa o alcance do Saque como padrão (mesma frota, mesma lógica de vizinhança).
-      const wallMaxDist = config.wall.maxDist != null ? config.wall.maxDist : (config.farm.maxDist != null ? config.farm.maxDist : 13);
       const cands = myV.map((s) => ({ s: s, d: fieldDist(s.x, s.y, tx, ty) })).filter((o) => o.d <= wallMaxDist).sort((a, b) => a.d - b.d);
-      if (!cands.length) { foraAlcance++; continue; }
+      if (!cands.length) {
+        foraAlcance++;
+        if (foraAlcanceEx.length < EX_MAX) foraAlcanceEx.push(t.coord);
+        continue;
+      }
       let done = false;
       for (const c of cands) {
         const avail = await getAvail(c.s.vid);
@@ -1374,10 +1384,25 @@
           pushLog('Muralha em ' + c.s.name + ' → ' + t.coord + ': ' + em, 'err', 'wall');
         }   // falhou nessa origem -> tenta a próxima
       }
-      if (!done) semTropa++;
+      if (!done) {
+        semTropa++;
+        // A candidata mais próxima já foi consultada (é a 1ª tentada no for acima) — o cache
+        // já tem o que ela tinha, então dá pra dizer exatamente o que faltou nela, sem request extra.
+        if (semTropaEx.length < EX_MAX) {
+          const perto = cands[0];
+          const av = availCache[perto.s.vid] || {};
+          const faltaAxe = Math.max(0, axeN - (av.axe || 0));
+          const faltaRam = Math.max(0, rams - (av.ram || 0));
+          const falta = [faltaAxe > 0 ? 'faltam ' + faltaAxe + ' bárbaro' : null, faltaRam > 0 ? 'faltam ' + faltaRam + ' aríete' : null]
+            .filter(Boolean).join(', ') || 'sem tropa suficiente';
+          semTropaEx.push(t.coord + ' (mais perto: ' + perto.s.name + ' a ' + (Math.round(perto.d * 10) / 10) + 'c, ' + falta + ')');
+        }
+      }
     }
-    if (semTropa) pushLog('Muralha: ' + semTropa + ' alvo(s) sem nenhuma aldeia no alcance com bárbaro+aríete.', '', 'wall');
-    if (foraAlcance) pushLog('Muralha: ' + foraAlcance + ' alvo(s) fora do alcance de ' + (config.wall.maxDist != null ? config.wall.maxDist : (config.farm.maxDist != null ? config.farm.maxDist : 13)) + ' campos.', '', 'wall');
+    if (semTropa) pushLog('Muralha: ' + semTropa + ' alvo(s) sem nenhuma aldeia no alcance (' + wallMaxDist + ' campos) com bárbaro+aríete suficiente' +
+      (semTropaEx.length ? ' — ex.: ' + semTropaEx.join('; ') + (semTropa > semTropaEx.length ? '; e mais ' + (semTropa - semTropaEx.length) : '') : '') + '.', '', 'wall');
+    if (foraAlcance) pushLog('Muralha: ' + foraAlcance + ' alvo(s) fora do alcance de ' + wallMaxDist + ' campos' +
+      (foraAlcanceEx.length ? ' — ex.: ' + foraAlcanceEx.join(', ') + (foraAlcance > foraAlcanceEx.length ? ', e mais ' + (foraAlcance - foraAlcanceEx.length) : '') : '') + '.', '', 'wall');
     Object.keys(demo).forEach((r) => { if (now - demo[r] > 12 * 3600 * 1000) delete demo[r]; });
     config.wall.sentDemo = demo;
     config.wall.stats = config.wall.stats || {};

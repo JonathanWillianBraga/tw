@@ -1343,6 +1343,10 @@
     // Teto de 6 porque o log é texto corrido, não uma tela; o "e mais N" cobre o resto.
     const EX_MAX = 6;
     const semTropaEx = [], foraAlcanceEx = [];
+    // Relatório COMPLETO (todo alvo elegível, não só os 6 de exemplo do log) — vira a tabela
+    // do painel. sendAttack já devolve a duração exata lida da confirmação do jogo, então
+    // "chega em" não precisa de nenhum cálculo de velocidade novo, só somar ao agora.
+    const relatorio = [];
     for (const t of eligible) {
       const pare = devoParar('wall');
       if (pare) { pushLog('Muralha: ciclo interrompido — ' + pare + '.', '', 'wall'); break; }
@@ -1356,6 +1360,7 @@
       if (!cands.length) {
         foraAlcance++;
         if (foraAlcanceEx.length < EX_MAX) foraAlcanceEx.push(t.coord);
+        relatorio.push({ coord: t.coord, wall: t.wall, status: 'fora', motivo: 'fora do alcance de ' + wallMaxDist + ' campos' });
         continue;
       }
       let done = false;
@@ -1365,11 +1370,13 @@
         const spies = Math.min(config.wall.spyCount || 1, avail.spy || 0);
         const amounts = { axe: axeN, ram: rams }; if (spies > 0) amounts.spy = spies;
         try {
-          await sendAttack(c.s.vid, tx, ty, amounts);
+          const dur = await sendAttack(c.s.vid, tx, ty, amounts);
           avail.axe -= axeN; avail.ram -= rams; avail.spy = (avail.spy || 0) - spies;
           demo[t.reportId] = now; count++; done = true;
           config.wall.ativos[t.coord] = now;   // p/ o card contar quantas quebras estão no ar
           pushLog('Muralha: ' + c.s.name + ' → ' + t.coord + ' (muro ' + t.wall + ', ' + (Math.round(c.d * 10) / 10) + ' campos) com ' + axeN + ' bárbaro + ' + rams + ' aríete' + (spies ? ' + ' + spies + ' explorador' : ''), 'ok', 'wall');
+          relatorio.push({ coord: t.coord, wall: t.wall, status: 'quebrando', origem: c.s.name, origemCoord: c.s.coord,
+            chegaEm: dur ? now + dur * 1000 : null });
           await sleep(delay + Math.floor(Math.random() * 250));
           break;
         } catch (e) {
@@ -1379,6 +1386,7 @@
           if (/^ambiguo:/.test(em)) {
             demo[t.reportId] = now; incertos++; done = true;
             pushLog('Muralha: ' + t.coord + ' — resposta ambígua, pode ter saído. Não repito por outra origem.', '', 'wall');
+            relatorio.push({ coord: t.coord, wall: t.wall, status: 'incerto', motivo: 'resposta ambígua — confira nos comandos' });
             break;
           }
           pushLog('Muralha em ' + c.s.name + ' → ' + t.coord + ': ' + em, 'err', 'wall');
@@ -1388,15 +1396,16 @@
         semTropa++;
         // A candidata mais próxima já foi consultada (é a 1ª tentada no for acima) — o cache
         // já tem o que ela tinha, então dá pra dizer exatamente o que faltou nela, sem request extra.
-        if (semTropaEx.length < EX_MAX) {
-          const perto = cands[0];
-          const av = availCache[perto.s.vid] || {};
-          const faltaAxe = Math.max(0, axeN - (av.axe || 0));
-          const faltaRam = Math.max(0, rams - (av.ram || 0));
-          const falta = [faltaAxe > 0 ? 'faltam ' + faltaAxe + ' bárbaro' : null, faltaRam > 0 ? 'faltam ' + faltaRam + ' aríete' : null]
-            .filter(Boolean).join(', ') || 'sem tropa suficiente';
-          semTropaEx.push(t.coord + ' (mais perto: ' + perto.s.name + ' a ' + (Math.round(perto.d * 10) / 10) + 'c, ' + falta + ')');
-        }
+        const perto = cands[0];
+        const av = availCache[perto.s.vid] || {};
+        const faltaAxe = Math.max(0, axeN - (av.axe || 0));
+        const faltaRam = Math.max(0, rams - (av.ram || 0));
+        const falta = [faltaAxe > 0 ? 'faltam ' + faltaAxe + ' bárbaro' : null, faltaRam > 0 ? 'faltam ' + faltaRam + ' aríete' : null]
+          .filter(Boolean).join(', ') || 'sem tropa suficiente';
+        const distPerto = Math.round(perto.d * 10) / 10;
+        relatorio.push({ coord: t.coord, wall: t.wall, status: 'bloqueado', origem: perto.s.name, origemCoord: perto.s.coord,
+          dist: distPerto, motivo: falta });
+        if (semTropaEx.length < EX_MAX) semTropaEx.push(t.coord + ' (mais perto: ' + perto.s.name + ' a ' + distPerto + 'c, ' + falta + ')');
       }
     }
     if (semTropa) pushLog('Muralha: ' + semTropa + ' alvo(s) sem nenhuma aldeia no alcance (' + wallMaxDist + ' campos) com bárbaro+aríete suficiente' +
@@ -1410,9 +1419,16 @@
     config.wall.stats.total = (config.wall.stats.total || 0) + count;
     config.wall.stats.last = count;
     config.wall.stats.active = quebrasNoAr + count;   // as deste ciclo também estão no ar
+    // Relatório do ciclo, pra tabela do painel: TODO alvo elegível, com status/origem/motivo.
+    // Ordena os bloqueados/fora primeiro (é o que dá pra agir), os já quebrando por último.
+    const ordem = { bloqueado: 0, fora: 1, incerto: 2, quebrando: 3 };
+    relatorio.sort((a, b) => (ordem[a.status] - ordem[b.status]) || (b.wall - a.wall));
+    config.wall.stats.relatorio = relatorio;
+    config.wall.stats.relatorioAt = now;
     config.wall.nextAt = now + Math.max(60, config.wall.interval || 600) * 1000;
     save();
     refreshCards('wall');
+    if (typeof wallRenderRelatorio === 'function') wallRenderRelatorio();
     pushLog('Muralha: ciclo concluído — ' + count + ' ataque(s) de quebra' + (incertos ? (' · ' + incertos + ' incerto(s)') : '') + '. Próximo em ' + Math.round((config.wall.interval || 600) / 60) + ' min.', 'ok', 'wall');
     scheduleWall();
   }

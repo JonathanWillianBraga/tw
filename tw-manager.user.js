@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.56.0
+// @version      11.57.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.56.0';
+  const VERSION = '11.57.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2240,6 +2240,10 @@
     // Teto de 6 porque o log é texto corrido, não uma tela; o "e mais N" cobre o resto.
     const EX_MAX = 6;
     const semTropaEx = [], foraAlcanceEx = [];
+    // Relatório COMPLETO (todo alvo elegível, não só os 6 de exemplo do log) — vira a tabela
+    // do painel. sendAttack já devolve a duração exata lida da confirmação do jogo, então
+    // "chega em" não precisa de nenhum cálculo de velocidade novo, só somar ao agora.
+    const relatorio = [];
     for (const t of eligible) {
       const pare = devoParar('wall');
       if (pare) { pushLog('Muralha: ciclo interrompido — ' + pare + '.', '', 'wall'); break; }
@@ -2253,6 +2257,7 @@
       if (!cands.length) {
         foraAlcance++;
         if (foraAlcanceEx.length < EX_MAX) foraAlcanceEx.push(t.coord);
+        relatorio.push({ coord: t.coord, wall: t.wall, status: 'fora', motivo: 'fora do alcance de ' + wallMaxDist + ' campos' });
         continue;
       }
       let done = false;
@@ -2262,11 +2267,13 @@
         const spies = Math.min(config.wall.spyCount || 1, avail.spy || 0);
         const amounts = { axe: axeN, ram: rams }; if (spies > 0) amounts.spy = spies;
         try {
-          await sendAttack(c.s.vid, tx, ty, amounts);
+          const dur = await sendAttack(c.s.vid, tx, ty, amounts);
           avail.axe -= axeN; avail.ram -= rams; avail.spy = (avail.spy || 0) - spies;
           demo[t.reportId] = now; count++; done = true;
           config.wall.ativos[t.coord] = now;   // p/ o card contar quantas quebras estão no ar
           pushLog('Muralha: ' + c.s.name + ' → ' + t.coord + ' (muro ' + t.wall + ', ' + (Math.round(c.d * 10) / 10) + ' campos) com ' + axeN + ' bárbaro + ' + rams + ' aríete' + (spies ? ' + ' + spies + ' explorador' : ''), 'ok', 'wall');
+          relatorio.push({ coord: t.coord, wall: t.wall, status: 'quebrando', origem: c.s.name, origemCoord: c.s.coord,
+            chegaEm: dur ? now + dur * 1000 : null });
           await sleep(delay + Math.floor(Math.random() * 250));
           break;
         } catch (e) {
@@ -2276,6 +2283,7 @@
           if (/^ambiguo:/.test(em)) {
             demo[t.reportId] = now; incertos++; done = true;
             pushLog('Muralha: ' + t.coord + ' — resposta ambígua, pode ter saído. Não repito por outra origem.', '', 'wall');
+            relatorio.push({ coord: t.coord, wall: t.wall, status: 'incerto', motivo: 'resposta ambígua — confira nos comandos' });
             break;
           }
           pushLog('Muralha em ' + c.s.name + ' → ' + t.coord + ': ' + em, 'err', 'wall');
@@ -2285,15 +2293,16 @@
         semTropa++;
         // A candidata mais próxima já foi consultada (é a 1ª tentada no for acima) — o cache
         // já tem o que ela tinha, então dá pra dizer exatamente o que faltou nela, sem request extra.
-        if (semTropaEx.length < EX_MAX) {
-          const perto = cands[0];
-          const av = availCache[perto.s.vid] || {};
-          const faltaAxe = Math.max(0, axeN - (av.axe || 0));
-          const faltaRam = Math.max(0, rams - (av.ram || 0));
-          const falta = [faltaAxe > 0 ? 'faltam ' + faltaAxe + ' bárbaro' : null, faltaRam > 0 ? 'faltam ' + faltaRam + ' aríete' : null]
-            .filter(Boolean).join(', ') || 'sem tropa suficiente';
-          semTropaEx.push(t.coord + ' (mais perto: ' + perto.s.name + ' a ' + (Math.round(perto.d * 10) / 10) + 'c, ' + falta + ')');
-        }
+        const perto = cands[0];
+        const av = availCache[perto.s.vid] || {};
+        const faltaAxe = Math.max(0, axeN - (av.axe || 0));
+        const faltaRam = Math.max(0, rams - (av.ram || 0));
+        const falta = [faltaAxe > 0 ? 'faltam ' + faltaAxe + ' bárbaro' : null, faltaRam > 0 ? 'faltam ' + faltaRam + ' aríete' : null]
+          .filter(Boolean).join(', ') || 'sem tropa suficiente';
+        const distPerto = Math.round(perto.d * 10) / 10;
+        relatorio.push({ coord: t.coord, wall: t.wall, status: 'bloqueado', origem: perto.s.name, origemCoord: perto.s.coord,
+          dist: distPerto, motivo: falta });
+        if (semTropaEx.length < EX_MAX) semTropaEx.push(t.coord + ' (mais perto: ' + perto.s.name + ' a ' + distPerto + 'c, ' + falta + ')');
       }
     }
     if (semTropa) pushLog('Muralha: ' + semTropa + ' alvo(s) sem nenhuma aldeia no alcance (' + wallMaxDist + ' campos) com bárbaro+aríete suficiente' +
@@ -2307,9 +2316,16 @@
     config.wall.stats.total = (config.wall.stats.total || 0) + count;
     config.wall.stats.last = count;
     config.wall.stats.active = quebrasNoAr + count;   // as deste ciclo também estão no ar
+    // Relatório do ciclo, pra tabela do painel: TODO alvo elegível, com status/origem/motivo.
+    // Ordena os bloqueados/fora primeiro (é o que dá pra agir), os já quebrando por último.
+    const ordem = { bloqueado: 0, fora: 1, incerto: 2, quebrando: 3 };
+    relatorio.sort((a, b) => (ordem[a.status] - ordem[b.status]) || (b.wall - a.wall));
+    config.wall.stats.relatorio = relatorio;
+    config.wall.stats.relatorioAt = now;
     config.wall.nextAt = now + Math.max(60, config.wall.interval || 600) * 1000;
     save();
     refreshCards('wall');
+    if (typeof wallRenderRelatorio === 'function') wallRenderRelatorio();
     pushLog('Muralha: ciclo concluído — ' + count + ' ataque(s) de quebra' + (incertos ? (' · ' + incertos + ' incerto(s)') : '') + '. Próximo em ' + Math.round((config.wall.interval || 600) / 60) + ' min.', 'ok', 'wall');
     scheduleWall();
   }
@@ -7923,6 +7939,31 @@
       }).join('') + (ks.length > 12 ? '<div style="font-size:9px;color:#8a7d6d;padding:2px 0">…e mais ' + (ks.length - 12) + '</div>' : '');
   }
 
+  // Relatório do último ciclo de Muralha: todo alvo elegível, o que aconteceu e por quê.
+  // config.wall.stats.relatorio já vem ordenado (bloqueado/fora primeiro) do próprio wallTick.
+  function wallRenderRelatorio() {
+    const box = document.getElementById('twmgr-wall-relatorio'); if (!box) return;
+    const at = document.getElementById('twmgr-wall-rel-at');
+    const rel = (config.wall.stats && config.wall.stats.relatorio) || [];
+    const quando = config.wall && config.wall.stats && config.wall.stats.relatorioAt;
+    if (at) at.textContent = quando ? ('atualizado às ' + new Date(quando).toLocaleTimeString('pt-BR').slice(0, 5)) : '';
+    if (!rel.length) { box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhum ciclo rodado ainda —</div>'; return; }
+    const ROT = { bloqueado: ['⚠ sem tropa', '#a8564a'], fora: ['✕ fora', '#8a7d6d'], incerto: ['? incerto', '#a2643a'], quebrando: ['✓ quebrando', '#2e7d3a'] };
+    box.innerHTML = rel.map((r) => {
+      const rt = ROT[r.status] || ['?', '#8a7d6d'];
+      const origem = r.origem ? esc(r.origem) + (r.origemCoord ? ' (' + esc(r.origemCoord) + ')' : '') + (r.dist != null ? ' · ' + r.dist + 'c' : '') : '—';
+      const detalhe = r.status === 'quebrando'
+        ? (r.chegaEm ? 'chega ' + new Date(r.chegaEm).toLocaleTimeString('pt-BR').slice(0, 5) : '(servidor não deu a duração)')
+        : esc(r.motivo || '');
+      return '<div style="display:grid;grid-template-columns:64px 74px 1fr 1fr;gap:4px;align-items:center;padding:3px 4px;border-bottom:1px solid rgba(0,0,0,.05);font-size:10px">' +
+        '<span style="color:#a2643a">' + esc(r.coord) + ' <span style="color:#8a7d6d">(' + r.wall + ')</span></span>' +
+        '<span style="color:' + rt[1] + '">' + rt[0] + '</span>' +
+        '<span style="color:#6f6153;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + origem + '">' + origem + '</span>' +
+        '<span style="color:#6f6153;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + detalhe + '">' + detalhe + '</span>' +
+      '</div>';
+    }).join('');
+  }
+
   function readScavUnits() {
     config.scav.units = config.scav.units || {};
     SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) config.scav.units[u] = el.checked; });
@@ -8434,6 +8475,13 @@
         sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-wall-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-wall-start" class="twmgr-btn twmgr-go">▶ Quebrar</button><button id="twmgr-wall-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-wall-status" class="twmgr-cstatus"></div>' +
+        // Relatório do último ciclo: todo alvo elegível, o que está acontecendo com ele e por
+        // quê. Bloqueados/fora primeiro (é o que dá pra agir); quebrando por último.
+        sec('Relatório do último ciclo',
+          '<div style="font-size:9px;color:#8a7d6d;margin-bottom:3px" id="twmgr-wall-rel-at"></div>' +
+          '<div style="display:grid;grid-template-columns:64px 74px 1fr 1fr;gap:4px;font-size:9px;color:#8a7d6d;padding:0 4px 2px">' +
+            '<span>alvo</span><span>status</span><span>origem</span><span>chega / motivo</span></div>' +
+          '<div id="twmgr-wall-relatorio" style="height:200px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>') +
         modLog('wall') +
         '</div>' +
         '<div id="twmgr-sub-map" style="display:none">' +
@@ -8859,6 +8907,7 @@
     document.getElementById('twmgr-wall-stop').addEventListener('click', wallStop);
     ['twmgr-wall-min', 'twmgr-wall-max', 'twmgr-wall-axe', 'twmgr-wall-ramw6', 'twmgr-wall-ramfix', 'twmgr-wall-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readWallCfg); });
     setWallStatus(config.wall.running);
+    wallRenderRelatorio();   // mostra o relatório do último ciclo já salvo, sem esperar um novo
 
     document.getElementById('twmgr-r-hours').value = config.recruit.targetHours != null ? config.recruit.targetHours : 2;
     document.getElementById('twmgr-r-refill').value = config.recruit.refillBelowMin != null ? config.recruit.refillBelowMin : 30;

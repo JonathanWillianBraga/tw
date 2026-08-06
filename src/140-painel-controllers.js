@@ -144,6 +144,31 @@
       }).join('') + (ks.length > 12 ? '<div style="font-size:9px;color:#8a7d6d;padding:2px 0">…e mais ' + (ks.length - 12) + '</div>' : '');
   }
 
+  // Relatório do último ciclo de Muralha: todo alvo elegível, o que aconteceu e por quê.
+  // config.wall.stats.relatorio já vem ordenado (bloqueado/fora primeiro) do próprio wallTick.
+  function wallRenderRelatorio() {
+    const box = document.getElementById('twmgr-wall-relatorio'); if (!box) return;
+    const at = document.getElementById('twmgr-wall-rel-at');
+    const rel = (config.wall.stats && config.wall.stats.relatorio) || [];
+    const quando = config.wall && config.wall.stats && config.wall.stats.relatorioAt;
+    if (at) at.textContent = quando ? ('atualizado às ' + new Date(quando).toLocaleTimeString('pt-BR').slice(0, 5)) : '';
+    if (!rel.length) { box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhum ciclo rodado ainda —</div>'; return; }
+    const ROT = { bloqueado: ['⚠ sem tropa', '#a8564a'], fora: ['✕ fora', '#8a7d6d'], incerto: ['? incerto', '#a2643a'], quebrando: ['✓ quebrando', '#2e7d3a'] };
+    box.innerHTML = rel.map((r) => {
+      const rt = ROT[r.status] || ['?', '#8a7d6d'];
+      const origem = r.origem ? esc(r.origem) + (r.origemCoord ? ' (' + esc(r.origemCoord) + ')' : '') + (r.dist != null ? ' · ' + r.dist + 'c' : '') : '—';
+      const detalhe = r.status === 'quebrando'
+        ? (r.chegaEm ? 'chega ' + new Date(r.chegaEm).toLocaleTimeString('pt-BR').slice(0, 5) : '(servidor não deu a duração)')
+        : esc(r.motivo || '');
+      return '<div style="display:grid;grid-template-columns:64px 74px 1fr 1fr;gap:4px;align-items:center;padding:3px 4px;border-bottom:1px solid rgba(0,0,0,.05);font-size:10px">' +
+        '<span style="color:#a2643a">' + esc(r.coord) + ' <span style="color:#8a7d6d">(' + r.wall + ')</span></span>' +
+        '<span style="color:' + rt[1] + '">' + rt[0] + '</span>' +
+        '<span style="color:#6f6153;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + origem + '">' + origem + '</span>' +
+        '<span style="color:#6f6153;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + detalhe + '">' + detalhe + '</span>' +
+      '</div>';
+    }).join('');
+  }
+
   function readScavUnits() {
     config.scav.units = config.scav.units || {};
     SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) config.scav.units[u] = el.checked; });

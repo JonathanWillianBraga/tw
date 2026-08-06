@@ -434,6 +434,13 @@
         sec('Ritmo', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-wall-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-wall-start" class="twmgr-btn twmgr-go">▶ Quebrar</button><button id="twmgr-wall-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-wall-status" class="twmgr-cstatus"></div>' +
+        // Relatório do último ciclo: todo alvo elegível, o que está acontecendo com ele e por
+        // quê. Bloqueados/fora primeiro (é o que dá pra agir); quebrando por último.
+        sec('Relatório do último ciclo',
+          '<div style="font-size:9px;color:#8a7d6d;margin-bottom:3px" id="twmgr-wall-rel-at"></div>' +
+          '<div style="display:grid;grid-template-columns:64px 74px 1fr 1fr;gap:4px;font-size:9px;color:#8a7d6d;padding:0 4px 2px">' +
+            '<span>alvo</span><span>status</span><span>origem</span><span>chega / motivo</span></div>' +
+          '<div id="twmgr-wall-relatorio" style="height:200px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>') +
         modLog('wall') +
         '</div>' +
         '<div id="twmgr-sub-map" style="display:none">' +
@@ -859,6 +866,7 @@
     document.getElementById('twmgr-wall-stop').addEventListener('click', wallStop);
     ['twmgr-wall-min', 'twmgr-wall-max', 'twmgr-wall-axe', 'twmgr-wall-ramw6', 'twmgr-wall-ramfix', 'twmgr-wall-int'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readWallCfg); });
     setWallStatus(config.wall.running);
+    wallRenderRelatorio();   // mostra o relatório do último ciclo já salvo, sem esperar um novo
 
     document.getElementById('twmgr-r-hours').value = config.recruit.targetHours != null ? config.recruit.targetHours : 2;
     document.getElementById('twmgr-r-refill').value = config.recruit.refillBelowMin != null ? config.recruit.refillBelowMin : 30;

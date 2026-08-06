@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.54.0
+// @version      11.55.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.54.0';
+  const VERSION = '11.55.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2727,7 +2727,22 @@
         + '<span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span><em>' + esc(u[1]) + '</em></div>'
         + '<input class="twmgr-rc-t twmgr-inp" data-unit="' + u[0] + '" type="number" min="0" placeholder="—"'
         + ' value="' + (tg[u[0]] != null ? tg[u[0]] : '') + '"></div>').join('') + '</div>' +
-      '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Vazio = <b>não recruta</b> essa unidade. Número = alvo a <b>manter</b> — ele repõe quando cai abaixo.</div>';
+      '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Vazio = <b>não recruta</b> essa unidade. Número = alvo a <b>manter</b> — ele repõe quando cai abaixo.</div>' +
+      '<div id="twmgr-rc-pop" style="font-size:9px;color:#8a7d6d;margin-top:2px">População do modelo: <b id="twmgr-rc-pop-v">0</b></div>';
+    rcAtualizarPop();
+  }
+  // População que o modelo ocupa na fazenda: soma dos alvos digitados × peso de cada
+  // unidade (FAKE_POP, a mesma tabela de população usada em Saque/Fakes). Lê DIRETO dos
+  // campos na tela (não de config.recruit), pra atualizar enquanto o usuário digita, antes
+  // de salvar.
+  function rcAtualizarPop() {
+    const el = document.getElementById('twmgr-rc-pop-v'); if (!el) return;
+    let pop = 0;
+    document.querySelectorAll('.twmgr-rc-t').forEach((i) => {
+      const v = parseInt(i.value, 10);
+      if (!Number.isNaN(v) && v > 0) pop += v * (FAKE_POP[i.getAttribute('data-unit')] || 0);
+    });
+    el.textContent = fmtN(pop);
   }
   function rcLerEditor() {
     const t = rcTplAtivo(); if (!t) return;
@@ -8831,6 +8846,8 @@
     document.getElementById('twmgr-rc-tpl-del').addEventListener('click', rcApagarModelo);
     // O editor é redesenhado a cada troca de modelo, então o listener fica no pai.
     document.getElementById('twmgr-rc-editor').addEventListener('change', () => { rcLerEditor(); save(); });
+    // População do modelo atualiza a cada tecla — não espera o blur/change pra recalcular.
+    document.getElementById('twmgr-rc-editor').addEventListener('input', rcAtualizarPop);
     // ---- Status ----
     document.getElementById('twmgr-rc-stgroup').addEventListener('change', (e) => rcStatusFiltrar(e.target.value));
     document.getElementById('twmgr-rc-status-reload').addEventListener('click', rcAtualizarStatus);

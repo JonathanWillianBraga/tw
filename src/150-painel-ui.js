@@ -871,6 +871,8 @@
     document.getElementById('twmgr-rc-tpl-del').addEventListener('click', rcApagarModelo);
     // O editor é redesenhado a cada troca de modelo, então o listener fica no pai.
     document.getElementById('twmgr-rc-editor').addEventListener('change', () => { rcLerEditor(); save(); });
+    // População do modelo atualiza a cada tecla — não espera o blur/change pra recalcular.
+    document.getElementById('twmgr-rc-editor').addEventListener('input', rcAtualizarPop);
     // ---- Status ----
     document.getElementById('twmgr-rc-stgroup').addEventListener('change', (e) => rcStatusFiltrar(e.target.value));
     document.getElementById('twmgr-rc-status-reload').addEventListener('click', rcAtualizarStatus);

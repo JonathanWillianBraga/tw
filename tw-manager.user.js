@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.72.0
+// @version      11.73.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.72.0';
+  const VERSION = '11.73.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5382,7 +5382,23 @@
   //
   // NAO poda quando o comando pousa: entre pousar e o relatorio ser lido existe uma janela em
   // que a lealdade ainda e a antiga E o comando ja sumiu -- podar ali contaria o mesmo nobre
-  // duas vezes e mandaria um a mais. So sai quando ha relatorio MAIS NOVO que o envio.
+  // duas vezes e mandaria um a mais.
+  //
+  // A poda compara o relatorio com a CHEGADA do comando, nao com a partida. Comparar com a
+  // partida apagava comando que ainda estava no ar, por dois caminhos:
+  //
+  //   1. mandei 4 comandos as 10h, chegam as 13h. O primeiro pousa e gera relatorio das 13h.
+  //      "relatorio mais novo que o envio (10h)" valia pros QUATRO -- os outros tres sumiam do
+  //      registro sem nunca terem sido contados.
+  //   2. quando `parseReportDate` nao entende a data da lista, o relatorio e carimbado com
+  //      Date.now(). Agora e sempre maior que qualquer envio passado, entao TODO comando no ar
+  //      era apagado no ciclo seguinte -- que e o sintoma relatado: "tem 4 a caminho e ele acha
+  //      que nao tem nada enviado".
+  //
+  // Pela chegada os dois somem: comando que ainda nao pousou tem `chega` no futuro, e nenhum
+  // relatorio ja escrito pode ser mais novo que isso. Registro antigo sem `chega` cai no `at`,
+  // que era o comportamento de antes.
+  //
   // Expiracao dura de 48h pra um registro perdido (envio que falhou calado, relatorio
   // apagado) nao travar o alvo pra sempre.
   function nobleVoos(coord) {
@@ -5391,7 +5407,7 @@
     const agora = Date.now();
     const vivos = lista.filter((e) => {
       if (agora - e.at > 48 * 3600000) return false;
-      if (rel && rel.at && rel.at > e.at) return false;   // ja apareceu num relatorio
+      if (rel && rel.at && rel.at >= (e.chega || e.at)) return false;   // ja pousou e apareceu no relatorio
       return true;
     });
     if (vivos.length !== lista.length) {
@@ -5952,7 +5968,13 @@
       await sleep(300);
       const ant = config.noble.relatorios[r.coord];
       // SÃ³ sobrescreve com relatÃ³rio MAIS NOVO â€” a lista vem ordenada, mas nÃ£o custa garantir.
-      if (ant && ant.at && r.at && ant.at > r.at) continue;
+      // `>=`, nao `>`. A lista de relatorios so tem precisao de MINUTO, entao um NT inteiro (4
+      // comandos que pousam juntos) vira quatro relatorios com a MESMA hora. Com `>`, o empate
+      // nao barrava a sobrescrita: a fila e percorrida do mais novo pro mais velho, entao o
+      // ultimo a escrever era o PRIMEIRO ataque do lote -- e a lealdade gravada era a de antes
+      // dos outros tres. O modulo achava o alvo bem mais inteiro do que estava e mandava nobre
+      // a mais. No empate quem vale e o primeiro lido, que e o mais novo.
+      if (ant && ant.at && r.at && ant.at >= r.at) continue;
       // Dono diferente do que estava = alguem CONQUISTOU o alvo. Se nao fui eu (o tick confere
       // na lista de aldeias antes de olhar isto aqui), a premissa "aldeia vazia" morreu junto:
       // agora ela tem dono ativo e tropa. O alvo sai da fila com alerta em vez de seguir sendo

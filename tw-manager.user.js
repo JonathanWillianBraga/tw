@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.78.0
+// @version      11.79.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.78.0';
+  const VERSION = '11.79.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -13300,10 +13300,6 @@
       if (_ccPontos) return;
       try { getVillagePoints().then((p) => { _ccPontos = p; }).catch(() => {}); } catch (e) {}
     }
-    function ccRotU(us) {
-      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
-      return us.map((u) => rot[u] || u).join(', ');
-    }
     function ccFilaConferir() {
       const out = {};
       if (!CCVILAS.length) return out;   // tropas ainda não lidas: não inventa alarme falso
@@ -13324,6 +13320,10 @@
           if (soma[u] > (minhas[u] || 0)) semTotal.push(u);
           else if (soma[u] > (casa[u] || 0)) semCasa.push(u);
         });
+        // "pedido/disponível" por unidade — dizer só o nome da tropa não conta o tamanho do
+        // buraco, e é justamente isso que decide se dá pra ajustar ou se o comando não vai.
+        const rotN = {}; UNITS.forEach(([u, n]) => { rotN[u] = n; });
+        const detalha = (us, disp) => us.map((u) => (rotN[u] || u) + ' ' + fmtN(soma[u]) + '/' + fmtN(disp[u] || 0)).join(', ');
         porVid[vid].forEach((c) => {
           // Devolve info pra TODO comando pendente, não só pros problemáticos: numa operação o
           // que se quer é confirmar que está tudo certo, não só a ausência de vermelho.
@@ -13345,9 +13345,16 @@
                 : { nivel: 'erro', msg: 'abaixo do piso de população e sem explorador pra completar (faltam ' + falta + ' hab.)' };
             }
           }
-          if (semTotal.length) { info.nivel = 'erro'; info.msg = 'tropa insuficiente na origem: ' + ccRotU(semTotal); }
+          // Só reporta as unidades que ESTE comando usa. A falta é da aldeia (soma de todos os
+          // pendentes dela), mas repetir a lista inteira em cada comando fazia um fake de
+          // explorador+aríete acusar "falta C.leve" — quem pedia cavalaria era OUTRO comando da
+          // mesma origem. O comando não corre risco por uma tropa que ele nem leva.
+          const usa = Object.keys(c.amounts || {}).filter((u) => (c.amounts[u] || 0) > 0);
+          const meuSemTotal = semTotal.filter((u) => usa.indexOf(u) >= 0);
+          const meuSemCasa = semCasa.filter((u) => usa.indexOf(u) >= 0);
+          if (meuSemTotal.length) { info.nivel = 'erro'; info.msg = 'tropa insuficiente na origem (pedido/tem): ' + detalha(meuSemTotal, minhas); }
           else if (piso && piso.nivel === 'erro') { info.nivel = piso.nivel; info.msg = piso.msg; }
-          else if (semCasa.length) { info.nivel = 'aviso'; info.msg = 'depende de tropa voltar: ' + ccRotU(semCasa); }
+          else if (meuSemCasa.length) { info.nivel = 'aviso'; info.msg = 'depende de tropa voltar (pedido/em casa): ' + detalha(meuSemCasa, casa); }
           else if (piso) { info.nivel = piso.nivel; info.msg = piso.msg; }
           out[c.id] = info;
         });

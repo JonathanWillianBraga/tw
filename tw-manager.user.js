@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.63.0
+// @version      11.64.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.63.0';
+  const VERSION = '11.64.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -12910,6 +12910,48 @@
     // ---- Comandos agendados na lista "Próprios comandos" da aldeia ----
     // Injeta os comandos AINDA NÃO ENVIADOS desta aldeia na tabela de comandos do jogo,
     // ordenados pela chegada, pra você conferir que encaixam no timing dos comandos reais.
+
+    // "hoje às HH:MM:SS:mmm" / "amanhã às ..." — mesmo formato da coluna "Chegada" do jogo,
+    // pra nossa linha ficar visualmente igual às de verdade (a real usa exatamente essa forma,
+    // conferido no HTML da própria tabela).
+    function ccDataRel(ms) {
+      const d = new Date(ms - wallToServerOffset());
+      const agora = new Date(serverNow() - wallToServerOffset());
+      const diffDias = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) -
+        new Date(agora.getFullYear(), agora.getMonth(), agora.getDate())) / 86400000);
+      const p = (n, w) => String(n).padStart(w || 2, '0');
+      const prefixo = diffDias === 0 ? 'hoje' : diffDias === 1 ? 'amanhã'
+        : p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear();
+      return prefixo + ' às ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) +
+        ':<span class="grey small">' + p(d.getMilliseconds(), 3) + '</span>';
+    }
+    // Janelinha flutuante própria (troca o title/tooltip padrão do navegador, que só mostra
+    // texto puro sem formatação) — mostra tropa com ícone+quantidade (mesmo bloco usado na
+    // Fila) e o horário de saída, seguindo o mouse.
+    function ccOvTipEl() {
+      let el = document.getElementById('cc-ov-tip');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'cc-ov-tip';
+        el.style.cssText = 'position:fixed;z-index:99999;display:none;background:#fdf6e8;' +
+          'border:1px solid #c9a35a;border-radius:6px;padding:6px 8px;font-size:10px;color:#4a3d28;' +
+          'box-shadow:0 2px 8px rgba(0,0,0,.25);pointer-events:none;max-width:260px;line-height:1.5';
+        document.body.appendChild(el);
+      }
+      return el;
+    }
+    function ccOvTipMostrar(html, ev) {
+      const el = ccOvTipEl();
+      el.innerHTML = html;
+      el.style.display = 'block';
+      const pad = 14;
+      el.style.left = (ev.clientX + pad) + 'px';
+      el.style.top = (ev.clientY + pad) + 'px';
+      const r = el.getBoundingClientRect();
+      if (r.right > window.innerWidth) el.style.left = Math.max(4, ev.clientX - r.width - pad) + 'px';
+      if (r.bottom > window.innerHeight) el.style.top = Math.max(4, ev.clientY - r.height - pad) + 'px';
+    }
+    function ccOvTipEsconder() { const el = document.getElementById('cc-ov-tip'); if (el) el.style.display = 'none'; }
     let _ccOvTimer = null;
     function ccOverviewTabela() {
       // O jogo reusa o MESMO id #commands_outgoings pra duas tabelas diferentes:
@@ -12946,8 +12988,10 @@
       if (!pend.length) { if (_ccOvTimer) { clearInterval(_ccOvTimer); _ccOvTimer = null; } return; }
       const reais = Array.prototype.slice.call(body.querySelectorAll('tr'))
         .filter((t) => !t.hasAttribute('data-cc-ag') && t.querySelector('a[href*="screen=info_command"]'));
-      const ncol = (reais[0] || body.querySelector('tr'));
-      const nc = ncol ? Math.max(2, ncol.querySelectorAll('td').length) : 3;
+      // 3 é a estrutura real confirmada da tabela (Próprios comandos/Chegada/Chega em). Só
+      // sobrescreve se achar uma linha REAL de comando pra amostrar — a linha de cabeçalho (só
+      // <th>, sem <td>) não conta, senão dava nc=2 sempre que não houvesse comando manual ativo.
+      const nc = reais.length ? Math.max(2, reais[0].querySelectorAll('td').length) : 3;
       const arrOf = (tr) => {
         // O jogo carrega a chegada em data-endtime (epoch em segundos) — mais confiável que o texto.
         const t = tr.querySelector('.widget-command-timer[data-endtime]');
@@ -12964,18 +13008,38 @@
         tr.className = 'command-row';
         tr.setAttribute('data-cc-ag', '1');
         tr.style.background = 'rgba(154,111,14,.12)';
-        // Tropas só no hover (title da linha), pra manter one-liner.
-        tr.title = 'Agendado na Central · ' + ccTropaTxt(c.amounts) + (saiEm ? ' · sai ' + srvClockMs(saiEm) : '');
-        let html = '';
-        for (let i = 0; i < nc; i++) html += '<td style="padding:4px 6px;white-space:nowrap;color:#a2643a">' +
-          (i === 0
-            ? '🕒 <b>' + esc(rot) + ' agendado</b> → ' + esc(c.x + '|' + c.y) + (nome ? ' ' + esc(nome) : '') +
-              (saiEm ? ' <span style="color:#a98a4a">· sai ' + srvClockMs(saiEm) + '</span>' : '')
-            : i === nc - 2 ? srvClockMs(c.arriveAt)
-            : i === nc - 1 ? '<span class="cc-ov-falta" data-arr="' + c.arriveAt + '"></span>' +
-                '<a href="#" class="cc-ov-x" data-id="' + c.id + '" title="cancelar comando agendado" style="color:#c0483a;font-weight:bold;margin-left:8px;text-decoration:none">✕</a>'
-            : '') + '</td>';
-        tr.innerHTML = html;
+        const tipHtml = '<div style="font-weight:600;margin-bottom:3px;color:#8b5426">' + esc(rot) + ' agendado</div>' +
+          '<div>' + (ccTropaResumo(c.amounts) || '<span style="color:#a8564a">sem tropa</span>') + '</div>' +
+          '<div style="color:#6f6153;margin-top:3px">saída: <b>' + (saiEm ? srvClockMs(saiEm) : '—') + '</b></div>';
+        // Mesma estrutura de classes da linha REAL (quickedit-content/icon-container/quickedit-
+        // label) — herda o visual do jogo automaticamente. Só o ícone (🕒 no lugar do ícone de
+        // unidade) e o fundo levemente destacado diferenciam "isto ainda não foi enviado".
+        if (nc === 3) {
+          tr.innerHTML =
+            '<td style="white-space:nowrap">' +
+              '<span class="quickedit-content">' +
+                '<span class="icon-container"><span class="cc-ov-hover" style="cursor:default;display:inline-block;font-size:13px;line-height:16px;vertical-align:-2px">🕒</span></span>' +
+                '<span class="quickedit-label">' + esc(rot) + ' agendado → ' + esc(c.x + '|' + c.y) + (nome ? ' ' + esc(nome) : '') + '</span>' +
+              '</span>' +
+            '</td>' +
+            '<td>' + ccDataRel(c.arriveAt) + '</td>' +
+            '<td><span class="cc-ov-falta" data-arr="' + c.arriveAt + '"></span>' +
+              ' <a href="#" class="cc-ov-x" data-id="' + c.id + '" title="cancelar comando agendado" style="color:#c0483a;font-weight:bold;text-decoration:none">✕</a></td>';
+        } else {
+          // Fallback pra tabela com número de colunas diferente do esperado (ex.: #commands_table).
+          let html = '';
+          for (let i = 0; i < nc; i++) html += '<td style="padding:4px 6px;white-space:nowrap;color:#a2643a">' +
+            (i === 0
+              ? '🕒 <b>' + esc(rot) + ' agendado</b> → ' + esc(c.x + '|' + c.y) + (nome ? ' ' + esc(nome) : '')
+              : i === nc - 2 ? srvClockMs(c.arriveAt)
+              : i === nc - 1 ? '<span class="cc-ov-falta" data-arr="' + c.arriveAt + '"></span>' +
+                  '<a href="#" class="cc-ov-x" data-id="' + c.id + '" title="cancelar comando agendado" style="color:#c0483a;font-weight:bold;margin-left:8px;text-decoration:none">✕</a>'
+              : '') + '</td>';
+          tr.innerHTML = html;
+        }
+        tr.addEventListener('mouseenter', (ev) => ccOvTipMostrar(tipHtml, ev));
+        tr.addEventListener('mousemove', (ev) => ccOvTipMostrar(tipHtml, ev));
+        tr.addEventListener('mouseleave', ccOvTipEsconder);
         let ref = null;
         for (const r of reais) { const a = arrOf(r); if (a && a > c.arriveAt) { ref = r; break; } }
         if (ref) body.insertBefore(tr, ref);
@@ -12987,6 +13051,7 @@
         const c = (config.cmd.fila || []).find((z) => z.id === el.getAttribute('data-id'));
         cmdAbortar(el.getAttribute('data-id'));
         if (c) pushLog('🕒 Central: ' + (c.tipo === 'support' ? 'apoio' : 'ataque') + ' agendado → ' + c.x + '|' + c.y + ' cancelado.', '', 'cmd');
+        ccOvTipEsconder();
         mountCmdOverview();
       });
       const tick = () => {

@@ -574,6 +574,15 @@
       ancorar();   // primeira âncora do relógio monotônico
       cmdFila().forEach((c) => { if (c.state === 'armado') c.state = c.prep ? 'preparado' : 'novo'; });
       save();
+      // O antichoke (AudioContext) só liga dentro de um gesto do usuário e MORRE a cada F5 ou
+      // troca de tela — mas só o clique em "Armar" o religava, o que não serve pra quem já armou
+      // e continua jogando. Sem ele, aba em 2º plano tem setTimeout estrangulado pra ~1x/min: o
+      // preparo perde a janela de prepLeadSec e o comando morre em "horário já passou". Agora
+      // QUALQUER clique/tecla na página o religa, enquanto houver comando pendente. É de graça
+      // (não faz nada se já está ligado) e cobre o caminho real: navegar pelo jogo enquanto espera.
+      const religar = () => { if (cmdPendentes().length) keepAwake(true); };
+      document.addEventListener('click', religar, true);
+      document.addEventListener('keydown', religar, true);
       cmdTick();
     }
 
@@ -2461,7 +2470,9 @@
           'aba <b>' + (document.hidden ? 'em 2º plano' : 'visível') + '</b>',
         ];
         // Sem o oscilador ativo, uma aba escondida perde centenas de ms. O usuário precisa ver isso.
-        if (document.hidden && !awakeAtivo()) partes.push('<b style="color:#c0483a">antichoke inativo — clique em Armar</b>');
+        // Avisa sempre que houver comando pendente, não só com a aba escondida: a aba pode ser
+        // mandada pra 2º plano a qualquer momento, e aí já é tarde pra descobrir que estava off.
+        if (!awakeAtivo() && cmdPendentes().length) partes.push('<b style="color:#c0483a">⚠ antichoke inativo — clique em qualquer lugar da página</b>');
         if (Math.abs(CLK.driftMs || 0) > 50) partes.push('<b style="color:#a2643a">relógio oscilando ' + Math.round(CLK.driftMs) + 'ms</b>');
         if (!window.Timing) partes.push('<b style="color:#c0483a">sem relógio do jogo!</b>');
         st.innerHTML = partes.join(' · ');

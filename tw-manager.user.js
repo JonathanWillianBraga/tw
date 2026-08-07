@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.70.0
+// @version      11.73.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.70.0';
+  const VERSION = '11.73.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -11339,6 +11339,15 @@
       ancorar();   // primeira âncora do relógio monotônico
       cmdFila().forEach((c) => { if (c.state === 'armado') c.state = c.prep ? 'preparado' : 'novo'; });
       save();
+      // O antichoke (AudioContext) só liga dentro de um gesto do usuário e MORRE a cada F5 ou
+      // troca de tela — mas só o clique em "Armar" o religava, o que não serve pra quem já armou
+      // e continua jogando. Sem ele, aba em 2º plano tem setTimeout estrangulado pra ~1x/min: o
+      // preparo perde a janela de prepLeadSec e o comando morre em "horário já passou". Agora
+      // QUALQUER clique/tecla na página o religa, enquanto houver comando pendente. É de graça
+      // (não faz nada se já está ligado) e cobre o caminho real: navegar pelo jogo enquanto espera.
+      const religar = () => { if (cmdPendentes().length) keepAwake(true); };
+      document.addEventListener('click', religar, true);
+      document.addEventListener('keydown', religar, true);
       cmdTick();
     }
 
@@ -13226,7 +13235,9 @@
           'aba <b>' + (document.hidden ? 'em 2º plano' : 'visível') + '</b>',
         ];
         // Sem o oscilador ativo, uma aba escondida perde centenas de ms. O usuário precisa ver isso.
-        if (document.hidden && !awakeAtivo()) partes.push('<b style="color:#c0483a">antichoke inativo — clique em Armar</b>');
+        // Avisa sempre que houver comando pendente, não só com a aba escondida: a aba pode ser
+        // mandada pra 2º plano a qualquer momento, e aí já é tarde pra descobrir que estava off.
+        if (!awakeAtivo() && cmdPendentes().length) partes.push('<b style="color:#c0483a">⚠ antichoke inativo — clique em qualquer lugar da página</b>');
         if (Math.abs(CLK.driftMs || 0) > 50) partes.push('<b style="color:#a2643a">relógio oscilando ' + Math.round(CLK.driftMs) + 'ms</b>');
         if (!window.Timing) partes.push('<b style="color:#c0483a">sem relógio do jogo!</b>');
         st.innerHTML = partes.join(' · ');

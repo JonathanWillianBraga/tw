@@ -96,6 +96,23 @@
       ".twmgr-units label{display:flex;align-items:center;gap:7px;font-size:11px;color:#6f6153;cursor:pointer}",
       ".twmgr-res{display:flex;gap:6px;margin:5px 0 9px}.twmgr-res label{flex:1;display:flex;align-items:center;gap:4px;font-size:13px}.twmgr-res .twmgr-inp{width:100%;font-size:11px !important}",
       ".twmgr-check{display:flex;align-items:center;gap:8px;font-size:11px;color:#6f6153;margin-bottom:10px;cursor:pointer}",
+      // ---- Célula de tropa (grade de unidades da Operação, na Central) ----
+      // Os campos de quantidade eram <input> cru: ficavam com a borda "inset" 3D e canto reto do
+      // navegador, destoando de todo o resto do painel (que é arredondado). Isto é o .twmgr-inp
+      // encolhido pra caber 12 unidades lado a lado.
+      ".twmgr-ucell{display:flex;flex-direction:column;align-items:center;gap:2px;padding:3px 1px;border-radius:8px;transition:.15s}",
+      ".twmgr-ucell:hover{background:#fbf7ee}",
+      // Sem tropa sobrando: apaga a célula em vez de escondê-la — some do caminho do olho, mas
+      // a posição de cada unidade continua a mesma em todas as ondas.
+      ".twmgr-ucell.vazia{opacity:.35}",
+      ".twmgr-ucell .twmgr-uqt{font-size:8px;color:#8a7d6d;line-height:1}",
+      ".twmgr-uinp{width:46px;background:#fff !important;border:1px solid #ddd2c0 !important;color:#463b30 !important;border-radius:6px !important;padding:3px 2px !important;font-size:10px !important;text-align:center;outline:none !important;transition:.15s}",
+      ".twmgr-uinp:focus{border-color:#a2643a !important;box-shadow:0 0 0 2px rgba(162,100,58,.22) !important}",
+      // Preenchido salta aos olhos: numa grade de 12 caixas quase todas vazias, o que importa
+      // é enxergar de relance quais têm tropa.
+      ".twmgr-uinp:not(:placeholder-shown){border-color:#c9a35a !important;background:#fffaf0 !important;font-weight:700}",
+      // Setinhas do type=number roubam ~15px de uma caixa de 46px e não servem pra nada aqui.
+      ".twmgr-uinp::-webkit-outer-spin-button,.twmgr-uinp::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}",
       // ---- Blocos reaproveitáveis (estreados no Noblar) ----
       // Cards lado a lado. auto-fit em vez de "1fr 1fr" porque o painel muda de largura: abaixo de
       // ~2 colunas ele empilha sozinho, sem media query.

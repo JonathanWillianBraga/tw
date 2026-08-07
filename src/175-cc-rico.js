@@ -1618,10 +1618,17 @@
       // tropa com o máximo em TODAS as ondas de uma vez. Some se não há onda pra preencher.
       const colsBox = document.getElementById('cc-op-tudo-cols');
       if (colsBox) {
-        colsBox.style.display = (a.ondas || []).length ? 'flex' : 'none';
-        colsBox.innerHTML = '<span style="color:#8a7d6d">tudo por tropa:</span> ' + listaU.map(([u, rot]) =>
-          '<label style="display:flex;align-items:center;gap:2px;cursor:pointer" title="preenche ' + esc(rot) + ' com o máximo em todas as ondas">' +
-            unitIcon(u, rot) + '<input type="checkbox" class="cc-op-tudo-col" data-u="' + u + '"></label>').join('');
+        colsBox.style.display = (a.ondas || []).length ? 'block' : 'none';
+        // Mesma largura de célula (48px) e mesmo recuo (23px) das caixas de tropa abaixo, pra
+        // cada checkbox cair na vertical exata da coluna que ele preenche.
+        colsBox.innerHTML =
+          '<div style="color:#8a7d6d;margin-bottom:2px">tudo por tropa ' +
+            '<span style="color:#b3a794">— marca a coluna e preenche em todas as ondas</span></div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:3px;margin-left:23px">' + listaU.map(([u, rot]) =>
+            '<label style="display:flex;flex-direction:column;align-items:center;gap:2px;width:48px;padding:0;cursor:pointer" ' +
+              'title="preenche ' + esc(rot) + ' com o máximo em todas as ondas">' +
+              unitIcon(u, rot) + '<input type="checkbox" class="cc-op-tudo-col" data-u="' + u + '"></label>').join('') +
+          '</div>';
         colsBox.querySelectorAll('.cc-op-tudo-col').forEach((el) => el.onclick = () => ccOpAplicarTudo(a, el.getAttribute('data-u')));
       }
       boxO.innerHTML = (a.ondas || []).length ? a.ondas.map((o, i) => {
@@ -1638,39 +1645,47 @@
         const campos = listaU.map(([u, rot]) => {
           const meu = (o.amounts && o.amounts[u]) || 0;
           const disp = (dispBase[u] || 0) + meu;
-          return '<label style="display:flex;flex-direction:column;align-items:center;gap:1px" title="' + esc(rot) + ' — sobra ' + fmtN(disp) + ' pra esta onda">' +
+          return '<label class="twmgr-ucell' + (disp > 0 ? '' : ' vazia') + '" title="' + esc(rot) + ' — sobra ' + fmtN(disp) + ' pra esta onda">' +
             unitIcon(u, rot) +
-            '<input class="cc-op-amt" data-id="' + o.id + '" data-u="' + u + '" type="number" min="0" placeholder="0" ' +
-              'value="' + (meu || '') + '" style="width:40px;padding:1px;text-align:center;font-size:10px">' +
-            '<span style="font-size:8px;color:#8a7d6d">' + fmtN(disp) + '</span>' +
+            '<input class="cc-op-amt twmgr-uinp" data-id="' + o.id + '" data-u="' + u + '" type="number" min="0" placeholder="0" ' +
+              'value="' + (meu || '') + '">' +
+            '<span class="twmgr-uqt">' + fmtN(disp) + '</span>' +
           '</label>';
         }).join('');
         return '<div style="border-bottom:1px solid rgba(0,0,0,.07);padding:4px 5px">' +
-          '<div style="display:grid;grid-template-columns:18px 1fr 70px 84px 46px;gap:5px;align-items:center;font-size:10px">' +
-            '<span style="color:#a2643a">' + (i + 1) + '</span>' +
-            '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + esc(nome) + '</span>' +
-            '<select class="cc-op-tipo twmgr-inp" data-id="' + o.id + '" style="font-size:9px;padding:1px">' +
+          '<div style="display:grid;grid-template-columns:22px 1fr 74px 92px 46px;gap:5px;align-items:center;font-size:10px">' +
+            // Número da onda como medalhinha: numa lista longa é o que dá o senso de ordem.
+            '<span style="display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;' +
+              'border-radius:50%;background:#f2e8d5;color:#8b5426;font-weight:700;font-size:9px">' + (i + 1) + '</span>' +
+            '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#584526">' + esc(nome) + '</span>' +
+            '<select class="cc-op-tipo twmgr-inp" data-id="' + o.id + '" style="font-size:9px;padding:2px 3px !important">' +
               '<option value="attack"' + (o.tipo !== 'support' ? ' selected' : '') + '>⚔ ataque</option>' +
               '<option value="support"' + (o.tipo === 'support' ? ' selected' : '') + '>🛡 apoio</option></select>' +
             '<input class="cc-op-chega" data-id="' + o.id + '" value="' + (chega ? srvClockMs(chega) : '') + '" placeholder="—" ' +
               'title="horário de chegada desta onda; edite pra calibrar" ' +
-              'style="width:100%;padding:1px;text-align:center;font-size:10px;color:' + (manual ? '#8b5426' : '#2e7d3a') + ';font-weight:' + (manual ? '700' : '400') + '">' +
+              'style="width:100%;border:1px solid ' + (manual ? '#c9a35a' : '#ddd2c0') + ';border-radius:6px;padding:3px 2px;' +
+              'background:' + (manual ? '#fffaf0' : '#fff') + ';text-align:center;font-size:10px;outline:none;' +
+              'color:' + (manual ? '#8b5426' : '#2e7d3a') + ';font-weight:' + (manual ? '700' : '400') + '">' +
             '<span style="text-align:right;white-space:nowrap">' +
-              '<a class="cc-op-up" data-id="' + o.id + '" href="#" style="color:#a2643a" title="subir">▲</a> ' +
-              '<a class="cc-op-dn" data-id="' + o.id + '" href="#" style="color:#a2643a" title="descer">▼</a> ' +
-              '<a class="cc-op-rm" data-id="' + o.id + '" href="#" style="color:#c0483a" title="remover">✕</a></span>' +
+              '<a class="cc-op-up" data-id="' + o.id + '" href="#" style="color:#a2643a;text-decoration:none" title="subir">▲</a> ' +
+              '<a class="cc-op-dn" data-id="' + o.id + '" href="#" style="color:#a2643a;text-decoration:none" title="descer">▼</a> ' +
+              '<a class="cc-op-rm" data-id="' + o.id + '" href="#" style="color:#c0483a;text-decoration:none" title="remover">✕</a></span>' +
           '</div>' +
-          '<div style="margin:2px 0 0 23px;font-size:9px;color:#8a7d6d">' +
-            'sai <b style="color:#6f6153">' + (sai ? srvClockMs(sai) : '—') + '</b>' +
-            (tViagem == null ? ' <span style="color:#a2643a">(digite tropa pra calcular)</span>' : '') +
-            ' <a class="cc-op-onda-tudo" data-id="' + o.id + '" href="#" style="margin-left:8px;color:#2e7d3a" title="preenche todas as tropas desta aldeia com o máximo disponível">🧺 tudo desta aldeia</a>' +
-            ' <span style="margin-left:8px">dividir em</span> ' +
-            '<input class="cc-op-divn" data-id="' + o.id + '" type="number" min="2" max="20" value="2" style="width:32px;padding:0 2px;font-size:9px">' +
-            ' <a class="cc-op-div" data-id="' + o.id + '" href="#" style="color:#2e7d3a">✂ dividir</a>' +
+          // Informação à esquerda, ações à direita — antes "sai" e os dois botões corriam juntos
+          // na mesma frase, e o dado mais importante da linha se perdia no meio dos links.
+          '<div style="display:flex;align-items:center;gap:5px;margin:3px 0 0 27px;font-size:9px;color:#8a7d6d">' +
+            '<span>sai <b style="color:' + (sai ? '#2e7d3a' : '#8a7d6d') + '">' + (sai ? srvClockMs(sai) : '—') + '</b>' +
+              (tViagem == null ? ' <span style="color:#a2643a">— digite a tropa pra calcular</span>' : '') + '</span>' +
+            '<span style="flex:1"></span>' +
+            '<a class="cc-op-onda-tudo" data-id="' + o.id + '" href="#" style="color:#2e7d3a;text-decoration:none" title="preenche todas as tropas desta aldeia com o máximo disponível">🧺 tudo</a>' +
+            '<span style="color:#d8cdb8">|</span>' +
+            '<a class="cc-op-div" data-id="' + o.id + '" href="#" style="color:#2e7d3a;text-decoration:none" title="quebra esta onda em N ondas iguais, da mesma aldeia">✂ dividir em</a>' +
+            '<input class="cc-op-divn" data-id="' + o.id + '" type="number" min="2" max="20" value="2" ' +
+              'style="width:34px;border:1px solid #ddd2c0;border-radius:6px;padding:2px 1px;background:#fff;color:#463b30;text-align:center;font-size:9px;outline:none">' +
           '</div>' +
-          '<div style="display:flex;flex-wrap:wrap;gap:4px;margin:3px 0 0 23px">' + campos + '</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:3px;margin:4px 0 0 23px">' + campos + '</div>' +
         '</div>';
-      }).join('') : '<div style="color:#8a7d6d;padding:6px;font-size:10px">— marque uma aldeia acima pra criar a 1ª onda —</div>';
+      }).join('') : '<div style="color:#8a7d6d;padding:6px;font-size:10px">— volte em <b>Origens</b> e marque uma aldeia pra criar a 1ª onda —</div>';
 
       boxO.querySelectorAll('.cc-op-amt').forEach((el) => el.onchange = () => {
         const o = a.ondas.find((z) => z.id === el.getAttribute('data-id')); if (!o) return;

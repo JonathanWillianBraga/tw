@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.74.0
+// @version      11.75.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.74.0';
+  const VERSION = '11.75.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -684,6 +684,12 @@
     c.noble.autoMax = Math.max(1, Math.min(40, parseInt(c.noble.autoMax, 10) || 8));
 
     if (!c.noble.relatorios || typeof c.noble.relatorios !== 'object') c.noble.relatorios = {};
+    // `lealdadeAt` (quando a lealdade foi MEDIDA) nasceu depois. Relatório antigo que já tem
+    // leitura herda o `at` dele — era o que a conta usava antes, então nada muda pra eles.
+    Object.keys(c.noble.relatorios).forEach((k) => {
+      const r = c.noble.relatorios[k] || {};
+      if (r.lealdade != null && r.lealdadeAt == null) r.lealdadeAt = r.at;
+    });
     if (!c.noble.vistos || typeof c.noble.vistos !== 'object') c.noble.vistos = {};
     // Relatório de alvo que saiu da lista não serve pra nada e cresceria pra sempre.
     Object.keys(c.noble.relatorios).forEach((k) => {

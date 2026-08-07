@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.80.0
+// @version      11.81.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.80.0';
+  const VERSION = '11.81.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -214,6 +214,9 @@
     cunhagemPesoWood: 28000, cunhagemPesoStone: 30000, cunhagemPesoIron: 25000,
     cunhagemSourceGroups: [], cunhagemStopEnabled: false, cunhagemStopHours: 2, autoMint: false,
     thresholdPct: 50, maxDist: 15,
+    // Alvo automático: em vez do limiar fixo, cada recurso mira a fatia que ELE ocupa da sua
+    // capacidade total. Desligado por padrão — muda o comportamento de quem já usa o fixo.
+    alvoAuto: false,
     groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {},
   });
   // Construções = gerenciador no molde do "Gerente de conta → Construção" do jogo: N modelos nomeados
@@ -512,6 +515,7 @@
     if (c.market.cunhagemStopHours == null) c.market.cunhagemStopHours = 2;
     if (c.market.autoMint == null) c.market.autoMint = false;
     if (c.market.thresholdPct == null) c.market.thresholdPct = 50;
+    if (c.market.alvoAuto == null) c.market.alvoAuto = false;
     if (c.market.maxDist == null) c.market.maxDist = 15;
     if (c.market.groupSolidario == null) c.market.groupSolidario = '';
     if (c.market.solidarioThresholdPct == null) c.market.solidarioThresholdPct = 50;

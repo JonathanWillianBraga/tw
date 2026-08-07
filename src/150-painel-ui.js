@@ -571,6 +571,8 @@
         '<div id="twmgr-sub-equilibrio" style="display:none">' +
         sec('⚖️ Equilíbrio',
             '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Aldeia acima do limiar doa o excedente pras abaixo, por recurso. Da mais perto primeiro.</div>' +
+            '<label class="twmgr-check" style="margin-bottom:5px" title="Em vez de um limiar que você escolhe, cada recurso mira a fatia que ELE ocupa da sua capacidade total de armazenamento. Resolve o caso em que um recurso (tipicamente madeira) passa do limiar em TODAS as aldeias: aí não sobra receptora, nada se move e a mais cheia estoura. Com o alvo proporcional sempre há alguém acima e alguém abaixo da média.">' +
+              '<input id="twmgr-mk-alvoauto" type="checkbox"> Alvo automático <span style="color:#8a7d6d">(proporcional ao que você tem)</span></label>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Encher armazém até (%)</span><input id="twmgr-mk-thr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="15" style="width:56px"></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-equilibrio-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-equilibrio-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
@@ -977,6 +979,16 @@
     document.getElementById('twmgr-mk-cunhagem-coins').textContent = '🪙 Total cunhado: ' + fmtN(config.market.modes.cunhagem.totalCoins || 0) + ' moeda(s)';
     document.getElementById('twmgr-mk-int').value = Math.round((config.market.interval || 600) / 60);
     document.getElementById('twmgr-mk-thr').value = config.market.thresholdPct != null ? config.market.thresholdPct : 50;
+    document.getElementById('twmgr-mk-alvoauto').checked = !!config.market.alvoAuto;
+    // O campo de limiar fixo fica inerte no automático — deixar ele editável sugeriria que o
+    // número ainda manda em alguma coisa.
+    const aplicarAlvoAuto = () => {
+      const on = document.getElementById('twmgr-mk-alvoauto').checked;
+      const thr = document.getElementById('twmgr-mk-thr');
+      if (thr) { thr.disabled = on; thr.style.opacity = on ? '.4' : '1'; }
+    };
+    document.getElementById('twmgr-mk-alvoauto').addEventListener('change', aplicarAlvoAuto);
+    aplicarAlvoAuto();
     document.getElementById('twmgr-mk-dist').value = config.market.maxDist != null ? config.market.maxDist : 15;
     document.getElementById('twmgr-mk-sthr').value = config.market.solidarioThresholdPct != null ? config.market.solidarioThresholdPct : 50;
     document.getElementById('twmgr-mk-sdonormin').value = config.market.solidarioDonorMinPct != null ? config.market.solidarioDonorMinPct : 50;
@@ -985,7 +997,7 @@
     document.getElementById('twmgr-mk-sdist').value = config.market.solidarioMaxDist != null ? config.market.solidarioMaxDist : 20;
     renderMarketCunhagemGroups();
     fillMarketSolidarioGroupSelect();
-    ['twmgr-mk-destcoords', 'twmgr-mk-rwood', 'twmgr-mk-rstone', 'twmgr-mk-riron', 'twmgr-mk-pwood', 'twmgr-mk-pstone', 'twmgr-mk-piron', 'twmgr-mk-automint', 'twmgr-mk-stopon', 'twmgr-mk-stophours', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
+    ['twmgr-mk-destcoords', 'twmgr-mk-rwood', 'twmgr-mk-rstone', 'twmgr-mk-riron', 'twmgr-mk-pwood', 'twmgr-mk-pstone', 'twmgr-mk-piron', 'twmgr-mk-automint', 'twmgr-mk-stopon', 'twmgr-mk-stophours', 'twmgr-mk-int', 'twmgr-mk-alvoauto', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
     // Cada modo tem seu próprio par Iniciar/Parar — rodam independentes, pode ligar vários ao mesmo tempo.
     MARKET_MODES.forEach((mkKey) => {
       document.getElementById('twmgr-mk-' + mkKey + '-start').addEventListener('click', () => marketStart(mkKey));

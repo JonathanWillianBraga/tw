@@ -182,7 +182,12 @@
     const ROT = { wood: 'madeira', stone: 'argila', iron: 'ferro' };
     const RES = ['wood', 'stone', 'iron'];
     const defTxt = RES.filter((r) => s.deficitTotal[r] > 0).map((r) => fmtN(s.deficitTotal[r]) + ' ' + ROT[r]).join(', ') || 'nenhum';
-    resumo.innerHTML = '<b style="color:' + (s.pct >= 90 ? '#2e7d3a' : s.pct >= 60 ? '#a2643a' : '#a8564a') + '">' + s.ok + ' de ' + s.total + ' aldeia(s)</b> no limiar (' + s.pct + '%, ≥' + s.limiarPct + '% do armazém)' +
+    // No automático o alvo é diferente por recurso e muda a cada ciclo — mostrar um "≥50%" fixo
+    // ali seria mentira. Exibe os três alvos calculados, que é o número que de fato mandou.
+    const alvoTxt = (s.auto && s.alvoRes)
+      ? 'alvo automático: ' + RES.map((r) => ROT[r] + ' ' + Math.round(s.alvoRes[r] * 100) + '%').join(' · ')
+      : '≥' + s.limiarPct + '% do armazém';
+    resumo.innerHTML = '<b style="color:' + (s.pct >= 90 ? '#2e7d3a' : s.pct >= 60 ? '#a2643a' : '#a8564a') + '">' + s.ok + ' de ' + s.total + ' aldeia(s)</b> no alvo (' + s.pct + '%, ' + alvoTxt + ')' +
       ' · déficit total: ' + defTxt + ' · atualizado ' + new Date(s.at).toLocaleTimeString('pt-BR').slice(0, 5);
     if (etaBox) {
       const partes = RES.map((r) => {

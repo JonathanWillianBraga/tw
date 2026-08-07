@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.80.0
+// @version      11.81.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.80.0';
+  const VERSION = '11.81.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -214,6 +214,9 @@
     cunhagemPesoWood: 28000, cunhagemPesoStone: 30000, cunhagemPesoIron: 25000,
     cunhagemSourceGroups: [], cunhagemStopEnabled: false, cunhagemStopHours: 2, autoMint: false,
     thresholdPct: 50, maxDist: 15,
+    // Alvo automático: em vez do limiar fixo, cada recurso mira a fatia que ELE ocupa da sua
+    // capacidade total. Desligado por padrão — muda o comportamento de quem já usa o fixo.
+    alvoAuto: false,
     groupSolidario: '', solidarioThresholdPct: 50, solidarioMaxDist: 20, solidarioDonorPct: 50, solidarioDonorMinPct: 50, solidarioGargaloKeepPct: 90, inflight: {},
   });
   // Construções = gerenciador no molde do "Gerente de conta → Construção" do jogo: N modelos nomeados
@@ -512,6 +515,7 @@
     if (c.market.cunhagemStopHours == null) c.market.cunhagemStopHours = 2;
     if (c.market.autoMint == null) c.market.autoMint = false;
     if (c.market.thresholdPct == null) c.market.thresholdPct = 50;
+    if (c.market.alvoAuto == null) c.market.alvoAuto = false;
     if (c.market.maxDist == null) c.market.maxDist = 15;
     if (c.market.groupSolidario == null) c.market.groupSolidario = '';
     if (c.market.solidarioThresholdPct == null) c.market.solidarioThresholdPct = 50;
@@ -3745,30 +3749,52 @@
   // pelo diagnóstico sob demanda (equilibrioDiagnostico), sem mandar nada em nenhum dos dois.
   // "storage" guardado À PARTE de "thr": thr já vem escalado pelo limiar (storage*pct), mas
   // pra saber se uma aldeia está perto de ESTOURAR o armazém preciso do valor bruto.
+  const EQ_ALVO_TETO = 0.92;   // no automático, nunca mira o topo: produção entre ciclos precisa caber
   async function getEquilibrioSnapshot() {
     let vils = await getAllVillagesCached();
     vils = vils.filter((v) => v.coord);
-    const pct = (config.market.thresholdPct != null ? config.market.thresholdPct : 50) / 100;
-    const st = [];
+    const RES = ['wood', 'stone', 'iron'];
+    const base = [];
     for (const v of vils) {
       let m; try { m = await getMarketState(v.vid); } catch (e) { continue; }
       if (!m.storage) continue;                 // sem armazém lido -> pula
-      st.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron },
-        cap: m.capacity, storage: m.storage, thr: m.storage * pct });
+      base.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron },
+        cap: m.capacity, storage: m.storage });
       await sleep(120);
     }
-    return { st: st, pct: pct };
+    // Alvo POR RECURSO. No automático ele sai do que você REALMENTE tem: a fatia que aquele
+    // recurso ocupa da sua capacidade total de armazenamento.
+    //
+    // Por que isso importa: com limiar fixo de 50%, uma aldeia só doa pra quem está ABAIXO de
+    // 50%. Quando um recurso passa de 50% em TODAS as aldeias (o caso da madeira), não sobra
+    // receptora nenhuma — nada se move e a mais cheia estoura, mesmo com o Equilíbrio ligado.
+    // Com o alvo proporcional sempre há alguém acima e alguém abaixo da média, então o excesso
+    // é espalhado em vez de concentrar. O limiar deixa de ser um número que você adivinha e
+    // passa a ser o que a sua conta tem de fato.
+    const auto = !!config.market.alvoAuto;
+    const fixo = (config.market.thresholdPct != null ? config.market.thresholdPct : 50) / 100;
+    const capTotal = base.reduce((s, x) => s + (x.storage || 0), 0);
+    const pctRes = {};
+    RES.forEach((r) => {
+      if (!auto || !capTotal) { pctRes[r] = fixo; return; }
+      const tot = base.reduce((s, x) => s + (x.cur[r] || 0), 0);
+      pctRes[r] = Math.min(EQ_ALVO_TETO, tot / capTotal);
+    });
+    const st = base.map((x) => Object.assign({}, x, {
+      thr: { wood: x.storage * pctRes.wood, stone: x.storage * pctRes.stone, iron: x.storage * pctRes.iron },
+    }));
+    return { st: st, pct: fixo, pctRes: pctRes, auto: auto };
   }
   async function equilibrioPass() {
     let snap;
     try { snap = await getEquilibrioSnapshot(); } catch (e) { pushLog('Equilíbrio: erro ao listar aldeias (' + (e.message || e) + ').', 'err', 'market'); return; }
-    const st = snap.st, pct = snap.pct;
+    const st = snap.st;
     const donorSet = {}, recvSet = {}, totRes = { wood: 0, stone: 0, iron: 0 };
     const maxDist = config.market.maxDist != null ? config.market.maxDist : 15;
     const now = Date.now();
     // Saúde ANTES de mexer em qualquer coisa — é o estado real, e a vazão do ciclo ANTERIOR
     // (config.market.modes.equilibrio.stats ainda não foi sobrescrita) alimenta o ETA.
-    equilibrioAtualizarSaudeCom(st, pct);
+    equilibrioAtualizarSaudeCom(snap);
     // recursos em trânsito (que eu já mandei e ainda não chegaram)
     config.market.inflight = config.market.inflight || {};
     Object.keys(config.market.inflight).forEach((vid) => {
@@ -3780,12 +3806,12 @@
     for (const r of ['wood', 'stone', 'iron']) {
       // carente = (atual + o que já vem chegando) abaixo do limiar
       const receivers = st.map((s) => ({ s: s, eff: s.cur[r] + inSum(s.vid, r) }))
-        .filter((x) => x.eff < x.s.thr).map((x) => ({ s: x.s, def: x.s.thr - x.eff })).sort((a, b) => b.def - a.def);
+        .filter((x) => x.eff < x.s.thr[r]).map((x) => ({ s: x.s, def: x.s.thr[r] - x.eff })).sort((a, b) => b.def - a.def);
       for (const rec of receivers) {
         { const pare = devoParar('market'); if (pare) { pushLog('Equilíbrio: interrompido — ' + pare + '.', '', 'market'); return; } }
         if (rec.def <= 0) continue;
-        const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] > s.thr)
-          .map((s) => ({ s: s, exc: s.cur[r] - s.thr, d: coordDist(s.coord, rec.s.coord) }))
+        const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] > s.thr[r])
+          .map((s) => ({ s: s, exc: s.cur[r] - s.thr[r], d: coordDist(s.coord, rec.s.coord) }))
           .filter((x) => x.d <= maxDist)
           .sort((a, b) => a.d - b.d);
         for (const don of donors) {
@@ -3807,7 +3833,10 @@
     }
     config.market.modes.equilibrio.stats = { sending: Object.keys(donorSet).length, receiving: Object.keys(recvSet).length, wood: totRes.wood, stone: totRes.stone, iron: totRes.iron };
     save();
-    pushLog('Equilíbrio: ciclo concluído — ' + sent + ' transferência(s), limiar ' + Math.round(pct * 100) + '%.', 'ok', 'market');
+    const alvoTxt = snap.auto
+      ? 'alvo automático (mad ' + Math.round(snap.pctRes.wood * 100) + '% · arg ' + Math.round(snap.pctRes.stone * 100) + '% · fer ' + Math.round(snap.pctRes.iron * 100) + '%)'
+      : 'limiar ' + Math.round(snap.pct * 100) + '%';
+    pushLog('Equilíbrio: ciclo concluído — ' + sent + ' transferência(s), ' + alvoTxt + '.', 'ok', 'market');
   }
 
   // Saúde: quão perto do limiar cada aldeia está (déficit) e quão perto do TETO do armazém
@@ -3818,7 +3847,8 @@
   const EQ_RISCO_PCT = 0.9;      // 90% do armazém = "quase estourando"
   const EQ_MARGEM_PCT = 15;      // pontos percentuais de folga na sugestão (baixa ANTES de chegar no risco)
   const EQ_LIMIAR_MIN = 20;      // nunca sugere abaixo disto (limiar baixo demais vira spam de transferência trivial)
-  function equilibrioAtualizarSaudeCom(st, pct) {
+  function equilibrioAtualizarSaudeCom(snap) {
+    const st = snap.st, pct = snap.pct;
     const RES = ['wood', 'stone', 'iron'];
     const anterior = (config.market.modes.equilibrio.stats) || {};
     const intervalSec = Math.max(60, config.market.interval || 600);
@@ -3835,10 +3865,10 @@
       let ok = true;
       const def = {}, risco = {};
       RES.forEach((r) => {
-        const d = Math.max(0, Math.round(s.thr - s.cur[r]));
+        const d = Math.max(0, Math.round(s.thr[r] - s.cur[r]));
         def[r] = d;
         deficitTotal[r] += d;
-        excedenteTotal[r] += Math.max(0, Math.round(s.cur[r] - s.thr));
+        excedenteTotal[r] += Math.max(0, Math.round(s.cur[r] - s.thr[r]));
         if (d > 0) ok = false;
         if (s.storage > 0) {
           const fill = s.cur[r] / s.storage;
@@ -3860,9 +3890,11 @@
     });
     // Só sugere quando há sinal de risco E a sugestão de fato baixaria o limiar atual — sem
     // aldeia em risco, ficar quieto é mais honesto que inventar ajuste sem necessidade.
+    // No modo automático o limiar não é um número que você escolhe — sugerir baixá-lo não faz
+    // sentido, o alvo já se ajusta sozinho ao estoque real a cada ciclo.
     let sugestao = null;
     const limiarAtualPct = Math.round(pct * 100);
-    if (menorFillRisco != null) {
+    if (!snap.auto && menorFillRisco != null) {
       const proposto = Math.max(EQ_LIMIAR_MIN, Math.round(menorFillRisco * 100) - EQ_MARGEM_PCT);
       if (proposto < limiarAtualPct) {
         sugestao = {
@@ -3877,6 +3909,7 @@
       pct: st.length ? Math.round(100 * aldeiasOk / st.length) : 100,
       limiarPct: limiarAtualPct, deficitTotal: deficitTotal, excedenteTotal: excedenteTotal,
       eta: eta, problemas: problemas, sugestao: sugestao,
+      auto: !!snap.auto, alvoRes: snap.pctRes || null,
     };
     save();
     if (typeof equilibrioRenderSaude === 'function') equilibrioRenderSaude();
@@ -3888,7 +3921,7 @@
     let snap;
     try { snap = await getEquilibrioSnapshot(); }
     catch (e) { pushLog('Equilíbrio: erro ao ler o diagnóstico (' + (e.message || e) + ').', 'err', 'market'); return; }
-    equilibrioAtualizarSaudeCom(snap.st, snap.pct);
+    equilibrioAtualizarSaudeCom(snap);
     pushLog('Equilíbrio: diagnóstico atualizado — ' + snap.st.length + ' aldeia(s) lida(s).', 'ok', 'market');
   }
 
@@ -4041,6 +4074,7 @@
     if (g('twmgr-mk-automint')) c.autoMint = g('twmgr-mk-automint').checked;
     if (g('twmgr-mk-srcgroups')) c.cunhagemSourceGroups = Array.from(document.querySelectorAll('.twmgr-mk-srcgrp:checked')).map((cb) => cb.getAttribute('data-gid')).filter(Boolean);
     if (g('twmgr-mk-int')) c.interval = Math.max(1, parseInt(g('twmgr-mk-int').value, 10) || 10) * 60;
+    if (g('twmgr-mk-alvoauto')) c.alvoAuto = g('twmgr-mk-alvoauto').checked;
     if (g('twmgr-mk-thr')) c.thresholdPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-thr').value, 10) || 50));
     if (g('twmgr-mk-dist')) c.maxDist = Math.max(1, parseFloat((g('twmgr-mk-dist').value || '').replace(',', '.')) || 15);
     if (g('twmgr-mk-sthr')) c.solidarioThresholdPct = Math.max(1, Math.min(99, parseInt(g('twmgr-mk-sthr').value, 10) || 50));
@@ -8498,7 +8532,12 @@
     const ROT = { wood: 'madeira', stone: 'argila', iron: 'ferro' };
     const RES = ['wood', 'stone', 'iron'];
     const defTxt = RES.filter((r) => s.deficitTotal[r] > 0).map((r) => fmtN(s.deficitTotal[r]) + ' ' + ROT[r]).join(', ') || 'nenhum';
-    resumo.innerHTML = '<b style="color:' + (s.pct >= 90 ? '#2e7d3a' : s.pct >= 60 ? '#a2643a' : '#a8564a') + '">' + s.ok + ' de ' + s.total + ' aldeia(s)</b> no limiar (' + s.pct + '%, ≥' + s.limiarPct + '% do armazém)' +
+    // No automático o alvo é diferente por recurso e muda a cada ciclo — mostrar um "≥50%" fixo
+    // ali seria mentira. Exibe os três alvos calculados, que é o número que de fato mandou.
+    const alvoTxt = (s.auto && s.alvoRes)
+      ? 'alvo automático: ' + RES.map((r) => ROT[r] + ' ' + Math.round(s.alvoRes[r] * 100) + '%').join(' · ')
+      : '≥' + s.limiarPct + '% do armazém';
+    resumo.innerHTML = '<b style="color:' + (s.pct >= 90 ? '#2e7d3a' : s.pct >= 60 ? '#a2643a' : '#a8564a') + '">' + s.ok + ' de ' + s.total + ' aldeia(s)</b> no alvo (' + s.pct + '%, ' + alvoTxt + ')' +
       ' · déficit total: ' + defTxt + ' · atualizado ' + new Date(s.at).toLocaleTimeString('pt-BR').slice(0, 5);
     if (etaBox) {
       const partes = RES.map((r) => {
@@ -9190,6 +9229,8 @@
         '<div id="twmgr-sub-equilibrio" style="display:none">' +
         sec('⚖️ Equilíbrio',
             '<div style="font-size:10px;color:#8a7d6d;margin-bottom:4px">Aldeia acima do limiar doa o excedente pras abaixo, por recurso. Da mais perto primeiro.</div>' +
+            '<label class="twmgr-check" style="margin-bottom:5px" title="Em vez de um limiar que você escolhe, cada recurso mira a fatia que ELE ocupa da sua capacidade total de armazenamento. Resolve o caso em que um recurso (tipicamente madeira) passa do limiar em TODAS as aldeias: aí não sobra receptora, nada se move e a mais cheia estoura. Com o alvo proporcional sempre há alguém acima e alguém abaixo da média.">' +
+              '<input id="twmgr-mk-alvoauto" type="checkbox"> Alvo automático <span style="color:#8a7d6d">(proporcional ao que você tem)</span></label>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Encher armazém até (%)</span><input id="twmgr-mk-thr" class="twmgr-inp" type="number" min="1" max="99" value="50" style="width:56px"></div>' +
             '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-dist" class="twmgr-inp" type="number" min="1" step="0.5" value="15" style="width:56px"></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-equilibrio-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-equilibrio-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
@@ -9596,6 +9637,16 @@
     document.getElementById('twmgr-mk-cunhagem-coins').textContent = '🪙 Total cunhado: ' + fmtN(config.market.modes.cunhagem.totalCoins || 0) + ' moeda(s)';
     document.getElementById('twmgr-mk-int').value = Math.round((config.market.interval || 600) / 60);
     document.getElementById('twmgr-mk-thr').value = config.market.thresholdPct != null ? config.market.thresholdPct : 50;
+    document.getElementById('twmgr-mk-alvoauto').checked = !!config.market.alvoAuto;
+    // O campo de limiar fixo fica inerte no automático — deixar ele editável sugeriria que o
+    // número ainda manda em alguma coisa.
+    const aplicarAlvoAuto = () => {
+      const on = document.getElementById('twmgr-mk-alvoauto').checked;
+      const thr = document.getElementById('twmgr-mk-thr');
+      if (thr) { thr.disabled = on; thr.style.opacity = on ? '.4' : '1'; }
+    };
+    document.getElementById('twmgr-mk-alvoauto').addEventListener('change', aplicarAlvoAuto);
+    aplicarAlvoAuto();
     document.getElementById('twmgr-mk-dist').value = config.market.maxDist != null ? config.market.maxDist : 15;
     document.getElementById('twmgr-mk-sthr').value = config.market.solidarioThresholdPct != null ? config.market.solidarioThresholdPct : 50;
     document.getElementById('twmgr-mk-sdonormin').value = config.market.solidarioDonorMinPct != null ? config.market.solidarioDonorMinPct : 50;
@@ -9604,7 +9655,7 @@
     document.getElementById('twmgr-mk-sdist').value = config.market.solidarioMaxDist != null ? config.market.solidarioMaxDist : 20;
     renderMarketCunhagemGroups();
     fillMarketSolidarioGroupSelect();
-    ['twmgr-mk-destcoords', 'twmgr-mk-rwood', 'twmgr-mk-rstone', 'twmgr-mk-riron', 'twmgr-mk-pwood', 'twmgr-mk-pstone', 'twmgr-mk-piron', 'twmgr-mk-automint', 'twmgr-mk-stopon', 'twmgr-mk-stophours', 'twmgr-mk-int', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
+    ['twmgr-mk-destcoords', 'twmgr-mk-rwood', 'twmgr-mk-rstone', 'twmgr-mk-riron', 'twmgr-mk-pwood', 'twmgr-mk-pstone', 'twmgr-mk-piron', 'twmgr-mk-automint', 'twmgr-mk-stopon', 'twmgr-mk-stophours', 'twmgr-mk-int', 'twmgr-mk-alvoauto', 'twmgr-mk-thr', 'twmgr-mk-dist', 'twmgr-mk-sthr', 'twmgr-mk-sdonormin', 'twmgr-mk-sdonor', 'twmgr-mk-sgargalo', 'twmgr-mk-sdist', 'twmgr-mk-g-solid'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readMarketCfg); });
     // Cada modo tem seu próprio par Iniciar/Parar — rodam independentes, pode ligar vários ao mesmo tempo.
     MARKET_MODES.forEach((mkKey) => {
       document.getElementById('twmgr-mk-' + mkKey + '-start').addEventListener('click', () => marketStart(mkKey));

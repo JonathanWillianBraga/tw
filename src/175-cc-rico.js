@@ -2405,6 +2405,58 @@
       _ccOvTimer = setInterval(tick, 1000);
     }
 
+    // ---- Agendados na ficha da aldeia (info_village) ----
+    // A ficha de uma aldeia INIMIGA nunca mostra ataque a caminho de verdade (essa informação
+    // só é visível pro dono) — então quem monta uma Operação com várias ondas pro mesmo alvo
+    // não tinha como conferir a fila que já agendou, só a Fila lá na Central. Isto injeta os
+    // NOSSOS comandos pendentes (config.cmd.fila) que apontam pra essa coordenada, direto na
+    // ficha, ordenados por chegada — igual ao mountCmdOverview faz na praça, só que por DESTINO
+    // em vez de por ORIGEM.
+    async function mountCmdDestino() {
+      if (!config.cmd || !config.cmd.enabled) return;
+      if (telaAtual() !== 'info_village') return;
+      const old = document.getElementById('cc-destino-box'); if (old) old.remove();
+      const coordEl = Array.prototype.slice.call(document.querySelectorAll('#content_value td'))
+        .find((td) => /^\d{1,3}\|\d{1,3}$/.test((td.textContent || '').trim()));
+      const coord = coordEl ? coordEl.textContent.trim() : null;
+      if (!coord) return;
+      const pend = cmdFila().filter((c) => (c.x + '|' + c.y) === coord &&
+        (c.state === 'novo' || c.state === 'preparado' || c.state === 'armado'));
+      if (!pend.length) return;
+      pend.sort((a, b) => a.arriveAt - b.arriveAt);
+      let vilas = [];
+      try { vilas = await getAllVillagesCached(); } catch (e) { /* segue sem nome de origem */ }
+      const h2 = document.querySelector('#content_value h2');
+      if (!h2) return;
+      const box = document.createElement('table');
+      box.id = 'cc-destino-box'; box.className = 'vis'; box.style.marginBottom = '10px';
+      box.innerHTML = '<tr><th colspan="4">🕒 Agendados na Central (' + pend.length + ')</th></tr>' +
+        '<tr style="font-size:11px;color:#7d7259"><td>tipo</td><td>origem</td><td>chega</td><td>sai / cancelar</td></tr>' +
+        pend.map((c) => {
+          const vo = vilas.find((z) => String(z.vid) === String(c.origin));
+          const origemTxt = vo ? (vo.name || vo.coord || vo.vid) : c.origin;
+          const rot = { support: 'Apoio', fake: 'Fake', nobre: 'Nobre' }[c.tipo] || 'Ataque';
+          const est = ccEstimaDeComando(c);
+          const saiEm = c.sendAt ? c.sendAt : (est != null ? c.arriveAt - est : null);
+          return '<tr>' +
+            '<td>' + esc(rot) + '</td>' +
+            '<td>' + esc(origemTxt) + '</td>' +
+            '<td>' + srvClockMs(c.arriveAt) + '</td>' +
+            '<td>' + (saiEm ? 'sai ' + srvClockMs(saiEm) : '—') +
+              ' <a href="#" class="cc-dest-x" data-id="' + c.id + '" title="cancelar comando agendado" style="color:#c0483a;font-weight:bold;margin-left:8px;text-decoration:none">✕</a></td>' +
+          '</tr>';
+        }).join('');
+      h2.insertAdjacentElement('afterend', box);
+      box.querySelectorAll('.cc-dest-x').forEach((el) => el.onclick = (ev) => {
+        ev.preventDefault();
+        const id = el.getAttribute('data-id');
+        const c = cmdFila().find((z) => z.id === id);
+        cmdAbortar(id);
+        if (c) pushLog('🕒 Central: agendado → ' + c.x + '|' + c.y + ' cancelado (via ficha da aldeia).', '', 'cmd');
+        mountCmdDestino().catch(() => {});
+      });
+    }
+
     // Unidades que defendem. Usadas pra sugerir de onde mandar o snipe.
     const CC_DEF = ['spear', 'sword', 'heavy', 'archer'];
     // Valores de defesa do TW por unidade (geral/cavalaria/arqueiro). Serve pra ordenar os
@@ -3562,5 +3614,6 @@
     try { if (telaAtual() === 'place') mountCmdCenter(); } catch (e) { pushLog('Central rica nao montou: ' + (e.message || e), 'err', 'cmd'); }
     try { mountSnipeIncomings(); } catch (e) { pushLog('Snipe rico falhou: ' + (e.message || e), 'err', 'cmd'); }
     try { mountCmdOverview(); } catch (e) { /* silencioso: injeção na lista de comandos é opcional */ }
+    mountCmdDestino().catch(() => { /* silencioso: injeção na ficha da aldeia é opcional */ });
     try { cmdBoot(); } catch (e) { pushLog('cmdBoot falhou: ' + (e.message || e), 'err', 'cmd'); }
   })();

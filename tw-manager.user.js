@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.71.0
+// @version      11.72.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.71.0';
+  const VERSION = '11.72.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -169,6 +169,7 @@
     autoUnlock: false,
     unlockAte: 4,          // desbloqueia até esta opção (1 Pequena … 4 Extrema)
     unlockPuxar: true,     // faltando recurso, puxa de outras aldeias imediatamente
+    emVoo: {},             // { [vid]: [{r, amt, chega}] } — o que já foi puxado e não pousou
     unlockReserva: 5000,   // a doadora nunca fica abaixo disto em cada recurso
     unlockMaxOrigens: 5,   // quantas aldeias no máximo contribuem por desbloqueio
     faltouRecurso: {},     // vid -> { nome, opcao, falta:{wood,stone,iron}, at } — o que travou
@@ -409,6 +410,7 @@
     if (typeof c.scav.autoUnlock !== 'boolean') c.scav.autoUnlock = false;
     if (typeof c.scav.unlockAte !== 'number' || c.scav.unlockAte < 1 || c.scav.unlockAte > 4) c.scav.unlockAte = 4;
     if (typeof c.scav.unlockPuxar !== 'boolean') c.scav.unlockPuxar = true;
+    if (!c.scav.emVoo || typeof c.scav.emVoo !== 'object') c.scav.emVoo = {};
     if (typeof c.scav.unlockReserva !== 'number' || c.scav.unlockReserva < 0) c.scav.unlockReserva = 5000;
     if (typeof c.scav.unlockMaxOrigens !== 'number' || c.scav.unlockMaxOrigens < 1) c.scav.unlockMaxOrigens = 5;
     if (!c.scav.faltouRecurso) c.scav.faltouRecurso = {};
@@ -1480,8 +1482,15 @@
       const total = RES3.reduce((s, k) => s + envio[k], 0);
       if (total <= 0) continue;
       try {
-        await sendMarketResources(c.v.vid, dCoord, envio);
+        const dur = await sendMarketResources(c.v.vid, dCoord, envio);
         RES3.forEach((k) => { restante[k] = Math.max(0, restante[k] - envio[k]); c.v.res[k] -= envio[k]; });
+        // REGISTRA o que está voando. Sem isto o ciclo seguinte recalcula a mesma falta (o
+        // transporte ainda não pousou) e manda tudo de novo — era o que enchia a aldeia de
+        // caminhão. Some sozinho na hora da chegada.
+        config.scav.emVoo = config.scav.emVoo || {};
+        const fila = config.scav.emVoo[destino.vid] = config.scav.emVoo[destino.vid] || [];
+        const chega = Date.now() + ((dur && dur > 0 ? dur : 3600) * 1000);
+        RES3.forEach((k) => { if (envio[k] > 0) fila.push({ r: k, amt: envio[k], chega: chega }); });
         usadas++;
         pushLog('🚚 ' + c.v.name + ' → ' + destino.name + ': ' + RES3.filter((k) => envio[k]).map((k) => envio[k] + ' ' + k).join(', ') +
           ' (' + Math.round(c.dist * 10) / 10 + ' campos)', 'ok', 'scav');
@@ -1490,6 +1499,18 @@
     }
     const aindaFalta = RES3.reduce((s, k) => s + restante[k], 0);
     return { usadas: usadas, aindaFalta: aindaFalta, restante: restante };
+  }
+
+  // O que já está a caminho desta aldeia por conta do desbloqueio, por recurso. Poda o que já
+  // pousou na mesma passada, então não precisa de limpeza em outro lugar.
+  function scavPuxadoEmVoo(vid) {
+    const agora = Date.now();
+    config.scav.emVoo = config.scav.emVoo || {};
+    const lista = (config.scav.emVoo[vid] || []).filter((e) => e.chega > agora);
+    if (lista.length) config.scav.emVoo[vid] = lista; else delete config.scav.emVoo[vid];
+    const out = { wood: 0, stone: 0, iron: 0 };
+    lista.forEach((e) => { out[e.r] = (out[e.r] || 0) + e.amt; });
+    return out;
   }
 
   async function scavAutoUnlock(estados) {
@@ -1522,8 +1543,36 @@
       cfg.faltouRecurso[v.vid] = { nome: v.name, opcao: alvo.nome, falta: falta, at: Date.now() };
       semRecurso++;
       if (!cfg.unlockPuxar) continue;
+
+      // ---- TRAVA 1: o alvo cabe no armazém? ----
+      // Se o custo de um recurso passa da capacidade do armazém, esta aldeia NUNCA vai juntar
+      // aquilo — o que chega acima do teto simplesmente some. Sem esta conferência o ciclo
+      // recalculava a mesma falta pra sempre e mandava caminhão atrás de caminhão, destruindo
+      // recurso a cada chegada. Foi o que estourou uma aldeia recém-conquistada, de armazém
+      // pequeno, mirando a Extrema Coleta.
+      const teto = v.storageMax || 0;
+      const naoCabe = teto ? RES3.filter((k) => (alvo.custo[k] || 0) > teto) : [];
+      if (naoCabe.length) {
+        pushLog('⛏️ ' + v.name + ': ' + alvo.nome + ' custa mais ' + naoCabe.join('/') + ' do que o armazém'
+          + ' guarda (' + fmtN(teto) + ') — é impossível juntar, o que passa do teto some. Não vou puxar'
+          + ' recurso pra cá. Suba o Armazém ou baixe o "desbloquear até".', 'err', 'scav');
+        continue;
+      }
+
+      // ---- TRAVA 2: desconta o que já está voando e o que cabe ----
+      // `falta` sai do recurso de AGORA e ignorava o transporte a caminho, então cada ciclo
+      // repetia o pedido inteiro. E nunca pede mais do que ainda cabe no armazém.
+      const voando = scavPuxadoEmVoo(v.vid);
+      const pedir = {}; let aindaPrecisa = 0;
+      RES3.forEach((k) => {
+        const livre = teto ? Math.max(0, teto - (v.res[k] || 0) - (voando[k] || 0)) : Infinity;
+        pedir[k] = Math.max(0, Math.min((falta[k] || 0) - (voando[k] || 0), livre));
+        aindaPrecisa += pedir[k];
+      });
+      if (!aindaPrecisa) continue;   // o que já está a caminho resolve
+
       try {
-        const r = await scavPuxarRecursos(v, falta, estados, coords);
+        const r = await scavPuxarRecursos(v, pedir, estados, coords);
         if (r.usadas) {
           puxadas++;
           pushLog('⛏️ ' + v.name + ': faltava recurso pra ' + alvo.nome + ' — puxei de ' + r.usadas + ' aldeia(s)' +

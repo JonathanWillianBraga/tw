@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.71.0
+// @version      11.72.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.71.0';
+  const VERSION = '11.72.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -169,6 +169,7 @@
     autoUnlock: false,
     unlockAte: 4,          // desbloqueia até esta opção (1 Pequena … 4 Extrema)
     unlockPuxar: true,     // faltando recurso, puxa de outras aldeias imediatamente
+    emVoo: {},             // { [vid]: [{r, amt, chega}] } — o que já foi puxado e não pousou
     unlockReserva: 5000,   // a doadora nunca fica abaixo disto em cada recurso
     unlockMaxOrigens: 5,   // quantas aldeias no máximo contribuem por desbloqueio
     faltouRecurso: {},     // vid -> { nome, opcao, falta:{wood,stone,iron}, at } — o que travou
@@ -409,6 +410,7 @@
     if (typeof c.scav.autoUnlock !== 'boolean') c.scav.autoUnlock = false;
     if (typeof c.scav.unlockAte !== 'number' || c.scav.unlockAte < 1 || c.scav.unlockAte > 4) c.scav.unlockAte = 4;
     if (typeof c.scav.unlockPuxar !== 'boolean') c.scav.unlockPuxar = true;
+    if (!c.scav.emVoo || typeof c.scav.emVoo !== 'object') c.scav.emVoo = {};
     if (typeof c.scav.unlockReserva !== 'number' || c.scav.unlockReserva < 0) c.scav.unlockReserva = 5000;
     if (typeof c.scav.unlockMaxOrigens !== 'number' || c.scav.unlockMaxOrigens < 1) c.scav.unlockMaxOrigens = 5;
     if (!c.scav.faltouRecurso) c.scav.faltouRecurso = {};

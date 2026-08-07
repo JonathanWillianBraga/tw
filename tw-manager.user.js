@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.76.0
+// @version      11.77.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.76.0';
+  const VERSION = '11.77.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5431,6 +5431,63 @@
   function nobleEmVoo(coord) {
     return nobleVoos(coord).reduce((a, e) => a + (e.n || 1), 0);
   }
+  // ===== O que o JOGO diz que está a caminho =====
+  // O `emVoo` é um caderno PARTICULAR: só sabe do que este navegador, com esta config, mandou.
+  // Comando disparado na mão, de outra sessão, ou antes do módulo existir era invisível — e aí o
+  // alvo aparecia com menos ataque do que realmente tem, a exigência ficava inflada e a fila dava
+  // por "coberto" cedo demais. Caso real (br141, ago/2026): 4 nobres a caminho de 853|450 no
+  // jogo, 1 no registro.
+  //
+  // Uma requisição por ciclo, pra conta inteira. Conta só comando COM NOBRE — o jogo marca a
+  // linha de dois jeitos (ícone snob.webp e `data-icon-hint="Com nobre"`); qualquer um serve, e
+  // aceitar os dois sobrevive a uma troca de tema.
+  //
+  // A PRIMEIRA coordenada da linha é o DESTINO ("Ataque a Aldeia de bárbaros (853|450) K48"); a
+  // segunda coluna é a origem. Por isso lê a primeira célula, não a linha inteira.
+  async function nobleComandosNoJogo() {
+    const res = await fetch('/game.php?village=' + CUR_VID
+      + '&screen=overview_villages&mode=commands&type=outgoing&page=-1', { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const out = {};
+    const agora = Date.now();
+    doc.querySelectorAll('#commands_table tr, tr.command-row').forEach((tr) => {
+      if (!tr.querySelector('img[src*="/snob"]') && !tr.querySelector('[data-icon-hint*="obre"]')) return;
+      const tds = tr.querySelectorAll('td');
+      if (!tds.length) return;
+      const m = (tds[0].textContent || '').match(/\((\d{1,3})\|(\d{1,3})\)/);
+      if (!m) return;
+      let chega = 0;
+      for (const td of tds) {
+        if (/\d{1,2}:\d{2}:\d{2}/.test(td.textContent || '')) { chega = desviarParseArriveAt(td.textContent); break; }
+      }
+      const coord = m[1] + '|' + m[2];
+      (out[coord] = out[coord] || []).push({ at: agora, chega: chega || (agora + 3600000), n: 1, doJogo: 1 });
+    });
+    return out;
+  }
+
+  // Reconcilia o caderno com a realidade. NÃO é substituição pura: são dois conjuntos disjuntos.
+  //
+  //   - ainda VOANDO  -> vem do jogo. É autoritativo e enxerga envio manual.
+  //   - já POUSOU     -> vem do caderno local. O jogo tira o comando da lista assim que ele
+  //                      chega, e entre pousar e o relatório ser lido existe uma janela em que a
+  //                      lealdade ainda é a antiga. Se eu apagasse aqui, o nobre que acabou de
+  //                      bater seria contado duas vezes e sairia um a mais.
+  //
+  // Quem tira os pousados é a poda do `nobleVoos`, quando aparecer relatório de nobre mais novo
+  // que a chegada deles.
+  function nobleSincronizaEmVoo(doJogo) {
+    const agora = Date.now();
+    config.noble.emVoo = config.noble.emVoo || {};
+    (config.noble.alvos || []).forEach((a) => {
+      const voando = doJogo[a.coord] || [];
+      const pousados = (config.noble.emVoo[a.coord] || []).filter((e) => (e.chega || e.at) <= agora);
+      const junto = voando.concat(pousados);
+      if (junto.length) config.noble.emVoo[a.coord] = junto; else delete config.noble.emVoo[a.coord];
+    });
+  }
+
   function nobleRegistraEnvio(coord, n, durSec) {
     if (!config.noble.emVoo[coord]) config.noble.emVoo[coord] = [];
     config.noble.emVoo[coord].push({ at: Date.now(), chega: Date.now() + (durSec || 0) * 1000, n: n });
@@ -6153,6 +6210,15 @@
       // Depende do que a varredura acabou de ler, entao vem logo em seguida.
       try { await noblePosConquista(todas); }
       catch (e) { pushLog('Noblar (pós-conquista): ' + (e.message || e), 'err', 'noble'); }
+    }
+
+    // O JOGO é a fonte da verdade sobre o que está a caminho. Vem antes de tudo: a fila inteira
+    // (exigência, previsão, estado) sai daqui. Se a leitura falhar, segue com o caderno interno
+    // e avisa — melhor um plano baseado em dado velho do que nenhum plano.
+    try { nobleSincronizaEmVoo(await nobleComandosNoJogo()); }
+    catch (e) {
+      pushLog('Noblar: não consegui ler os comandos a caminho no jogo (' + (e.message || e)
+        + ') — este ciclo usa só o registro interno, que não enxerga envio manual.', '', 'noble');
     }
 
     // ===== Entra e sai da fila =====

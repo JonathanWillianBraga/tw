@@ -2371,25 +2371,31 @@
         const v = CCVILAS.find((z) => String(z.vid) === String(vid));
         if (!v) return;
         const casa = v.casa || {}, minhas = v.minhas || {};
-        const soma = {};
-        porVid[vid].forEach((c) => Object.keys(c.amounts || {}).forEach((u) => {
-          soma[u] = (soma[u] || 0) + (c.amounts[u] || 0);
-        }));
-        // "minhas" inclui o que está fora/voltando; "casa" é o que dá pra mandar agora. Passar de
-        // "minhas" nunca vai caber (nem esperando); passar só de "casa" depende de tropa voltar.
-        const semTotal = [], semCasa = [];
-        Object.keys(soma).forEach((u) => {
-          if (soma[u] > (minhas[u] || 0)) semTotal.push(u);
-          else if (soma[u] > (casa[u] || 0)) semCasa.push(u);
-        });
-        // "pedido/disponível" por unidade — dizer só o nome da tropa não conta o tamanho do
-        // buraco, e é justamente isso que decide se dá pra ajustar ou se o comando não vai.
         const rotN = {}; UNITS.forEach(([u, n]) => { rotN[u] = n; });
-        const detalha = (us, disp) => us.map((u) => (rotN[u] || u) + ' ' + fmtN(soma[u]) + '/' + fmtN(disp[u] || 0)).join(', ');
-        porVid[vid].forEach((c) => {
+        // Aloca a tropa na ordem de SAÍDA — quem sai antes leva antes, que é o que acontece de
+        // verdade. Antes a conta era a soma da aldeia e o aviso caía em TODO comando que usasse
+        // a unidade em falta: um fake pedindo 1 aríete aparecia como "Aríete 301/300", onde o
+        // 301 era o total da aldeia (um ataque pedia 300) e nem era pedido dele. Agora o aviso
+        // cai em quem realmente vai ficar sem, com o número que é dele.
+        // "minhas" inclui o que está fora/voltando; "casa" é o que dá pra mandar agora. Estourar
+        // "minhas" não cabe nem esperando; estourar só "casa" depende de tropa voltar a tempo.
+        const saiDe = (c) => {
+          const e = ccEstimaDeComando(c);
+          return c.sendAt || ((e != null && c.arriveAt) ? (c.arriveAt - e) : (c.arriveAt || 0));
+        };
+        const restaT = Object.assign({}, minhas), restaC = Object.assign({}, casa);
+        porVid[vid].slice().sort((a, b) => saiDe(a) - saiDe(b)).forEach((c) => {
           // Devolve info pra TODO comando pendente, não só pros problemáticos: numa operação o
           // que se quer é confirmar que está tudo certo, não só a ausência de vermelho.
           const info = {};
+          const faltaT = [], faltaC = [];
+          Object.keys(c.amounts || {}).forEach((u) => {
+            const q = c.amounts[u] || 0; if (q <= 0) return;
+            const dT = restaT[u] || 0, dC = restaC[u] || 0;
+            if (q > dT) faltaT.push({ u: u, pede: q, tem: Math.max(0, dT) });
+            else if (q > dC) faltaC.push({ u: u, pede: q, tem: Math.max(0, dC) });
+            restaT[u] = dT - q; restaC[u] = dC - q;
+          });
           let piso = null;
           // Piso de população: só ataque tem, e ataque só de explorador é isento (regra do jogo).
           if (c.tipo !== 'support') {
@@ -2401,22 +2407,16 @@
             const falta = minPop - pop;
             if (!soSpy && pts && falta > 0) {
               const precisa = Math.ceil(falta / (FAKE_POP.spy || 2));
-              const sobraSpy = (casa.spy || 0) - (soma.spy || 0);
-              piso = (sobraSpy >= precisa)
+              // O que sobra DEPOIS deste comando já ter pego a parte dele.
+              piso = ((restaC.spy || 0) >= precisa)
                 ? { nivel: 'aviso', msg: 'abaixo do piso de população — completa sozinho com ' + precisa + ' explorador(es)' }
                 : { nivel: 'erro', msg: 'abaixo do piso de população e sem explorador pra completar (faltam ' + falta + ' hab.)' };
             }
           }
-          // Só reporta as unidades que ESTE comando usa. A falta é da aldeia (soma de todos os
-          // pendentes dela), mas repetir a lista inteira em cada comando fazia um fake de
-          // explorador+aríete acusar "falta C.leve" — quem pedia cavalaria era OUTRO comando da
-          // mesma origem. O comando não corre risco por uma tropa que ele nem leva.
-          const usa = Object.keys(c.amounts || {}).filter((u) => (c.amounts[u] || 0) > 0);
-          const meuSemTotal = semTotal.filter((u) => usa.indexOf(u) >= 0);
-          const meuSemCasa = semCasa.filter((u) => usa.indexOf(u) >= 0);
-          if (meuSemTotal.length) { info.nivel = 'erro'; info.msg = 'tropa insuficiente na origem (pedido/tem): ' + detalha(meuSemTotal, minhas); }
+          const det = (lista) => lista.map((x) => (rotN[x.u] || x.u) + ' ' + fmtN(x.pede) + '/' + fmtN(x.tem)).join(', ');
+          if (faltaT.length) { info.nivel = 'erro'; info.msg = 'tropa insuficiente pra este comando (pede/sobra): ' + det(faltaT); }
           else if (piso && piso.nivel === 'erro') { info.nivel = piso.nivel; info.msg = piso.msg; }
-          else if (meuSemCasa.length) { info.nivel = 'aviso'; info.msg = 'depende de tropa voltar (pedido/em casa): ' + detalha(meuSemCasa, casa); }
+          else if (faltaC.length) { info.nivel = 'aviso'; info.msg = 'depende de tropa voltar (pede/em casa): ' + det(faltaC); }
           else if (piso) { info.nivel = piso.nivel; info.msg = piso.msg; }
           out[c.id] = info;
         });

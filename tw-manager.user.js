@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.64.1
+// @version      11.66.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.64.1';
+  const VERSION = '11.66.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -10790,18 +10790,21 @@
       let t1 = await r1.text();
       try { const j = JSON.parse(t1); t1 = (j.response && j.response.dialog) || j.dialog || t1; } catch (e) {}
       const doc = new DOMParser().parseFromString(t1, 'text/html');
+      // ATENÇÃO (medido ao vivo contra o servidor, não deduzido): quando o jogo RECUSA o comando,
+      // ele responde com a tela da praça re-renderizada — que tem o MESMO #command-data-form da
+      // página de confirmação. Ou seja: achar o form não prova nada, e era exatamente isso que
+      // fazia o erro real passar batido e virar "servidor não devolveu a duração" lá na frente.
+      // O que SÓ existe na confirmação de verdade é o botão submit_confirm (e o data-duration);
+      // na tela da praça o que há são os dois submits attack/support e os inputs de digitar tropa.
+      // O motivo real da recusa vem em .error_box — classe que o seletor antigo (.error) não
+      // pegava, porque são classes diferentes.
       const form = doc.querySelector('#command-data-form') || doc.querySelector('form[action*="action=command"]');
-      if (!form) {
-        const errEl = doc.querySelector('.error, .autoHideBox, #command_confirmation_error');
-        throw new Error(errEl ? errEl.textContent.trim().slice(0, 90) : 'confirmação falhou (tropa/alvo)');
+      const confirmou = !!(form && (form.querySelector('[name="submit_confirm"]') || doc.querySelector('[data-duration]')));
+      if (!confirmou) {
+        const errEl = doc.querySelector('.error_box, .error, .autoHideBox, #command_confirmation_error');
+        const motivo = errEl ? errEl.textContent.replace(/\s+/g, ' ').trim().slice(0, 150) : null;
+        throw new Error(motivo || (form ? 'o servidor recusou o comando (sem motivo informado na resposta)' : 'confirmação falhou (tropa/alvo)'));
       }
-      // Três tentativas, da mais confiável pra mais frágil. A 2ª existia sozinha antes (regex
-      // apertada: só 2 dígitos de hora e 12 caracteres de folga entre "duração" e o número) —
-      // em algumas composições (fake com poucas unidades, por exemplo) o rótulo e o valor ficam
-      // mais longe um do outro no HTML, ou a viagem passa de 99h, e o comando falhava com
-      // "servidor não devolveu a duração" e nunca saía. Por isso a 3ª tentativa: qualquer célula
-      // do próprio form no formato hh:mm:ss é quase certamente a duração, sem depender de achar
-      // o rótulo por perto.
       let dur = null;
       const dd = doc.querySelector('[data-duration]');
       if (dd) dur = parseInt(dd.getAttribute('data-duration'), 10);
@@ -10901,13 +10904,54 @@
             amounts = clamped; c.amounts = clamped; save();
           }
         }
+        // Rede de segurança do piso de população (1% dos pontos da origem — regra real do mundo,
+        // e a recusa mais comum: "A força de ataque precisa do mínimo de N habitantes"). A aba
+        // Fake já aplica isto ao ARMAR, mas ali o piso é calculado com a tropa/pontos daquele
+        // instante e some silenciosamente se village.txt falhar — então ataque armado por outro
+        // caminho (Operação, Ataque avulso) chegava aqui sem proteção nenhuma. Completar com
+        // EXPLORADOR é seguro pro timing: spy é a unidade mais rápida, então nunca atrasa um
+        // comando que já leva qualquer outra tropa. Só vale pra ataque (apoio não tem piso).
+        if (!ehApoio) {
+          try {
+            const soExplorador = Object.keys(amounts).every((u) => u === 'spy');
+            if (!soExplorador) {
+              const pontos = await getVillagePoints();
+              const pts = parseInt(pontos[String(c.origin)], 10) || 0;
+              const minPop = pts > 0 ? Math.ceil((FAKE_LIMIT_PCT / 100) * pts) : 0;
+              const falta = minPop - ccFakePopOf(amounts);
+              if (falta > 0) {
+                const precisa = (amounts.spy || 0) + Math.ceil(falta / (FAKE_POP.spy || 2));
+                let temSpy = 0;
+                try { temSpy = ((await getVillageState(c.origin)).avail || {}).spy || 0; } catch (e) { temSpy = precisa; }
+                if (temSpy >= precisa) {
+                  amounts = Object.assign({}, amounts, { spy: precisa });
+                  c.amounts = amounts; save();
+                  pushLog('Central: ' + c.x + '|' + c.y + ' — completado com ' + precisa + ' explorador(es) pro piso de população (' + minPop + ' hab.).', '', 'cmd');
+                } else {
+                  pushLog('⚠ ' + c.x + '|' + c.y + ': piso de população é ' + minPop + ' hab. e faltam exploradores pra completar — o servidor provavelmente vai recusar.', 'err', 'cmd');
+                }
+              }
+            }
+          } catch (e) { /* sem pontos (village.txt falhou): segue e deixa o servidor decidir */ }
+        }
         const p = await cmdPrepare(c.origin, c.x, c.y, amounts, ehApoio ? 'support' : 'attack');
-        if (!p.dur) throw new Error('servidor não devolveu a duração');
         ancorar();                                    // reancora o relógio junto do preparo
-        // O servidor é a verdade. Se a estimativa local divergir, corrige o fator do mundo —
-        // assim a UI para de mentir mesmo que /interface.php tenha falhado.
         const est = ccEstimaDeComando(c);
-        if (est && p.dur) {
+        // Se o servidor confirmou mas não deu a duração, NÃO derruba o comando: cai na estimativa
+        // local (a mesma que a UI já mostra antes do preparo). Um comando saindo com timing
+        // aproximado é muito melhor que um comando que simplesmente não sai — ainda mais no meio
+        // de uma operação. Só falha de vez se não houver nem estimativa (origem sem coordenada).
+        let estimado = false;
+        if (!p.dur) {
+          if (est == null) throw new Error('servidor não devolveu a duração e não há estimativa local (origem sem coordenada?)');
+          p.dur = Math.round(est / 1000);
+          estimado = true;
+          pushLog('⚠ ' + c.x + '|' + c.y + ': servidor não devolveu a duração — usando estimativa local (' + fmt(est) + '). O horário pode variar alguns segundos.', 'err', 'cmd');
+        }
+        // O servidor é a verdade. Se a estimativa local divergir, corrige o fator do mundo —
+        // assim a UI para de mentir mesmo que /interface.php tenha falhado. Não vale quando a
+        // própria duração VEIO da estimativa: comparar ela com ela mesma só zeraria o fator.
+        if (est && p.dur && !estimado) {
           const razao = est / (p.dur * 1000);
           if (razao > 1.02 || razao < 0.98) {
             const m = config.cmd.mundo;

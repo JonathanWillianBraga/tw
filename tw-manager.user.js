@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.73.0
+// @version      11.74.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.73.0';
+  const VERSION = '11.74.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -684,6 +684,12 @@
     c.noble.autoMax = Math.max(1, Math.min(40, parseInt(c.noble.autoMax, 10) || 8));
 
     if (!c.noble.relatorios || typeof c.noble.relatorios !== 'object') c.noble.relatorios = {};
+    // `lealdadeAt` (quando a lealdade foi MEDIDA) nasceu depois. Relatório antigo que já tem
+    // leitura herda o `at` dele — era o que a conta usava antes, então nada muda pra eles.
+    Object.keys(c.noble.relatorios).forEach((k) => {
+      const r = c.noble.relatorios[k] || {};
+      if (r.lealdade != null && r.lealdadeAt == null) r.lealdadeAt = r.at;
+    });
     if (!c.noble.vistos || typeof c.noble.vistos !== 'object') c.noble.vistos = {};
     // Relatório de alvo que saiu da lista não serve pra nada e cresceria pra sempre.
     Object.keys(c.noble.relatorios).forEach((k) => {
@@ -5371,10 +5377,14 @@
   // A lealdade LIDA envelhece: regenera ~1/h, entao a leitura de 2 dias atras nao vale mais.
   // Projeta pra AGORA, com teto 100. Devolve null quando nunca houve relatorio com lealdade
   // (so ataque com nobre traz esse campo).
+  // Quando a lealdade foi MEDIDA. Relatorio antigo (anterior ao campo) cai no `at`, que era o
+  // comportamento de antes.
+  function nobleLealdadeAt(r) { return (r && (r.lealdadeAt || r.at)) || 0; }
   function nobleLealdadeAgora(coord) {
     const r = (config.noble.relatorios || {})[coord];
-    if (!r || r.lealdade == null || !r.at) return null;
-    const h = Math.max(0, (Date.now() - r.at) / 3600000);
+    const t = nobleLealdadeAt(r);
+    if (!r || r.lealdade == null || !t) return null;
+    const h = Math.max(0, (Date.now() - t) / 3600000);
     return Math.min(100, r.lealdade + h * (config.noble.lealdadeRegen || 0));
   }
 
@@ -5407,7 +5417,10 @@
     const agora = Date.now();
     const vivos = lista.filter((e) => {
       if (agora - e.at > 48 * 3600000) return false;
-      if (rel && rel.at && rel.at >= (e.chega || e.at)) return false;   // ja pousou e apareceu no relatorio
+      // Compara com a MEDIÇÃO de lealdade, não com o último relatório qualquer: só relatório de
+      // nobre prova que o comando pousou. Um saque no alvo não diz nada sobre o nobre.
+      const medido = nobleLealdadeAt(rel);
+      if (rel && rel.lealdade != null && medido && medido >= (e.chega || e.at)) return false;
       return true;
     });
     if (vivos.length !== lista.length) {
@@ -5433,7 +5446,8 @@
   // Devolve null quando nunca houve relatorio com lealdade (so ataque com nobre traz o campo).
   function nobleLealdadeEm(coord, ateMs) {
     const r = (config.noble.relatorios || {})[coord];
-    if (!r || r.lealdade == null || !r.at) return null;
+    const t0 = nobleLealdadeAt(r);
+    if (!r || r.lealdade == null || !t0) return null;
     const regen = config.noble.lealdadeRegen || 0;
     const queda = config.noble.lealdadePorAtk || 25;
     const fim = ateMs || Date.now();
@@ -5441,7 +5455,7 @@
       .map((e) => ({ at: e.chega || e.at, n: e.n || 1 }))
       .filter((e) => e.at <= fim)
       .sort((a, b) => a.at - b.at);
-    let t = r.at, v = r.lealdade;
+    let t = t0, v = r.lealdade;
     for (const e of chegadas) {
       v = Math.min(100, v + Math.max(0, (e.at - t) / 3600000) * regen);
       v -= e.n * queda;
@@ -5980,9 +5994,25 @@
       // agora ela tem dono ativo e tropa. O alvo sai da fila com alerta em vez de seguir sendo
       // atacado no escuro.
       const trocouDono = !!(ant && ant.dono && info.dono && ant.dono !== info.dono);
+      // A lealdade SÓ existe em relatório de ATAQUE COM NOBRE. Mas a varredura casa por
+      // coordenada no assunto, então relatório de SAQUE ou de EXPLORAÇÃO no mesmo alvo também
+      // entra aqui — e vinha gravando `lealdade: null` por cima, apagando a única leitura que
+      // existia. Era por isso que o painel mostrava lealdade "?" e previsão vazia num alvo que
+      // já tinha levado nobre: um saque no meio do caminho zerava a memória.
+      //
+      // Agora relatório sem lealdade só atualiza dono e tropa. A leitura sobrevive.
+      const temLeald = info.lealdade != null;
+      const antR = ant || {};
       config.noble.relatorios[r.coord] = {
         reportId: r.id, at: r.at || Date.now(),
-        lealdade: info.lealdade, de: info.de, dono: info.dono, tropa: info.tropa,
+        lealdade: temLeald ? info.lealdade : antR.lealdade,
+        de: temLeald ? info.de : antR.de,
+        // QUANDO a lealdade foi medida — separado do `at` do relatório. A regeneração conta a
+        // partir da medição, não da última vez que qualquer relatório apareceu; e só relatório
+        // de nobre prova que o comando pousou, então é este carimbo que poda o "em voo".
+        lealdadeAt: temLeald ? (r.at || Date.now()) : antR.lealdadeAt,
+        dono: info.dono || antR.dono,
+        tropa: info.tropa != null ? info.tropa : antR.tropa,
         trocouDono: trocouDono || !!(ant && ant.trocouDono),
         donoAnterior: trocouDono ? ant.dono : (ant || {}).donoAnterior,
       };
@@ -6445,7 +6475,7 @@
         const atual = nobleLealdadeAgora(a.coord);
         const prev = (p.prevista !== undefined) ? p.prevista : nobleLealdadePrevista(a.coord, a.ultDur);
         const dicaAtual = rel.lealdade != null
-          ? 'relatório de ' + nobleQuandoTxt(rel.at) + ': caiu de ' + rel.de + ' para ' + rel.lealdade : '';
+          ? 'medida ' + nobleQuandoTxt(nobleLealdadeAt(rel)) + ': caiu de ' + rel.de + ' para ' + rel.lealdade : '';
         const dicaPrev = a.ultDur != null
           ? 'projetada pra daqui a ' + fmtDur(a.ultDur) + ', que é a viagem do próximo nobre'
           : 'sem viagem medida ainda — projetada só até a última chegada marcada';

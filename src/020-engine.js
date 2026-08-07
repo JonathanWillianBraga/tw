@@ -54,16 +54,16 @@
       ];
     } else if (mod === 'noble') {
       const s = (config.noble && config.noble.stats) || {};
+      // Três cards, não cinco: a fila serve uma aldeia por vez, então "prontos/completos/sem
+      // nobre" (que descreviam vários alvos ativos ao mesmo tempo) não dizem mais nada. O que
+      // importa agora é o tamanho da fila e o estoque de nobre que a alimenta.
       arr = [
-        { v: fmtN(s.alvos), l: 'alvos na lista', hl: true },
-        // "prontos" = tem ao menos 1 nobre pra mandar (parcial conta); "completos" = leva o que o
-        // modelo pede. A diferença entre os dois é o que ainda vai sair capenga.
-        { v: fmtN(s.completos), l: 'com envio completo' },
-        { v: fmtN(s.prontos), l: 'prontos p/ enviar' },
-        { v: fmtN(s.faltando), l: 'sem nobre' },
-        // Total da conta: 14 nobres = 3 alvos completos e 2 de sobra. Vem de passagem na
-        // Academia ("Na Aldeia/Total"), sem requisição dedicada.
-        { v: s.nobresConta != null ? fmtN(s.nobresConta) : '—', l: 'nobres na conta' },
+        { v: fmtN(s.naFila), l: 'aldeias na fila', hl: true },
+        // Nobre PARADO nas aldeias, somado do que o ciclo já leu — sem requisição extra.
+        { v: fmtN(s.recrutados), l: 'nobres recrutados' },
+        // Na fila da Academia. Só conta o que o ciclo abriu: se a aldeia da vez já está coberta,
+        // nenhuma Academia é lida e isto fica em zero — de propósito, é o custo de não sondar.
+        { v: fmtN(s.recrutando), l: 'nobres recrutando' },
       ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});

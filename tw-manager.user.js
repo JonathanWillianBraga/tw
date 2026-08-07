@@ -258,7 +258,9 @@
     autoEnviar: true, autoMax: 8,
     // Quanto um nobre derruba de lealdade (no jogo varia 20-35) e quanto ela regenera por
     // hora. Os dois viram "quantos nobres ainda faltam" — ver noblePrecisaDe.
-    lealdadePorAtk: 28, lealdadeRegen: 1,
+    // 25 e nao 28: 28 é a média, e com sorte ruim (20, 21) a conta manda de MENOS e o alvo
+    // sobrevive de raspão. 25 erra pro lado de mandar um nobre a mais, que é o erro barato.
+    lealdadePorAtk: 25, lealdadeRegen: 1,
     // Cunhar DESLIGADO por padrão: gasta recurso sem volta. Quando ligado tem alvo claro —
     // cunha até alguma aldeia perto conseguir fechar um NT de `cunharAte` nobres.
     cunhar: false, cunharAte: 4, cunharMaxAldeias: 3,
@@ -648,7 +650,14 @@
 
     if (c.noble.lerRelatorios == null) c.noble.lerRelatorios = true;
     if (c.noble.autoEnviar == null) c.noble.autoEnviar = true;
-    c.noble.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(c.noble.lealdadePorAtk, 10) || 28));
+    // O padrão virou 25 (era 28). Só trocar o default não bastava: quem já usava o módulo tem
+    // 28 GRAVADO no config, e o valor salvo ganha do default — ficaria com o número antigo sem
+    // perceber. A migração roda uma vez e só mexe em quem estava exatamente no default velho.
+    if (!c.noble.migLpa25) {
+      if (parseInt(c.noble.lealdadePorAtk, 10) === 28) c.noble.lealdadePorAtk = 25;
+      c.noble.migLpa25 = 1;
+    }
+    c.noble.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(c.noble.lealdadePorAtk, 10) || 25));
     if (c.noble.lealdadeRegen == null) c.noble.lealdadeRegen = 1;
     c.noble.lealdadeRegen = Math.max(0, Math.min(10, parseFloat(c.noble.lealdadeRegen) || 0));
     if (!c.noble.emVoo || typeof c.noble.emVoo !== 'object') c.noble.emVoo = {};
@@ -957,16 +966,16 @@
       ];
     } else if (mod === 'noble') {
       const s = (config.noble && config.noble.stats) || {};
+      // Três cards, não cinco: a fila serve uma aldeia por vez, então "prontos/completos/sem
+      // nobre" (que descreviam vários alvos ativos ao mesmo tempo) não dizem mais nada. O que
+      // importa agora é o tamanho da fila e o estoque de nobre que a alimenta.
       arr = [
-        { v: fmtN(s.alvos), l: 'alvos na lista', hl: true },
-        // "prontos" = tem ao menos 1 nobre pra mandar (parcial conta); "completos" = leva o que o
-        // modelo pede. A diferença entre os dois é o que ainda vai sair capenga.
-        { v: fmtN(s.completos), l: 'com envio completo' },
-        { v: fmtN(s.prontos), l: 'prontos p/ enviar' },
-        { v: fmtN(s.faltando), l: 'sem nobre' },
-        // Total da conta: 14 nobres = 3 alvos completos e 2 de sobra. Vem de passagem na
-        // Academia ("Na Aldeia/Total"), sem requisição dedicada.
-        { v: s.nobresConta != null ? fmtN(s.nobresConta) : '—', l: 'nobres na conta' },
+        { v: fmtN(s.naFila), l: 'aldeias na fila', hl: true },
+        // Nobre PARADO nas aldeias, somado do que o ciclo já leu — sem requisição extra.
+        { v: fmtN(s.recrutados), l: 'nobres recrutados' },
+        // Na fila da Academia. Só conta o que o ciclo abriu: se a aldeia da vez já está coberta,
+        // nenhuma Academia é lida e isto fica em zero — de propósito, é o custo de não sondar.
+        { v: fmtN(s.recrutando), l: 'nobres recrutando' },
       ];
     } else if (mod === 'map') {
       const s = (config.map.stats || {});
@@ -5321,7 +5330,7 @@
   // duas vezes e mandaria um a mais. So sai quando ha relatorio MAIS NOVO que o envio.
   // Expiracao dura de 48h pra um registro perdido (envio que falhou calado, relatorio
   // apagado) nao travar o alvo pra sempre.
-  function nobleEmVoo(coord) {
+  function nobleVoos(coord) {
     const lista = (config.noble.emVoo || {})[coord] || [];
     const rel = (config.noble.relatorios || {})[coord];
     const agora = Date.now();
@@ -5333,22 +5342,101 @@
     if (vivos.length !== lista.length) {
       if (vivos.length) config.noble.emVoo[coord] = vivos; else delete config.noble.emVoo[coord];
     }
-    return vivos.reduce((a, e) => a + (e.n || 1), 0);
+    return vivos;
+  }
+  function nobleEmVoo(coord) {
+    return nobleVoos(coord).reduce((a, e) => a + (e.n || 1), 0);
   }
   function nobleRegistraEnvio(coord, n, durSec) {
     if (!config.noble.emVoo[coord]) config.noble.emVoo[coord] = [];
     config.noble.emVoo[coord].push({ at: Date.now(), chega: Date.now() + (durSec || 0) * 1000, n: n });
   }
 
-  // Quantos comandos ainda faltam. Com lealdade conhecida a conta manda; sem ela cai no
-  // `nobres` do modelo -- unico palpite honesto, ja que exploracao nao traz lealdade.
-  function noblePrecisaDe(alvo, tpl) {
-    const l = nobleLealdadeAgora(alvo.coord);
+  // ===== Lealdade prevista =====
+  // A lealdade REGENERA ENTRE as chegadas. Somar todos os ataques de uma vez e so depois somar a
+  // regeneracao daria um numero errado pro lado otimista: tres nobres que chegam em levas
+  // separadas derrubam MENOS, no liquido, do que tres que chegam juntos. Entao aqui a linha do
+  // tempo e simulada de verdade -- ordena as chegadas, regenera ate cada uma, desconta, segue.
+  //
+  // `ateMs` e o instante que interessa: agora, ou a chegada do nobre que eu mandaria neste ciclo.
+  // Devolve null quando nunca houve relatorio com lealdade (so ataque com nobre traz o campo).
+  function nobleLealdadeEm(coord, ateMs) {
+    const r = (config.noble.relatorios || {})[coord];
+    if (!r || r.lealdade == null || !r.at) return null;
+    const regen = config.noble.lealdadeRegen || 0;
+    const queda = config.noble.lealdadePorAtk || 25;
+    const fim = ateMs || Date.now();
+    const chegadas = nobleVoos(coord)
+      .map((e) => ({ at: e.chega || e.at, n: e.n || 1 }))
+      .filter((e) => e.at <= fim)
+      .sort((a, b) => a.at - b.at);
+    let t = r.at, v = r.lealdade;
+    for (const e of chegadas) {
+      v = Math.min(100, v + Math.max(0, (e.at - t) / 3600000) * regen);
+      v -= e.n * queda;
+      t = e.at;
+      if (v <= 0) return v;      // caiu aqui: dali pra frente a aldeia e minha, nao ha mais regen
+    }
+    return Math.min(100, v + Math.max(0, (fim - t) / 3600000) * regen);
+  }
+
+  // O numero que o motor usa pra decidir: a lealdade no instante em que o nobre que eu mandaria
+  // AGORA chegaria la. E por isso que a distancia importa -- nobre de 4h devolve 4 de lealdade
+  // ao alvo antes de bater.
+  //
+  // `durSec` vem do proprio jogo, medido no ciclo anterior e guardado em `alvo.ultDur`. Sem ele
+  // (primeiro ciclo do alvo), projeta so ate a ultima chegada ja marcada: e o mais longe que da
+  // pra afirmar sem chutar distancia. A partir do 2o ciclo a conta fica completa.
+  function nobleLealdadePrevista(coord, durSec) {
+    if (durSec != null) return nobleLealdadeEm(coord, Date.now() + durSec * 1000);
+    const chegadas = nobleVoos(coord).map((e) => e.chega || e.at);
+    return nobleLealdadeEm(coord, chegadas.length ? Math.max.apply(null, chegadas) : Date.now());
+  }
+
+  // Quantos comandos ainda faltam. Sai da lealdade PREVISTA, nao de "atual menos o que voa":
+  // subtrair os voos no fim ignorava a regeneracao ENTRE as chegadas e mandava de menos.
+  // Sem relatorio nenhum cai no `nobres` do modelo -- unico palpite honesto, e ai sim descontando
+  // o que ja esta no ar, senao cada ciclo mandaria mais um lote inteiro.
+  function noblePrecisaDe(alvo, tpl, durSec) {
+    const prev = nobleLealdadePrevista(alvo.coord, durSec != null ? durSec : alvo.ultDur);
     const voando = nobleEmVoo(alvo.coord);
-    const base = (l == null)
-      ? (tpl.nobres || NOBLE_POR_CONQUISTA)
-      : Math.ceil(l / (config.noble.lealdadePorAtk || 28));
-    return { precisa: Math.max(0, base - voando), lealdade: l, voando: voando, bruto: base };
+    const base = (prev == null)
+      ? Math.max(0, (tpl.nobres || NOBLE_POR_CONQUISTA) - voando)
+      : Math.max(0, Math.ceil(prev / (config.noble.lealdadePorAtk || 25)));
+    return { precisa: base, lealdade: nobleLealdadeAgora(alvo.coord), prevista: prev,
+             voando: voando, bruto: base };
+  }
+
+  // ===== Estado do alvo =====
+  // O estado e SEMPRE de quem ja entrou no processo de noblagem. Quem espera a vez na fila fica
+  // em "aguardando" e ponto -- dizer "sem nobres" pra um alvo que nem foi tentado e ruido, e
+  // pior: parece defeito quando e so a fila funcionando.
+  const NB_ESTADOS = {
+    aguardando:  { t: 'Aguardando',        c: '#8a7340' },
+    'sem-nobres': { t: 'Sem nobres',       c: '#b03030' },
+    recrutando:  { t: 'Recrutando nobres', c: '#b5651d' },
+    enviados:    { t: 'Nobres enviados',   c: '#3f8f52' },
+    retornando:  { t: 'Nobres retornando', c: '#a07a42' },
+    garantida:   { t: 'Queda garantida',   c: '#3f8f52' },
+    noblada:     { t: 'Noblada',           c: '#3f8f52' },
+    perdida:     { t: 'Perdida',           c: '#b03030' },
+    propria:     { t: 'É sua aldeia',      c: '#b03030' },
+  };
+  // "Enviados" enquanto ha comando no ar; "retornando" quando todos ja pousaram e a aldeia nao
+  // caiu -- os nobres que sobreviveram estao voltando pra casa.
+  //
+  // "Queda garantida" e a janela curta entre a lealdade chegar a zero e a aldeia aparecer na
+  // minha lista. Sem esse estado ela cairia em "sem nobres", que seria mentira: nao falta nobre,
+  // falta o jogo registrar a conquista.
+  function nobleEstadoDe(coord, vindo, garantida) {
+    const agora = Date.now();
+    const voos = nobleVoos(coord);
+    const noAr = voos.filter((e) => (e.chega || e.at) > agora).length;
+    if (noAr > 0) return 'enviados';
+    if (voos.length > 0) return 'retornando';
+    if (garantida) return 'garantida';
+    if (vindo > 0) return 'recrutando';
+    return 'sem-nobres';
   }
 
   // ===== Pós-conquista =====
@@ -5639,7 +5727,7 @@
     if (precisa <= 0) {
       return { pronto: false, envios: [], falta: 0, dentroDoLimite: origens, tpl: tpl,
                tplId: op.id, tplNome: tpl.name, coberto: true,
-               lealdade: need.lealdade, voando: need.voando,
+               lealdade: need.lealdade, prevista: need.prevista, voando: need.voando,
                motivo: need.voando ? ('coberto: ' + need.voando + ' a caminho') : 'lealdade zerada' };
     }
 
@@ -5694,6 +5782,10 @@
       await sleep(250);
       if (dur == null) { pushLog('Noblar: ' + o.nome + ' → ' + alvo.coord + ': o jogo não informou a duração — origem descartada.', '', 'noble'); continue; }
       if (dur > limite) continue;                     // fora do limite de horas: proxima origem
+      // Guarda a viagem MEDIDA pelo jogo. E ela que a lealdade prevista usa no ciclo seguinte pra
+      // saber quanto o alvo regenera antes do nobre chegar. Fica na origem mais perto (a primeira
+      // que passa por aqui), que e de onde o proximo comando sairia.
+      if (alvo.ultDur == null || dur < alvo.ultDur) alvo.ultDur = dur;
       if (curta.length) {
         pushLog('Noblar: ' + o.nome + ' → ' + alvo.coord + ' — escolta incompleta (' + curta.join(', ') + ').', '', 'noble');
       }
@@ -5711,7 +5803,7 @@
     return {
       pronto: envios.length > 0,
       envios: envios, falta: Math.max(0, faltam), levando: levando, precisa: precisa,
-      lealdade: need.lealdade, voando: need.voando,
+      lealdade: need.lealdade, prevista: need.prevista, voando: need.voando,
       dentroDoLimite: origens, tpl: tpl, tplId: op.id, tplNome: tpl.name,
       motivo: faltam > 0
         ? ('parcial: ' + levando + ' de ' + precisa + ' nobre(s)')
@@ -5806,9 +5898,16 @@
       const ant = config.noble.relatorios[r.coord];
       // SÃ³ sobrescreve com relatÃ³rio MAIS NOVO â€” a lista vem ordenada, mas nÃ£o custa garantir.
       if (ant && ant.at && r.at && ant.at > r.at) continue;
+      // Dono diferente do que estava = alguem CONQUISTOU o alvo. Se nao fui eu (o tick confere
+      // na lista de aldeias antes de olhar isto aqui), a premissa "aldeia vazia" morreu junto:
+      // agora ela tem dono ativo e tropa. O alvo sai da fila com alerta em vez de seguir sendo
+      // atacado no escuro.
+      const trocouDono = !!(ant && ant.dono && info.dono && ant.dono !== info.dono);
       config.noble.relatorios[r.coord] = {
         reportId: r.id, at: r.at || Date.now(),
         lealdade: info.lealdade, de: info.de, dono: info.dono, tropa: info.tropa,
+        trocouDono: trocouDono || !!(ant && ant.trocouDono),
+        donoAnterior: trocouDono ? ant.dono : (ant || {}).donoAnterior,
       };
       if (info.lealdade != null) {
         pushLog('Noblar: ' + r.coord + ' â€” lealdade ' + info.de + ' â†’ ' + info.lealdade
@@ -5878,8 +5977,12 @@
         // tem MAIS o que esta na fila. Sem esse teto ela cunharia pra sempre.
         if (config.noble.cunhar && cunhadas < (config.noble.cunharMaxAldeias || 3)) {
           const jaTem = ((o.avail || {}).snob || 0) + (fl.nobres || 0);
-          if (jaTem >= (config.noble.cunharAte || 4)) {
-            feitas.push({ nome: o.nome, ok: false, motivo: 'já fecha NT (' + jaTem + ')' });
+          // O teto e o MENOR entre "fechar o NT" e o que a aldeia da vez realmente precisa.
+          // Sem o segundo, um alvo a que falta 1 nobre mandaria cunhar ate 4 -- e moeda nao tem
+          // volta. Com a fila, `faltam` e um numero exato, entao da pra ser exato.
+          const teto = Math.min(config.noble.cunharAte || 4, Math.max(1, faltam));
+          if (jaTem >= teto) {
+            feitas.push({ nome: o.nome, ok: false, motivo: 'já tem o que falta (' + jaTem + '/' + teto + ')' });
           } else if (st.maxMint < 1) {
             feitas.push({ nome: o.nome, ok: false, motivo: 'sem recurso pra cunhar' });
           } else {
@@ -5945,21 +6048,74 @@
       catch (e) { pushLog('Noblar (pós-conquista): ' + (e.message || e), 'err', 'noble'); }
     }
 
+    // ===== Entra e sai da fila =====
+    // Sai por conquista MINHA (a coordenada aparece na lista de aldeias) ou porque outro jogador
+    // tomou o alvo antes. Nos dois casos nao ha mais o que noblar ali. O alvo resolvido nao some
+    // na hora: fica visivel um tempo com o estado final, senao o usuario nunca ve o resultado do
+    // proprio ciclo -- some sozinho depois.
+    const RESOLVIDO_TTL = 30 * 60000;
+    (config.noble.alvos || []).forEach((a) => {
+      if (!a.noblada && nobleMinhaAldeia(a.coord, todas)) {
+        a.noblada = Date.now();
+        delete config.noble.emVoo[a.coord];
+        pushLog('Noblar: ' + a.coord + ' CONQUISTADA — sai da fila.', 'ok', 'noble');
+      }
+      const rel = (config.noble.relatorios || {})[a.coord];
+      if (!a.noblada && !a.perdida && rel && rel.trocouDono) {
+        a.perdida = Date.now();
+        pushLog('Noblar: ' + a.coord + ' MUDOU DE DONO (' + (rel.donoAnterior || '?') + ' → '
+          + (rel.dono || '?') + ') — outro jogador noblou antes. Sai da fila: ela não está mais'
+          + ' vazia, então a premissa do módulo não vale pra esse alvo.', 'err', 'noble');
+      }
+    });
+    config.noble.alvos = (config.noble.alvos || []).filter((a) => {
+      const fim = a.noblada || a.perdida;
+      return !fim || (Date.now() - fim) < RESOLVIDO_TTL;
+    });
+
     const cacheTropa = {};
     // Pool global: quanto de cada aldeia os alvos ANTERIORES desta rodada ja levaram. E o que
     // impede o mesmo nobre de aparecer no plano de dois alvos.
     const usados = {};
     const plano = [];
     let enviadosNoCiclo = 0;
-    let prontos = 0, completos = 0;
-    for (const alvo of alvos) {
+    let prontos = 0, completos = 0, recrutando = 0, naFila = 0;
+    // A FILA. Uma aldeia por vez: o alvo da vez tem prioridade absoluta sobre nobre parado,
+    // recrutamento e cunhagem. O proximo so entra quando a lealdade PREVISTA do da vez ja esta
+    // em zero -- ou seja, quando o que ja esta no ar garante a queda, mesmo sem ter pousado.
+    // Ele nao SAI da fila ai: sai so na conquista efetiva (bloco acima).
+    //
+    // Quando destrava, o proximo descobre sozinho se ha nobre pra ele: o pool `usados` ja
+    // garantiu que o da vez pegou primeiro, e o que sobrar (parado, formavel ou cunhavel) e
+    // exatamente o que o planejamento dele encontra. Se nao sobrou nada, ele diz "sem nobres".
+    let travado = false;
+    for (const alvo of config.noble.alvos) {
       { const pare = devoParar('noble'); if (pare) { pushLog('Noblar: ciclo interrompido — ' + pare + '.', '', 'noble'); break; } }
+
+      // Ja resolvido: continua na tela pelo TTL, mas nao consome ciclo nem trava a fila.
+      if (alvo.noblada || alvo.perdida) {
+        plano.push({ coord: alvo.coord, x: alvo.x, y: alvo.y, pronto: false, envios: [],
+                     estado: alvo.noblada ? 'noblada' : 'perdida' });
+        continue;
+      }
+      naFila++;
+      // Esperando a vez. Nem planeja: planejar gastaria fakePrepare e leitura de Academia num
+      // alvo que, por decisao da fila, nao vai receber nada neste ciclo.
+      if (travado) {
+        plano.push({ coord: alvo.coord, x: alvo.x, y: alvo.y, pronto: false, envios: [],
+                     estado: 'aguardando',
+                     lealdade: nobleLealdadeAgora(alvo.coord),
+                     prevista: nobleLealdadePrevista(alvo.coord, alvo.ultDur),
+                     voando: nobleEmVoo(alvo.coord) });
+        continue;
+      }
+
       const r = await noblePlanejarAlvo(alvo, todas, cacheTropa, usados);
       r.envios.forEach((e) => { usados[e.vid] = (usados[e.vid] || 0) + e.qtd; });
       plano.push({ coord: alvo.coord, x: alvo.x, y: alvo.y, pronto: r.pronto,
                    envios: r.envios, falta: r.falta, levando: r.levando, precisa: r.precisa,
                    tplId: r.tplId, tplNome: r.tplNome, propria: r.propria, coberto: r.coberto,
-                   lealdade: r.lealdade, voando: r.voando, motivo: r.motivo });
+                   lealdade: r.lealdade, prevista: r.prevista, voando: r.voando, motivo: r.motivo });
       const item = plano[plano.length - 1];
       if (r.pronto) prontos++;
 
@@ -5976,6 +6132,7 @@
         try {
           const rec = await nobleRecrutar(alvo, r.dentroDoLimite || [], r.falta);
           vindo = (rec.formados || 0) + (rec.naFila || 0);
+          recrutando += vindo;
           prontoEm = rec.prontoEm || null;
         }
         catch (e) { pushLog('Noblar (recruta) em ' + alvo.coord + ': ' + (e.message || e), 'err', 'noble'); }
@@ -6007,19 +6164,49 @@
           }
         }
       }
+
+      // ---- estado e trava da fila ----
+      // Recalcula DEPOIS do envio: os comandos que acabaram de sair ja entraram no emVoo, entao
+      // esta previsao e a situacao real da fila agora, nao a de antes do ciclo.
+      const prevFinal = nobleLealdadePrevista(alvo.coord, alvo.ultDur);
+      item.prevista = prevFinal;
+      item.estado = r.propria ? 'propria'
+        : nobleEstadoDe(alvo.coord, vindo, prevFinal != null && prevFinal <= 0);
+      item.prontoEm = prontoEm;
+      // Aldeia propria nao trava nada -- nao ha o que noblar e o alvo so espera ser removido.
+      // Sem relatorio nunca lido nao ha previsao: cai no que ainda falta do modelo.
+      if (!r.propria) {
+        travado = (prevFinal != null) ? (prevFinal > 0) : (r.falta == null || r.falta > 0);
+      }
     }
+
+    // Nobres parados na conta: soma o snob de todas as aldeias que o ciclo ja leu. Zero
+    // requisicao extra -- o cacheTropa foi preenchido pelo planejamento. Fica null quando o
+    // ciclo nao chegou a ler nenhuma (fila toda em espera), pra o card mostrar "—" em vez de 0.
+    // DESCONTA o `usados`: o cacheTropa foi lido ANTES dos envios deste ciclo, então sem isso o
+    // card contaria como parado o nobre que acabou de decolar.
+    const vidsLidos = Object.keys(cacheTropa);
+    let nobresParados = 0;
+    vidsLidos.forEach((vid) => {
+      nobresParados += Math.max(0, ((cacheTropa[vid] || {}).snob || 0) - (usados[vid] || 0));
+    });
 
     config.noble.plano = plano;
     config.noble.planoAt = now;
-    config.noble.stats = { alvos: alvos.length, prontos: prontos, completos: completos,
-                           faltando: alvos.length - prontos,
+    config.noble.stats = { alvos: naFila, prontos: prontos, completos: completos,
+                           naFila: naFila, recrutando: recrutando,
+                           recrutados: vidsLidos.length ? nobresParados : null,
+                           faltando: naFila - prontos,
                            nobresConta: _nbTotalConta != null ? _nbTotalConta : (config.noble.stats || {}).nobresConta };
     config.noble.nextAt = now + Math.max(60, config.noble.interval || 900) * 1000;
     save();
     renderNoblePlano();
     refreshCards('noble');
-    pushLog('Noblar: plano refeito — ' + prontos + ' de ' + alvos.length + ' alvo(s) com nobre pra enviar ('
-      + completos + ' completo(s)). ' + (config.noble.autoEnviar === false ? 'Nada foi enviado (disparo manual).'
+    const daVez = (config.noble.alvos || []).filter((a) => !a.noblada && !a.perdida)[0];
+    pushLog('Noblar: fila de ' + naFila + ' aldeia(s)'
+      + (daVez ? ' — a vez é de ' + daVez.coord : '')
+      + (travado && naFila > 1 ? ' (as outras aguardam)' : '')
+      + '. ' + (config.noble.autoEnviar === false ? 'Nada foi enviado (disparo manual).'
         : enviadosNoCiclo + ' comando(s) enviado(s).'), 'ok', 'noble');
     scheduleNoble();
   }
@@ -6116,24 +6303,19 @@
     const n = nobleParseCoords(ta.value).length;
     el.textContent = n + ' coordenada' + (n === 1 ? '' : 's');
   }
-  // Mostra a lealdade PROJETADA pra agora, nao a lida: e o numero que o motor usa pra decidir.
-  // Exibir a lida faria a tela discordar da decisao sem explicacao visivel.
-  function nobleLealdadeCel(coord) {
-    const r = (config.noble.relatorios || {})[coord];
-    const voando = nobleEmVoo(coord);
-    const extra = voando ? '<div class="sub">' + voando + ' a caminho</div>' : '';
-    if (!r || r.lealdade == null) {
-      return '<span style="color:#8a7340" title="lealdade só aparece em relatório de ataque com nobre">?</span>' + extra;
+  // Celula de lealdade (atual ou prevista). `?` quando nunca houve relatorio de nobre -- e o
+  // unico jeito de saber lealdade no jogo, entao fingir 100 seria mentira.
+  function nobleLealdadeCel(v, dica) {
+    if (v == null) {
+      return '<span style="color:#8a7340" title="lealdade só aparece em relatório de ataque com nobre">?</span>';
     }
-    const v = Math.round(nobleLealdadeAgora(coord));
-    const cor = v <= 0 ? '#3f8f52' : v <= 35 ? '#b5651d' : '#8a7340';
-    const dica = 'relatório: caiu de ' + r.de + ' para ' + r.lealdade
-      + (v !== r.lealdade ? ' · projetado pra agora com regen: ' + v : '');
-    return '<b style="color:' + cor + '" title="' + esc(dica) + '">'
-      + (v <= 0 ? 'conquistada' : v) + '</b>' + extra;
+    const n = Math.round(v);
+    const cor = n <= 0 ? '#3f8f52' : n <= 35 ? '#b5651d' : '#8a7340';
+    return '<b style="color:' + cor + '" title="' + esc(dica || '') + '">' + n + '</b>';
   }
+  // Idade do relatório em texto curto, pra dica de ferramenta (sem HTML, que o title não aceita).
   function nobleQuandoTxt(ts) {
-    if (!ts) return '<span style="color:#8a7340">—</span>';
+    if (!ts) return 'data desconhecida';
     const h = Math.floor((Date.now() - ts) / 3600000);
     if (h < 1) return 'agora há pouco';
     if (h < 24) return h + 'h atrás';
@@ -6148,54 +6330,78 @@
     }
     const tpls = nobleOrdemIds();
     const porCoord = {}; plano.forEach((p) => { porCoord[p.coord] = p; });
-    // 7 colunas, não 10. Numa largura de ~560px a versão de 10 colunas dava 48px por célula e o
-    // conteúdo vazava do painel. Os pares que sempre são lidos juntos viraram uma célula de duas
-    // linhas: coord + dono, e origem + hora de chegada.
+    // A ORDEM DO ARRAY É A FILA — FIFO. Coordenada colada depois entra atrás; as setas movem o
+    // alvo no próprio array. Não existe campo "posição" separado justamente pra ele não poder
+    // dessincronizar da ordem que o motor percorre.
+    //
+    // A coluna Def. saiu: a premissa do módulo (decisão do usuário) é que o alvo está vazio, e
+    // uma coluna de defesa sempre zerada só roubava largura das que decidem.
+    let pos = 0;
     box.innerHTML = '<table class="twmgr-bld-tab twmgr-nb-tab"><thead><tr>' +
-      '<th>Alvo</th><th>Modelo</th><th>Leald.</th><th>Def.</th>' +
-      '<th>Envio</th><th>Estado</th><th></th></tr></thead><tbody>' +
+      '<th style="width:34px" title="Ordem na fila — uma aldeia é noblada por vez">Fila</th>' +
+      '<th>Alvo</th><th>Modelo</th>' +
+      '<th style="width:36px" title="Lealdade de hoje: a do último relatório, projetada pra agora com a regeneração">Leald.</th>' +
+      '<th style="width:30px" title="Comandos meus com nobre a caminho">Atks</th>' +
+      '<th style="width:36px" title="Lealdade na hora em que o próximo nobre chegaria — já descontando os ataques no ar e somando a regeneração até lá">Prev.</th>' +
+      '<th>Estado</th><th style="width:20px"></th></tr></thead><tbody>' +
       alvos.map((a, i) => {
-        const p = porCoord[a.coord];
+        const p = porCoord[a.coord] || {};
         const rel = (config.noble.relatorios || {})[a.coord] || {};
+        const fim = a.noblada || a.perdida;
         // Em modo prioridade mostra QUAL modelo o plano acabou escolhendo -- sem isso o usuario
         // ve "seguir ordem" e nao tem como saber o que vai sair.
-        const escolhido = (!a.tpl && p && p.tplNome)
+        const escolhido = (!a.tpl && p.tplNome)
           ? '<div class="sub" style="color:#a07a42">→ ' + esc(p.tplNome) + '</div>' : '';
         const sel = '<select class="twmgr-nb-tpl twmgr-inp" data-coord="' + esc(a.coord) + '">'
           + '<option value=""' + (!a.tpl ? ' selected' : '') + '>⇅ ordem</option>'
           + tpls.map((id) => '<option value="' + esc(id) + '"' + (id === a.tpl ? ' selected' : '') + '>'
             + esc(config.noble.templates[id].name || id) + '</option>').join('') + '</select>' + escolhido;
+        // Alvo resolvido não ocupa número: a numeração é da fila de verdade.
+        const filaCel = fim
+          ? '<span style="color:#8a7340">—</span>'
+          : '<b>' + String(++pos).padStart(2, '0') + '</b><div class="sub">'
+            + (i > 0 ? '<a class="twmgr-nb-up" data-coord="' + esc(a.coord) + '" title="subir na fila">▲</a>' : '')
+            + (i < alvos.length - 1 ? '<a class="twmgr-nb-dn" data-coord="' + esc(a.coord) + '" title="descer na fila">▼</a>' : '')
+            + '</div>';
         const alvoCel = '<b>' + esc(a.coord) + '</b>'
           + '<div class="sub">' + (rel.dono ? esc(rel.dono) : '—') + '</div>';
-        const tropa = rel.tropa == null ? '<span style="color:#8a7340">?</span>' : fmtN(rel.tropa);
-        const defCel = tropa + '<div class="sub">' + nobleQuandoTxt(rel.at) + '</div>';
-        const envio = p && p.envios.length
-          ? p.envios.map((e) => e.qtd + '× ' + esc(e.nome)).join(', ')
-            + '<div class="sub">chega em ' + p.envios.map((e) => fmtDur(e.durSec)).join(' / ') + '</div>'
-          : '<span style="color:#8a7340">—</span>';
-        // Três estados, não dois: completo (leva o que o modelo pede), parcial (leva menos, mas
-        // ENVIA) e sem nobre. O parcial precisa saltar aos olhos — é envio de verdade, com nobre
-        // sendo gasto, só que não conquista sozinho.
-        const estado = !p ? '<span style="color:#8a7340">sem plano</span>'
-          : p.propria ? '<b style="color:#b03030" title="não dá pra noblar aldeia própria">é sua aldeia</b>'
-          : (p.pronto && p.falta <= 0) ? '<b style="color:#3f8f52">completo</b>'
-          : p.pronto ? '<b style="color:#b5651d" title="envia assim mesmo — não conquista sozinho">'
-            + esc(p.motivo || 'parcial') + '</b>'
-            + (p.prontoEm ? '<div class="sub">nobre pronto às ' + new Date(p.prontoEm).toLocaleTimeString('pt-BR') + '</div>' : '')
-          : '<span style="color:#8a7340">' + esc(p.motivo || 'sem nobre') + '</span>';
-        const acao = (p && p.pronto)
-          ? '<a class="twmgr-nb-fire" data-coord="' + esc(a.coord) + '">Enviar</a><div class="sub"><a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '">remover</a></div>'
-          : '<a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '">✕</a>';
-        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
-          '<td>' + alvoCel + '</td><td>' + sel + '</td>' +
-          '<td>' + nobleLealdadeCel(a.coord) + '</td><td>' + defCel + '</td>' +
-          '<td>' + envio + '</td><td>' + estado + '</td><td>' + acao + '</td></tr>';
+        const atual = nobleLealdadeAgora(a.coord);
+        const prev = (p.prevista !== undefined) ? p.prevista : nobleLealdadePrevista(a.coord, a.ultDur);
+        const dicaAtual = rel.lealdade != null
+          ? 'relatório de ' + nobleQuandoTxt(rel.at) + ': caiu de ' + rel.de + ' para ' + rel.lealdade : '';
+        const dicaPrev = a.ultDur != null
+          ? 'projetada pra daqui a ' + fmtDur(a.ultDur) + ', que é a viagem do próximo nobre'
+          : 'sem viagem medida ainda — projetada só até a última chegada marcada';
+        const voando = nobleEmVoo(a.coord);
+        const atksCel = voando
+          ? '<b style="color:#3f8f52">' + voando + '</b>' : '<span style="color:#8a7340">—</span>';
+        // O estado é SÓ de quem entrou no processo. Quem espera a vez fica em "Aguardando".
+        const chave = fim ? (a.noblada ? 'noblada' : 'perdida') : (p.estado || 'aguardando');
+        const E = NB_ESTADOS[chave] || NB_ESTADOS.aguardando;
+        let sub = '';
+        if (chave === 'enviados' && p.envios && p.envios.length) {
+          sub = 'chega em ' + p.envios.map((e) => fmtDur(e.durSec)).join(' / ');
+        } else if (chave === 'recrutando' && p.prontoEm) {
+          sub = '1º às ' + new Date(p.prontoEm).toLocaleTimeString('pt-BR');
+        } else if (chave === 'perdida') {
+          sub = (rel.donoAnterior || '?') + ' → ' + (rel.dono || '?');
+        } else if (!fim && chave !== 'aguardando' && p.motivo) sub = p.motivo;
+        const estado = '<b style="color:' + E.c + '">' + esc(E.t) + '</b>'
+          + (sub ? '<div class="sub">' + esc(sub) + '</div>' : '')
+          + (p.pronto ? '<div class="sub"><a class="twmgr-nb-fire" data-coord="' + esc(a.coord) + '">Enviar agora</a></div>' : '');
+        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '"' + (fim ? ' style="opacity:.6"' : '') + '>' +
+          '<td>' + filaCel + '</td><td>' + alvoCel + '</td><td>' + sel + '</td>' +
+          '<td>' + nobleLealdadeCel(atual, dicaAtual) + '</td>' +
+          '<td>' + atksCel + '</td>' +
+          '<td>' + nobleLealdadeCel(prev, dicaPrev) + '</td>' +
+          '<td>' + estado + '</td>' +
+          '<td><a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '" title="tirar da fila">✕</a></td></tr>';
       }).join('') + '</tbody></table>';
     const info = document.getElementById('twmgr-nb-info');
     if (info) {
       const p = config.noble.planoAt
         ? 'plano de ' + new Date(config.noble.planoAt).toLocaleTimeString('pt-BR') : 'sem plano ainda';
-      info.textContent = alvos.length + ' alvo(s) · ' + p;
+      info.textContent = pos + ' na fila · ' + p;
     }
   }
 
@@ -6354,6 +6560,19 @@
     box.addEventListener('click', (e) => {
       const el = e.target, coord = el.getAttribute && el.getAttribute('data-coord');
       if (!coord) return;
+      // Reordenar a fila = mover no PRÓPRIO array de alvos, que é o que o motor percorre.
+      // Guardar um número de posição à parte abriria a porta pra tela e motor discordarem.
+      if (el.classList.contains('twmgr-nb-up') || el.classList.contains('twmgr-nb-dn')) {
+        const arr = config.noble.alvos || [];
+        const i = arr.findIndex((a) => a.coord === coord);
+        const j = i + (el.classList.contains('twmgr-nb-up') ? -1 : 1);
+        if (i < 0 || j < 0 || j >= arr.length) return;
+        const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+        // O plano velho foi montado com a fila antiga: quem era o da vez pode não ser mais.
+        config.noble.plano = [];
+        save(); renderNoblePlano(); renderNoblePos();
+        return;
+      }
       if (el.classList.contains('twmgr-nb-fire')) nobleDispararAlvo(coord);
       else if (el.classList.contains('twmgr-nb-rm')) {
         config.noble.alvos = (config.noble.alvos || []).filter((a) => a.coord !== coord);
@@ -6506,7 +6725,7 @@
     if (g('twmgr-nb-int')) c.interval = Math.max(1, parseInt(g('twmgr-nb-int').value, 10) || 15) * 60;
     if (g('twmgr-nb-prod')) c.produzir = g('twmgr-nb-prod').checked;
     if (g('twmgr-nb-rel')) c.lerRelatorios = g('twmgr-nb-rel').checked;
-    if (g('twmgr-nb-lpa')) c.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(g('twmgr-nb-lpa').value, 10) || 28));
+    if (g('twmgr-nb-lpa')) c.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(g('twmgr-nb-lpa').value, 10) || 25));
     if (g('twmgr-nb-regen')) c.lealdadeRegen = Math.max(0, Math.min(10, parseFloat(g('twmgr-nb-regen').value) || 0));
     if (g('twmgr-nb-cunhar')) c.cunhar = g('twmgr-nb-cunhar').checked;
     if (g('twmgr-nb-cunhar-ate')) c.cunharAte = Math.max(1, Math.min(8, parseInt(g('twmgr-nb-cunhar-ate').value, 10) || 4));
@@ -8891,7 +9110,7 @@
         modLog('research') +
       '</div>' +
       '<div id="twmgr-tab-noble" style="display:none">' +
-        hint('👑 Cola as coordenadas, define o limite de viagem e ele monta o plano de conquista e <b>dispara sozinho</b>. Serve os alvos <b>na ordem da lista</b>: com 6 nobres e 2 alvos, 4 no primeiro e 2 no segundo. Envia <b>parcial</b> se for o que há, e <b>nunca cunha</b> — só forma nobre onde a moeda já está guardada.') +
+        hint('👑 Cola as coordenadas e ele nobla <b>uma aldeia por vez</b>, na ordem da fila (FIFO — use ▲▼ pra mudar). A da vez tem <b>prioridade absoluta</b> sobre nobre parado, recrutamento e cunhagem; a próxima só entra quando a <b>lealdade prevista</b> da primeira chega a zero, ou seja, quando o que já está no ar garante a queda. Ela só <b>sai</b> da fila na conquista efetiva. Premissa: os alvos estão <b>vazios</b>.') +
         cardsDiv('noble') +
         '<div class="twmgr-subtabs">' +
           subBtn('alvos', '👑', 'Alvos', 'noble') +
@@ -8933,10 +9152,11 @@
           '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Só tropa de campo na escolta: explorador não briga, e aríete e catapulta servem pra muralha, não pra proteger nobre. Como o nobre é a unidade <b>mais lenta do jogo</b>, a escolta não atrasa a chegada.</div>') +
         '<div class="twmgr-cols">' +
           '<div class="twmgr-card2"><h4>⚖ Lealdade</h4>' +
-            '<div class="twmgr-fld"><span title="Quanto um nobre derruba. No jogo varia de 20 a 35 — um valor MAIOR arrisca mandar de menos; menor manda de sobra">Queda por ataque</span><input id="twmgr-nb-lpa" class="twmgr-inp" type="number" min="1" max="100" value="28"></div>' +
+            '<div class="twmgr-fld"><span title="Quanto um nobre derruba. No jogo varia de 20 a 35 — um valor MAIOR arrisca mandar de menos; menor manda de sobra">Queda por ataque</span><input id="twmgr-nb-lpa" class="twmgr-inp" type="number" min="1" max="100" value="25"></div>' +
             '<div class="twmgr-fld"><span title="Quanto a lealdade sobe por hora sozinha">Regenera por hora</span><input id="twmgr-nb-regen" class="twmgr-inp" type="number" min="0" max="10" step="0.5" value="1"></div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">O número de nobres sai da <b>lealdade atual</b>, não do modelo: lealdade 19 pede <b>1</b>, não 4. Comando já a caminho <b>conta como se tivesse pousado</b> — com 30 de lealdade e 1 voando, sai mais 1; com 27 e 1 voando, não sai nada.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A lealdade lida <b>envelhece</b>: a tela mostra o valor projetado pra agora com a regeneração. Sem relatório de nobre (lealdade <b>?</b>) ele usa o número do modelo.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">O padrão é <b>25</b>, não a média 28: no jogo a queda varia de 20 a 35, e com sorte ruim o 28 manda <b>de menos</b> — o alvo sobrevive de raspão. Errar pro lado de um nobre a mais é o erro barato.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A <b>lealdade prevista</b> é a que o alvo terá <b>na hora em que o próximo nobre chegar</b>: parte do último relatório, soma a regeneração e desconta os ataques que já estão no ar — cada um no seu horário de chegada, porque a lealdade <b>sobe entre uma leva e outra</b>. Somar tudo de uma vez daria um número otimista.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Sem relatório de nobre não há lealdade (<b>?</b>) — é o único lugar do jogo onde ela aparece. Aí ele usa o número do modelo.</div>' +
           '</div>' +
           '<div class="twmgr-card2"><h4>⏱ Ciclo</h4>' +
             '<div class="twmgr-fld"><span>Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15"></div>' +
@@ -8961,10 +9181,10 @@
           sec('Cunhar moeda de ouro',
             '<div class="twmgr-fld"><span title="Converte recurso em moeda — sem volta">Cunhar quando faltar nobre</span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-cunhar" type="checkbox"><i></i></label></div>' +
-            '<div class="twmgr-fld"><span title="Para de cunhar numa aldeia quando ela já fecha esse tanto de nobre">Cunhar até fechar NT de</span><input id="twmgr-nb-cunhar-ate" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
+            '<div class="twmgr-fld"><span title="Teto máximo. O teto real é o menor entre este número e o que a aldeia da vez ainda precisa">Cunhar até fechar NT de</span><input id="twmgr-nb-cunhar-ate" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
             '<div class="twmgr-fld"><span title="Trava de gasto: quantas aldeias podem cunhar num mesmo ciclo">Cunhar em até (aldeias/ciclo)</span><input id="twmgr-nb-cunhar-n" class="twmgr-inp" type="number" min="1" max="12" value="3"></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px"><b>Desligado por padrão</b>, e de propósito: cunhar converte recurso em moeda <b>sem volta</b>, num alvo que pode nem sair.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Ligado, ele cunha nas aldeias mais perto do alvo e <b>para</b> quando a aldeia já fecha o NT — contando o que ela tem <b>mais o que está na fila</b> da Academia. Sem esse teto ela cunharia pra sempre.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Ligado, ele cunha nas aldeias mais perto do alvo e <b>para</b> no menor entre o NT acima e <b>o que a aldeia da vez ainda precisa</b> — contando o que a origem tem <b>mais o que está na fila</b> da Academia. Se falta 1 nobre, cunha pra 1: moeda não tem volta.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">O modo <b>Cunhar</b> do Mercado continua existindo e é independente deste — aquele cunha sempre, este só quando falta nobre pro alvo.</div>') +
         '</div>' +
         '<div id="twmgr-sub-pos" style="display:none">' +
@@ -9301,7 +9521,7 @@
     document.getElementById('twmgr-nb-rel').checked = config.noble.lerRelatorios !== false;
     document.getElementById('twmgr-nb-auto').checked = config.noble.autoEnviar !== false;
     document.getElementById('twmgr-nb-automax').value = config.noble.autoMax != null ? config.noble.autoMax : 8;
-    document.getElementById('twmgr-nb-lpa').value = config.noble.lealdadePorAtk != null ? config.noble.lealdadePorAtk : 28;
+    document.getElementById('twmgr-nb-lpa').value = config.noble.lealdadePorAtk != null ? config.noble.lealdadePorAtk : 25;
     document.getElementById('twmgr-nb-regen').value = config.noble.lealdadeRegen != null ? config.noble.lealdadeRegen : 1;
     document.getElementById('twmgr-nb-cunhar').checked = !!config.noble.cunhar;
     document.getElementById('twmgr-nb-cunhar-ate').value = config.noble.cunharAte != null ? config.noble.cunharAte : 4;

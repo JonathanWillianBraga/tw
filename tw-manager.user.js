@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.68.0
+// @version      11.69.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.68.0';
+  const VERSION = '11.69.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -10845,6 +10845,10 @@
         if (c.cmd.passoMs == null) c.cmd.passoMs = 50;
         if (!Array.isArray(c.cmd.modelos)) c.cmd.modelos = MODELOS_PADRAO();
         if (!c.cmd.fechados) c.cmd.fechados = {};
+        // A Fila entra recolhida SEMPRE (não só na primeira vez): é uma lista longa, que muda
+        // sozinha a cada segundo e puxa a atenção do que importa acima dela. Um clique no
+        // título abre quando você quiser olhar.
+        c.cmd.fechados.fila = true;
         if (c.cmd.snipeFolgaMs == null) c.cmd.snipeFolgaMs = 150;
     }
     // ==================== MOTOR DE PRECISÃO ====================
@@ -12115,10 +12119,15 @@
         ev.preventDefault(); ccOpIrEtapa(parseInt(el.getAttribute('data-op-etapa'), 10));
       });
       const prox = CC_OP_ETAPAS.find((e) => e.n === at + 1);
+      // Verde = pode seguir. É o sinal de "já preenchi o que precisava aqui" sem precisar ler
+      // texto nenhum; cinza com o motivo no title = ainda falta algo nesta etapa.
+      const trava = prox ? ccOpBloqueio(prox.n) : null;
       nav.innerHTML =
         (at > 1 ? '<button id="cc-op-voltar" class="twmgr-btn twmgr-ghost" style="padding:3px 12px;font-size:10px">← Voltar</button>' : '<span></span>') +
         '<span id="cc-op-aviso" style="font-size:9px;color:#c0483a;flex:1;text-align:center;padding:0 6px"></span>' +
-        (prox ? '<button id="cc-op-avancar" class="twmgr-btn twmgr-ghost" style="padding:3px 12px;font-size:10px">' + esc(prox.rot) + ' →</button>' : '<span></span>');
+        (prox ? '<button id="cc-op-avancar" class="twmgr-btn ' + (trava ? 'twmgr-ghost' : 'twmgr-go') + '" ' +
+          'style="padding:3px 12px;font-size:10px"' + (trava ? ' title="' + esc(trava) + '"' : '') + '>' +
+          esc(prox.rot) + ' →</button>' : '<span></span>');
       const bv = document.getElementById('cc-op-voltar'); if (bv) bv.onclick = () => ccOpIrEtapa(at - 1);
       const ba = document.getElementById('cc-op-avancar'); if (ba) ba.onclick = () => ccOpIrEtapa(at + 1);
       // Armar só na última etapa: nas outras ele mandaria um alvo pela metade (sem tropa definida).
@@ -13632,7 +13641,7 @@
       const d = document.createElement('div');
       d.id = 'cc-painel';
       d.style.cssText = 'background:linear-gradient(180deg,#fdfaf5,#fffdfa);border:1px solid #e0d6c6;border-radius:10px;padding:10px;margin:0 0 12px;color:#8b5426;font-size:11px';
-      const row = (l, inner) => '<div class="twmgr-row" style="display:flex;align-items:center;gap:6px;margin:3px 0"><span style="min-width:120px;color:#6f6153">' + l + '</span>' + inner + '</div>';
+      const row = (l, inner, id) => '<div class="twmgr-row"' + (id ? ' id="' + id + '"' : '') + ' style="display:flex;align-items:center;gap:6px;margin:3px 0"><span style="min-width:120px;color:#6f6153">' + l + '</span>' + inner + '</div>';
       d.innerHTML =
         // O cabeçalho fica SEMPRE visível, mesmo minimizado — é o que permite reabrir. O
         // resto (tudo dentro de #cc-corpo) esconde/mostra junto do estado persistido.
@@ -13655,11 +13664,16 @@
         '</div>' +
         row('Alvo',
           '<input id="cc-alvo" class="twmgr-inp" style="width:130px;font-variant-numeric:tabular-nums" placeholder="478|586">' +
-          '<span id="cc-alvo-ok" style="font-size:10px;color:#8a7d6d"></span>') +
-        row('Chegada (servidor)',
-          '<input id="cc-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:230px">' +
-          '<button id="cc-ch-agora" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="preenche com a hora do servidor + 10 min">+10min</button>' +
-          '<button id="cc-ch-cmd" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="copiar o horário de um comando do jogo">📋 de um comando</button>') +
+          '<span id="cc-alvo-ok" style="font-size:10px;color:#8a7d6d"></span>', 'cc-row-alvo') +
+        // A linha da chegada vive neste "slot" pra poder ser MOVIDA pro bloco do Fake (que não
+        // tem campo próprio e usa este mesmo). Mover o elemento — em vez de duplicar — mantém
+        // id, valor e listeners, então ccChegadaMs() segue funcionando de onde ele estiver.
+        '<div id="cc-chegada-slot">' +
+          row('Chegada (servidor)',
+            '<input id="cc-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:230px">' +
+            '<button id="cc-ch-agora" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="preenche com a hora do servidor + 10 min">+10min</button>' +
+            '<button id="cc-ch-cmd" class="twmgr-btn twmgr-ghost" style="padding:2px 6px;font-size:10px" title="copiar o horário de um comando do jogo">📋 de um comando</button>', 'cc-row-chegada') +
+        '</div>' +
         '<div id="cc-alvo-hist" style="font-size:10px;margin:2px 0 6px;line-height:1.8"></div>' +
         // Comandos do jogo: copiar horário pra coordenar em cima, ou escolher um pra snipar.
         '<div id="cc-cmds-box" style="display:none;border:1px solid #e0d6c6;border-radius:6px;padding:6px;margin:4px 0">' +
@@ -13686,6 +13700,8 @@
           '<div id="cc-aba-hint" style="font-size:10px;color:#8a7d6d;margin-bottom:6px"></div>' +
         // Fake: dezenas de alvos de uma vez, com duas distribuições possíveis.
         '<div id="cc-fake-cfg" style="display:none">' +
+          // Recebe a linha "Chegada (servidor)" movida pra cá enquanto o Fake está ativo.
+          '<div id="cc-fake-chegada-slot"></div>' +
           '<div style="font-size:10px;color:#6f6153;margin:4px 0 2px">Alvos do fake (cole vários)</div>' +
           '<textarea id="cc-fake-alvos" class="twmgr-inp" style="width:100%;height:54px;font-size:10px" ' +
             'placeholder="478|586 479|587 480|588 …"></textarea>' +
@@ -13712,7 +13728,7 @@
           '<div id="cc-op-e1">' +
             '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:4px">' +
               '<span style="font-size:10px;color:#6f6153">Coordenada</span>' +
-              '<input id="cc-op-coord" class="twmgr-inp" placeholder="478|586" style="width:96px;font-size:10px;padding:2px">' +
+              '<input id="cc-op-coord" class="twmgr-inp" style="width:96px;font-size:10px;padding:2px">' +
             '</div>' +
             '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:4px">' +
               '<span style="font-size:10px;color:#6f6153">Chega a 1ª onda</span>' +
@@ -13946,12 +13962,21 @@
         const tsec = document.getElementById('cc-tropas-sec'); if (tsec) tsec.style.display = (massa || op) ? 'none' : 'block';
         const osec = document.getElementById('cc-origens-sec'); if (osec) osec.style.display = op ? 'none' : 'block';
         const arow = document.getElementById('cc-armar-row'); if (arow) arow.style.display = massa ? 'none' : 'flex';
-        // O campo de alvo único não serve pro fake (lista própria) nem pra Operação (alvo por bloco).
+        // O campo de alvo único não serve pro fake (tem lista própria) nem pra Operação (o alvo
+        // é do bloco). Antes ficavam só apagados e continuavam ali em cima, confundindo — agora
+        // somem de vez.
         const semAlvoGlobal = (tipo === 'fake' || op);
-        const al = document.getElementById('cc-alvo');
-        if (al) { al.disabled = semAlvoGlobal; al.style.opacity = semAlvoGlobal ? '.4' : '1'; }
-        const ch = document.getElementById('cc-chegada');
-        if (ch) { ch.disabled = op; ch.style.opacity = op ? '.4' : '1'; }
+        const rAlvo = document.getElementById('cc-row-alvo');
+        if (rAlvo) rAlvo.style.display = semAlvoGlobal ? 'none' : 'flex';
+        // Chegada: a Operação tem a dela na etapa 1, então some. Já o Fake NÃO tem campo próprio
+        // — usa este mesmo. Escondê-lo deixaria o fake sem como marcar o horário; por isso a
+        // linha é MOVIDA pra dentro do bloco do Fake e volta pro lugar ao sair dele.
+        const rCheg = document.getElementById('cc-row-chegada');
+        if (rCheg) {
+          rCheg.style.display = op ? 'none' : 'flex';
+          const destino = document.getElementById((tipo === 'fake') ? 'cc-fake-chegada-slot' : 'cc-chegada-slot');
+          if (destino && rCheg.parentElement !== destino) destino.appendChild(rCheg);
+        }
         const btn = document.getElementById('cc-armar');
         if (btn) btn.textContent = op ? '▶ Armar este alvo' : ('▶ Armar ' + def.rot.toLowerCase());
         if (tipo === 'fake') ccPreviaFake();

@@ -114,12 +114,19 @@
 
   // O que demolir nesta aldeia, se é que há algo. Devolve no máximo UM prédio.
   //
-  // Só entra item MARCADO (`it.dem`): passar do alvo, sozinho, não autoriza derrubar nada. E usa o
-  // nível REAL, não o efetivo com fila de construção — considerar obra que nem ficou pronta
+  // O interruptor "Demolir excedente" SOZINHO autoriza — decisão do usuário (ago/2026). Antes
+  // exigia também marcar prédio por prédio no modelo, o que obrigava a declarar duas vezes a
+  // mesma intenção e fazia o interruptor parecer quebrado quando nada acontecia.
+  //
+  // A proteção não sumiu, ela mudou de lugar: as três travas do ciclo continuam de pé — só com a
+  // aldeia COMPLETA (bate o alvo em todos os prédios), um nível por aldeia por ciclo, e só com a
+  // fila de demolição vazia. Um nível digitado errado derruba um nível e dá tempo de desligar.
+  //
+  // Usa o nível REAL, não o efetivo com fila de construção: considerar obra que nem ficou pronta
   // derrubaria o prédio errado.
   function bldExcedente(st, plan) {
     for (const it of plan) {
-      if (it.en === false || !it.dem) continue;
+      if (it.en === false) continue;
       const atual = st.level[it.b] || 0;
       if (atual > it.lvl) return { b: it.b, de: atual, para: it.lvl };
     }
@@ -518,8 +525,6 @@
         '<span class="twmgr-bld-ico">' + buildingIcon(it.b, meta.ico) + '</span>' +
         '<span class="twmgr-bld-name" title="' + esc(meta.name) + ' (máx ' + meta.max + ')">' + esc(meta.name) + '</span>' +
         '<input type="number" class="twmgr-bld-lvl twmgr-inp" data-i="' + i + '" min="1" max="' + meta.max + '" value="' + it.lvl + '" title="nível alvo">' +
-        '<label class="twmgr-bld-dem" title="demolir excedente: quando a aldeia estiver COMPLETA, derruba este prédio até o nível alvo">'
-          + '<input type="checkbox" class="twmgr-bld-demck" data-i="' + i + '"' + (it.dem ? ' checked' : '') + '><span>⬇</span></label>' +
         '<span class="twmgr-bld-up" data-i="' + i + '" title="subir prioridade">▲</span>' +
         '<span class="twmgr-bld-down" data-i="' + i + '" title="descer prioridade">▼</span>' +
         '<span class="twmgr-bld-rm" data-i="' + i + '" title="remover">✕</span>' +
@@ -532,13 +537,6 @@
     box.addEventListener('change', (e) => {
       const el = e.target; const i = parseInt(el.getAttribute('data-i'), 10);
       const plan = bldPlanAtual(); if (!plan || isNaN(i) || !plan[i]) return;
-      if (el.classList.contains('twmgr-bld-demck')) {
-        // Demolir e por PREDIO, nunca global: marcar "tudo que passar do alvo" transformaria um
-        // numero digitado errado em estrago em serie.
-        plan[i].dem = el.checked;
-        save(); renderBuildPlan();
-        return;
-      }
       if (el.classList.contains('twmgr-bld-en')) plan[i].en = !!el.checked;
       else if (el.classList.contains('twmgr-bld-lvl')) {
         const meta = BUILD_META[plan[i].b]; const max = meta ? meta.max : 30;
@@ -603,8 +601,14 @@
     _bldActiveProf = id;
     const sel = document.getElementById('twmgr-bld-tpl'); if (sel) sel.value = id;
     const selAba = document.getElementById('twmgr-bld-tplsel'); if (selAba) selAba.value = id;
+    // Os DOIS campos, não só a Fazenda. O Armazém faltava aqui: o input nascia com o `value="0"`
+    // do HTML e nunca era populado do config, então ele aparecia zerado toda vez que o painel era
+    // montado. Pior que cosmético — o handler de `change` grava os dois juntos lendo do DOM, então
+    // mexer na Fazenda escrevia o zero da tela por cima do Armazém salvo. Era esse o "reset".
     const fp = document.getElementById('twmgr-bld-farmpct');
     if (fp) fp.value = bldTpl().farmPct != null ? bldTpl().farmPct : 0;
+    const sp = document.getElementById('twmgr-bld-storagepct');
+    if (sp) sp.value = bldTpl().storagePct != null ? bldTpl().storagePct : 0;
     renderBuildPlan();
     fillBldTplGrupo();   // o grupo e por MODELO, entao acompanha a troca
   }

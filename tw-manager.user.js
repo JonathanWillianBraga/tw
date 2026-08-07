@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.62.0
+// @version      11.63.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.62.0';
+  const VERSION = '11.63.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -10559,6 +10559,8 @@
       // "nuke na frente, nobres atrás" e "dividir a tropa de uma aldeia em N ataques".
       ondas: [],              // [{id, origem, amounts, max, offsetMs, rot}]
       filaOrdem: 'chegada',   // como listar a fila: 'chegada' | 'saida'
+      filaTipoFiltro: '',     // filtro de exibição da fila: '' (todos) | 'ataque' | 'apoio' | 'fake' | 'nobre'
+      enviarParcial: false,   // padrão geral: manda o que tiver disponível em vez de falhar por tropa insuficiente
       passoMs: 50,            // passo dos botões de ajuste fino na fila
       modelos: null,          // modelos de tropa do usuário (null = ainda não semeado)
       fechados: {},           // seções recolhidas do painel (ele fica alto demais com tudo aberto)
@@ -10618,6 +10620,8 @@
         if (!c.cmd.tipo) c.cmd.tipo = 'attack';
         if (!Array.isArray(c.cmd.ondas)) c.cmd.ondas = [];
         if (!c.cmd.filaOrdem) c.cmd.filaOrdem = 'chegada';
+        if (c.cmd.filaTipoFiltro == null) c.cmd.filaTipoFiltro = '';
+        if (c.cmd.enviarParcial == null) c.cmd.enviarParcial = false;
         if (c.cmd.passoMs == null) c.cmd.passoMs = 50;
         if (!Array.isArray(c.cmd.modelos)) c.cmd.modelos = MODELOS_PADRAO();
         if (!c.cmd.fechados) c.cmd.fechados = {};
@@ -10791,10 +10795,28 @@
         const errEl = doc.querySelector('.error, .autoHideBox, #command_confirmation_error');
         throw new Error(errEl ? errEl.textContent.trim().slice(0, 90) : 'confirmação falhou (tropa/alvo)');
       }
+      // Três tentativas, da mais confiável pra mais frágil. A 2ª existia sozinha antes (regex
+      // apertada: só 2 dígitos de hora e 12 caracteres de folga entre "duração" e o número) —
+      // em algumas composições (fake com poucas unidades, por exemplo) o rótulo e o valor ficam
+      // mais longe um do outro no HTML, ou a viagem passa de 99h, e o comando falhava com
+      // "servidor não devolveu a duração" e nunca saía. Por isso a 3ª tentativa: qualquer célula
+      // do próprio form no formato hh:mm:ss é quase certamente a duração, sem depender de achar
+      // o rótulo por perto.
       let dur = null;
       const dd = doc.querySelector('[data-duration]');
       if (dd) dur = parseInt(dd.getAttribute('data-duration'), 10);
-      if (!dur) { const txt = doc.body ? doc.body.textContent : t1; const m = txt.match(/dura[çc][aã]o[^0-9]{0,12}(\d{1,2}):([0-5]\d):([0-5]\d)/i); if (m) dur = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]); }
+      if (!dur) {
+        const txt = (doc.body ? doc.body.textContent : t1).replace(/\s+/g, ' ');
+        const m = txt.match(/dura[çc][aã]o[^0-9]{0,60}(\d{1,3}):([0-5]\d):([0-5]\d)/i);
+        if (m) dur = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
+      }
+      if (!dur) {
+        const cels = Array.prototype.slice.call(form.querySelectorAll('td, th, span, div'));
+        for (const el of cels) {
+          const mm = (el.textContent || '').trim().match(/^(\d{1,3}):([0-5]\d):([0-5]\d)$/);
+          if (mm) { dur = (+mm[1]) * 3600 + (+mm[2]) * 60 + (+mm[3]); break; }
+        }
+      }
       // Colher o form como o navegador colheria. O laço ingênuo (todo input com name) mandava
       // checkbox DESMARCADO e, pior, os DOIS botões de submit — o que pode virar apoio em ataque.
       const params = {};
@@ -10857,7 +10879,29 @@
     async function cmdPreparar(c) {
       try {
         const ehApoio = (c.tipo === 'support' || c.tipo === 'snipe');
-        const p = await cmdPrepare(c.origin, c.x, c.y, c.amounts, ehApoio ? 'support' : 'attack');
+        // Envio parcial: manda o que tiver na origem em vez de falhar quando a quantidade
+        // digitada não cabe mais. c.parcial null = segue o padrão geral; true/false força só
+        // este comando. Precisa clampar ANTES do cmdPrepare — é o confirmar que fixa os números
+        // que vão de fato pro disparo (c.prep), então ajustar depois seria tarde demais.
+        const parcial = ccParcialEfetivo(c);
+        let amounts = c.amounts;
+        if (parcial) {
+          let avail = {};
+          try { avail = (await getVillageState(c.origin)).avail || {}; } catch (e) { /* sem leitura, segue com o pedido original */ }
+          const clamped = {}; let temAlgo = false, reduziu = false;
+          Object.keys(amounts || {}).forEach((u) => {
+            const pedido = amounts[u] || 0;
+            const v = Math.min(pedido, avail[u] || 0);
+            if (v > 0) { clamped[u] = v; temAlgo = true; }
+            if (v < pedido) reduziu = true;
+          });
+          if (!temAlgo) { cmdFalha(c, 'pulado: sem tropa disponível na origem (modo parcial)'); return false; }
+          if (reduziu) {
+            pushLog('Central: ' + c.x + '|' + c.y + ' — tropa reduzida por modo parcial (' + ccTropaTxt(amounts) + ' → ' + ccTropaTxt(clamped) + ').', '', 'cmd');
+            amounts = clamped; c.amounts = clamped; save();
+          }
+        }
+        const p = await cmdPrepare(c.origin, c.x, c.y, amounts, ehApoio ? 'support' : 'attack');
         if (!p.dur) throw new Error('servidor não devolveu a duração');
         ancorar();                                    // reancora o relógio junto do preparo
         // O servidor é a verdade. Se a estimativa local divergir, corrige o fator do mundo —
@@ -11288,7 +11332,8 @@
     function cmdAdicionar(tipo, x, y, amounts, arriveAt, origem) {
       const c = { id: genId(), tipo: tipo, origin: origem || CUR_VID, x: String(x), y: String(y),
                   amounts: amounts, arriveAt: arriveAt, durMs: null, sendAt: 0, fireAt: 0,
-                  prep: null, state: 'novo', erro: null, sentAt: null, desvioMs: null };
+                  prep: null, state: 'novo', erro: null, sentAt: null, desvioMs: null,
+                  parcial: null };   // null = segue config.cmd.enviarParcial · true/false = força só este
       config.cmd.fila.push(c); save();
       cmdTick(); ccRender();
       return c;
@@ -12671,6 +12716,16 @@
         .map((u) => '<span style="white-space:nowrap" title="' + esc(rot[u] || u) + '">' + unitIcon(u, rot[u] || u) + fmtN(amounts[u]) + '</span>')
         .join(' ');
     }
+    // Categoria de exibição do comando — usada tanto na linha da fila quanto no filtro de tipo,
+    // pra um nunca discordar do outro.
+    function ccRotTipo(c) { return { support: 'apoio', fake: 'fake', nobre: 'nobre' }[c.tipo] || 'ataque'; }
+    // c.parcial null = segue o padrão geral (config.cmd.enviarParcial); true/false força só este.
+    function ccParcialEfetivo(c) { return (c.parcial != null) ? c.parcial : !!config.cmd.enviarParcial; }
+    function cmdCicloParcial(id) {
+      const c = cmdFila().find((z) => z.id === id); if (!c || c.state !== 'novo') return;
+      c.parcial = (c.parcial == null) ? true : (c.parcial === true ? false : null);
+      save(); ccRender();
+    }
     function ccRender() {
       // Fila dividida: "a enviar" (novo/preparado/armado) e "enviados/concluídos" (o resto).
       const bEnvio = document.getElementById('cc-fila-envio');
@@ -12699,7 +12754,7 @@
         const org = vo ? (vo.coord || vo.vid) : c.origin;
         const orgNome = vo && vo.nome ? vo.nome : '';
         const alvoNome = ccNomeAlvo(c.x + '|' + c.y);
-        const rot = { support: 'apoio', fake: 'fake', nobre: 'nobre' }[c.tipo] || 'ataque';
+        const rot = ccRotTipo(c);
         // Horário de saída: já confirmado pelo servidor (c.sendAt) ou, antes do preparo,
         // a estimativa local. A estimativa aparece com "~" pra não passar por certeza.
         let saiTxt = '—', saiCor = '#8a7d6d';
@@ -12722,7 +12777,15 @@
             ? '<span data-cc-ab="' + c.id + '" style="cursor:pointer;color:#c0483a" title="abortar">✕</span>' : '<span></span>') +
           // Tropas que saem neste comando — largura total, pra não espremer a grade.
           '<span style="grid-column:1/-1;font-size:9px;color:#8a7d6d;margin:1px 0 0 46px;line-height:1.6">' +
-            (ccTropaResumo(c.amounts) || '<span style="color:#584526">— sem tropa —</span>') + '</span>' +
+            (ccTropaResumo(c.amounts) || '<span style="color:#584526">— sem tropa —</span>') +
+            // Só antes do preparo: depois que confirmou no servidor (c.prep já montado), mudar
+            // isto aqui não re-executa o confirmar, então não teria efeito nenhum no que sai.
+            (c.state === 'novo' ? ' &nbsp;<a data-parcial="' + c.id + '" style="cursor:pointer;color:' +
+              (c.parcial == null ? '#8a7d6d' : (c.parcial ? '#2e7d3a' : '#c0483a')) +
+              '" title="clique pra alternar: geral → forçado parcial → forçado exato → geral">envio: ' +
+              esc(c.parcial == null ? ('geral (' + (ccParcialEfetivo(c) ? 'parcial' : 'exato') + ')') : (c.parcial ? 'forçado parcial' : 'forçado exato')) +
+              '</a>' : '') +
+          '</span>' +
           // Ajuste fino: mexe na CHEGADA e o horário de saída se recalcula sozinho.
           // Some depois que o comando entra no disparo, quando mudar já não é seguro.
           (ccEditavel(c)
@@ -12739,12 +12802,15 @@
           '</div>';
       };
       const ehEnvio = (c) => c.state === 'novo' || c.state === 'preparado' || c.state === 'armado';
-      const ordenada = ccFilaOrdenada();
+      const filtroTipo = config.cmd.filaTipoFiltro || '';
+      const passaFiltro = (c) => !filtroTipo || ccRotTipo(c) === filtroTipo;
+      const ordenada = ccFilaOrdenada().filter(passaFiltro);
       const envio = ordenada.filter(ehEnvio);
       const feitos = ordenada.filter((c) => !ehEnvio(c));
       const vazio = (t) => '<div style="color:#8a7d6d;padding:6px;font-size:10px">' + t + '</div>';
-      bEnvio.innerHTML = envio.length ? envio.map(linha).join('') : vazio('— nada a enviar —');
-      bEnv.innerHTML = feitos.length ? feitos.map(linha).join('') : vazio('— nada enviado ainda —');
+      const sufFiltro = filtroTipo ? ' desse tipo' : '';
+      bEnvio.innerHTML = envio.length ? envio.map(linha).join('') : vazio('— nada a enviar' + sufFiltro + ' —');
+      bEnv.innerHTML = feitos.length ? feitos.map(linha).join('') : vazio('— nada enviado' + sufFiltro + ' ainda —');
       const ne = document.getElementById('cc-ftab-n-envio'); if (ne) ne.textContent = '(' + envio.length + ')';
       const nd = document.getElementById('cc-ftab-n-enviados'); if (nd) nd.textContent = '(' + feitos.length + ')';
       [bEnvio, bEnv].forEach((box) => {
@@ -12753,6 +12819,7 @@
         box.querySelectorAll('[data-sw]').forEach((e) => e.onclick = () =>
           ccTrocar(e.getAttribute('data-sw'), parseInt(e.getAttribute('data-dir'), 10)));
         box.querySelectorAll('[data-cc-ab]').forEach((el) => el.onclick = () => cmdAbortar(el.getAttribute('data-cc-ab')));
+        box.querySelectorAll('[data-parcial]').forEach((el) => el.onclick = () => cmdCicloParcial(el.getAttribute('data-parcial')));
       });
     }
 
@@ -13291,6 +13358,10 @@
           '<div id="cc-resumo" style="font-size:10px;color:#6f6153;margin-top:3px"></div>' +
           '</div>' +
         '</div>' +
+        '<div style="font-size:10px;color:#6f6153;margin-bottom:5px">' +
+          '<label style="cursor:pointer" title="Na hora de preparar, se a origem tiver menos tropa do que foi pedido, manda o que tiver em vez de falhar. Cada comando na Fila pode sobrescrever isto individualmente.">' +
+            '<input id="cc-parcial" type="checkbox"> enviar mesmo com tropa insuficiente (usa o que tiver disponível)</label>' +
+        '</div>' +
         '<div id="cc-armar-row" style="display:flex;gap:6px;align-items:center">' +
           '<button id="cc-armar" class="twmgr-btn twmgr-go" style="flex:1">▶ Armar comando</button>' +
           '<button id="cc-limpar" class="twmgr-btn twmgr-ghost" title="remove enviados/erros da lista">🧹</button>' +
@@ -13301,7 +13372,11 @@
         '<div style="margin-top:8px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
             '<span data-sec="fila" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Fila <span id="cc-fila-n" style="color:#8a7d6d;font-weight:400"></span></span>' +
-            '<span style="font-size:10px;color:#8a7d6d">ordenar por ' +
+            '<span style="font-size:10px;color:#8a7d6d">' +
+              '<select id="cc-fila-tipo" class="twmgr-inp" style="width:auto;font-size:10px;padding:1px" title="mostra só um tipo na fila">' +
+                '<option value="">todos os tipos</option><option value="ataque">⚔ ataque</option>' +
+                '<option value="apoio">🛡 apoio</option><option value="fake">🎭 fake</option><option value="nobre">👑 nobre</option></select>' +
+              ' · ordenar por ' +
               '<select id="cc-fila-ordem" class="twmgr-inp" style="width:auto;font-size:10px;padding:1px">' +
                 '<option value="chegada">chegada</option><option value="saida">saída</option></select>' +
               ' · passo <input id="cc-passo" class="twmgr-inp" type="number" min="1" step="10" style="width:52px;font-size:10px;padding:1px">ms' +
@@ -13374,6 +13449,12 @@
       const ordEl = document.getElementById('cc-fila-ordem');
       ordEl.value = config.cmd.filaOrdem || 'chegada';
       ordEl.addEventListener('change', () => { config.cmd.filaOrdem = ordEl.value; save(); ccRender(); });
+      const tipoEl = document.getElementById('cc-fila-tipo');
+      tipoEl.value = config.cmd.filaTipoFiltro || '';
+      tipoEl.addEventListener('change', () => { config.cmd.filaTipoFiltro = tipoEl.value; save(); ccRender(); });
+      const parcialEl = document.getElementById('cc-parcial');
+      parcialEl.checked = !!config.cmd.enviarParcial;
+      parcialEl.addEventListener('change', () => { config.cmd.enviarParcial = parcialEl.checked; save(); ccRender(); });
       document.querySelectorAll('.cc-ftab').forEach((el) => el.addEventListener('click', () => ccFilaTab(el.getAttribute('data-ftab'))));
       ccFilaTab();
       const passoEl = document.getElementById('cc-passo');

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.76.0
+// @version      11.78.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.76.0';
+  const VERSION = '11.78.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -13259,13 +13259,19 @@
           else if (soma[u] > (casa[u] || 0)) semCasa.push(u);
         });
         porVid[vid].forEach((c) => {
+          // Devolve info pra TODO comando pendente, não só pros problemáticos: numa operação o
+          // que se quer é confirmar que está tudo certo, não só a ausência de vermelho.
+          const info = {};
           let piso = null;
-          if (_ccPontos && c.tipo !== 'support') {
+          // Piso de população: só ataque tem, e ataque só de explorador é isento (regra do jogo).
+          if (c.tipo !== 'support') {
             const soSpy = Object.keys(c.amounts || {}).every((u) => u === 'spy');
-            const pts = parseInt(_ccPontos[String(c.origin)], 10) || 0;
+            const pop = ccFakePopOf(c.amounts);
+            const pts = _ccPontos ? (parseInt(_ccPontos[String(c.origin)], 10) || 0) : 0;
             const minPop = pts > 0 ? Math.ceil((FAKE_LIMIT_PCT / 100) * pts) : 0;
-            const falta = minPop - ccFakePopOf(c.amounts);
-            if (!soSpy && falta > 0) {
+            info.pop = { atual: pop, min: minPop, isento: soSpy, semPontos: !pts };
+            const falta = minPop - pop;
+            if (!soSpy && pts && falta > 0) {
               const precisa = Math.ceil(falta / (FAKE_POP.spy || 2));
               const sobraSpy = (casa.spy || 0) - (soma.spy || 0);
               piso = (sobraSpy >= precisa)
@@ -13273,10 +13279,11 @@
                 : { nivel: 'erro', msg: 'abaixo do piso de população e sem explorador pra completar (faltam ' + falta + ' hab.)' };
             }
           }
-          if (semTotal.length) out[c.id] = { nivel: 'erro', msg: 'tropa insuficiente na origem: ' + ccRotU(semTotal) };
-          else if (piso && piso.nivel === 'erro') out[c.id] = piso;
-          else if (semCasa.length) out[c.id] = { nivel: 'aviso', msg: 'depende de tropa voltar: ' + ccRotU(semCasa) };
-          else if (piso) out[c.id] = piso;
+          if (semTotal.length) { info.nivel = 'erro'; info.msg = 'tropa insuficiente na origem: ' + ccRotU(semTotal); }
+          else if (piso && piso.nivel === 'erro') { info.nivel = piso.nivel; info.msg = piso.msg; }
+          else if (semCasa.length) { info.nivel = 'aviso'; info.msg = 'depende de tropa voltar: ' + ccRotU(semCasa); }
+          else if (piso) { info.nivel = piso.nivel; info.msg = piso.msg; }
+          out[c.id] = info;
         });
       });
       return out;
@@ -13298,6 +13305,64 @@
       }
       save();
     }
+    // ---- Resumo ----
+    // A Fila mostra comando a comando; numa operação de 13 ondas o que falta é a visão de cima:
+    // a que horas eu preciso estar na frente do PC, quais alvos recebem o quê, e qual aldeia é o
+    // gargalo. Fica ACIMA da Fila porque é o que se olha antes de entrar no detalhe.
+    function ccResumoRender() {
+      const box = document.getElementById('cc-resumo-op'); if (!box) return;
+      const cn = document.getElementById('cc-resumo-n');
+      const pend = cmdPendentes();
+      if (!pend.length) {
+        box.innerHTML = '<div style="color:#8a7d6d;padding:4px">— nada agendado —</div>';
+        if (cn) cn.textContent = ''; return;
+      }
+      const conf = ccFilaConferir();
+      const nErro = Object.keys(conf).filter((k) => conf[k].nivel === 'erro').length;
+      const nAviso = Object.keys(conf).filter((k) => conf[k].nivel === 'aviso').length;
+      if (cn) cn.innerHTML = '(' + pend.length + ')' +
+        (nErro ? ' <b style="color:#c0483a">⛔ ' + nErro + '</b>' : '') +
+        (nAviso ? ' <b style="color:#a2643a">⚠ ' + nAviso + '</b>' : '') +
+        (!nErro && !nAviso ? ' <b style="color:#2e7d3a">✓</b>' : '');
+      const agora = srvNowP();
+      const saiDe = (c) => { const e = ccEstimaDeComando(c); return c.sendAt ? c.sendAt : ((e != null && c.arriveAt) ? c.arriveAt - e : null); };
+      const saidas = pend.map(saiDe).filter((x) => x != null).sort((a, b) => a - b);
+      const selo = (ms) => ccDiaRel(ms) ? ' <span style="color:#a8564a">' + ccDiaRel(ms) + '</span>' : '';
+      const porAlvo = {}, porOrig = {};
+      pend.forEach((c) => {
+        (porAlvo[c.x + '|' + c.y] = porAlvo[c.x + '|' + c.y] || []).push(c);
+        (porOrig[String(c.origin)] = porOrig[String(c.origin)] || []).push(c);
+      });
+      const lin = (rot, val) => '<div style="display:flex;gap:6px;margin-bottom:3px">' +
+        '<span style="color:#8a7d6d;flex:0 0 62px">' + rot + '</span><span style="flex:1">' + val + '</span></div>';
+      let html = '';
+      if (saidas.length) {
+        const p = saidas[0], u = saidas[saidas.length - 1];
+        html += lin('Saídas', '<b style="color:#2e7d3a">' + srvClockMs(p) + '</b>' + selo(p) +
+          (u !== p ? ' <span style="color:#8a7d6d">até</span> <b>' + srvClockMs(u) + '</b>' + selo(u) : '') +
+          ' <span style="color:#8a7d6d">· 1ª em</span> <b>' + fmt(p - agora) + '</b>');
+      }
+      html += lin('Alvos', Object.keys(porAlvo).map((k) => {
+        const nome = ccNomeAlvo(k);
+        return '<span title="' + esc(nome || k) + '">' + esc(k) + '<span style="color:#8a7d6d">×' + porAlvo[k].length + '</span></span>';
+      }).join(' · '));
+      html += lin('Origens', Object.keys(porOrig).map((vid) => {
+        const v = CCVILAS.find((z) => String(z.vid) === String(vid));
+        const nome = v ? (v.nome || v.coord || vid) : vid;
+        const ruim = porOrig[vid].some((c) => (conf[c.id] || {}).nivel === 'erro');
+        const meio = porOrig[vid].some((c) => (conf[c.id] || {}).nivel === 'aviso');
+        return '<span style="color:' + (ruim ? '#c0483a' : meio ? '#a2643a' : '#6f6153') + '">' + esc(String(nome)) +
+          '<span style="color:#8a7d6d">×' + porOrig[vid].length + '</span>' + (ruim ? ' ⛔' : meio ? ' ⚠' : '') + '</span>';
+      }).join(' · '));
+      const probs = pend.filter((c) => (conf[c.id] || {}).nivel);
+      if (probs.length) {
+        html += '<div style="margin-top:4px;border-top:1px dashed #e0d6c6;padding-top:3px">' +
+          probs.slice(0, 6).map((c) => '<div style="color:' + (conf[c.id].nivel === 'erro' ? '#c0483a' : '#a2643a') + '">' +
+            (conf[c.id].nivel === 'erro' ? '⛔ ' : '⚠ ') + esc(c.x + '|' + c.y) + ' — ' + esc(conf[c.id].msg) + '</div>').join('') +
+          (probs.length > 6 ? '<div style="color:#8a7d6d">…e mais ' + (probs.length - 6) + '</div>' : '') + '</div>';
+      }
+      box.innerHTML = html;
+    }
     function ccRender() {
       // Fila dividida: "a enviar" (novo/preparado/armado) e "enviados/concluídos" (o resto).
       const bEnvio = document.getElementById('cc-fila-envio');
@@ -13317,7 +13382,7 @@
       if (cn) {
         const pend = f.filter((c) => c.state === 'novo' || c.state === 'preparado' || c.state === 'armado').length;
         const nErro = Object.keys(conf).filter((k) => conf[k].nivel === 'erro').length;
-        const nAviso = Object.keys(conf).length - nErro;
+        const nAviso = Object.keys(conf).filter((k) => conf[k].nivel === 'aviso').length;
         cn.innerHTML = (f.length ? ('(' + pend + ' pendente(s) de ' + f.length + ')') : '') +
           (nErro ? ' <b style="color:#c0483a">⛔ ' + nErro + ' sem tropa</b>' : '') +
           (nAviso ? ' <b style="color:#a2643a">⚠ ' + nAviso + '</b>' : '');
@@ -13340,6 +13405,18 @@
         // 'armado' já está no spin de disparo — mexer ali sairia com a composição velha ou
         // atrasaria o tiro. Antes disso dá pra editar à vontade.
         const podeEditarTropa = (c.state === 'novo' || c.state === 'preparado');
+        const _p = (conf[c.id] || {}).pop;
+        let popTxt = '', popCor = '#8a7d6d', popNota = '';
+        if (_p) {
+          if (_p.isento) { popTxt = 'pop ' + fmtN(_p.atual) + ' · isento'; popNota = 'ataque só de explorador não tem piso'; }
+          else if (_p.semPontos) { popTxt = 'pop ' + fmtN(_p.atual); popNota = 'pontos da origem ainda não lidos — piso não conferido'; }
+          else {
+            const ok = _p.atual >= _p.min;
+            popTxt = 'pop ' + fmtN(_p.atual) + '/' + fmtN(_p.min) + (ok ? ' ✓' : ' ⛔');
+            popCor = ok ? '#2e7d3a' : '#c0483a';
+            popNota = 'piso de ' + FAKE_LIMIT_PCT + '% dos pontos da aldeia de origem';
+          }
+        }
         // Horário de saída: já confirmado pelo servidor (c.sendAt) ou, antes do preparo,
         // a estimativa local. A estimativa aparece com "~" pra não passar por certeza.
         let saiTxt = '—', saiCor = '#8a7d6d', saiMs = null;
@@ -13366,12 +13443,16 @@
             ? '<span data-cc-ab="' + c.id + '" style="cursor:pointer;color:#c0483a" title="abortar">✕</span>' : '<span></span>') +
           // Aviso da conferência antecipada: aparece MUITO antes do preparo, dando tempo de
           // trocar a tropa em vez de descobrir o problema 60s antes da saída.
-          (conf[c.id] ? '<span style="grid-column:1/-1;font-size:9px;margin:2px 0 0 46px;color:' +
+          ((conf[c.id] && conf[c.id].nivel) ? '<span style="grid-column:1/-1;font-size:9px;margin:2px 0 0 46px;color:' +
             (conf[c.id].nivel === 'erro' ? '#c0483a' : '#a2643a') + '">' +
             (conf[c.id].nivel === 'erro' ? '⛔ ' : '⚠ ') + esc(conf[c.id].msg) + '</span>' : '') +
           // Tropas que saem neste comando — largura total, pra não espremer a grade.
           '<span style="grid-column:1/-1;font-size:9px;color:#8a7d6d;margin:1px 0 0 46px;line-height:1.6">' +
             (ccTropaResumo(c.amounts) || '<span style="color:#584526">— sem tropa —</span>') +
+            // População vs o piso de 1% dos pontos da origem — mostrado SEMPRE, não só quando
+            // falha: numa operação você quer confirmar que passou, não deduzir pelo silêncio.
+            (popTxt ? ' &nbsp;<span style="color:' + popCor + '" title="população deste comando' +
+              (popNota ? ' — ' + esc(popNota) : '') + '">' + popTxt + '</span>' : '') +
             (podeEditarTropa ? ' &nbsp;<a data-edit-tropa="' + c.id + '" style="cursor:pointer;color:#a2643a;text-decoration:none" ' +
               'title="mexer na tropa deste comando (ele reconfirma no servidor se já estava preparado)">' +
               (_ccFilaEdit === c.id ? '▾ fechar tropa' : '✎ tropa') + '</a>' : '') +
@@ -13436,6 +13517,7 @@
           ccRender();   // o "sai" muda junto (a unidade mais lenta pode ter mudado)
         });
       });
+      ccResumoRender();
     }
 
     // Relógio a 100ms; a fila só 1x por segundo. Redesenhar a lista 10x/s atrapalharia o clique
@@ -14098,6 +14180,13 @@
         '</div>' +
         '<div id="cc-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
         '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
+        // Resumo antes da Fila: visão de cima (quando sai, pra onde, de onde, o que está errado).
+        '<div style="margin-top:8px;border-top:1px solid #ece4d8;padding-top:6px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
+            '<span data-sec="resumo" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Resumo <span id="cc-resumo-n" style="color:#8a7d6d;font-weight:400"></span></span>' +
+          '</div>' +
+          '<div data-secbody="resumo"><div id="cc-resumo-op" style="font-size:10px;color:#6f6153;background:#fbf7ee;border:1px solid #ece4d8;border-radius:7px;padding:6px 8px"></div></div>' +
+        '</div>' +
         '<div style="margin-top:8px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
             '<span data-sec="fila" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Fila <span id="cc-fila-n" style="color:#8a7d6d;font-weight:400"></span></span>' +

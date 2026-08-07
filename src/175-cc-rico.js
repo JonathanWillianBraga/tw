@@ -1303,6 +1303,80 @@
       save(); ccOpRender();
     }
     function ccOpChegadaBase(a) { return a ? arrivalToServerMs(a.chegadaLocal || '') || 0 : 0; }
+
+    // ---- Etapas da Operação ----
+    // O formulário corrido pedia tudo de uma vez (alvo, horário, gap, aldeias, ondas, tropa),
+    // e nada dizia por onde começar. Virou assistente de 3 passos: cada um mostra só o que
+    // importa naquele momento. A etapa é guardada POR ALVO — montar um alvo novo começa do 1
+    // sem perder onde você parou nos outros.
+    const CC_OP_ETAPAS = [
+      { n: 1, rot: 'Alvo', dica: 'coordenada, quando a 1ª onda chega e o gap entre ondas da mesma aldeia' },
+      { n: 2, rot: 'Origens', dica: 'quais das suas aldeias participam deste alvo' },
+      { n: 3, rot: 'Tropas', dica: 'o que cada onda leva, e o horário fino de cada uma' },
+    ];
+    function ccOpEtapaAtual() {
+      const a = ccOpAtivo(); if (!a) return 1;
+      const n = parseInt(a.etapa, 10);
+      return (n >= 1 && n <= 3) ? n : 1;
+    }
+    // Cada etapa depende do que a anterior produziu: sem coordenada a lista de origens não tem
+    // como ordenar por distância, e sem horário de chegada a etapa 3 calcularia a saída a partir
+    // do nada. Por isso avançar é validado — e é a mesma checagem que apaga o passo na trilha.
+    function ccOpBloqueio(n) {
+      const a = ccOpAtivo();
+      if (!a) return 'Crie um alvo primeiro.';
+      if (n >= 2) {
+        if (!ccCoordParse(a.coord)) return 'Preencha a coordenada do alvo (ex.: 478|586).';
+        if (!ccOpChegadaBase(a)) return 'Escolha quando a 1ª onda deve chegar.';
+      }
+      if (n >= 3 && !Object.keys(a.vids || {}).length) return 'Marque ao menos uma aldeia de origem.';
+      return null;
+    }
+    function ccOpAviso(t) { const el = document.getElementById('cc-op-aviso'); if (el) el.textContent = t || ''; }
+    function ccOpIrEtapa(n) {
+      const a = ccOpAtivo(); if (!a) return;
+      const alvo = Math.max(1, Math.min(CC_OP_ETAPAS.length, n));
+      // Voltar nunca é bloqueado — só avançar.
+      if (alvo > ccOpEtapaAtual()) {
+        const b = ccOpBloqueio(alvo);
+        if (b) { ccOpAviso(b); return; }
+      }
+      a.etapa = alvo; save(); ccOpRender();
+    }
+    function ccOpRenderEtapas() {
+      const cab = document.getElementById('cc-op-passos');
+      const nav = document.getElementById('cc-op-nav');
+      if (!cab || !nav) return;
+      const at = ccOpEtapaAtual();
+      CC_OP_ETAPAS.forEach((e) => {
+        const el = document.getElementById('cc-op-e' + e.n);
+        if (el) el.style.display = (e.n === at) ? 'block' : 'none';
+      });
+      cab.innerHTML = CC_OP_ETAPAS.map((e) => {
+        const atual = (e.n === at);
+        const liberada = atual || e.n < at || !ccOpBloqueio(e.n);
+        return '<a data-op-etapa="' + e.n + '" title="' + esc(e.dica) + '" style="cursor:' + (liberada ? 'pointer' : 'default') +
+          ';color:' + (atual ? '#8b5426' : liberada ? '#2e7d3a' : '#b7ab99') +
+          ';font-weight:' + (atual ? '700' : '400') +
+          ';background:' + (atual ? '#fdf6e8' : 'transparent') +
+          ';border:1px solid ' + (atual ? '#c9a35a' : 'transparent') +
+          ';border-radius:10px;padding:2px 9px;text-decoration:none;white-space:nowrap">' +
+          (e.n < at ? '✓' : e.n) + '. ' + esc(e.rot) + '</a>';
+      }).join('<span style="color:#c9bda8">›</span>');
+      cab.querySelectorAll('[data-op-etapa]').forEach((el) => el.onclick = (ev) => {
+        ev.preventDefault(); ccOpIrEtapa(parseInt(el.getAttribute('data-op-etapa'), 10));
+      });
+      const prox = CC_OP_ETAPAS.find((e) => e.n === at + 1);
+      nav.innerHTML =
+        (at > 1 ? '<button id="cc-op-voltar" class="twmgr-btn twmgr-ghost" style="padding:3px 12px;font-size:10px">← Voltar</button>' : '<span></span>') +
+        '<span id="cc-op-aviso" style="font-size:9px;color:#c0483a;flex:1;text-align:center;padding:0 6px"></span>' +
+        (prox ? '<button id="cc-op-avancar" class="twmgr-btn twmgr-ghost" style="padding:3px 12px;font-size:10px">' + esc(prox.rot) + ' →</button>' : '<span></span>');
+      const bv = document.getElementById('cc-op-voltar'); if (bv) bv.onclick = () => ccOpIrEtapa(at - 1);
+      const ba = document.getElementById('cc-op-avancar'); if (ba) ba.onclick = () => ccOpIrEtapa(at + 1);
+      // Armar só na última etapa: nas outras ele mandaria um alvo pela metade (sem tropa definida).
+      const arow = document.getElementById('cc-armar-row');
+      if (arow && ccTipo() === 'op') arow.style.display = (at === CC_OP_ETAPAS.length) ? 'flex' : 'none';
+    }
     function ccOpOndaAdd(vid) {
       const a = ccOpAtivo(); if (!a) return;
       a.ondas.push({ id: genId(), vid: String(vid), tipo: 'attack', amounts: {}, offsetMs: null });
@@ -1474,6 +1548,8 @@
       const gapEl = document.getElementById('cc-op-gap'); if (gapEl) gapEl.value = cfg.gapMs;
       const coordEl = document.getElementById('cc-op-coord'); if (coordEl) coordEl.value = a ? (a.coord || '') : '';
       const chEl = document.getElementById('cc-op-chegada'); if (chEl) chEl.value = a ? (a.chegadaLocal || '') : '';
+      // Antes do return de "sem alvo": a trilha/navegação tem que aparecer mesmo sem alvo criado.
+      ccOpRenderEtapas();
 
       const boxV = document.getElementById('cc-op-vilas');
       const boxO = document.getElementById('cc-op-ondas');
@@ -2875,35 +2951,55 @@
         // participantes e uma LISTA ORDENADA de ondas com horário calibrável.
         '<div id="cc-op-cfg" style="display:none">' +
           '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:5px">' +
-            '<span style="font-size:10px;color:#6f6153">Alvo</span>' +
+            // "Alvos" no plural de propósito: é o seletor de QUAL alvo você está montando, e
+            // não pode se confundir com o passo "1. Alvo" logo abaixo, que edita os dados dele.
+            '<span style="font-size:10px;color:#6f6153">Alvos</span>' +
             '<select id="cc-op-sel" class="twmgr-inp" style="width:170px;font-size:10px;padding:1px"></select>' +
             '<button id="cc-op-novo" class="twmgr-btn twmgr-ghost" style="padding:2px 8px;font-size:10px">+ novo alvo</button>' +
             '<button id="cc-op-del" class="twmgr-btn twmgr-ghost" style="padding:2px 8px;font-size:10px" title="remove este alvo e as ondas dele">✕</button>' +
           '</div>' +
-          '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:6px">' +
-            '<input id="cc-op-coord" class="twmgr-inp" placeholder="478|586" style="width:96px;font-size:10px;padding:2px">' +
-            '<span style="font-size:10px;color:#6f6153">chega a 1ª onda</span>' +
-            '<input id="cc-op-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:200px;font-size:10px;padding:1px">' +
-            '<span style="font-size:10px;color:#6f6153">gap</span>' +
-            '<input id="cc-op-gap" class="twmgr-inp" type="number" min="50" step="10" style="width:60px;font-size:10px;padding:1px">' +
-            '<span style="font-size:10px;color:#8a7d6d">ms</span>' +
+          // Trilha das etapas. Clicar num passo já liberado volta/avança direto.
+          '<div id="cc-op-passos" style="display:flex;align-items:center;gap:2px;font-size:10px;margin-bottom:7px"></div>' +
+          // ---- Etapa 1: o alvo ----
+          '<div id="cc-op-e1">' +
+            '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:4px">' +
+              '<span style="font-size:10px;color:#6f6153">Coordenada</span>' +
+              '<input id="cc-op-coord" class="twmgr-inp" placeholder="478|586" style="width:96px;font-size:10px;padding:2px">' +
+            '</div>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:4px">' +
+              '<span style="font-size:10px;color:#6f6153">Chega a 1ª onda</span>' +
+              '<input id="cc-op-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:200px;font-size:10px;padding:1px">' +
+            '</div>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:4px">' +
+              '<span style="font-size:10px;color:#6f6153">Gap</span>' +
+              '<input id="cc-op-gap" class="twmgr-inp" type="number" min="50" step="10" style="width:60px;font-size:10px;padding:1px">' +
+              '<span style="font-size:10px;color:#8a7d6d">ms — só entre ondas da MESMA aldeia</span>' +
+            '</div>' +
           '</div>' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">' +
-            '<span style="font-size:9px;color:#6f6153">Aldeias deste alvo <span style="color:#8a7d6d">— marque e use <b>+ onda</b></span></span>' +
-            '<span style="font-size:9px;color:#6f6153">grupo ' +
-              '<select id="cc-op-grupo" class="twmgr-inp" style="width:110px;font-size:9px;padding:1px"><option value="">todas</option></select></span>' +
+          // ---- Etapa 2: as origens ----
+          '<div id="cc-op-e2" style="display:none">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">' +
+              '<span style="font-size:9px;color:#6f6153">Marque as aldeias que vão participar <span style="color:#8a7d6d">(mais perto primeiro)</span></span>' +
+              '<span style="font-size:9px;color:#6f6153">grupo ' +
+                '<select id="cc-op-grupo" class="twmgr-inp" style="width:110px;font-size:9px;padding:1px"><option value="">todas</option></select></span>' +
+            '</div>' +
+            '<div id="cc-op-vilas" style="height:300px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px;margin-bottom:4px"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d">Cada aldeia marcada já entra com 1 onda. Use <b>+ onda</b> pra ela mandar mais de um comando.</div>' +
           '</div>' +
-          '<div id="cc-op-vilas" style="height:220px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px;margin-bottom:6px"></div>' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">' +
-            '<span style="font-size:9px;color:#6f6153">Ondas <span style="color:#8a7d6d">(ordem de chegada)</span></span>' +
-            '<span style="font-size:9px"><a id="cc-op-tudo-geral" style="cursor:pointer;color:#2e7d3a">🧺 tudo (todas as ondas)</a> · ' +
-              '<a id="cc-op-limpar" style="cursor:pointer;color:#c0483a">limpar ondas</a></span>' +
+          // ---- Etapa 3: as tropas ----
+          '<div id="cc-op-e3" style="display:none">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">' +
+              '<span style="font-size:9px;color:#6f6153">Ondas <span style="color:#8a7d6d">(ordem de chegada)</span></span>' +
+              '<span style="font-size:9px"><a id="cc-op-tudo-geral" style="cursor:pointer;color:#2e7d3a">🧺 tudo (todas as ondas)</a> · ' +
+                '<a id="cc-op-limpar" style="cursor:pointer;color:#c0483a">limpar ondas</a></span>' +
+            '</div>' +
+            // Por coluna de unidade — igual ao "apoio em massa" do próprio jogo: marcar preenche
+            // aquela tropa com o máximo disponível em TODAS as ondas de uma vez.
+            '<div id="cc-op-tudo-cols" style="display:flex;flex-wrap:wrap;gap:8px;font-size:9px;color:#6f6153;padding:3px 5px;background:#fbf7ee;border:1px solid #ece4d8;border-radius:6px 6px 0 0"></div>' +
+            '<div id="cc-op-ondas" style="height:380px;min-height:100px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
+            '<div id="cc-op-resumo" style="font-size:10px;color:#6f6153;margin-top:4px"></div>' +
           '</div>' +
-          // Por coluna de unidade — igual ao "apoio em massa" do próprio jogo: marcar preenche
-          // aquela tropa com o máximo disponível em TODAS as ondas de uma vez.
-          '<div id="cc-op-tudo-cols" style="display:flex;flex-wrap:wrap;gap:8px;font-size:9px;color:#6f6153;padding:3px 5px;background:#fbf7ee;border:1px solid #ece4d8;border-radius:6px 6px 0 0"></div>' +
-          '<div id="cc-op-ondas" style="height:380px;min-height:100px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:0 0 6px 6px"></div>' +
-          '<div id="cc-op-resumo" style="font-size:10px;color:#6f6153;margin-top:4px"></div>' +
+          '<div id="cc-op-nav" style="display:flex;align-items:center;gap:6px;margin-top:8px"></div>' +
         '</div>' +
           // Apoio em massa: aparece só quando a aba 🚚 está ativa. Usa as origens marcadas abaixo.
           '<div id="cc-massa-cfg" style="display:none">' +

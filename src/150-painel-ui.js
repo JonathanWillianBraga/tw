@@ -664,7 +664,7 @@
         modLog('research') +
       '</div>' +
       '<div id="twmgr-tab-noble" style="display:none">' +
-        hint('👑 Cola as coordenadas, define o limite de viagem e ele monta o plano de conquista e <b>dispara sozinho</b>. Serve os alvos <b>na ordem da lista</b>: com 6 nobres e 2 alvos, 4 no primeiro e 2 no segundo. Envia <b>parcial</b> se for o que há, e <b>nunca cunha</b> — só forma nobre onde a moeda já está guardada.') +
+        hint('👑 Cola as coordenadas e ele nobla <b>uma aldeia por vez</b>, na ordem da fila (FIFO — use ▲▼ pra mudar). A da vez tem <b>prioridade absoluta</b> sobre nobre parado, recrutamento e cunhagem; a próxima só entra quando a <b>lealdade prevista</b> da primeira chega a zero, ou seja, quando o que já está no ar garante a queda. Ela só <b>sai</b> da fila na conquista efetiva. Premissa: os alvos estão <b>vazios</b>.') +
         cardsDiv('noble') +
         '<div class="twmgr-subtabs">' +
           subBtn('alvos', '👑', 'Alvos', 'noble') +
@@ -706,10 +706,11 @@
           '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Só tropa de campo na escolta: explorador não briga, e aríete e catapulta servem pra muralha, não pra proteger nobre. Como o nobre é a unidade <b>mais lenta do jogo</b>, a escolta não atrasa a chegada.</div>') +
         '<div class="twmgr-cols">' +
           '<div class="twmgr-card2"><h4>⚖ Lealdade</h4>' +
-            '<div class="twmgr-fld"><span title="Quanto um nobre derruba. No jogo varia de 20 a 35 — um valor MAIOR arrisca mandar de menos; menor manda de sobra">Queda por ataque</span><input id="twmgr-nb-lpa" class="twmgr-inp" type="number" min="1" max="100" value="28"></div>' +
+            '<div class="twmgr-fld"><span title="Quanto um nobre derruba. No jogo varia de 20 a 35 — um valor MAIOR arrisca mandar de menos; menor manda de sobra">Queda por ataque</span><input id="twmgr-nb-lpa" class="twmgr-inp" type="number" min="1" max="100" value="25"></div>' +
             '<div class="twmgr-fld"><span title="Quanto a lealdade sobe por hora sozinha">Regenera por hora</span><input id="twmgr-nb-regen" class="twmgr-inp" type="number" min="0" max="10" step="0.5" value="1"></div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">O número de nobres sai da <b>lealdade atual</b>, não do modelo: lealdade 19 pede <b>1</b>, não 4. Comando já a caminho <b>conta como se tivesse pousado</b> — com 30 de lealdade e 1 voando, sai mais 1; com 27 e 1 voando, não sai nada.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A lealdade lida <b>envelhece</b>: a tela mostra o valor projetado pra agora com a regeneração. Sem relatório de nobre (lealdade <b>?</b>) ele usa o número do modelo.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">O padrão é <b>25</b>, não a média 28: no jogo a queda varia de 20 a 35, e com sorte ruim o 28 manda <b>de menos</b> — o alvo sobrevive de raspão. Errar pro lado de um nobre a mais é o erro barato.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A <b>lealdade prevista</b> é a que o alvo terá <b>na hora em que o próximo nobre chegar</b>: parte do último relatório, soma a regeneração e desconta os ataques que já estão no ar — cada um no seu horário de chegada, porque a lealdade <b>sobe entre uma leva e outra</b>. Somar tudo de uma vez daria um número otimista.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Sem relatório de nobre não há lealdade (<b>?</b>) — é o único lugar do jogo onde ela aparece. Aí ele usa o número do modelo.</div>' +
           '</div>' +
           '<div class="twmgr-card2"><h4>⏱ Ciclo</h4>' +
             '<div class="twmgr-fld"><span>Refazer o plano a cada (min)</span><input id="twmgr-nb-int" class="twmgr-inp" type="number" min="1" value="15"></div>' +
@@ -734,10 +735,10 @@
           sec('Cunhar moeda de ouro',
             '<div class="twmgr-fld"><span title="Converte recurso em moeda — sem volta">Cunhar quando faltar nobre</span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-cunhar" type="checkbox"><i></i></label></div>' +
-            '<div class="twmgr-fld"><span title="Para de cunhar numa aldeia quando ela já fecha esse tanto de nobre">Cunhar até fechar NT de</span><input id="twmgr-nb-cunhar-ate" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
+            '<div class="twmgr-fld"><span title="Teto máximo. O teto real é o menor entre este número e o que a aldeia da vez ainda precisa">Cunhar até fechar NT de</span><input id="twmgr-nb-cunhar-ate" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
             '<div class="twmgr-fld"><span title="Trava de gasto: quantas aldeias podem cunhar num mesmo ciclo">Cunhar em até (aldeias/ciclo)</span><input id="twmgr-nb-cunhar-n" class="twmgr-inp" type="number" min="1" max="12" value="3"></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px"><b>Desligado por padrão</b>, e de propósito: cunhar converte recurso em moeda <b>sem volta</b>, num alvo que pode nem sair.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Ligado, ele cunha nas aldeias mais perto do alvo e <b>para</b> quando a aldeia já fecha o NT — contando o que ela tem <b>mais o que está na fila</b> da Academia. Sem esse teto ela cunharia pra sempre.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Ligado, ele cunha nas aldeias mais perto do alvo e <b>para</b> no menor entre o NT acima e <b>o que a aldeia da vez ainda precisa</b> — contando o que a origem tem <b>mais o que está na fila</b> da Academia. Se falta 1 nobre, cunha pra 1: moeda não tem volta.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">O modo <b>Cunhar</b> do Mercado continua existindo e é independente deste — aquele cunha sempre, este só quando falta nobre pro alvo.</div>') +
         '</div>' +
         '<div id="twmgr-sub-pos" style="display:none">' +
@@ -1074,7 +1075,7 @@
     document.getElementById('twmgr-nb-rel').checked = config.noble.lerRelatorios !== false;
     document.getElementById('twmgr-nb-auto').checked = config.noble.autoEnviar !== false;
     document.getElementById('twmgr-nb-automax').value = config.noble.autoMax != null ? config.noble.autoMax : 8;
-    document.getElementById('twmgr-nb-lpa').value = config.noble.lealdadePorAtk != null ? config.noble.lealdadePorAtk : 28;
+    document.getElementById('twmgr-nb-lpa').value = config.noble.lealdadePorAtk != null ? config.noble.lealdadePorAtk : 25;
     document.getElementById('twmgr-nb-regen').value = config.noble.lealdadeRegen != null ? config.noble.lealdadeRegen : 1;
     document.getElementById('twmgr-nb-cunhar').checked = !!config.noble.cunhar;
     document.getElementById('twmgr-nb-cunhar-ate').value = config.noble.cunharAte != null ? config.noble.cunharAte : 4;

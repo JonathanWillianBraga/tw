@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.64.1
+// @version      11.65.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.64.1';
+  const VERSION = '11.65.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -258,7 +258,9 @@
     autoEnviar: true, autoMax: 8,
     // Quanto um nobre derruba de lealdade (no jogo varia 20-35) e quanto ela regenera por
     // hora. Os dois viram "quantos nobres ainda faltam" — ver noblePrecisaDe.
-    lealdadePorAtk: 28, lealdadeRegen: 1,
+    // 25 e nao 28: 28 é a média, e com sorte ruim (20, 21) a conta manda de MENOS e o alvo
+    // sobrevive de raspão. 25 erra pro lado de mandar um nobre a mais, que é o erro barato.
+    lealdadePorAtk: 25, lealdadeRegen: 1,
     // Cunhar DESLIGADO por padrão: gasta recurso sem volta. Quando ligado tem alvo claro —
     // cunha até alguma aldeia perto conseguir fechar um NT de `cunharAte` nobres.
     cunhar: false, cunharAte: 4, cunharMaxAldeias: 3,
@@ -648,7 +650,14 @@
 
     if (c.noble.lerRelatorios == null) c.noble.lerRelatorios = true;
     if (c.noble.autoEnviar == null) c.noble.autoEnviar = true;
-    c.noble.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(c.noble.lealdadePorAtk, 10) || 28));
+    // O padrão virou 25 (era 28). Só trocar o default não bastava: quem já usava o módulo tem
+    // 28 GRAVADO no config, e o valor salvo ganha do default — ficaria com o número antigo sem
+    // perceber. A migração roda uma vez e só mexe em quem estava exatamente no default velho.
+    if (!c.noble.migLpa25) {
+      if (parseInt(c.noble.lealdadePorAtk, 10) === 28) c.noble.lealdadePorAtk = 25;
+      c.noble.migLpa25 = 1;
+    }
+    c.noble.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(c.noble.lealdadePorAtk, 10) || 25));
     if (c.noble.lealdadeRegen == null) c.noble.lealdadeRegen = 1;
     c.noble.lealdadeRegen = Math.max(0, Math.min(10, parseFloat(c.noble.lealdadeRegen) || 0));
     if (!c.noble.emVoo || typeof c.noble.emVoo !== 'object') c.noble.emVoo = {};

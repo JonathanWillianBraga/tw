@@ -2490,8 +2490,12 @@
           tr.innerHTML =
             '<td style="white-space:nowrap">' +
               '<span class="quickedit-content">' +
-                '<span class="icon-container"><span class="cc-ov-hover" style="cursor:default;display:inline-block;font-size:13px;line-height:16px;vertical-align:-2px">🕒</span></span>' +
-                '<span class="quickedit-label">' + esc(rot) + ' agendado → ' + esc(c.x + '|' + c.y) + (nome ? ' ' + esc(nome) : '') + '</span>' +
+                '<span class="icon-container"><span class="cc-ov-hover" style="cursor:default;font-size:12px">🕒</span></span>' +
+                // O negrito+marrom (#603000) do jogo só é aplicado quando o .quickedit-label está
+                // dentro de .quickedit-out + <a> (confirmado ao vivo, comparando com/sem o
+                // wrapper) — como não existe link de verdade pra apontar, replica a cor/peso
+                // direto aqui em vez de montar um <a> morto só pra herdar o estilo.
+                '<span class="quickedit-label" style="color:#603000;font-weight:700">' + esc(rot) + ' agendado → ' + esc(c.x + '|' + c.y) + (nome ? ' ' + esc(nome) : '') + '</span>' +
               '</span>' +
             '</td>' +
             '<td>' + ccDataRel(c.arriveAt) + '</td>' +

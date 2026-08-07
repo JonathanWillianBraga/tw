@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.64.0
+// @version      11.64.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.64.0';
+  const VERSION = '11.64.1';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -13018,8 +13018,12 @@
           tr.innerHTML =
             '<td style="white-space:nowrap">' +
               '<span class="quickedit-content">' +
-                '<span class="icon-container"><span class="cc-ov-hover" style="cursor:default;display:inline-block;font-size:13px;line-height:16px;vertical-align:-2px">🕒</span></span>' +
-                '<span class="quickedit-label">' + esc(rot) + ' agendado → ' + esc(c.x + '|' + c.y) + (nome ? ' ' + esc(nome) : '') + '</span>' +
+                '<span class="icon-container"><span class="cc-ov-hover" style="cursor:default;font-size:12px">🕒</span></span>' +
+                // O negrito+marrom (#603000) do jogo só é aplicado quando o .quickedit-label está
+                // dentro de .quickedit-out + <a> (confirmado ao vivo, comparando com/sem o
+                // wrapper) — como não existe link de verdade pra apontar, replica a cor/peso
+                // direto aqui em vez de montar um <a> morto só pra herdar o estilo.
+                '<span class="quickedit-label" style="color:#603000;font-weight:700">' + esc(rot) + ' agendado → ' + esc(c.x + '|' + c.y) + (nome ? ' ' + esc(nome) : '') + '</span>' +
               '</span>' +
             '</td>' +
             '<td>' + ccDataRel(c.arriveAt) + '</td>' +

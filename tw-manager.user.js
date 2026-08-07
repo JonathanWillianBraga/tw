@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.75.0
+// @version      11.76.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.75.0';
+  const VERSION = '11.76.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -13223,19 +13223,104 @@
       c.parcial = (c.parcial == null) ? true : (c.parcial === true ? false : null);
       save(); ccRender();
     }
+
+    // ---- Conferência antecipada de tropa ----
+    // O "confirmar" do servidor só roda 60s antes da saída; descobrir ali que falta tropa não
+    // deixa tempo de trocar nada. Isto confere a qualquer momento, com os dados já lidos das
+    // aldeias. Detalhe que engana quem confere comando a comando: comandos da MESMA origem
+    // disputam o MESMO estoque, então a conta tem que ser pela SOMA dos pendentes daquela aldeia.
+    let _ccPontos = null;
+    function ccPontosCarregar() {
+      if (_ccPontos) return;
+      try { getVillagePoints().then((p) => { _ccPontos = p; }).catch(() => {}); } catch (e) {}
+    }
+    function ccRotU(us) {
+      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+      return us.map((u) => rot[u] || u).join(', ');
+    }
+    function ccFilaConferir() {
+      const out = {};
+      if (!CCVILAS.length) return out;   // tropas ainda não lidas: não inventa alarme falso
+      const porVid = {};
+      cmdPendentes().forEach((c) => { (porVid[String(c.origin)] = porVid[String(c.origin)] || []).push(c); });
+      Object.keys(porVid).forEach((vid) => {
+        const v = CCVILAS.find((z) => String(z.vid) === String(vid));
+        if (!v) return;
+        const casa = v.casa || {}, minhas = v.minhas || {};
+        const soma = {};
+        porVid[vid].forEach((c) => Object.keys(c.amounts || {}).forEach((u) => {
+          soma[u] = (soma[u] || 0) + (c.amounts[u] || 0);
+        }));
+        // "minhas" inclui o que está fora/voltando; "casa" é o que dá pra mandar agora. Passar de
+        // "minhas" nunca vai caber (nem esperando); passar só de "casa" depende de tropa voltar.
+        const semTotal = [], semCasa = [];
+        Object.keys(soma).forEach((u) => {
+          if (soma[u] > (minhas[u] || 0)) semTotal.push(u);
+          else if (soma[u] > (casa[u] || 0)) semCasa.push(u);
+        });
+        porVid[vid].forEach((c) => {
+          let piso = null;
+          if (_ccPontos && c.tipo !== 'support') {
+            const soSpy = Object.keys(c.amounts || {}).every((u) => u === 'spy');
+            const pts = parseInt(_ccPontos[String(c.origin)], 10) || 0;
+            const minPop = pts > 0 ? Math.ceil((FAKE_LIMIT_PCT / 100) * pts) : 0;
+            const falta = minPop - ccFakePopOf(c.amounts);
+            if (!soSpy && falta > 0) {
+              const precisa = Math.ceil(falta / (FAKE_POP.spy || 2));
+              const sobraSpy = (casa.spy || 0) - (soma.spy || 0);
+              piso = (sobraSpy >= precisa)
+                ? { nivel: 'aviso', msg: 'abaixo do piso de população — completa sozinho com ' + precisa + ' explorador(es)' }
+                : { nivel: 'erro', msg: 'abaixo do piso de população e sem explorador pra completar (faltam ' + falta + ' hab.)' };
+            }
+          }
+          if (semTotal.length) out[c.id] = { nivel: 'erro', msg: 'tropa insuficiente na origem: ' + ccRotU(semTotal) };
+          else if (piso && piso.nivel === 'erro') out[c.id] = piso;
+          else if (semCasa.length) out[c.id] = { nivel: 'aviso', msg: 'depende de tropa voltar: ' + ccRotU(semCasa) };
+          else if (piso) out[c.id] = piso;
+        });
+      });
+      return out;
+    }
+    // ---- Editar a tropa de um comando já na fila ----
+    let _ccFilaEdit = null;
+    function ccFilaEditar(id) { _ccFilaEdit = (_ccFilaEdit === id) ? null : id; ccRender(); }
+    // Mexer na tropa de um comando JÁ preparado invalida o formulário que o servidor devolveu
+    // (c.prep guarda o corpo exato do POST, com as quantidades antigas). Por isso ele volta pra
+    // "novo" e é re-confirmado — senão o envio sairia com a composição velha, sem aviso nenhum.
+    function ccFilaSetTropa(id, u, n) {
+      const c = cmdFila().find((z) => z.id === id); if (!c) return;
+      if (c.state !== 'novo' && c.state !== 'preparado') return;
+      c.amounts = c.amounts || {};
+      if (n > 0) c.amounts[u] = n; else delete c.amounts[u];
+      if (c.state === 'preparado') {
+        c.state = 'novo'; c.prep = null; c.durMs = null; c.sendAt = 0; c.fireAt = 0;
+        pushLog('Central: ' + c.x + '|' + c.y + ' — tropa alterada, vai reconfirmar no servidor.', '', 'cmd');
+      }
+      save();
+    }
     function ccRender() {
       // Fila dividida: "a enviar" (novo/preparado/armado) e "enviados/concluídos" (o resto).
       const bEnvio = document.getElementById('cc-fila-envio');
       const bEnv = document.getElementById('cc-fila-enviados');
       if (!bEnvio || !bEnv) return;
+      // ccTick redesenha a Fila 1x/s. Se o foco está numa caixa daqui, redesenhar apagaria o
+      // número sendo digitado (e o foco junto) — então segura o redesenho enquanto se edita.
+      const ae = document.activeElement;
+      if (ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && (bEnvio.contains(ae) || bEnv.contains(ae))) return;
       const f = cmdFila();
       const ord = document.getElementById('cc-fila-ordem');
       if (ord && ord.value !== config.cmd.filaOrdem) ord.value = config.cmd.filaOrdem;
-      // Contador no cabeçalho, pra saber que há comandos mesmo com a seção recolhida.
+      const conf = ccFilaConferir();
+      // Contador no cabeçalho, pra saber que há comandos mesmo com a seção recolhida — e, agora
+      // que a Fila abre recolhida, é aqui que o alerta de tropa tem que aparecer.
       const cn = document.getElementById('cc-fila-n');
       if (cn) {
         const pend = f.filter((c) => c.state === 'novo' || c.state === 'preparado' || c.state === 'armado').length;
-        cn.textContent = f.length ? ('(' + pend + ' pendente(s) de ' + f.length + ')') : '';
+        const nErro = Object.keys(conf).filter((k) => conf[k].nivel === 'erro').length;
+        const nAviso = Object.keys(conf).length - nErro;
+        cn.innerHTML = (f.length ? ('(' + pend + ' pendente(s) de ' + f.length + ')') : '') +
+          (nErro ? ' <b style="color:#c0483a">⛔ ' + nErro + ' sem tropa</b>' : '') +
+          (nAviso ? ' <b style="color:#a2643a">⚠ ' + nAviso + '</b>' : '');
       }
       const agora = serverNow();
       const passo = Math.max(1, config.cmd.passoMs || 50);
@@ -13252,6 +13337,9 @@
         const orgNome = vo && vo.nome ? vo.nome : '';
         const alvoNome = ccNomeAlvo(c.x + '|' + c.y);
         const rot = ccRotTipo(c);
+        // 'armado' já está no spin de disparo — mexer ali sairia com a composição velha ou
+        // atrasaria o tiro. Antes disso dá pra editar à vontade.
+        const podeEditarTropa = (c.state === 'novo' || c.state === 'preparado');
         // Horário de saída: já confirmado pelo servidor (c.sendAt) ou, antes do preparo,
         // a estimativa local. A estimativa aparece com "~" pra não passar por certeza.
         let saiTxt = '—', saiCor = '#8a7d6d', saiMs = null;
@@ -13276,9 +13364,17 @@
           '<span style="text-align:right;color:' + (dev ? erroCor(Math.abs(c.desvioMs)) : '#8a7d6d') + '">' + (dev || (falta > 0 ? fmt(falta) : '—')) + '</span>' +
           (c.state === 'novo' || c.state === 'preparado' || c.state === 'armado'
             ? '<span data-cc-ab="' + c.id + '" style="cursor:pointer;color:#c0483a" title="abortar">✕</span>' : '<span></span>') +
+          // Aviso da conferência antecipada: aparece MUITO antes do preparo, dando tempo de
+          // trocar a tropa em vez de descobrir o problema 60s antes da saída.
+          (conf[c.id] ? '<span style="grid-column:1/-1;font-size:9px;margin:2px 0 0 46px;color:' +
+            (conf[c.id].nivel === 'erro' ? '#c0483a' : '#a2643a') + '">' +
+            (conf[c.id].nivel === 'erro' ? '⛔ ' : '⚠ ') + esc(conf[c.id].msg) + '</span>' : '') +
           // Tropas que saem neste comando — largura total, pra não espremer a grade.
           '<span style="grid-column:1/-1;font-size:9px;color:#8a7d6d;margin:1px 0 0 46px;line-height:1.6">' +
             (ccTropaResumo(c.amounts) || '<span style="color:#584526">— sem tropa —</span>') +
+            (podeEditarTropa ? ' &nbsp;<a data-edit-tropa="' + c.id + '" style="cursor:pointer;color:#a2643a;text-decoration:none" ' +
+              'title="mexer na tropa deste comando (ele reconfirma no servidor se já estava preparado)">' +
+              (_ccFilaEdit === c.id ? '▾ fechar tropa' : '✎ tropa') + '</a>' : '') +
             // Só antes do preparo: depois que confirmou no servidor (c.prep já montado), mudar
             // isto aqui não re-executa o confirmar, então não teria efeito nenhum no que sai.
             (c.state === 'novo' ? ' &nbsp;<a data-parcial="' + c.id + '" style="cursor:pointer;color:' +
@@ -13287,6 +13383,19 @@
               esc(c.parcial == null ? ('geral (' + (ccParcialEfetivo(c) ? 'parcial' : 'exato') + ')') : (c.parcial ? 'forçado parcial' : 'forçado exato')) +
               '</a>' : '') +
           '</span>' +
+          // Grade pra mexer na tropa sem desarmar o comando. O número embaixo é o que a origem
+          // tem EM CASA agora — é o teto real pra quem sai já, já.
+          (_ccFilaEdit === c.id ? '<span style="grid-column:1/-1;display:flex;flex-wrap:wrap;gap:3px;margin:4px 0 2px 46px">' +
+            ccUnidadesUI().map(([u, rotu]) => {
+              const vo2 = CCVILAS.find((z) => String(z.vid) === String(c.origin));
+              const emCasa = ((vo2 && vo2.casa) || {})[u] || 0;
+              const tot = ((vo2 && vo2.minhas) || {})[u] || 0;
+              const meu = (c.amounts && c.amounts[u]) || 0;
+              return '<label class="twmgr-ucell' + ((tot > 0 || meu > 0) ? '' : ' vazia') + '" title="' + esc(rotu) +
+                ' — ' + fmtN(emCasa) + ' em casa, ' + fmtN(tot) + ' suas no total">' + unitIcon(u, rotu) +
+                '<input class="cc-fila-amt twmgr-uinp" data-id="' + c.id + '" data-u="' + u + '" type="number" min="0" placeholder="0" value="' + (meu || '') + '">' +
+                '<span class="twmgr-uqt">' + fmtN(emCasa) + '</span></label>';
+            }).join('') + '</span>' : '') +
           // Ajuste fino: mexe na CHEGADA e o horário de saída se recalcula sozinho.
           // Some depois que o comando entra no disparo, quando mudar já não é seguro.
           (ccEditavel(c)
@@ -13321,6 +13430,11 @@
           ccTrocar(e.getAttribute('data-sw'), parseInt(e.getAttribute('data-dir'), 10)));
         box.querySelectorAll('[data-cc-ab]').forEach((el) => el.onclick = () => cmdAbortar(el.getAttribute('data-cc-ab')));
         box.querySelectorAll('[data-parcial]').forEach((el) => el.onclick = () => cmdCicloParcial(el.getAttribute('data-parcial')));
+        box.querySelectorAll('[data-edit-tropa]').forEach((el) => el.onclick = () => ccFilaEditar(el.getAttribute('data-edit-tropa')));
+        box.querySelectorAll('.cc-fila-amt').forEach((el) => el.onchange = () => {
+          ccFilaSetTropa(el.getAttribute('data-id'), el.getAttribute('data-u'), parseInt(el.value, 10) || 0);
+          ccRender();   // o "sai" muda junto (a unidade mais lenta pode ter mudado)
+        });
       });
     }
 
@@ -14041,6 +14155,7 @@
         ccOpCfg().grupo = e.target.value; save(); ccOpAplicarFiltroGrupo();
       });
       ccOpCarregarGrupos();
+      ccPontosCarregar();   // pontos das aldeias: alimentam o piso de população na conferência
       document.getElementById('cc-op-coord').addEventListener('change', (e) => {
         const a = ccOpAtivo(); if (!a) return;
         const p = ccCoordParse(e.target.value);

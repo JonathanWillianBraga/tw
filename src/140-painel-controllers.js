@@ -55,6 +55,7 @@
     ring('twmgr-sbtab-farm', config.farm.running);
     ring('twmgr-sbtab-wall', muroAtivo);
     ring('twmgr-sbtab-map', mapaAtivo);
+    MARKET_MODES.forEach((mkKey) => { ring('twmgr-sbtab-' + mkKey, config.market.modes[mkKey].running); });
     ring('twmgr-btab-scav', config.scav.running);
     ring('twmgr-btab-farm', config.farm.running || muroAtivo || mapaAtivo);
     ring('twmgr-btab-recruit', config.recruit.running);

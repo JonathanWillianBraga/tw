@@ -2273,12 +2273,16 @@
         const rot = ccRotTipo(c);
         // Horário de saída: já confirmado pelo servidor (c.sendAt) ou, antes do preparo,
         // a estimativa local. A estimativa aparece com "~" pra não passar por certeza.
-        let saiTxt = '—', saiCor = '#8a7d6d';
-        if (c.sendAt) { saiTxt = srvClockMs(c.sendAt); saiCor = '#2e7d3a'; }
+        let saiTxt = '—', saiCor = '#8a7d6d', saiMs = null;
+        if (c.sendAt) { saiMs = c.sendAt; saiTxt = srvClockMs(c.sendAt); saiCor = '#2e7d3a'; }
         else {
           const est = ccEstimaDeComando(c);
-          if (est != null && c.arriveAt) { saiTxt = '~' + srvClockMs(c.arriveAt - est); saiCor = '#6f6153'; }
+          if (est != null && c.arriveAt) { saiMs = c.arriveAt - est; saiTxt = '~' + srvClockMs(saiMs); saiCor = '#6f6153'; }
         }
+        // Dia em segunda linha (só quando não é hoje) — mesma solução das colunas de/para, que já
+        // quebram em duas linhas quando têm nome além da coordenada.
+        const diaSai = ccDiaRel(saiMs), diaCheg = ccDiaRel(c.arriveAt);
+        const selo = (t) => '<br><span style="color:#a8564a;font-size:9px">' + t + '</span>';
         return '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;align-items:center;padding:3px 5px;border-bottom:1px solid rgba(0,0,0,.07);font-size:10px">' +
           '<span style="color:' + (c.tipo === 'support' ? '#1f6fb2' : '#b5602f') + '">' + rot + (c.ondas ? ' ' + c.onda + '/' + c.ondas : '') + '</span>' +
           '<span style="color:#8a7d6d;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(orgNome || String(org)) + '">' +
@@ -2286,8 +2290,8 @@
           '<span style="color:#a2643a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(alvoNome || (c.x + '|' + c.y)) + '">' +
             esc(c.x + '|' + c.y) + (alvoNome ? '<br><span style="color:#8a7d6d">' + esc(alvoNome) + '</span>' : '') + '</span>' +
           '<span style="color:' + (corDe[c.state] || '#6f6153') + '">' + esc(c.state) + (c.erro ? ' · ' + esc(c.erro.slice(0, 40)) : '') + '</span>' +
-          '<span style="color:' + saiCor + '" title="horário de saída">' + saiTxt + '</span>' +
-          '<span style="color:#6f6153">' + (c.arriveAt ? srvClockMs(c.arriveAt) : '—') + '</span>' +
+          '<span style="color:' + saiCor + '" title="horário de saída">' + saiTxt + (diaSai ? selo(diaSai) : '') + '</span>' +
+          '<span style="color:#6f6153">' + (c.arriveAt ? srvClockMs(c.arriveAt) + (diaCheg ? selo(diaCheg) : '') : '—') + '</span>' +
           '<span style="text-align:right;color:' + (dev ? erroCor(Math.abs(c.desvioMs)) : '#8a7d6d') + '">' + (dev || (falta > 0 ? fmt(falta) : '—')) + '</span>' +
           (c.state === 'novo' || c.state === 'preparado' || c.state === 'armado'
             ? '<span data-cc-ab="' + c.id + '" style="cursor:pointer;color:#c0483a" title="abortar">✕</span>' : '<span></span>') +
@@ -2441,6 +2445,21 @@
       return prefixo + ' às ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) +
         ':<span class="grey small">' + p(d.getMilliseconds(), 3) + '</span>';
     }
+    // Só o DIA de um horário, e vazio quando é hoje. As colunas "sai"/"chegada" da Fila mostram
+    // apenas o relógio (o milésimo importa, então o horário tem que caber) — num comando marcado
+    // pra daqui dois dias isso vira "08:05:00.500" sem dizer de QUE dia, que é justamente quando
+    // saber o dia mais importa. Vazio no caso comum (hoje) pra não poluir a coluna estreita.
+    function ccDiaRel(ms) {
+      if (!ms) return '';
+      const d = new Date(ms - wallToServerOffset());
+      const hoje = new Date(serverNow() - wallToServerOffset());
+      const dias = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) -
+        new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate())) / 86400000);
+      if (dias === 0) return '';
+      if (dias === 1) return 'amanhã';
+      const p = (n) => String(n).padStart(2, '0');
+      return p(d.getDate()) + '/' + p(d.getMonth() + 1) + (dias > 1 ? ' +' + dias + 'd' : '');
+    }
     // Janelinha flutuante própria (troca o title/tooltip padrão do navegador, que só mostra
     // texto puro sem formatação) — mostra tropa com ícone+quantidade (mesmo bloco usado na
     // Fila) e o horário de saída, seguindo o mouse.
@@ -2526,7 +2545,8 @@
         tr.style.background = 'rgba(154,111,14,.12)';
         const tipHtml = '<div style="font-weight:600;margin-bottom:3px;color:#8b5426">' + esc(rot) + ' agendado</div>' +
           '<div>' + (ccTropaResumo(c.amounts) || '<span style="color:#a8564a">sem tropa</span>') + '</div>' +
-          '<div style="color:#6f6153;margin-top:3px">saída: <b>' + (saiEm ? srvClockMs(saiEm) : '—') + '</b></div>';
+          '<div style="color:#6f6153;margin-top:3px">saída: <b>' + (saiEm ? srvClockMs(saiEm) : '—') +
+            (saiEm && ccDiaRel(saiEm) ? ' <span style="color:#a8564a">(' + ccDiaRel(saiEm) + ')</span>' : '') + '</b></div>';
         // Mesma estrutura de classes da linha REAL (quickedit-content/icon-container/quickedit-
         // label) — herda o visual do jogo automaticamente. Só o ícone (🕒 no lugar do ícone de
         // unidade) e o fundo levemente destacado diferenciam "isto ainda não foi enviado".
@@ -2621,8 +2641,8 @@
           return '<tr>' +
             '<td>' + esc(rot) + '</td>' +
             '<td>' + esc(origemTxt) + '</td>' +
-            '<td>' + srvClockMs(c.arriveAt) + '</td>' +
-            '<td>' + (saiEm ? 'sai ' + srvClockMs(saiEm) : '—') +
+            '<td>' + srvClockMs(c.arriveAt) + (ccDiaRel(c.arriveAt) ? ' <span style="color:#a8564a;font-size:10px">' + ccDiaRel(c.arriveAt) + '</span>' : '') + '</td>' +
+            '<td>' + (saiEm ? 'sai ' + srvClockMs(saiEm) + (ccDiaRel(saiEm) ? ' <span style="color:#a8564a;font-size:10px">' + ccDiaRel(saiEm) + '</span>' : '') : '—') +
               ' <a href="#" class="cc-dest-x" data-id="' + c.id + '" title="cancelar comando agendado" style="color:#c0483a;font-weight:bold;margin-left:8px;text-decoration:none">✕</a></td>' +
           '</tr>';
         }).join('');

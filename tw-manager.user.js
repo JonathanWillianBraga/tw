@@ -169,6 +169,7 @@
     autoUnlock: false,
     unlockAte: 4,          // desbloqueia até esta opção (1 Pequena … 4 Extrema)
     unlockPuxar: true,     // faltando recurso, puxa de outras aldeias imediatamente
+    emVoo: {},             // { [vid]: [{r, amt, chega}] } — o que já foi puxado e não pousou
     unlockReserva: 5000,   // a doadora nunca fica abaixo disto em cada recurso
     unlockMaxOrigens: 5,   // quantas aldeias no máximo contribuem por desbloqueio
     faltouRecurso: {},     // vid -> { nome, opcao, falta:{wood,stone,iron}, at } — o que travou
@@ -409,6 +410,7 @@
     if (typeof c.scav.autoUnlock !== 'boolean') c.scav.autoUnlock = false;
     if (typeof c.scav.unlockAte !== 'number' || c.scav.unlockAte < 1 || c.scav.unlockAte > 4) c.scav.unlockAte = 4;
     if (typeof c.scav.unlockPuxar !== 'boolean') c.scav.unlockPuxar = true;
+    if (!c.scav.emVoo || typeof c.scav.emVoo !== 'object') c.scav.emVoo = {};
     if (typeof c.scav.unlockReserva !== 'number' || c.scav.unlockReserva < 0) c.scav.unlockReserva = 5000;
     if (typeof c.scav.unlockMaxOrigens !== 'number' || c.scav.unlockMaxOrigens < 1) c.scav.unlockMaxOrigens = 5;
     if (!c.scav.faltouRecurso) c.scav.faltouRecurso = {};
@@ -562,9 +564,11 @@
     // Demolição DESLIGADA por padrão, e explicitamente. Não devolve recurso e não tem desfazer:
     // tem que ser escolha consciente, nunca herdada de um `undefined` que por acaso é falso.
     if (c.build.demolir == null) c.build.demolir = false;
-    // `dem` por item do modelo, também explicito. Modelo importado de fora vem sem o campo.
+    // O `dem` por item do modelo foi aposentado: o interruptor "Demolir excedente" sozinho
+    // autoriza agora, e nenhum item precisa ser marcado. Limpa o campo pra ele não ficar
+    // guardado dando a impressão de que ainda decide alguma coisa.
     Object.keys(c.build.templates || {}).forEach((id) => {
-      ((c.build.templates[id] || {}).plan || []).forEach((it) => { if (it.dem == null) it.dem = false; });
+      ((c.build.templates[id] || {}).plan || []).forEach((it) => { if (it.dem != null) delete it.dem; });
     });
 
     if (c.build.grupoTpl == null) c.build.grupoTpl = '';
@@ -1478,8 +1482,15 @@
       const total = RES3.reduce((s, k) => s + envio[k], 0);
       if (total <= 0) continue;
       try {
-        await sendMarketResources(c.v.vid, dCoord, envio);
+        const dur = await sendMarketResources(c.v.vid, dCoord, envio);
         RES3.forEach((k) => { restante[k] = Math.max(0, restante[k] - envio[k]); c.v.res[k] -= envio[k]; });
+        // REGISTRA o que está voando. Sem isto o ciclo seguinte recalcula a mesma falta (o
+        // transporte ainda não pousou) e manda tudo de novo — era o que enchia a aldeia de
+        // caminhão. Some sozinho na hora da chegada.
+        config.scav.emVoo = config.scav.emVoo || {};
+        const fila = config.scav.emVoo[destino.vid] = config.scav.emVoo[destino.vid] || [];
+        const chega = Date.now() + ((dur && dur > 0 ? dur : 3600) * 1000);
+        RES3.forEach((k) => { if (envio[k] > 0) fila.push({ r: k, amt: envio[k], chega: chega }); });
         usadas++;
         pushLog('🚚 ' + c.v.name + ' → ' + destino.name + ': ' + RES3.filter((k) => envio[k]).map((k) => envio[k] + ' ' + k).join(', ') +
           ' (' + Math.round(c.dist * 10) / 10 + ' campos)', 'ok', 'scav');
@@ -1488,6 +1499,18 @@
     }
     const aindaFalta = RES3.reduce((s, k) => s + restante[k], 0);
     return { usadas: usadas, aindaFalta: aindaFalta, restante: restante };
+  }
+
+  // O que já está a caminho desta aldeia por conta do desbloqueio, por recurso. Poda o que já
+  // pousou na mesma passada, então não precisa de limpeza em outro lugar.
+  function scavPuxadoEmVoo(vid) {
+    const agora = Date.now();
+    config.scav.emVoo = config.scav.emVoo || {};
+    const lista = (config.scav.emVoo[vid] || []).filter((e) => e.chega > agora);
+    if (lista.length) config.scav.emVoo[vid] = lista; else delete config.scav.emVoo[vid];
+    const out = { wood: 0, stone: 0, iron: 0 };
+    lista.forEach((e) => { out[e.r] = (out[e.r] || 0) + e.amt; });
+    return out;
   }
 
   async function scavAutoUnlock(estados) {
@@ -1520,8 +1543,36 @@
       cfg.faltouRecurso[v.vid] = { nome: v.name, opcao: alvo.nome, falta: falta, at: Date.now() };
       semRecurso++;
       if (!cfg.unlockPuxar) continue;
+
+      // ---- TRAVA 1: o alvo cabe no armazém? ----
+      // Se o custo de um recurso passa da capacidade do armazém, esta aldeia NUNCA vai juntar
+      // aquilo — o que chega acima do teto simplesmente some. Sem esta conferência o ciclo
+      // recalculava a mesma falta pra sempre e mandava caminhão atrás de caminhão, destruindo
+      // recurso a cada chegada. Foi o que estourou uma aldeia recém-conquistada, de armazém
+      // pequeno, mirando a Extrema Coleta.
+      const teto = v.storageMax || 0;
+      const naoCabe = teto ? RES3.filter((k) => (alvo.custo[k] || 0) > teto) : [];
+      if (naoCabe.length) {
+        pushLog('⛏️ ' + v.name + ': ' + alvo.nome + ' custa mais ' + naoCabe.join('/') + ' do que o armazém'
+          + ' guarda (' + fmtN(teto) + ') — é impossível juntar, o que passa do teto some. Não vou puxar'
+          + ' recurso pra cá. Suba o Armazém ou baixe o "desbloquear até".', 'err', 'scav');
+        continue;
+      }
+
+      // ---- TRAVA 2: desconta o que já está voando e o que cabe ----
+      // `falta` sai do recurso de AGORA e ignorava o transporte a caminho, então cada ciclo
+      // repetia o pedido inteiro. E nunca pede mais do que ainda cabe no armazém.
+      const voando = scavPuxadoEmVoo(v.vid);
+      const pedir = {}; let aindaPrecisa = 0;
+      RES3.forEach((k) => {
+        const livre = teto ? Math.max(0, teto - (v.res[k] || 0) - (voando[k] || 0)) : Infinity;
+        pedir[k] = Math.max(0, Math.min((falta[k] || 0) - (voando[k] || 0), livre));
+        aindaPrecisa += pedir[k];
+      });
+      if (!aindaPrecisa) continue;   // o que já está a caminho resolve
+
       try {
-        const r = await scavPuxarRecursos(v, falta, estados, coords);
+        const r = await scavPuxarRecursos(v, pedir, estados, coords);
         if (r.usadas) {
           puxadas++;
           pushLog('⛏️ ' + v.name + ': faltava recurso pra ' + alvo.nome + ' — puxei de ' + r.usadas + ' aldeia(s)' +
@@ -4132,12 +4183,19 @@
 
   // O que demolir nesta aldeia, se é que há algo. Devolve no máximo UM prédio.
   //
-  // Só entra item MARCADO (`it.dem`): passar do alvo, sozinho, não autoriza derrubar nada. E usa o
-  // nível REAL, não o efetivo com fila de construção — considerar obra que nem ficou pronta
+  // O interruptor "Demolir excedente" SOZINHO autoriza — decisão do usuário (ago/2026). Antes
+  // exigia também marcar prédio por prédio no modelo, o que obrigava a declarar duas vezes a
+  // mesma intenção e fazia o interruptor parecer quebrado quando nada acontecia.
+  //
+  // A proteção não sumiu, ela mudou de lugar: as três travas do ciclo continuam de pé — só com a
+  // aldeia COMPLETA (bate o alvo em todos os prédios), um nível por aldeia por ciclo, e só com a
+  // fila de demolição vazia. Um nível digitado errado derruba um nível e dá tempo de desligar.
+  //
+  // Usa o nível REAL, não o efetivo com fila de construção: considerar obra que nem ficou pronta
   // derrubaria o prédio errado.
   function bldExcedente(st, plan) {
     for (const it of plan) {
-      if (it.en === false || !it.dem) continue;
+      if (it.en === false) continue;
       const atual = st.level[it.b] || 0;
       if (atual > it.lvl) return { b: it.b, de: atual, para: it.lvl };
     }
@@ -4536,8 +4594,6 @@
         '<span class="twmgr-bld-ico">' + buildingIcon(it.b, meta.ico) + '</span>' +
         '<span class="twmgr-bld-name" title="' + esc(meta.name) + ' (máx ' + meta.max + ')">' + esc(meta.name) + '</span>' +
         '<input type="number" class="twmgr-bld-lvl twmgr-inp" data-i="' + i + '" min="1" max="' + meta.max + '" value="' + it.lvl + '" title="nível alvo">' +
-        '<label class="twmgr-bld-dem" title="demolir excedente: quando a aldeia estiver COMPLETA, derruba este prédio até o nível alvo">'
-          + '<input type="checkbox" class="twmgr-bld-demck" data-i="' + i + '"' + (it.dem ? ' checked' : '') + '><span>⬇</span></label>' +
         '<span class="twmgr-bld-up" data-i="' + i + '" title="subir prioridade">▲</span>' +
         '<span class="twmgr-bld-down" data-i="' + i + '" title="descer prioridade">▼</span>' +
         '<span class="twmgr-bld-rm" data-i="' + i + '" title="remover">✕</span>' +
@@ -4550,13 +4606,6 @@
     box.addEventListener('change', (e) => {
       const el = e.target; const i = parseInt(el.getAttribute('data-i'), 10);
       const plan = bldPlanAtual(); if (!plan || isNaN(i) || !plan[i]) return;
-      if (el.classList.contains('twmgr-bld-demck')) {
-        // Demolir e por PREDIO, nunca global: marcar "tudo que passar do alvo" transformaria um
-        // numero digitado errado em estrago em serie.
-        plan[i].dem = el.checked;
-        save(); renderBuildPlan();
-        return;
-      }
       if (el.classList.contains('twmgr-bld-en')) plan[i].en = !!el.checked;
       else if (el.classList.contains('twmgr-bld-lvl')) {
         const meta = BUILD_META[plan[i].b]; const max = meta ? meta.max : 30;
@@ -4621,8 +4670,14 @@
     _bldActiveProf = id;
     const sel = document.getElementById('twmgr-bld-tpl'); if (sel) sel.value = id;
     const selAba = document.getElementById('twmgr-bld-tplsel'); if (selAba) selAba.value = id;
+    // Os DOIS campos, não só a Fazenda. O Armazém faltava aqui: o input nascia com o `value="0"`
+    // do HTML e nunca era populado do config, então ele aparecia zerado toda vez que o painel era
+    // montado. Pior que cosmético — o handler de `change` grava os dois juntos lendo do DOM, então
+    // mexer na Fazenda escrevia o zero da tela por cima do Armazém salvo. Era esse o "reset".
     const fp = document.getElementById('twmgr-bld-farmpct');
     if (fp) fp.value = bldTpl().farmPct != null ? bldTpl().farmPct : 0;
+    const sp = document.getElementById('twmgr-bld-storagepct');
+    if (sp) sp.value = bldTpl().storagePct != null ? bldTpl().storagePct : 0;
     renderBuildPlan();
     fillBldTplGrupo();   // o grupo e por MODELO, entao acompanha a troca
   }
@@ -9070,7 +9125,7 @@
             '<div class="twmgr-fld" style="margin-top:9px"><span title="Derruba nível acima do alvo">Demolir excedente</span>' +
               '<label class="twmgr-sw"><input id="twmgr-bld-demolir" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#b03030;margin-top:4px">⚠ Demolir <b>não devolve recurso</b> e reconstruir custa o preço cheio. Não há desfazer.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Só começa depois que a aldeia <b>bate o alvo em todos os prédios</b> (a linha com ✓ no Status). Marque quais prédios podem cair no <b>⬇</b> de cada item, em Gerenciar modelos — sem marcar, nada é demolido.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Ligado, vale pra <b>todo</b> prédio do modelo — não precisa marcar nada. Só começa depois que a aldeia <b>bate o alvo em todos os prédios</b> (a linha com ✓ no Status), derruba <b>um nível por aldeia por ciclo</b> e só com a fila de demolição vazia — dá tempo de ver acontecendo e desligar.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px"><b>Um nível por aldeia por ciclo</b>, e só com a fila de demolição vazia — dá tempo de ver acontecendo e desligar.</div>') +
         '</div>' +
         '<div id="twmgr-sub-bldstatus" style="display:none">' +

@@ -169,6 +169,7 @@
     autoUnlock: false,
     unlockAte: 4,          // desbloqueia até esta opção (1 Pequena … 4 Extrema)
     unlockPuxar: true,     // faltando recurso, puxa de outras aldeias imediatamente
+    emVoo: {},             // { [vid]: [{r, amt, chega}] } — o que já foi puxado e não pousou
     unlockReserva: 5000,   // a doadora nunca fica abaixo disto em cada recurso
     unlockMaxOrigens: 5,   // quantas aldeias no máximo contribuem por desbloqueio
     faltouRecurso: {},     // vid -> { nome, opcao, falta:{wood,stone,iron}, at } — o que travou
@@ -409,6 +410,7 @@
     if (typeof c.scav.autoUnlock !== 'boolean') c.scav.autoUnlock = false;
     if (typeof c.scav.unlockAte !== 'number' || c.scav.unlockAte < 1 || c.scav.unlockAte > 4) c.scav.unlockAte = 4;
     if (typeof c.scav.unlockPuxar !== 'boolean') c.scav.unlockPuxar = true;
+    if (!c.scav.emVoo || typeof c.scav.emVoo !== 'object') c.scav.emVoo = {};
     if (typeof c.scav.unlockReserva !== 'number' || c.scav.unlockReserva < 0) c.scav.unlockReserva = 5000;
     if (typeof c.scav.unlockMaxOrigens !== 'number' || c.scav.unlockMaxOrigens < 1) c.scav.unlockMaxOrigens = 5;
     if (!c.scav.faltouRecurso) c.scav.faltouRecurso = {};
@@ -562,9 +564,11 @@
     // Demolição DESLIGADA por padrão, e explicitamente. Não devolve recurso e não tem desfazer:
     // tem que ser escolha consciente, nunca herdada de um `undefined` que por acaso é falso.
     if (c.build.demolir == null) c.build.demolir = false;
-    // `dem` por item do modelo, também explicito. Modelo importado de fora vem sem o campo.
+    // O `dem` por item do modelo foi aposentado: o interruptor "Demolir excedente" sozinho
+    // autoriza agora, e nenhum item precisa ser marcado. Limpa o campo pra ele não ficar
+    // guardado dando a impressão de que ainda decide alguma coisa.
     Object.keys(c.build.templates || {}).forEach((id) => {
-      ((c.build.templates[id] || {}).plan || []).forEach((it) => { if (it.dem == null) it.dem = false; });
+      ((c.build.templates[id] || {}).plan || []).forEach((it) => { if (it.dem != null) delete it.dem; });
     });
 
     if (c.build.grupoTpl == null) c.build.grupoTpl = '';

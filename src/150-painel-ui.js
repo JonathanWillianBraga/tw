@@ -624,7 +624,7 @@
             '<div class="twmgr-fld" style="margin-top:9px"><span title="Derruba nível acima do alvo">Demolir excedente</span>' +
               '<label class="twmgr-sw"><input id="twmgr-bld-demolir" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#b03030;margin-top:4px">⚠ Demolir <b>não devolve recurso</b> e reconstruir custa o preço cheio. Não há desfazer.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Só começa depois que a aldeia <b>bate o alvo em todos os prédios</b> (a linha com ✓ no Status). Marque quais prédios podem cair no <b>⬇</b> de cada item, em Gerenciar modelos — sem marcar, nada é demolido.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Ligado, vale pra <b>todo</b> prédio do modelo — não precisa marcar nada. Só começa depois que a aldeia <b>bate o alvo em todos os prédios</b> (a linha com ✓ no Status), derruba <b>um nível por aldeia por ciclo</b> e só com a fila de demolição vazia — dá tempo de ver acontecendo e desligar.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px"><b>Um nível por aldeia por ciclo</b>, e só com a fila de demolição vazia — dá tempo de ver acontecendo e desligar.</div>') +
         '</div>' +
         '<div id="twmgr-sub-bldstatus" style="display:none">' +

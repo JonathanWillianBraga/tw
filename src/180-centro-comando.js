@@ -39,6 +39,11 @@
     // chegue atrasado, sem esticar a cessão a ponto de gerar lixo.
     FOLGA_ACORDADO: 60,
     FOLGA_ESTRANGULADO: 30000, // aba de fundo SEM keep-awake: acorda muito antes e paga cedendo
+    // Aba de fundo COM o worker acordando: ele entrega no horário, mas a thread principal
+    // ainda precisa rodar a cessão depois de acordar. 250ms é folga pra isso sem virar os
+    // 30s do caso sem nada.
+    FOLGA_WORKER: 250,
+    AQUECER_TIMEOUT: 800,   // aquecimento pendurado nos 2s finais é pior que aquecimento nenhum
     CEDER_ATE: 3,           // últimos 3ms: espera ocupada
     TETO_OCUPADO: 5000,     // trava de segurança da espera ocupada
     AQUECER_ANTES: 2000,    // abre/renova a conexão pra o POST não pagar handshake
@@ -103,7 +108,55 @@
     return true;
   }
 
-  const ccDormir = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+  // ── Timer em Web Worker ─────────────────────────────────────────────────────────
+  // O oscilador de áudio resolve o estrangulamento, mas tem uma fragilidade: MORRE a cada
+  // F5 e só religa dentro de um gesto do usuário. Se a aba recarregar entre armar e
+  // disparar, o keep-awake some sem avisar e o comando acorda tarde.
+  //
+  // Worker não depende de gesto nenhum e o navegador não estrangula o timer dele como
+  // estrangula o da thread principal. Ele não executa o disparo — só acorda a thread
+  // principal na hora certa, via postMessage, que também não é estrangulado.
+  //
+  // A REDE DE SEGURANÇA importa mais que o worker: se ele morrer, a Promise nunca
+  // resolveria e o comando ficaria pendurado pra sempre. O setTimeout corre junto e
+  // solta de qualquer jeito. Em aba de fundo ele chega tarde — e tarde é infinitamente
+  // melhor que nunca.
+  let _ccWorker = null, _ccWSeq = 0;
+  const _ccWPend = {};
+  function ccWorkerOk() {
+    if (_ccWorker) return true;
+    try {
+      const src = 'onmessage=function(e){var d=e.data;setTimeout(function(){postMessage(d.id)},d.ms)}';
+      const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+      _ccWorker = new Worker(url);
+      _ccWorker.onmessage = (e) => { const f = _ccWPend[e.data]; if (f) f(); };
+      _ccWorker.onerror = () => { _ccWorker = null; };
+      // Aquece. Medido no navegador: o 1º round-trip custa ~60ms (nascer o worker + a
+      // primeira mensagem); do 2º em diante o erro é de 1ms (150→151, 400→401, 1000→1001).
+      // `id: 0` não tem resolvedor pendurado, então a resposta cai no vazio de propósito.
+      try { _ccWorker.postMessage({ id: 0, ms: 0 }); } catch (e) {}
+      return true;
+    } catch (e) { _ccWorker = null; return false; }
+  }
+  function ccDormir(ms) {
+    ms = Math.max(0, ms);
+    if (ms < 50 || !ccWorkerOk()) return new Promise((r) => setTimeout(r, ms));
+    return new Promise((r) => {
+      const id = ++_ccWSeq;
+      let feito = false;
+      const solta = () => { if (feito) return; feito = true; delete _ccWPend[id]; r(); };
+      _ccWPend[id] = solta;
+      try { _ccWorker.postMessage({ id: id, ms: ms }); }
+      catch (e) { solta(); return; }
+      setTimeout(solta, ms + 250);   // rede de segurança: nunca fica pendurado
+    });
+  }
+  // Sem número redondo repetido. Um período exato é assinatura; o Nexus não repete nenhum
+  // (tick com jitter −400/+700, auto-reload numa faixa de 26 a 34 min).
+  function ccJitter(base, frac) {
+    const f = (frac == null) ? 0.12 : frac;
+    return Math.round(base * (1 - f + Math.random() * 2 * f));
+  }
   // Cede o laço de eventos sem dormir. setTimeout(0) aninhado é preso em 4ms pelo
   // navegador; MessageChannel não é — dá umas dezenas de microssegundos por volta.
   //
@@ -171,8 +224,42 @@
     return { min: Math.round(ord[0]), mediana: Math.round(med), max: Math.round(ord[ord.length - 1]), jitter: Math.round(ord[ord.length - 1] - ord[0]), n: rtts.length };
   }
   // Só reabre/renova a conexão. Descarta o resultado de propósito.
+  //
+  // `keepalive` pede pro navegador manter a conexão de pé depois da resposta — é o ponto
+  // inteiro do aquecimento. E o ABORT em 800ms não é detalhe: isto roda 2s antes do
+  // disparo, então um aquecimento pendurado seguraria a escada justamente no pior
+  // instante possível. Aquecimento travado é pior que aquecimento nenhum.
   async function ccAquecer() {
-    try { await fetch(CC_PING + '?w=' + Math.random(), { method: 'HEAD', cache: 'no-store', credentials: 'omit' }); } catch (e) {}
+    const ac = (typeof AbortController === 'function') ? new AbortController() : null;
+    const t = ac ? setTimeout(() => { try { ac.abort(); } catch (e) {} }, CC.AQUECER_TIMEOUT) : null;
+    try {
+      const o = { method: 'HEAD', cache: 'no-store', credentials: 'omit', keepalive: true };
+      if (ac) o.signal = ac.signal;
+      await fetch(CC_PING + '?w=' + Math.random(), o);
+    } catch (e) { /* inclusive o abort: o resultado nunca importou */ }
+    finally { if (t) clearTimeout(t); }
+  }
+
+  // ── WakeLock ────────────────────────────────────────────────────────────────────
+  // Impede a MÁQUINA de dormir antes de um comando agendado — problema diferente do
+  // estrangulamento de timer, que o oscilador e o worker resolvem. Só vale pra quem
+  // agenda de madrugada com o computador ocioso.
+  //
+  // A API exige documento visível pra conceder, e o navegador solta o lock sozinho
+  // quando a aba é escondida. Falhar aqui é normal, não é erro: devolve false e segue.
+  let _ccWakeLock = null;
+  async function ccTrancarSono(ligar) {
+    try {
+      if (!ligar) {
+        if (_ccWakeLock) { const w = _ccWakeLock; _ccWakeLock = null; await w.release(); }
+        return true;
+      }
+      if (_ccWakeLock) return true;
+      if (!navigator.wakeLock || typeof navigator.wakeLock.request !== 'function') return false;
+      _ccWakeLock = await navigator.wakeLock.request('screen');
+      _ccWakeLock.addEventListener('release', () => { _ccWakeLock = null; });
+      return true;
+    } catch (e) { _ccWakeLock = null; return false; }
   }
   // Metade do ida-e-volta da sonda. NÃO entra mais no cálculo do disparo — ficou provado
   // que não tem relação com o custo real de um POST na praça (85ms estimados contra ~184ms
@@ -191,11 +278,16 @@
   async function ccEsperarPreciso(alvoMs) {
     for (;;) {
       const falta = alvoMs - ccNow();
-      // Sem keep-awake numa aba de fundo o setTimeout é estrangulado: acorda muito
-      // antes e paga o resto cedendo, que o Chrome não estrangula do mesmo jeito.
-      const folga = (document.hidden && !ccAcordadoOk()) ? CC.FOLGA_ESTRANGULADO : CC.FOLGA_ACORDADO;
+      // Três níveis, não dois. Sem nada, em aba de fundo o setTimeout é estrangulado e
+      // é preciso acordar 30s antes e pagar o resto cedendo. Com o oscilador, a aba nem
+      // é estrangulada. Com só o worker, ele acorda no horário mas a thread principal
+      // ainda tem que rodar a cessão depois — daí a folga intermediária.
+      const folga = (!document.hidden || ccAcordadoOk()) ? CC.FOLGA_ACORDADO
+        : ccWorkerOk() ? CC.FOLGA_WORKER
+        : CC.FOLGA_ESTRANGULADO;
       if (falta <= folga) break;
-      await ccDormir(Math.min(falta - folga, CC.BLOCO_MS));
+      // O jitter nunca ultrapassa o alvo: o `min` com `falta - folga` manda.
+      await ccDormir(Math.min(falta - folga, ccJitter(CC.BLOCO_MS)));
     }
     while (alvoMs - ccNow() > CC.CEDER_ATE) await ccCeder();
     // Espera ocupada nos últimos milissegundos: é o único jeito de acertar abaixo do
@@ -204,6 +296,32 @@
     while (ccNow() < alvoMs && performance.now() < limite) { /* ocupado de propósito */ }
     return ccNow();
   }
+
+  // ── Cessão instantânea da trava ─────────────────────────────────────────────────
+  // `lockOther()` só descobre que outra aba assumiu quando alguém pergunta, e a trava tem
+  // 12s de validade — dá pra rodar uma escada inteira achando que ainda se é o dono.
+  //
+  // O evento `storage` dispara em TODAS as outras abas quando uma delas escreve, e não
+  // dispara na que escreveu. Então ele é exatamente o aviso que faltava, de graça: a aba
+  // que perdeu a trava sabe na hora, não daqui a 12s.
+  //
+  // Aqui isso só ANOTA. Quem decide continua sendo `devoParar`/`lockOther` na hora de
+  // agir — um sinal assíncrono não pode abortar um disparo pela metade.
+  let _ccTravaPerdidaEm = 0;
+  try {
+    window.addEventListener('storage', (e) => {
+      if (!e.key || e.key !== LOCKKEY || !e.newValue) return;
+      let dono = null;
+      try { dono = JSON.parse(e.newValue); } catch (er) { return; }
+      if (!dono || dono.id === TAB_ID) return;
+      _ccTravaPerdidaEm = Date.now();
+      if (ccJanelaCritica()) {
+        pushLog('🎯 Central: outra aba assumiu a trava com disparo perto. Esta aba recua — '
+          + 'confira se o comando saiu pela outra.', 'err');
+      }
+    });
+  } catch (e) { /* sem window.addEventListener não há o que fazer */ }
+  function ccTravaPerdidaAgora() { return _ccTravaPerdidaEm > 0 && (Date.now() - _ccTravaPerdidaEm) < 12000; }
 
   // ── Janela crítica ──────────────────────────────────────────────────────────────
   // Tem disparo chegando nos próximos N ms? O Auto-F5 e os laços longos consultam isto
@@ -239,6 +357,43 @@
   //
   // A escrita adiantada continua valendo: 'disparando' vai pro disco ANTES do fetch, e
   // uma aba que morra no meio deixa o comando INCERTO, nunca reenviado.
+  // ── Veredito da resposta ────────────────────────────────────────────────────────
+  // ESTRUTURAL, não frase em português. A versão anterior era:
+  //
+  //     if (/n[aã]o tem tropas suficientes|not enough|insuficient/i.test(t2)) ... else ENVIADO
+  //
+  // Ela só sabia dizer "não" quando o jogo escrevia exatamente a frase que ela conhecia.
+  // Qualquer outra coisa — tela de verificação de bot, sessão expirada, página de
+  // manutenção, HTTP 500 — não casava com nada e caía no `else`: o envio mais caro do
+  // script concluía como SUCESSO sem ter saído tropa nenhuma. É a mesma classe de bug que
+  // já custou tempo em três outros módulos deste projeto.
+  //
+  // Ordem: HTTP → bot-check → caixa de erro do jogo → isto é uma tela do jogo? Só sobra
+  // 'enviado' quando nada disso apareceu. Na dúvida devolve INCERTO, que nunca reenvia —
+  // mandar um nobre duas vezes é pior do que não mandar.
+  function ccVeredito(cmd, txt) {
+    if (cmd.httpOk === false) return { state: 'incerto', erro: 'HTTP ' + cmd.httpStatus };
+    if (/bot_check|botprotect|g-recaptcha|captcha/i.test(txt)) {
+      return { state: 'incerto', erro: 'verificação de bot na resposta — confira na tela de comandos' };
+    }
+    // A caixa de erro do jogo fica com `erroDeComando` (050-envio.js), que é o helper
+    // compartilhado e cobre mais redações do que eu cobriria aqui sozinho — inclusive
+    // "Não existem unidades suficientes", que não casa com "não tem tropas suficientes".
+    const errCmd = erroDeComando(txt);
+    if (errCmd) return { state: 'falhou', erro: errCmd };
+    let doc = null;
+    try { doc = new DOMParser().parseFromString(txt, 'text/html'); } catch (e) {}
+    // Sessão expirada ou redirecionado pro portal: a resposta não tem nada de tela do jogo.
+    if (doc && !doc.querySelector('#header_info, #menu_row2, #content_value, .vis')) {
+      return { state: 'incerto', erro: 'a resposta não parece uma tela do jogo (sessão expirada?)' };
+    }
+    if (/selecione uma aldeia alvo/i.test(txt)) {
+      // Ambíguo: é também o estado normal da praça DEPOIS de um envio que deu certo.
+      return { state: 'incerto', erro: 'resposta ambígua — confira na tela de comandos' };
+    }
+    return { state: 'enviado', erro: null };
+  }
+
   function ccDispararAgora(cmd) {
     cmd.state = 'disparando';
     cmd.fireAt = ccNow();
@@ -258,20 +413,11 @@
       method: 'POST', credentials: 'include', cache: 'no-store',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams(cmd.payload.params).toString(),
-    }).then((r) => r.text()).then((t2) => {
+    }).then((r) => { cmd.httpOk = r.ok; cmd.httpStatus = r.status; return r.text(); }).then((t2) => {
       cmd.rttEnvioMs = Math.round(performance.now() - t0);
-      // Estrutural (erroDeComando, em 050-envio.js): procurar uma frase específica deixava passar
-      // recusa com outra redação — "Não existem unidades suficientes" não casava com "não tem
-      // tropas suficientes" — e o comando era dado como enviado sem ter saído.
-      const errCmd = erroDeComando(t2);
-      if (errCmd) {
-        cmd.state = 'falhou'; cmd.erro = errCmd;
-      } else if (/selecione uma aldeia alvo/i.test(t2)) {
-        // Ambíguo: é também o estado normal da praça DEPOIS de um envio que deu certo.
-        cmd.state = 'incerto'; cmd.erro = 'resposta ambígua — confira na tela de comandos';
-      } else {
-        cmd.state = 'enviado'; cmd.sentAt = ccNow(); cmd.erro = null;
-      }
+      const v = ccVeredito(cmd, t2);
+      cmd.state = v.state; cmd.erro = v.erro;
+      if (cmd.state === 'enviado') cmd.sentAt = ccNow();
       // Diagnóstico: o quanto ANTES da hora pedida o POST saiu. Não é o erro — o erro
       // depende da viagem até o servidor, que só a chegada publicada pelo jogo revela.
       // (Era aqui que eu somava meioRtt e chamava de "erro líquido"; o número concordava
@@ -602,7 +748,7 @@
           continue;   // reavalia: o preparo pode ter mudado sendAt (duração exata do servidor)
         }
 
-        if (config.cc.manterAcordado) ccManterAcordado(true);
+        if (config.cc.manterAcordado) { ccManterAcordado(true); ccTrancarSono(true); }
         if (cmd.sendAt - ccNow() > CC.AQUECER_ANTES) await ccAquecer();
 
         // UM termo só, e isso é a lição mais cara desta noite.
@@ -620,12 +766,26 @@
         const alvoChamada = cmd.sendAt - correcao;
         const real = await ccEsperarPreciso(alvoChamada);
         cmd.atrasoEscadaMs = Math.round(real - alvoChamada);
+        // Última conferência, depois da escada e antes do POST. Duas abas com a Central
+        // ligada guardam cada uma a SUA cópia da fila em memória: as duas leem 'armado' e
+        // as duas disparam. O `state: 'disparando'` gravado no localStorage não protege,
+        // porque a outra aba não releu. Aqui o aviso do evento `storage` vale: se outra aba
+        // assumiu a trava nos últimos 12s, esta recua. Nobre enviado duas vezes não volta.
+        if (ccTravaPerdidaAgora()) {
+          cmd.state = 'cancelado';
+          cmd.erro = 'outra aba assumiu a trava — não disparei pra não duplicar';
+          save();
+          pushLog('🎯 Central: ' + ccRotulo(cmd) + ' NÃO disparado — outra aba tem a trava. '
+            + 'Confira se ela mandou.', 'err');
+          ccRenderPagina();
+          continue;
+        }
         ccDispararAgora(cmd);       // sem await: o próximo da onda não pode esperar a resposta
         ccRenderPagina();
       }
     } finally {
       _ccMotorAtivo = false;
-      if (!ccJanelaCritica(CC.ACORDAR_ANTES)) ccManterAcordado(false);
+      if (!ccJanelaCritica(CC.ACORDAR_ANTES)) { ccManterAcordado(false); ccTrancarSono(false); }
     }
   }
 
@@ -643,11 +803,11 @@
     const porConferir = ccPendentesDeConferencia().length;
     if (porConferir) ccConferirPendentes().catch(() => {});
     if (!vivos.length) {
-      ccManterAcordado(false);
-      if (porConferir) ccTimer = setTimeout(ccTick, 30000);
+      ccManterAcordado(false); ccTrancarSono(false);
+      if (porConferir) ccTimer = setTimeout(ccTick, ccJitter(30000));
       return;
     }
-    if (captchaBlocked()) { ccTimer = setTimeout(ccTick, 30000); return; }
+    if (captchaBlocked()) { ccTimer = setTimeout(ccTick, ccJitter(30000)); return; }
     for (const cmd of vivos) {
       if (!ccCalcularSaida(cmd)) {
         // Modo chegada sem duração: uma confirmação só pra descobrir o tempo de viagem.
@@ -656,13 +816,13 @@
         catch (e) { cmd.state = 'falhou'; cmd.erro = 'não consegui a duração: ' + (e.message || e); save(); continue; }
       }
     }
-    if (config.cc.manterAcordado && ccJanelaCritica(CC.ACORDAR_ANTES)) ccManterAcordado(true);
+    if (config.cc.manterAcordado && ccJanelaCritica(CC.ACORDAR_ANTES)) { ccManterAcordado(true); ccTrancarSono(true); }
     if (!ccJanelaCritica(CC.ACORDAR_ANTES)) ccReancorarSeSeguro();
     save();
     // O tick só faz manutenção. Quem espera e dispara é o motor, e ele é um só —
     // chamá-lo de novo enquanto roda é no-op, por isso não há mais corrida de re-agendar.
     ccMotor();
-    ccTimer = setTimeout(ccTick, 30000);
+    ccTimer = setTimeout(ccTick, ccJitter(30000));
   }
 
   // Retomada depois de F5. Payload de outra sessão é descartado (token velho).

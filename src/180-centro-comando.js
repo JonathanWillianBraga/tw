@@ -660,8 +660,24 @@
     // conexão dele. Não existe valor universal, e fingir que existe foi meu erro.
     const anterior = (typeof cc.biasMs === 'number') ? cc.biasMs : 0;
     const pico = Math.abs(erroMs - anterior) > CC.EWMA_BANDA_MS;
-    const alfa = pico ? CC.EWMA_ALFA_PICO
+    const alfaBase = pico ? CC.EWMA_ALFA_PICO
       : (cc.estilo === 'responsivo' ? CC.EWMA_ALFA_RESPONSIVO : CC.EWMA_ALFA_ESTAVEL);
+    // AQUECIMENTO. Com α fixo em 0,1 e o viés começando em ZERO, um atraso sistemático de
+    // 200ms só é absorvido lá pela 22ª amostra:
+    //     1ª:  0 + 200×0,1 =  20  (ainda erra 180)
+    //     2ª: 20 + 180×0,1 =  38  (ainda erra 162)  ...
+    // Ou seja: vinte e poucos comandos errando enquanto o estimador está "correto". Foi
+    // exatamente o que apareceu no uso real -- desvio teimoso de ~200ms.
+    //
+    // A correção é a média corrida clássica: nas primeiras amostras o ganho é 1/n, e ele
+    // cede pro α configurado assim que ficar menor (n≈9 no estável). Com teto de 0,5, pra
+    // nenhuma amostra sozinha definir o viés -- que é a razão do Nexus não usar 1 na
+    // primeira. As duas redes acima (guarda de deriva e teto de plausibilidade) já
+    // barraram amostra ruim antes de chegar aqui.
+    //
+    // Convergência nova, mesmos 200ms: 100 → 150 → 167 → 175 → 180. Cinco comandos.
+    // Pico não ganha aquecimento: amostra fora da banda continua entrando devagar.
+    const alfa = pico ? alfaBase : Math.max(alfaBase, Math.min(0.5, 1 / ((cc.nReal || 0) + 1)));
     cc.biasMs = Math.max(-teto, Math.min(teto, Math.round(anterior + erroMs * alfa)));
     cc.nReal = (cc.nReal || 0) + 1;
     cc.afericoes = (cc.afericoes || []).concat([{ t: cmd.sentAt || ccNow(), erro: cmd.erroRealMs, estimado: cmd.erroMs, bias: cc.biasMs, oculta: document.hidden, acordado: ccAcordadoOk() }]).slice(-50);

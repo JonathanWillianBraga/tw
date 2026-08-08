@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.89.0
+// @version      11.91.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.89.0';
+  const VERSION = '11.91.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -11416,12 +11416,25 @@
     // (4) Compensação de latência: o request precisa CHEGAR ao servidor em sendAt, então sai antes.
     // rttMin/2 estima o tempo de ida. Substitui o antigo "offset" fixo de 150ms, que era chute.
     function fireAtFor(sendAtSrvMs, ajusteManualMs) {
-      const ida = (NETLAT.rttMin || 300) / 2;
-      // biasMs vem do laço fechado (ccMedir): é o erro real medido nos envios anteriores.
-      // Modelar o relógio sozinho dá ~±50ms; corrigir pelo resultado medido é o que leva a ±10ms.
+      // SEM `rttMin/2`. Ele era um MODELO da ida, e o modelo não corresponde ao real: a sonda
+      // HEAD estimava 85ms contra ~184ms medidos num POST de verdade na praça. O motor `cc` já
+      // tirou este termo da conta por isso. Pior que impreciso, ele BRIGA com o viés — os dois
+      // corrigem a mesma coisa, e a soma passa do alvo.
+      //
+      // E existe um erro que modelo de rede nenhum enxerga: o relógio de referência é o Timing
+      // do jogo, calibrado na resposta do carregamento de PÁGINA, que pode estar dezenas ou
+      // centenas de ms adiantado do relógio real do servidor. Foi o que apareceu no uso real —
+      // lead de 180ms e chegada 200ms ADIANTADA, aritmética que só fecha com o relógio à frente.
+      // Só a chegada publicada pelo jogo revela isso, e é o que o viés aprende.
+      //
+      // Então o viés carrega tudo: latência de ida e desvio de relógio juntos. Com `calib.n = 0`
+      // o lead é ZERO — sai na hora pedida, e a primeira medição ensina o resto.
       const bias = (config.cmd && config.cmd.calib && config.cmd.calib.biasMs) || 0;
-      const lead = ida + bias + (ajusteManualMs || 0);
-      return sendAtSrvMs - Math.max(0, Math.min(lead, 3000));   // teto de 3s por segurança
+      const lead = bias + (ajusteManualMs || 0);
+      // O piso era 0, e isso PROIBIA o viés de atrasar o disparo. Comando chegando adiantado
+      // precisa de correção negativa — o laço não tinha como consertar esse caso nem medindo
+      // certo. Agora vale nos dois sentidos, com o mesmo teto de 3s de cada lado.
+      return sendAtSrvMs - Math.max(-3000, Math.min(lead, 3000));
     }
 
     // (5) Orçamento de erro honesto, calculado ANTES de armar. O usuário decidiu: se estourar,
@@ -11777,18 +11790,44 @@
       try {
         const res = await fetch('/game.php?village=' + c.origin + '&screen=place', { credentials: 'include' });
         const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-        let href = null;
+        // Casa por ORDEM, não pelo último que aparecer. O `forEach` antigo sobrescrevia `href` a
+        // cada linha do mesmo alvo, então uma onda de 6 comandos pra uma coordenada media SEMPRE
+        // a mesma linha — a última. A praça lista por chegada, e o servidor processa a conta em
+        // fila: o i-ésimo enviado é o i-ésimo a chegar. Então o índice deste comando entre os
+        // meus pro mesmo alvo é o índice da linha.
+        const hrefs = [];
         doc.querySelectorAll('tr.command-row').forEach((tr) => {
           const lbl = tr.querySelector('.quickedit-label');
           const mc = lbl ? (lbl.textContent || '').match(/(\d{1,3})\|(\d{1,3})/) : null;
           if (!mc || mc[1] !== String(c.x) || mc[2] !== String(c.y)) return;
           const a = tr.querySelector('a[href*="screen=info_command"]');
-          if (a) href = a.href;
+          if (a) hrefs.push(a.href);
         });
-        if (!href) return;
+        const irmaos = cmdFila().filter((o) => o.origin === c.origin && String(o.x) === String(c.x)
+          && String(o.y) === String(c.y) && o.state === 'enviado' && o.arriveAt)
+          .sort((a, b) => a.arriveAt - b.arriveAt);
+        const idx = irmaos.findIndex((o) => o.id === c.id);
+        // Contagem diferente = ambíguo. Medida errada é pior que medida nenhuma: ela vira
+        // correção permanente no viés. Recusa e diz por quê.
+        let href = null;
+        if (!hrefs.length) {
+          pushLog('📏 ' + c.x + '|' + c.y + ': não achei o comando na praça pra medir. '
+            + 'Ele saiu mesmo? A calibração automática fica parada até uma medição dar certo.', 'err', 'cmd');
+          return;
+        }
+        if (irmaos.length > 1 && hrefs.length !== irmaos.length) {
+          pushLog('📏 ' + c.x + '|' + c.y + ': ' + hrefs.length + ' comando(s) na praça contra '
+            + irmaos.length + ' na fila — não dá pra saber qual é qual. Medição recusada.', '', 'cmd');
+          return;
+        }
+        href = (idx >= 0 && hrefs[idx]) ? hrefs[idx] : hrefs[0];
         const d2 = new DOMParser().parseFromString(await (await fetch(href, { credentials: 'include' })).text(), 'text/html');
         const m = (d2.body.textContent || '').match(/(\d{2})\/(\d{2})\/(\d{4})[^\d]{0,6}(\d{2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/);
-        if (!m) return;
+        if (!m) {
+          pushLog('📏 ' + c.x + '|' + c.y + ': abri o comando mas não entendi a data da chegada. '
+            + 'A calibração automática segue parada.', 'err', 'cmd');
+          return;
+        }
         const parede = new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6], +(m[7] || 0)).getTime();
         const chegouEm = parede + wallToServerOffset();
         const erroMs = chegouEm - c.arriveAt;              // positivo = chegou atrasado
@@ -11798,8 +11837,15 @@
         if (temMs) {
           const k = config.cmd.calib;
           const alpha = (k.n < 3) ? 0.6 : 0.25;           // aprende rápido no começo, estável depois
-          k.biasMs = Math.max(-1500, Math.min(1500, (k.biasMs || 0) + erroMs * alpha));
+          // O viés precisa poder ficar NEGATIVO: chegada adiantada só se corrige atrasando o
+          // disparo. Antes o clamp do fireAtFor jogava lead negativo fora, então metade da faixa
+          // aqui era decorativa.
+          k.biasMs = Math.max(-1500, Math.min(1500, Math.round((k.biasMs || 0) + erroMs * alpha)));
           k.n = (k.n || 0) + 1;
+        } else {
+          pushLog('📏 ' + c.x + '|' + c.y + ': a chegada veio SEM milésimos, então esta amostra não '
+            + 'calibra nada (o sinal seria quantizado em 1s). Ligue os milésimos nas configurações '
+            + 'do jogo — sem isso nenhuma calibração automática funciona.', 'err', 'cmd');
         }
         pushLog('📏 ' + c.x + '|' + c.y + ' chegou com desvio de ' + (erroMs > 0 ? '+' : '') + erroMs + 'ms' +
                 (temMs ? '' : ' (sem milésimos — ative nas configurações do jogo)'),
@@ -16221,8 +16267,24 @@
     // conexão dele. Não existe valor universal, e fingir que existe foi meu erro.
     const anterior = (typeof cc.biasMs === 'number') ? cc.biasMs : 0;
     const pico = Math.abs(erroMs - anterior) > CC.EWMA_BANDA_MS;
-    const alfa = pico ? CC.EWMA_ALFA_PICO
+    const alfaBase = pico ? CC.EWMA_ALFA_PICO
       : (cc.estilo === 'responsivo' ? CC.EWMA_ALFA_RESPONSIVO : CC.EWMA_ALFA_ESTAVEL);
+    // AQUECIMENTO. Com α fixo em 0,1 e o viés começando em ZERO, um atraso sistemático de
+    // 200ms só é absorvido lá pela 22ª amostra:
+    //     1ª:  0 + 200×0,1 =  20  (ainda erra 180)
+    //     2ª: 20 + 180×0,1 =  38  (ainda erra 162)  ...
+    // Ou seja: vinte e poucos comandos errando enquanto o estimador está "correto". Foi
+    // exatamente o que apareceu no uso real -- desvio teimoso de ~200ms.
+    //
+    // A correção é a média corrida clássica: nas primeiras amostras o ganho é 1/n, e ele
+    // cede pro α configurado assim que ficar menor (n≈9 no estável). Com teto de 0,5, pra
+    // nenhuma amostra sozinha definir o viés -- que é a razão do Nexus não usar 1 na
+    // primeira. As duas redes acima (guarda de deriva e teto de plausibilidade) já
+    // barraram amostra ruim antes de chegar aqui.
+    //
+    // Convergência nova, mesmos 200ms: 100 → 150 → 167 → 175 → 180. Cinco comandos.
+    // Pico não ganha aquecimento: amostra fora da banda continua entrando devagar.
+    const alfa = pico ? alfaBase : Math.max(alfaBase, Math.min(0.5, 1 / ((cc.nReal || 0) + 1)));
     cc.biasMs = Math.max(-teto, Math.min(teto, Math.round(anterior + erroMs * alfa)));
     cc.nReal = (cc.nReal || 0) + 1;
     cc.afericoes = (cc.afericoes || []).concat([{ t: cmd.sentAt || ccNow(), erro: cmd.erroRealMs, estimado: cmd.erroMs, bias: cc.biasMs, oculta: document.hidden, acordado: ccAcordadoOk() }]).slice(-50);

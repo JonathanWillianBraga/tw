@@ -628,8 +628,18 @@
           const a = tr.querySelector('a[href*="screen=info_command"]');
           if (a) hrefs.push(a.href);
         });
+        // IRMÃOS = só os que ainda PODEM estar na praça. A fila guarda todo comando enviado pra
+        // sempre; a praça só mostra o que está voando. Comparar os dois inteiros fazia a
+        // contagem nunca mais bater depois do primeiro comando pousar ou ser cancelado — e a
+        // trava de ambiguidade recusava TODA medição, pra sempre. Foi o que apareceu ao vivo:
+        //   "2 comando(s) na praça contra 6 na fila — medição recusada"
+        // Os 4 velhos ja tinham chegado (ou foram cancelados), mas continuavam contando.
+        //
+        // Chegada no futuro e sem medição ainda: é exatamente o conjunto que a praça mostra.
+        const agoraMed = srvNowP();
         const irmaos = cmdFila().filter((o) => o.origin === c.origin && String(o.x) === String(c.x)
-          && String(o.y) === String(c.y) && o.state === 'enviado' && o.arriveAt)
+          && String(o.y) === String(c.y) && o.state === 'enviado' && o.arriveAt
+          && o.arriveAt > agoraMed && !o.medido)
           .sort((a, b) => a.arriveAt - b.arriveAt);
         const idx = irmaos.findIndex((o) => o.id === c.id);
         // Contagem diferente = ambíguo. Medida errada é pior que medida nenhuma: ela vira

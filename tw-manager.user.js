@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.93.0
+// @version      11.94.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.93.0';
+  const VERSION = '11.94.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -11865,8 +11865,18 @@
           const a = tr.querySelector('a[href*="screen=info_command"]');
           if (a) hrefs.push(a.href);
         });
+        // IRMÃOS = só os que ainda PODEM estar na praça. A fila guarda todo comando enviado pra
+        // sempre; a praça só mostra o que está voando. Comparar os dois inteiros fazia a
+        // contagem nunca mais bater depois do primeiro comando pousar ou ser cancelado — e a
+        // trava de ambiguidade recusava TODA medição, pra sempre. Foi o que apareceu ao vivo:
+        //   "2 comando(s) na praça contra 6 na fila — medição recusada"
+        // Os 4 velhos ja tinham chegado (ou foram cancelados), mas continuavam contando.
+        //
+        // Chegada no futuro e sem medição ainda: é exatamente o conjunto que a praça mostra.
+        const agoraMed = srvNowP();
         const irmaos = cmdFila().filter((o) => o.origin === c.origin && String(o.x) === String(c.x)
-          && String(o.y) === String(c.y) && o.state === 'enviado' && o.arriveAt)
+          && String(o.y) === String(c.y) && o.state === 'enviado' && o.arriveAt
+          && o.arriveAt > agoraMed && !o.medido)
           .sort((a, b) => a.arriveAt - b.arriveAt);
         const idx = irmaos.findIndex((o) => o.id === c.id);
         // Contagem diferente = ambíguo. Medida errada é pior que medida nenhuma: ela vira

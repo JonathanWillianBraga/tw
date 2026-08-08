@@ -549,6 +549,40 @@
     // Mede o erro REAL: lê a chegada que o jogo registrou e compara com a que pedimos.
     // O servidor carimba o comando quando PROCESSA o POST, então erroMs é exatamente o atraso
     // entre o nosso disparo e o processamento — sinal limpo, sem modelagem.
+    // A chegada na página de detalhe vem no formato do LOCALE do jogo:
+    //
+    //     Chegada: ago. 08, 2026 20:31:30:331
+    //
+    // A regex antiga exigia `dd/mm/aaaa` colado no horário (`[^\d]{0,6}` entre os dois) e por
+    // isso NUNCA casou nesta conta. Efeito: `calib.n` ficou em zero desde sempre e o motor rodou
+    // o tempo todo com o lead do modelo, sem correção nenhuma — e em silêncio, porque a saída
+    // era um `return` mudo. Descoberto lendo a página de verdade, não o código.
+    //
+    // Agora ancora na palavra "Chegada" e pega o horário COM milésimos logo depois. A data sai
+    // do mesmo trecho, aceitando mês por extenso OU dd/mm/aaaa; sem nenhum dos dois, cai em
+    // hoje/amanhã pelo horário, que é o que o resto do script já faz.
+    const MESES_PT = { jan: 0, fev: 1, mar: 2, abr: 3, mai: 4, jun: 5, jul: 6, ago: 7, set: 8, out: 9, nov: 10, dez: 11 };
+    function parseChegadaDetalhe(texto) {
+      const t = String(texto || '').replace(/\s+/g, ' ');
+      const i = t.search(/Chegada\s*:/i);
+      const trecho = i >= 0 ? t.slice(i, i + 140) : t;
+      const mh = trecho.match(/(\d{1,2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/);
+      if (!mh) return null;
+      const ms = (mh[4] != null) ? +mh[4] : null;
+      let Y = null, M = null, D = null;
+      const mExt = trecho.match(/([a-zç]{3})\.?\s+(\d{1,2}),\s*(\d{4})/i);
+      if (mExt && MESES_PT[mExt[1].toLowerCase()] != null) { M = MESES_PT[mExt[1].toLowerCase()]; D = +mExt[2]; Y = +mExt[3]; }
+      const mBar = trecho.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (mBar) { D = +mBar[1]; M = +mBar[2] - 1; Y = +mBar[3]; }
+      const agora = new Date();
+      const semData = (Y == null);
+      if (semData) { Y = agora.getFullYear(); M = agora.getMonth(); D = agora.getDate(); }
+      let d = new Date(Y, M, D, +mh[1], +mh[2], +mh[3], ms || 0);
+      // Sem data legível, chegada que "já passou" faz muito tempo é na verdade amanhã.
+      if (semData && d.getTime() < agora.getTime() - 6 * 3600000) d = new Date(d.getTime() + 86400000);
+      return { ms: d.getTime(), temMs: ms != null };
+    }
+
     async function ccMedir(c) {
       try {
         const res = await fetch('/game.php?village=' + c.origin + '&screen=place', { credentials: 'include' });
@@ -585,16 +619,15 @@
         }
         href = (idx >= 0 && hrefs[idx]) ? hrefs[idx] : hrefs[0];
         const d2 = new DOMParser().parseFromString(await (await fetch(href, { credentials: 'include' })).text(), 'text/html');
-        const m = (d2.body.textContent || '').match(/(\d{2})\/(\d{2})\/(\d{4})[^\d]{0,6}(\d{2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/);
-        if (!m) {
-          pushLog('📏 ' + c.x + '|' + c.y + ': abri o comando mas não entendi a data da chegada. '
+        const p = parseChegadaDetalhe(d2.body.textContent || '');
+        if (!p) {
+          pushLog('📏 ' + c.x + '|' + c.y + ': abri o comando mas não achei a chegada na página. '
             + 'A calibração automática segue parada.', 'err', 'cmd');
           return;
         }
-        const parede = new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6], +(m[7] || 0)).getTime();
-        const chegouEm = parede + wallToServerOffset();
+        const chegouEm = p.ms + wallToServerOffset();
         const erroMs = chegouEm - c.arriveAt;              // positivo = chegou atrasado
-        const temMs = (m[7] != null);
+        const temMs = p.temMs;
         c.medido = { chegouEm: chegouEm, erroMs: erroMs, temMs: temMs };
         // Só amostra com milésimos entra na correção — sem isso o sinal é quantizado em 1s.
         if (temMs) {

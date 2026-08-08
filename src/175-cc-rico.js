@@ -2488,6 +2488,44 @@
       });
       return out;
     }
+    // ---- Agrupar comandos JÁ ARMADOS num trem ----
+    // Sem isto só dava pra usar o trem remontando a operação do zero, o que ninguém vai querer
+    // fazer com 13 ondas já calibradas. Junta o que já está na fila.
+    // Critério (o mesmo do armar): mesma ORIGEM, mesmo ALVO e tipo ataque — o formulário do
+    // trem tem um x/y só, então ondas pra alvos diferentes não podem ir juntas. Apoio fica fora.
+    // 'armado' não entra: já está no spin de disparo, mexer ali atrasaria o tiro.
+    function ccFilaTremGrupos() {
+      const grupos = {};
+      cmdFila().forEach((c) => {
+        if (c.state !== 'novo' && c.state !== 'preparado') return;
+        if (c.tipo === 'support' || c.tipo === 'snipe') return;
+        const k = String(c.origin) + '>' + c.x + '|' + c.y;
+        (grupos[k] = grupos[k] || []).push(c);
+      });
+      return Object.keys(grupos).map((k) => grupos[k]).filter((g) => g.length > 1);
+    }
+    function ccFilaAgruparTrem() {
+      const grupos = ccFilaTremGrupos();
+      if (!grupos.length) return;
+      const nOndas = grupos.reduce((s, g) => s + g.length, 0);
+      if (!confirm('Agrupar ' + nOndas + ' comando(s) em ' + grupos.length + ' trem(ns)?\n\n' +
+                   'As ondas de cada grupo passam a sair JUNTAS, num POST só, com o horário da ' +
+                   'primeira do grupo — o horário individual das demais deixa de valer.\n\n' +
+                   'É isso que evita elas disputarem a mesma tropa no servidor.')) return;
+      const absorvidos = {};
+      grupos.forEach((g) => {
+        g.sort((a, b) => (a.arriveAt || 0) - (b.arriveAt || 0));
+        const base = g[0], extras = g.slice(1);
+        base.trem = (base.trem || []).concat(extras.map((c) => c.amounts));
+        // Volta pra "novo": o c.prep guardado foi confirmado SEM as ondas extras, então tem que
+        // ser refeito — senão o POST sairia com o corpo antigo, de uma onda só.
+        base.state = 'novo'; base.prep = null; base.durMs = null; base.sendAt = 0; base.fireAt = 0; base.erro = null;
+        extras.forEach((c) => { absorvidos[c.id] = 1; });
+      });
+      config.cmd.fila = cmdFila().filter((c) => !absorvidos[c.id]);
+      save(); ccRender();
+      pushLog('Central: ' + nOndas + ' comando(s) agrupados em ' + grupos.length + ' trem(ns) — vão sair num POST só.', 'ok', 'cmd');
+    }
     // ---- Editar a tropa de um comando já na fila ----
     let _ccFilaEdit = null;
     function ccFilaEditar(id) { _ccFilaEdit = (_ccFilaEdit === id) ? null : id; ccRender(); }
@@ -2554,6 +2592,16 @@
         return '<span style="color:' + (ruim ? '#c0483a' : meio ? '#a2643a' : '#6f6153') + '">' + esc(String(nome)) +
           '<span style="color:#8a7d6d">×' + porOrig[vid].length + '</span>' + (ruim ? ' ⛔' : meio ? ' ⚠' : '') + '</span>';
       }).join(' · '));
+      // Oferece o trem quando há ondas da mesma origem indo pro mesmo alvo — é exatamente o
+      // caso em que elas disputam a mesma tropa e o servidor recusa as últimas.
+      const gruposTrem = ccFilaTremGrupos();
+      if (gruposTrem.length) {
+        const n = gruposTrem.reduce((s, g) => s + g.length, 0);
+        html += '<div style="margin-top:4px;border-top:1px dashed #e0d6c6;padding-top:3px">' +
+          '<a id="cc-trem-agrupar" style="cursor:pointer;color:#2e7d3a;text-decoration:none" ' +
+          'title="Junta ondas da mesma aldeia pro mesmo alvo num envio só, pelo recurso nativo do jogo. Evita que elas disputem a mesma tropa — a causa de onda recusada num NT.">' +
+          '🚂 agrupar ' + n + ' onda(s) em ' + gruposTrem.length + ' trem(ns)</a></div>';
+      }
       const probs = pend.filter((c) => (conf[c.id] || {}).nivel);
       if (probs.length) {
         html += '<div style="margin-top:4px;border-top:1px dashed #e0d6c6;padding-top:3px">' +
@@ -2562,6 +2610,8 @@
           (probs.length > 6 ? '<div style="color:#8a7d6d">…e mais ' + (probs.length - 6) + '</div>' : '') + '</div>';
       }
       box.innerHTML = html;
+      const bt = document.getElementById('cc-trem-agrupar');
+      if (bt) bt.onclick = ccFilaAgruparTrem;
     }
     function ccRender() {
       // Fila dividida: "a enviar" (novo/preparado/armado) e "enviados/concluídos" (o resto).

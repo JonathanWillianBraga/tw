@@ -692,6 +692,11 @@
     async function cmdTick() {
       clearTimeout(cmdTimer);
       if (!config.cmd || !config.cmd.enabled) return;
+      // ANTES do early return. A medição acontece DEPOIS do disparo, quando o comando já saiu
+      // de `pendentes` — se ela ficar embaixo do `if (!pend.length) return`, o tick sai antes e
+      // a varredura nunca roda justamente no estado em que ela é necessária: fila só de
+      // enviados. Foi o que aconteceu no teste ao vivo — `medirApos` venceu e nada rodou.
+      ccVarrerMedicoes();
       const pend = cmdPendentes();
       if (!pend.length) {
         if (SILENCE.on) silenceOff();
@@ -702,10 +707,6 @@
       const prepLead = (config.cmd.prepLeadSec || 60) * 1000;
       const silLead = (config.cmd.silenceLeadSec || 10) * 1000;
 
-      // Varredura das medições pendentes. Substitui o setTimeout em memória: roda em qualquer
-      // aba viva, sobrevive a reload e a troca de trava. Uma por tick, pra não sair em rajada;
-      // teto de tentativas pra um comando cancelado não ficar tentando pra sempre.
-      ccVarrerMedicoes();
 
       // Preparo: um por vez, pra não sair request em rajada.
       for (const c of pend) {

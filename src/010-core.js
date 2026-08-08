@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.87.0
+// @version      11.88.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -101,6 +101,43 @@
     hide:       { name: 'Esconderijo',   ico: '🕳️', max: 10 },
     wall:       { name: 'Muralha',       ico: '🧱', max: 20 },
   };
+  // População que cada edifício OCUPA. [base, fator] por prédio; a acumulada até o nível N é
+  //     popAcumEdificio(b, N) = round(base * fator^(N-1))
+  // e o custo do nível N é a diferença pro N-1. Conferido contra a tela do Edifício principal
+  // em 14/14 casos válidos (ed. principal nv23 = 23, quartel nv11 = 5, estábulo nv17 = 15,
+  // torre de vigia nv1 = 500). Praça, fazenda e armazém não custam população.
+  //
+  // Isto é só o FALLBACK: os valores variam por mundo e o jogo os serve em
+  // /interface.php?func=get_building_info — quem lê de lá e cacheia é o módulo de edifícios,
+  // no mesmo padrão que o Centro de Comando já usa pras velocidades de unidade.
+  const BUILD_POP_FALLBACK = {
+    main: [5, 1.17], barracks: [7, 1.17], stable: [8, 1.17], garage: [8, 1.17],
+    watchtower: [500, 1.18], snob: [80, 1.17], smith: [20, 1.17], place: [0, 1.17],
+    statue: [10, 1.17], market: [20, 1.17], wood: [5, 1.155], stone: [10, 1.14],
+    iron: [10, 1.17], farm: [0, 1], storage: [0, 1.15], hide: [2, 1.17], wall: [5, 1.17],
+  };
+  function buildPopTabela() {
+    const c = (config.build && config.build.popTabela) || null;
+    return (c && Object.keys(c).length) ? c : BUILD_POP_FALLBACK;
+  }
+  function popAcumEdificio(b, n) {
+    if (!(n > 0)) return 0;
+    const t = buildPopTabela()[b]; if (!t) return 0;
+    return Math.round(t[0] * Math.pow(t[1], n - 1));
+  }
+  // Quanta população os níveis que AINDA FALTAM de um plano vão consumir. `niveis` = nível
+  // efetivo atual por prédio; `plano` = itens {b, lvl, en} do modelo de construção.
+  // Como é a diferença de duas acumuladas, plano já cumprido dá 0 sozinho.
+  function popDoPlano(niveis, plano) {
+    let total = 0;
+    (plano || []).forEach((it) => {
+      if (!it || it.en === false) return;
+      const atual = (niveis && niveis[it.b]) || 0;
+      const alvo = it.lvl || 0;
+      if (alvo > atual) total += popAcumEdificio(it.b, alvo) - popAcumEdificio(it.b, atual);
+    });
+    return total;
+  }
   const tplToPlan = (text) => (text || '').split('\n').map((l) => l.trim().match(/^([a-z_]+)\s+(\d+)$/i)).filter(Boolean).filter((m) => BUILD_META[m[1].toLowerCase()]).map((m) => ({ b: m[1].toLowerCase(), lvl: Math.max(1, Math.min(BUILD_META[m[1].toLowerCase()].max, +m[2])), en: true }));
   // Nomes completos (não abreviados) como aparecem na tabela "Ainda não disponível" de screen=main —
   // diferente de BUILD_META.name, que é abreviado pra UI (ex.: "Ed. principal" vs "Edifício principal").
@@ -140,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.87.0';
+  const VERSION = '11.88.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -187,7 +224,11 @@
   //
   // `targets` continua sendo quantidade-ALVO (manutenção), não pedido único: a tela do jogo é
   // one-shot porque é manual; aqui o ciclo repete, então manter nível é o que faz sentido.
-  const defRecruitTpl = (name) => ({ name: name, targets: {}, grupo: '' });
+  // `modo` 'fixo' = o desenho de sempre (targets em números absolutos). 'receita' = os alvos
+  // são calculados POR ALDEIA a partir da fazenda dela: `receita` guarda o peso de cada
+  // unidade e `encherPct` até onde encher. Modelo antigo não tem `modo` e cai em 'fixo', então
+  // nada muda pra quem já usa.
+  const defRecruitTpl = (name) => ({ name: name, targets: {}, grupo: '', modo: 'fixo', receita: {}, encherPct: 95 });
   const defRecruit = () => ({
     running: false, nextAt: 0, interval: 600, targetHours: 2, refillBelowMin: 30,
     templates: {}, villages: {}, filterGroup: '', seguirGrupo: false, grupoTpl: '',
@@ -739,6 +780,10 @@
       if (!t.name) t.name = id;
       if (!t.targets || typeof t.targets !== 'object') t.targets = {};
       if (t.grupo == null) t.grupo = '';
+      // Modelo sem `modo` é de antes da receita: continua no comportamento de sempre.
+      if (t.modo !== 'receita') t.modo = 'fixo';
+      if (!t.receita || typeof t.receita !== 'object') t.receita = {};
+      if (t.encherPct == null) t.encherPct = 95;
     });
     // Aldeia apontando pra modelo que sumiu perderia o recrutamento em silêncio.
     Object.keys(c.recruit.villages).forEach((vid) => {

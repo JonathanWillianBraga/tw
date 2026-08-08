@@ -927,7 +927,13 @@
     document.getElementById('twmgr-rc-tpl-ren').addEventListener('click', rcRenomearModelo);
     document.getElementById('twmgr-rc-tpl-del').addEventListener('click', rcApagarModelo);
     // O editor é redesenhado a cada troca de modelo, então o listener fica no pai.
-    document.getElementById('twmgr-rc-editor').addEventListener('change', () => { rcLerEditor(); save(); });
+    document.getElementById('twmgr-rc-editor').addEventListener('change', (e) => {
+      rcLerEditor(); save();
+      // Trocar fixo⇄receita muda os CAMPOS (alvo vira peso, e aparece o "encher até %"), então
+      // o editor tem que ser redesenhado. rcLerEditor já rodou acima e guardou o que estava na
+      // tela no bucket do modo ANTIGO, então nada se perde ao alternar.
+      if (e.target && e.target.id === 'twmgr-rc-modo') rcRenderEditor();
+    });
     // População do modelo atualiza a cada tecla — não espera o blur/change pra recalcular.
     document.getElementById('twmgr-rc-editor').addEventListener('input', rcAtualizarPop);
     // ---- Status ----

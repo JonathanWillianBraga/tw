@@ -1,4 +1,40 @@
   // ==================== CONSTRUÇÕES (modelos nomeados aplicados por aldeia) ===============
+  // População que cada edifício ocupa, lida do próprio mundo. Os valores variam por servidor,
+  // então adivinhar é arriscado — o jogo publica em /interface.php?func=get_building_info.
+  // Cacheado 7 dias em config (mesmo padrão do ccMundo pras velocidades de unidade); se a
+  // leitura falhar, popAcumEdificio cai no BUILD_POP_FALLBACK e nada trava.
+  async function carregarPopEdificios(forcar) {
+    const b = (config.build = config.build || {});
+    if (!forcar && b.popTabela && Object.keys(b.popTabela).length && (Date.now() - (b.popTabelaAt || 0) < 7 * 864e5)) return b.popTabela;
+    try {
+      const txt = await (await fetch('/interface.php?func=get_building_info', { credentials: 'include' })).text();
+      const doc = new DOMParser().parseFromString(txt, 'text/xml');
+      const raiz = doc.querySelector('config'); if (!raiz) throw new Error('sem <config>');
+      const t = {};
+      Array.prototype.slice.call(raiz.children).forEach((el) => {
+        const g = (tag) => { const e = el.querySelector(tag); return e ? e.textContent.trim() : null; };
+        const base = parseFloat(g('pop')), fator = parseFloat(g('pop_factor'));
+        if (!isNaN(base) && !isNaN(fator)) t[el.tagName] = [base, fator];
+      });
+      if (!Object.keys(t).length) throw new Error('nenhum edifício lido');
+      b.popTabela = t; b.popTabelaAt = Date.now(); save();
+      return t;
+    } catch (e) {
+      pushLog('População dos edifícios: não consegui ler do mundo (' + (e.message || e) + ') — usando a tabela padrão.', 'err', 'build');
+      return null;
+    }
+  }
+  // Cache curto do estado da aldeia. Construções, Obra e (agora) o Recrutar por receita leem a
+  // MESMA tela screen=main; sem cache a mesma aldeia era buscada 2-3x no mesmo minuto.
+  const BUILD_STATE_TTL_MS = 60000;
+  const _bstCache = {};
+  async function getBuildStateCached(vid, forcar) {
+    const k = String(vid), e = _bstCache[k];
+    if (!forcar && e && (Date.now() - e.at) < BUILD_STATE_TTL_MS) return e.st;
+    const st = await getBuildState(vid);
+    _bstCache[k] = { st: st, at: Date.now() };
+    return st;
+  }
   async function getBuildState(vid) {
     const res = await fetch('/game.php?village=' + vid + '&screen=main', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');

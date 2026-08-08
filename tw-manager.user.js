@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.87.0
+// @version      11.88.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -101,6 +101,43 @@
     hide:       { name: 'Esconderijo',   ico: '🕳️', max: 10 },
     wall:       { name: 'Muralha',       ico: '🧱', max: 20 },
   };
+  // População que cada edifício OCUPA. [base, fator] por prédio; a acumulada até o nível N é
+  //     popAcumEdificio(b, N) = round(base * fator^(N-1))
+  // e o custo do nível N é a diferença pro N-1. Conferido contra a tela do Edifício principal
+  // em 14/14 casos válidos (ed. principal nv23 = 23, quartel nv11 = 5, estábulo nv17 = 15,
+  // torre de vigia nv1 = 500). Praça, fazenda e armazém não custam população.
+  //
+  // Isto é só o FALLBACK: os valores variam por mundo e o jogo os serve em
+  // /interface.php?func=get_building_info — quem lê de lá e cacheia é o módulo de edifícios,
+  // no mesmo padrão que o Centro de Comando já usa pras velocidades de unidade.
+  const BUILD_POP_FALLBACK = {
+    main: [5, 1.17], barracks: [7, 1.17], stable: [8, 1.17], garage: [8, 1.17],
+    watchtower: [500, 1.18], snob: [80, 1.17], smith: [20, 1.17], place: [0, 1.17],
+    statue: [10, 1.17], market: [20, 1.17], wood: [5, 1.155], stone: [10, 1.14],
+    iron: [10, 1.17], farm: [0, 1], storage: [0, 1.15], hide: [2, 1.17], wall: [5, 1.17],
+  };
+  function buildPopTabela() {
+    const c = (config.build && config.build.popTabela) || null;
+    return (c && Object.keys(c).length) ? c : BUILD_POP_FALLBACK;
+  }
+  function popAcumEdificio(b, n) {
+    if (!(n > 0)) return 0;
+    const t = buildPopTabela()[b]; if (!t) return 0;
+    return Math.round(t[0] * Math.pow(t[1], n - 1));
+  }
+  // Quanta população os níveis que AINDA FALTAM de um plano vão consumir. `niveis` = nível
+  // efetivo atual por prédio; `plano` = itens {b, lvl, en} do modelo de construção.
+  // Como é a diferença de duas acumuladas, plano já cumprido dá 0 sozinho.
+  function popDoPlano(niveis, plano) {
+    let total = 0;
+    (plano || []).forEach((it) => {
+      if (!it || it.en === false) return;
+      const atual = (niveis && niveis[it.b]) || 0;
+      const alvo = it.lvl || 0;
+      if (alvo > atual) total += popAcumEdificio(it.b, alvo) - popAcumEdificio(it.b, atual);
+    });
+    return total;
+  }
   const tplToPlan = (text) => (text || '').split('\n').map((l) => l.trim().match(/^([a-z_]+)\s+(\d+)$/i)).filter(Boolean).filter((m) => BUILD_META[m[1].toLowerCase()]).map((m) => ({ b: m[1].toLowerCase(), lvl: Math.max(1, Math.min(BUILD_META[m[1].toLowerCase()].max, +m[2])), en: true }));
   // Nomes completos (não abreviados) como aparecem na tabela "Ainda não disponível" de screen=main —
   // diferente de BUILD_META.name, que é abreviado pra UI (ex.: "Ed. principal" vs "Edifício principal").
@@ -140,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.87.0';
+  const VERSION = '11.88.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -187,7 +224,11 @@
   //
   // `targets` continua sendo quantidade-ALVO (manutenção), não pedido único: a tela do jogo é
   // one-shot porque é manual; aqui o ciclo repete, então manter nível é o que faz sentido.
-  const defRecruitTpl = (name) => ({ name: name, targets: {}, grupo: '' });
+  // `modo` 'fixo' = o desenho de sempre (targets em números absolutos). 'receita' = os alvos
+  // são calculados POR ALDEIA a partir da fazenda dela: `receita` guarda o peso de cada
+  // unidade e `encherPct` até onde encher. Modelo antigo não tem `modo` e cai em 'fixo', então
+  // nada muda pra quem já usa.
+  const defRecruitTpl = (name) => ({ name: name, targets: {}, grupo: '', modo: 'fixo', receita: {}, encherPct: 95 });
   const defRecruit = () => ({
     running: false, nextAt: 0, interval: 600, targetHours: 2, refillBelowMin: 30,
     templates: {}, villages: {}, filterGroup: '', seguirGrupo: false, grupoTpl: '',
@@ -739,6 +780,10 @@
       if (!t.name) t.name = id;
       if (!t.targets || typeof t.targets !== 'object') t.targets = {};
       if (t.grupo == null) t.grupo = '';
+      // Modelo sem `modo` é de antes da receita: continua no comportamento de sempre.
+      if (t.modo !== 'receita') t.modo = 'fixo';
+      if (!t.receita || typeof t.receita !== 'object') t.receita = {};
+      if (t.encherPct == null) t.encherPct = 95;
     });
     // Aldeia apontando pra modelo que sumiu perderia o recrutamento em silêncio.
     Object.keys(c.recruit.villages).forEach((vid) => {
@@ -2626,8 +2671,10 @@
       try { vs = await getVillagesInGroup(t.grupo); }
       catch (e) { pushLog('Recrutar: erro no grupo do modelo "' + (t.name || id) + '": ' + (e.message || e), 'err', 'recruit'); continue; }
       usouGrupo = true;
+      // Carrega o modelo INTEIRO (não só targets): o tick precisa do modo/receita/encherPct
+      // pra, no modo receita, calcular os alvos com a fazenda de cada aldeia.
       (vs || []).forEach((v) => { map[v.vid] = { name: v.name || v.coord || v.vid, coord: v.coord || null,
-                                                targets: t.targets || {}, tpl: id }; });
+                                                targets: t.targets || {}, tpl: id, modelo: t }; });
     }
     // Ler grupo deixa o jogo com aquele grupo selecionado; volta pra "todos" pra não afetar as
     // outras telas do usuário.
@@ -2669,7 +2716,66 @@
       if (!tmt) return;
       queuedSec[BUILDING_OF[uu]] += (+tmt[1]) * 3600 + (+tmt[2]) * 60 + (+tmt[3]);
     });
-    return { units, res: { wood: tx('#wood'), stone: tx('#stone'), iron: tx('#iron') }, popFree: Math.max(0, tx('#pop_max_label') - tx('#pop_current_label')), queuedSec: queuedSec };
+    // popMax/popAtual expostos além do popFree: o modo receita precisa da CAPACIDADE da
+    // fazenda pra calcular o alvo, não só do quanto sobra agora.
+    const popMax = tx('#pop_max_label'), popAtual = tx('#pop_current_label');
+    return { units, res: { wood: tx('#wood'), stone: tx('#stone'), iron: tx('#iron') },
+      popMax: popMax, popAtual: popAtual, popFree: Math.max(0, popMax - popAtual), queuedSec: queuedSec };
+  }
+  // ---- Modo RECEITA: converte proporção + "encher até X%" nos alvos absolutos DESTA aldeia ----
+  // O problema que isto resolve: alvo fixo é o mesmo número pra todas as aldeias, então
+  // subutiliza a que tem fazenda maior (ou bônus de +10%) e nunca é atingido na menor.
+  //
+  // A conta, em população — e a ordem importa: primeiro DESCONTA, depois reparte.
+  //   popTropa   = Σ (total × pop) de cada unidade   -> tropa ocupa fazenda esteja onde estiver,
+  //                                                     e `total` já é o total, não só o de casa
+  //   popPrédios = popAtual − popTropa               -> o que sobra da fazenda é prédio
+  //   orçamento  = popMax × encherPct% − popPrédios − reservaObra
+  //   alvo[u]    = orçamento × peso[u]/Σpesos ÷ pop[u]
+  //
+  // Repartir por POPULAÇÃO (e não por peça) é o que faz "20% cavalaria" custar o mesmo que
+  // "20% lanceiro": a cavalaria come 4 de fazenda cada, então vêm menos peças.
+  // Nobre e paladino entram no popTropa e reduzem o orçamento sozinhos.
+  function alvosDaReceita(state, modelo, reservaObra) {
+    const receita = (modelo && modelo.receita) || {};
+    const pesos = Object.keys(receita).filter((u) => (+receita[u] || 0) > 0);
+    if (!pesos.length) return { targets: {}, orcamento: 0, motivo: 'receita vazia' };
+    const popMax = state.popMax || 0;
+    if (!popMax) return { targets: {}, orcamento: 0, motivo: 'fazenda não lida' };
+    let popTropa = 0;
+    Object.keys(state.units || {}).forEach((u) => {
+      const su = state.units[u]; if (!su) return;
+      popTropa += (su.total || 0) * (su.pop || 0);
+    });
+    const popPredios = Math.max(0, (state.popAtual || 0) - popTropa);
+    const pct = Math.max(1, Math.min(100, +(modelo.encherPct) || 95)) / 100;
+    const orcamento = Math.floor(popMax * pct - popPredios - (reservaObra || 0));
+    if (!(orcamento > 0)) return { targets: {}, orcamento: 0, motivo: 'sem espaço na fazenda' };
+    const soma = pesos.reduce((s, u) => s + (+receita[u] || 0), 0);
+    const targets = {};
+    pesos.forEach((u) => {
+      const su = (state.units || {})[u];
+      const custo = (su && su.pop) || (UNIT_STATS[u] && UNIT_STATS[u].pop) || 1;
+      targets[u] = Math.max(0, Math.floor(orcamento * ((+receita[u] || 0) / soma) / custo));
+    });
+    return { targets: targets, orcamento: orcamento, motivo: null };
+  }
+  // Resolve os alvos EFETIVOS de uma aldeia: no fixo devolve o que está no modelo; na receita
+  // calcula a partir da fazenda dela. Usado pelo ciclo E pelo ↻ do Status — se cada um fizesse
+  // a conta por conta própria, o Status mostraria número diferente do que o motor usa.
+  async function rcAlvosEfetivos(vid, entrada, state, assignObra) {
+    const modelo = entrada.modelo || null;
+    if (!modelo || modelo.modo !== 'receita') return { targets: entrada.targets || {}, orcamento: null, motivo: null };
+    let reservaObra = 0;
+    try {
+      const atrib = (assignObra || {})[String(vid)];
+      const plano = atrib ? ((config.build.templates[atrib.tpl] || {}).plan || []) : [];
+      if (plano.length) {
+        const bst = await getBuildStateCached(vid);
+        reservaObra = popDoPlano(bst.levelEff || bst.level || {}, plano);
+      }
+    } catch (e) { /* sem plano/estado: reserva 0, vira só "encher até X%" */ }
+    return alvosDaReceita(state, modelo, reservaObra);
   }
   function computeRecruit(state, targets, cfg, queuedSec) {
     const amounts = {}, addedSec = {}, res = Object.assign({}, state.res);
@@ -2746,14 +2852,35 @@
     catch (e) { pushLog('Recrutar: erro ao resolver os alvos (' + (e.message || e) + ').', 'err', 'recruit'); config.recruit.nextAt = now + 120000; save(); scheduleRecruit(); return; }
     const vids = Object.keys(map);
     if (!vids.length) { pushLog('Recrutar: nenhum grupo mapeado com aldeias.', '', 'recruit'); config.recruit.nextAt = now + 300000; save(); scheduleRecruit(); return; }
+    // Se algum modelo é receita, resolve as aldeias do módulo de Construções UMA vez por ciclo
+    // (a função busca grupo no servidor — chamar por aldeia sairia caro à toa).
+    let assignObra = null;
+    if (vids.some((v) => (map[v].modelo || {}).modo === 'receita')) {
+      // Tabela de população dos edifícios do MUNDO (cacheada 7 dias; cai no padrão se falhar).
+      try { await carregarPopEdificios(false); } catch (e) {}
+      try { assignObra = await bldResolverAldeias(); }
+      catch (e) { pushLog('Recrutar: não li os modelos de Construções pra reservar população (' + (e.message || e) + ') — seguindo sem reserva.', 'err', 'recruit'); }
+    }
     let totalSent = 0, metas = 0;
     for (const vid of vids) {
       { const pare = devoParar('recruit'); if (pare) { pushLog('Recrutar: ciclo interrompido — ' + pare + '.', '', 'recruit'); break; } }
-      const targets = map[vid].targets || {};
-      if (!Object.keys(targets).length) continue;
+      const modelo = map[vid].modelo || null;
+      const ehReceita = !!(modelo && modelo.modo === 'receita');
+      let targets = map[vid].targets || {};
+      if (!ehReceita && !Object.keys(targets).length) continue;
       let state;
       try { state = await getRecruitState(vid); }
       catch (e) { pushLog('Recrutar em ' + (map[vid].name || vid) + ': erro ao ler o estado (' + (e.message || e) + ').', 'err', 'recruit'); continue; }
+      // Modo receita: os alvos saem da fazenda DESTA aldeia, descontando o que o modelo de
+      // Construções ainda vai ocupar. O computeRecruit abaixo não muda — ele segue recebendo
+      // números absolutos, só que agora calculados por aldeia.
+      let orcamentoRec = null;
+      if (ehReceita) {
+        const r = await rcAlvosEfetivos(vid, map[vid], state, assignObra);
+        targets = r.targets; orcamentoRec = r.orcamento;
+        if (r.motivo) pushLog('Recrutar em ' + (map[vid].name || vid) + ': ' + r.motivo + ' — nada a fazer.', '', 'recruit');
+      }
+      if (!Object.keys(targets).length) continue;
       const queuedSec = state.queuedSec || { barracks: 0, stable: 0, garage: 0 };  // FILA REAL lida da tela
       const { amounts, reason, wantCost } = computeRecruit(state, targets, config.recruit, queuedSec);
       config.recruit.demand = config.recruit.demand || {};
@@ -2780,7 +2907,9 @@
       if (Object.keys(amounts).length) {
         try {
           await sendRecruit(vid, amounts);
-          pushLog('Recrutar: ' + nm + ' → ' + Object.entries(amounts).map(([u, n]) => n + ' ' + u).join(', ') + ' (' + qStr + ')', 'ok', 'recruit');
+          pushLog('Recrutar: ' + nm + ' → ' + Object.entries(amounts).map(([u, n]) => n + ' ' + u).join(', ') +
+                  (orcamentoRec != null ? ' · receita: ' + fmtN(orcamentoRec) + ' de fazenda pra tropa' : '') +
+                  ' (' + qStr + ')', 'ok', 'recruit');
           totalSent++;
         } catch (e) { pushLog('Recrutar em ' + nm + ': ' + (e.message || e), 'err', 'recruit'); }
       } else {
@@ -2836,16 +2965,33 @@
     const gopts = '<option value="">— nenhum —</option>' + _twGroupsCache.map((gr) =>
       '<option value="' + gr.id + '"' + (String(t.grupo || '') === String(gr.id) ? ' selected' : '') + '>'
       + esc(gr.name) + '</option>').join('');
+    const receita = (t.modo === 'receita');
+    const rc = t.receita || {};
     box.innerHTML =
       '<div class="twmgr-fld"><span title="Todas as aldeias deste grupo usam este modelo, sem precisar marcar uma a uma">Aplicar ao grupo</span>' +
         '<select id="twmgr-rc-tplgrp" class="twmgr-inp" style="flex:0 0 150px;width:150px">' + gopts + '</select></div>' +
+      // Fixo x Receita. Fixo é o de sempre; receita calcula o alvo por aldeia a partir da
+      // fazenda dela, o que faz a aldeia com bônus recrutar mais sozinha.
+      '<div class="twmgr-fld"><span title="Fixo: o número é o alvo, igual pra toda aldeia do grupo. Receita: o número é um PESO — o script reparte a fazenda de cada aldeia nessa proporção, descontando o que os prédios ocupam e o que o modelo de Construções ainda vai ocupar.">Modo</span>' +
+        '<select id="twmgr-rc-modo" class="twmgr-inp" style="flex:0 0 150px;width:150px">' +
+          '<option value="fixo"' + (receita ? '' : ' selected') + '>Alvo fixo (número)</option>' +
+          '<option value="receita"' + (receita ? ' selected' : '') + '>Receita (% da fazenda)</option>' +
+        '</select></div>' +
+      (receita
+        ? '<div class="twmgr-fld"><span title="Até onde encher a fazenda. O resto fica de folga.">Encher a fazenda até</span>' +
+            '<input id="twmgr-rc-encher" class="twmgr-inp" type="number" min="1" max="100" value="' + (t.encherPct != null ? t.encherPct : 95) + '"><span style="flex:0 0 auto;color:#8a7d6d">%</span></div>'
+        : '') +
       '<div class="twmgr-ug">' + unitsDoMundo().filter((u) => u[0] !== 'knight' && u[0] !== 'snob').map((u) =>
         '<div><div class="h" title="' + esc(u[1]) + '">'
         + '<span class="unit_sprite unit_sprite_smaller ' + u[0] + '"></span><em>' + esc(u[1]) + '</em></div>'
-        + '<input class="twmgr-rc-t twmgr-inp" data-unit="' + u[0] + '" type="number" min="0" placeholder="—"'
-        + ' value="' + (tg[u[0]] != null ? tg[u[0]] : '') + '"></div>').join('') + '</div>' +
-      '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Vazio = <b>não recruta</b> essa unidade. Número = alvo a <b>manter</b> — ele repõe quando cai abaixo.</div>' +
-      '<div id="twmgr-rc-pop" style="font-size:9px;color:#8a7d6d;margin-top:2px">População do modelo: <b id="twmgr-rc-pop-v">0</b></div>';
+        + '<input class="' + (receita ? 'twmgr-rc-r' : 'twmgr-rc-t') + ' twmgr-inp" data-unit="' + u[0] + '" type="number" min="0" placeholder="—"'
+        + ' value="' + (receita ? (rc[u[0]] != null ? rc[u[0]] : '') : (tg[u[0]] != null ? tg[u[0]] : '')) + '"></div>').join('') + '</div>' +
+      '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">' + (receita
+        ? 'Número = <b>peso</b>. Ele é repartido em POPULAÇÃO, não em peças — por isso cavalaria (4 de fazenda) rende menos unidades que lanceiro (1) pro mesmo peso. Vazio = não recruta.'
+        : 'Vazio = <b>não recruta</b> essa unidade. Número = alvo a <b>manter</b> — ele repõe quando cai abaixo.') + '</div>' +
+      '<div id="twmgr-rc-pop" style="font-size:9px;color:#8a7d6d;margin-top:2px">' +
+        (receita ? 'Divisão da fazenda: ' : 'População do modelo: ') +
+        '<b id="twmgr-rc-pop-v">' + (receita ? '—' : '0') + '</b></div>';
     rcAtualizarPop();
   }
   // População que o modelo ocupa na fazenda: soma dos alvos digitados × peso de cada
@@ -2854,6 +3000,21 @@
   // de salvar.
   function rcAtualizarPop() {
     const el = document.getElementById('twmgr-rc-pop-v'); if (!el) return;
+    const campos = document.querySelectorAll('.twmgr-rc-r');
+    if (campos.length) {
+      // Modo receita: o número não é quantidade, é peso — então o útil aqui é mostrar a fatia
+      // da fazenda que cada unidade vai levar, que é o que o usuário está de fato decidindo.
+      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+      let soma = 0; const pesos = [];
+      campos.forEach((i) => {
+        const v = parseInt(i.value, 10);
+        if (!Number.isNaN(v) && v > 0) { pesos.push([i.getAttribute('data-unit'), v]); soma += v; }
+      });
+      el.innerHTML = soma
+        ? pesos.map(([u, v]) => esc(rot[u] || u) + ' ' + Math.round(100 * v / soma) + '%').join(' · ')
+        : '—';
+      return;
+    }
     let pop = 0;
     document.querySelectorAll('.twmgr-rc-t').forEach((i) => {
       const v = parseInt(i.value, 10);
@@ -2863,13 +3024,30 @@
   }
   function rcLerEditor() {
     const t = rcTplAtivo(); if (!t) return;
-    const tg = {};
-    document.querySelectorAll('.twmgr-rc-t').forEach((i) => {
-      if (String(i.value).trim() === '') return;
-      const v = parseInt(i.value, 10);
-      if (!Number.isNaN(v) && v >= 0) tg[i.getAttribute('data-unit')] = v;
-    });
-    t.targets = tg;
+    const md = document.getElementById('twmgr-rc-modo');
+    if (md) t.modo = (md.value === 'receita') ? 'receita' : 'fixo';
+    // Lê SÓ os campos do modo que está na tela: o outro conjunto não foi renderizado, e
+    // sobrescrever com vazio apagaria a configuração do modo que não está aparecendo.
+    const campoR = document.querySelectorAll('.twmgr-rc-r');
+    if (campoR.length) {
+      const rc = {};
+      campoR.forEach((i) => {
+        if (String(i.value).trim() === '') return;
+        const v = parseInt(i.value, 10);
+        if (!Number.isNaN(v) && v > 0) rc[i.getAttribute('data-unit')] = v;
+      });
+      t.receita = rc;
+      const ep = document.getElementById('twmgr-rc-encher');
+      if (ep) t.encherPct = Math.max(1, Math.min(100, parseInt(ep.value, 10) || 95));
+    } else {
+      const tg = {};
+      document.querySelectorAll('.twmgr-rc-t').forEach((i) => {
+        if (String(i.value).trim() === '') return;
+        const v = parseInt(i.value, 10);
+        if (!Number.isNaN(v) && v >= 0) tg[i.getAttribute('data-unit')] = v;
+      });
+      t.targets = tg;
+    }
     const g = document.getElementById('twmgr-rc-tplgrp');
     if (g) t.grupo = g.value || '';
   }
@@ -3097,11 +3275,21 @@
     try {
       const map = await resolveTargets();
       config.recruit.status = config.recruit.status || {};
+      // Mesma preparação do ciclo, pra o Status mostrar exatamente o alvo que o motor usaria.
+      let assignObra = null;
+      const temReceita = Object.keys(map).some((v) => (map[v].modelo || {}).modo === 'receita');
+      if (temReceita) {
+        try { await carregarPopEdificios(false); } catch (e) {}
+        try { assignObra = await bldResolverAldeias(); } catch (e) {}
+      }
       for (const vid of Object.keys(map)) {
-        const targets = map[vid].targets || {};
-        if (!Object.keys(targets).length) continue;
+        const ehRec = ((map[vid].modelo || {}).modo === 'receita');
+        let targets = map[vid].targets || {};
+        if (!ehRec && !Object.keys(targets).length) continue;
         let state;
         try { state = await getRecruitState(vid); } catch (e) { continue; }
+        if (ehRec) targets = (await rcAlvosEfetivos(vid, map[vid], state, assignObra)).targets;
+        if (!Object.keys(targets).length) continue;
         const un = {};
         let ok = true;
         Object.keys(targets).forEach((u) => {
@@ -4126,6 +4314,42 @@
   function marketStop(modeKey) { readMarketCfg(); config.market.modes[modeKey].running = false; save(); clearTimeout(marketTimers[modeKey]); setMarketStatus(modeKey, false); pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + ') parado.', '', 'market'); }
 
   // ==================== CONSTRUÇÕES (modelos nomeados aplicados por aldeia) ===============
+  // População que cada edifício ocupa, lida do próprio mundo. Os valores variam por servidor,
+  // então adivinhar é arriscado — o jogo publica em /interface.php?func=get_building_info.
+  // Cacheado 7 dias em config (mesmo padrão do ccMundo pras velocidades de unidade); se a
+  // leitura falhar, popAcumEdificio cai no BUILD_POP_FALLBACK e nada trava.
+  async function carregarPopEdificios(forcar) {
+    const b = (config.build = config.build || {});
+    if (!forcar && b.popTabela && Object.keys(b.popTabela).length && (Date.now() - (b.popTabelaAt || 0) < 7 * 864e5)) return b.popTabela;
+    try {
+      const txt = await (await fetch('/interface.php?func=get_building_info', { credentials: 'include' })).text();
+      const doc = new DOMParser().parseFromString(txt, 'text/xml');
+      const raiz = doc.querySelector('config'); if (!raiz) throw new Error('sem <config>');
+      const t = {};
+      Array.prototype.slice.call(raiz.children).forEach((el) => {
+        const g = (tag) => { const e = el.querySelector(tag); return e ? e.textContent.trim() : null; };
+        const base = parseFloat(g('pop')), fator = parseFloat(g('pop_factor'));
+        if (!isNaN(base) && !isNaN(fator)) t[el.tagName] = [base, fator];
+      });
+      if (!Object.keys(t).length) throw new Error('nenhum edifício lido');
+      b.popTabela = t; b.popTabelaAt = Date.now(); save();
+      return t;
+    } catch (e) {
+      pushLog('População dos edifícios: não consegui ler do mundo (' + (e.message || e) + ') — usando a tabela padrão.', 'err', 'build');
+      return null;
+    }
+  }
+  // Cache curto do estado da aldeia. Construções, Obra e (agora) o Recrutar por receita leem a
+  // MESMA tela screen=main; sem cache a mesma aldeia era buscada 2-3x no mesmo minuto.
+  const BUILD_STATE_TTL_MS = 60000;
+  const _bstCache = {};
+  async function getBuildStateCached(vid, forcar) {
+    const k = String(vid), e = _bstCache[k];
+    if (!forcar && e && (Date.now() - e.at) < BUILD_STATE_TTL_MS) return e.st;
+    const st = await getBuildState(vid);
+    _bstCache[k] = { st: st, at: Date.now() };
+    return st;
+  }
   async function getBuildState(vid) {
     const res = await fetch('/game.php?village=' + vid + '&screen=main', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
@@ -9603,7 +9827,13 @@
     document.getElementById('twmgr-rc-tpl-ren').addEventListener('click', rcRenomearModelo);
     document.getElementById('twmgr-rc-tpl-del').addEventListener('click', rcApagarModelo);
     // O editor é redesenhado a cada troca de modelo, então o listener fica no pai.
-    document.getElementById('twmgr-rc-editor').addEventListener('change', () => { rcLerEditor(); save(); });
+    document.getElementById('twmgr-rc-editor').addEventListener('change', (e) => {
+      rcLerEditor(); save();
+      // Trocar fixo⇄receita muda os CAMPOS (alvo vira peso, e aparece o "encher até %"), então
+      // o editor tem que ser redesenhado. rcLerEditor já rodou acima e guardou o que estava na
+      // tela no bucket do modo ANTIGO, então nada se perde ao alternar.
+      if (e.target && e.target.id === 'twmgr-rc-modo') rcRenderEditor();
+    });
     // População do modelo atualiza a cada tecla — não espera o blur/change pra recalcular.
     document.getElementById('twmgr-rc-editor').addEventListener('input', rcAtualizarPop);
     // ---- Status ----

@@ -32,6 +32,7 @@
       ondas: [],              // [{id, origem, amounts, max, offsetMs, rot}]
       filaOrdem: 'chegada',   // como listar a fila: 'chegada' | 'saida'
       filaTipoFiltro: '',     // filtro de exibição da fila: '' (todos) | 'ataque' | 'apoio' | 'fake' | 'nobre'
+      filaAlvoFiltro: '',     // filtro por alvo: casa contra a coordenada OU o nome da aldeia
       enviarParcial: false,   // padrão geral: manda o que tiver disponível em vez de falhar por tropa insuficiente
       passoMs: 50,            // passo dos botões de ajuste fino na fila
       modelos: null,          // modelos de tropa do usuário (null = ainda não semeado)
@@ -93,6 +94,7 @@
         if (!Array.isArray(c.cmd.ondas)) c.cmd.ondas = [];
         if (!c.cmd.filaOrdem) c.cmd.filaOrdem = 'chegada';
         if (c.cmd.filaTipoFiltro == null) c.cmd.filaTipoFiltro = '';
+        if (c.cmd.filaAlvoFiltro == null) c.cmd.filaAlvoFiltro = '';
         if (c.cmd.enviarParcial == null) c.cmd.enviarParcial = false;
         if (c.cmd.passoMs == null) c.cmd.passoMs = 50;
         if (!Array.isArray(c.cmd.modelos)) c.cmd.modelos = MODELOS_PADRAO();
@@ -2380,12 +2382,21 @@
       if (b.durMs != null) cmdRecalc(b);
       save(); ccRender(); cmdTick();
     }
+    // Saída de um comando: a confirmada pelo servidor, ou — antes do preparo — a mesma
+    // estimativa local que a coluna "sai" já mostra.
+    // O bug que isto conserta: comando 'novo' tem sendAt = 0, então o "ordenar por saída" caía
+    // no fallback pra chegada e a ordem não mudava NADA. Como quase todo comando na fila está
+    // em 'novo', a opção parecia simplesmente não funcionar.
+    function ccSaidaDe(c) {
+      if (c.sendAt) return c.sendAt;
+      const e = ccEstimaDeComando(c);
+      return (e != null && c.arriveAt) ? (c.arriveAt - e) : (c.arriveAt || 0);
+    }
     function ccFilaOrdenada() {
       const porSaida = (config.cmd.filaOrdem === 'saida');
       return cmdFila().slice().sort((a, b) => {
-        // Antes do preparo não há saída conhecida; cai pra chegada pra não embaralhar.
-        const va = porSaida ? (a.sendAt || a.arriveAt || 0) : (a.arriveAt || 0);
-        const vb = porSaida ? (b.sendAt || b.arriveAt || 0) : (b.arriveAt || 0);
+        const va = porSaida ? ccSaidaDe(a) : (a.arriveAt || 0);
+        const vb = porSaida ? ccSaidaDe(b) : (b.arriveAt || 0);
         return va - vb;
       });
     }
@@ -2575,76 +2586,6 @@
       }
       save();
     }
-    // ---- Resumo ----
-    // A Fila mostra comando a comando; numa operação de 13 ondas o que falta é a visão de cima:
-    // a que horas eu preciso estar na frente do PC, quais alvos recebem o quê, e qual aldeia é o
-    // gargalo. Fica ACIMA da Fila porque é o que se olha antes de entrar no detalhe.
-    function ccResumoRender() {
-      const box = document.getElementById('cc-resumo-op'); if (!box) return;
-      const cn = document.getElementById('cc-resumo-n');
-      const pend = cmdPendentes();
-      if (!pend.length) {
-        box.innerHTML = '<div style="color:#8a7d6d;padding:4px">— nada agendado —</div>';
-        if (cn) cn.textContent = ''; return;
-      }
-      const conf = ccFilaConferir();
-      const nErro = Object.keys(conf).filter((k) => conf[k].nivel === 'erro').length;
-      const nAviso = Object.keys(conf).filter((k) => conf[k].nivel === 'aviso').length;
-      if (cn) cn.innerHTML = '(' + pend.length + ')' +
-        (nErro ? ' <b style="color:#c0483a">⛔ ' + nErro + '</b>' : '') +
-        (nAviso ? ' <b style="color:#a2643a">⚠ ' + nAviso + '</b>' : '') +
-        (!nErro && !nAviso ? ' <b style="color:#2e7d3a">✓</b>' : '');
-      const agora = srvNowP();
-      const saiDe = (c) => { const e = ccEstimaDeComando(c); return c.sendAt ? c.sendAt : ((e != null && c.arriveAt) ? c.arriveAt - e : null); };
-      const saidas = pend.map(saiDe).filter((x) => x != null).sort((a, b) => a - b);
-      const selo = (ms) => ccDiaRel(ms) ? ' <span style="color:#a8564a">' + ccDiaRel(ms) + '</span>' : '';
-      const porAlvo = {}, porOrig = {};
-      pend.forEach((c) => {
-        (porAlvo[c.x + '|' + c.y] = porAlvo[c.x + '|' + c.y] || []).push(c);
-        (porOrig[String(c.origin)] = porOrig[String(c.origin)] || []).push(c);
-      });
-      const lin = (rot, val) => '<div style="display:flex;gap:6px;margin-bottom:3px">' +
-        '<span style="color:#8a7d6d;flex:0 0 62px">' + rot + '</span><span style="flex:1">' + val + '</span></div>';
-      let html = '';
-      if (saidas.length) {
-        const p = saidas[0], u = saidas[saidas.length - 1];
-        html += lin('Saídas', '<b style="color:#2e7d3a">' + srvClockMs(p) + '</b>' + selo(p) +
-          (u !== p ? ' <span style="color:#8a7d6d">até</span> <b>' + srvClockMs(u) + '</b>' + selo(u) : '') +
-          ' <span style="color:#8a7d6d">· 1ª em</span> <b>' + fmt(p - agora) + '</b>');
-      }
-      html += lin('Alvos', Object.keys(porAlvo).map((k) => {
-        const nome = ccNomeAlvo(k);
-        return '<span title="' + esc(nome || k) + '">' + esc(k) + '<span style="color:#8a7d6d">×' + porAlvo[k].length + '</span></span>';
-      }).join(' · '));
-      html += lin('Origens', Object.keys(porOrig).map((vid) => {
-        const v = CCVILAS.find((z) => String(z.vid) === String(vid));
-        const nome = v ? (v.nome || v.coord || vid) : vid;
-        const ruim = porOrig[vid].some((c) => (conf[c.id] || {}).nivel === 'erro');
-        const meio = porOrig[vid].some((c) => (conf[c.id] || {}).nivel === 'aviso');
-        return '<span style="color:' + (ruim ? '#c0483a' : meio ? '#a2643a' : '#6f6153') + '">' + esc(String(nome)) +
-          '<span style="color:#8a7d6d">×' + porOrig[vid].length + '</span>' + (ruim ? ' ⛔' : meio ? ' ⚠' : '') + '</span>';
-      }).join(' · '));
-      // Oferece o trem quando há ondas da mesma origem indo pro mesmo alvo — é exatamente o
-      // caso em que elas disputam a mesma tropa e o servidor recusa as últimas.
-      const gruposTrem = ccFilaTremGrupos();
-      if (gruposTrem.length) {
-        const n = gruposTrem.reduce((s, g) => s + g.length, 0);
-        html += '<div style="margin-top:4px;border-top:1px dashed #e0d6c6;padding-top:3px">' +
-          '<a id="cc-trem-agrupar" style="cursor:pointer;color:#2e7d3a;text-decoration:none" ' +
-          'title="Junta ondas da mesma aldeia pro mesmo alvo num envio só, pelo recurso nativo do jogo. Evita que elas disputem a mesma tropa — a causa de onda recusada num NT.">' +
-          '🚂 agrupar ' + n + ' onda(s) em ' + gruposTrem.length + ' trem(ns)</a></div>';
-      }
-      const probs = pend.filter((c) => (conf[c.id] || {}).nivel);
-      if (probs.length) {
-        html += '<div style="margin-top:4px;border-top:1px dashed #e0d6c6;padding-top:3px">' +
-          probs.slice(0, 6).map((c) => '<div style="color:' + (conf[c.id].nivel === 'erro' ? '#c0483a' : '#a2643a') + '">' +
-            (conf[c.id].nivel === 'erro' ? '⛔ ' : '⚠ ') + esc(c.x + '|' + c.y) + ' — ' + esc(conf[c.id].msg) + '</div>').join('') +
-          (probs.length > 6 ? '<div style="color:#8a7d6d">…e mais ' + (probs.length - 6) + '</div>' : '') + '</div>';
-      }
-      box.innerHTML = html;
-      const bt = document.getElementById('cc-trem-agrupar');
-      if (bt) bt.onclick = ccFilaAgruparTrem;
-    }
     function ccRender() {
       // Fila dividida: "a enviar" (novo/preparado/armado) e "enviados/concluídos" (o resto).
       const bEnvio = document.getElementById('cc-fila-envio');
@@ -2788,7 +2729,16 @@
       };
       const ehEnvio = (c) => c.state === 'novo' || c.state === 'preparado' || c.state === 'armado';
       const filtroTipo = config.cmd.filaTipoFiltro || '';
-      const passaFiltro = (c) => !filtroTipo || ccRotTipo(c) === filtroTipo;
+      // Filtro de alvo: casa contra a COORDENADA e contra o NOME da aldeia alvo, porque numa
+      // operação você lembra de um ou do outro — raramente dos dois.
+      const filtroAlvo = (config.cmd.filaAlvoFiltro || '').trim().toLowerCase();
+      const passaFiltro = (c) => {
+        if (filtroTipo && ccRotTipo(c) !== filtroTipo) return false;
+        if (!filtroAlvo) return true;
+        const coord = c.x + '|' + c.y;
+        const nome = ccNomeAlvo(coord) || '';
+        return coord.toLowerCase().indexOf(filtroAlvo) >= 0 || nome.toLowerCase().indexOf(filtroAlvo) >= 0;
+      };
       const ordenada = ccFilaOrdenada().filter(passaFiltro);
       const envio = ordenada.filter(ehEnvio);
       const feitos = ordenada.filter((c) => !ehEnvio(c));
@@ -2811,7 +2761,19 @@
           ccRender();   // o "sai" muda junto (a unidade mais lenta pode ter mudado)
         });
       });
-      ccResumoRender();
+      // Botão de agrupar em trem: aparece só quando há ondas da mesma origem pro mesmo alvo —
+      // que é exatamente o caso em que elas disputam a mesma tropa no servidor.
+      const btTrem = document.getElementById('cc-trem-agrupar');
+      if (btTrem) {
+        const gs = ccFilaTremGrupos();
+        if (gs.length) {
+          const n = gs.reduce((s, g) => s + g.length, 0);
+          btTrem.style.display = '';
+          btTrem.textContent = '🚂 agrupar ' + n + ' em ' + gs.length + ' trem(ns)';
+          btTrem.title = 'Junta ondas da mesma aldeia pro mesmo alvo num envio só, pelo recurso nativo do jogo. Evita que elas disputem a mesma tropa.';
+          btTrem.onclick = ccFilaAgruparTrem;
+        } else { btTrem.style.display = 'none'; }
+      }
     }
 
     // Relógio a 100ms; a fila só 1x por segundo. Redesenhar a lista 10x/s atrapalharia o clique
@@ -3471,30 +3433,31 @@
         '</div>' +
         '<div id="cc-armar-row" style="display:flex;gap:6px;align-items:center">' +
           '<button id="cc-armar" class="twmgr-btn twmgr-go" style="flex:1">▶ Armar comando</button>' +
-          '<button id="cc-limpar" class="twmgr-btn twmgr-ghost" title="remove enviados/erros da lista">🧹</button>' +
           '<button id="cc-diag" class="twmgr-btn twmgr-ghost" title="copia um relatório do estado interno pra área de transferência">🐛</button>' +
         '</div>' +
         '<div id="cc-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
         '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
-        // Resumo antes da Fila: visão de cima (quando sai, pra onde, de onde, o que está errado).
-        '<div style="margin-top:8px;border-top:1px solid #ece4d8;padding-top:6px">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
-            '<span data-sec="resumo" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Resumo <span id="cc-resumo-n" style="color:#8a7d6d;font-weight:400"></span></span>' +
-          '</div>' +
-          '<div data-secbody="resumo"><div id="cc-resumo-op" style="font-size:10px;color:#6f6153;background:#fbf7ee;border:1px solid #ece4d8;border-radius:7px;padding:6px 8px"></div></div>' +
-        '</div>' +
         '<div style="margin-top:8px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
             '<span data-sec="fila" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Fila <span id="cc-fila-n" style="color:#8a7d6d;font-weight:400"></span></span>' +
             '<span style="font-size:10px;color:#8a7d6d">' +
+              // Limpar mora aqui, e não na linha do Armar: aquela linha some fora da última etapa
+              // da Operação, e o botão ia junto — mas limpar a fila não tem nada a ver com armar.
+              '<a id="cc-trem-agrupar" style="cursor:pointer;color:#2e7d3a;display:none;text-decoration:none;margin-right:6px"></a>' +
+              '<a id="cc-limpar" style="cursor:pointer;color:#a2643a;text-decoration:none" title="remove enviados/erros da lista">🧹 limpar</a>' +
+            '</span>' +
+          '</div>' +
+          // Filtros da fila numa linha só, pra caber alvo + tipo + ordem + passo.
+          '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:10px;color:#8a7d6d;margin-bottom:3px">' +
+              '<input id="cc-fila-alvo" class="twmgr-inp" placeholder="filtrar alvo (coord ou nome)" ' +
+                'style="flex:1;min-width:130px;font-size:10px;padding:2px 5px" title="filtra pela coordenada OU pelo nome da aldeia alvo">' +
               '<select id="cc-fila-tipo" class="twmgr-inp" style="width:auto;font-size:10px;padding:1px" title="mostra só um tipo na fila">' +
                 '<option value="">todos os tipos</option><option value="ataque">⚔ ataque</option>' +
                 '<option value="apoio">🛡 apoio</option><option value="fake">🎭 fake</option><option value="nobre">👑 nobre</option></select>' +
-              ' · ordenar por ' +
+              ' ordenar por ' +
               '<select id="cc-fila-ordem" class="twmgr-inp" style="width:auto;font-size:10px;padding:1px">' +
                 '<option value="chegada">chegada</option><option value="saida">saída</option></select>' +
               ' · passo <input id="cc-passo" class="twmgr-inp" type="number" min="1" step="10" style="width:52px;font-size:10px;padding:1px">ms' +
-            '</span>' +
           '</div>' +
           '<div data-secbody="fila">' +
             '<div style="display:flex;gap:2px;margin-bottom:0">' +
@@ -3571,6 +3534,11 @@
       const tipoEl = document.getElementById('cc-fila-tipo');
       tipoEl.value = config.cmd.filaTipoFiltro || '';
       tipoEl.addEventListener('change', () => { config.cmd.filaTipoFiltro = tipoEl.value; save(); ccRender(); });
+      const alvoFEl = document.getElementById('cc-fila-alvo');
+      alvoFEl.value = config.cmd.filaAlvoFiltro || '';
+      // 'input' e não 'change': filtrar tem que responder enquanto se digita. O guarda de foco
+      // do ccRender impede que o redesenho de 1s roube o cursor no meio.
+      alvoFEl.addEventListener('input', () => { config.cmd.filaAlvoFiltro = alvoFEl.value; save(); ccRender(); });
       const parcialEl = document.getElementById('cc-parcial');
       parcialEl.checked = !!config.cmd.enviarParcial;
       parcialEl.addEventListener('change', () => { config.cmd.enviarParcial = parcialEl.checked; save(); ccRender(); });

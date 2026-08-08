@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.82.0
+// @version      11.83.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.82.0';
+  const VERSION = '11.83.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -11258,7 +11258,19 @@
     // ==================== COMANDOS COORDENADOS ====================
     // Passo 1 (confirmar): valida tropa/alvo no servidor e devolve a duração real da viagem
     // + o formulário já montado. Genérico: 'attack' ou 'support'.
-    async function cmdPrepare(vid, x, y, amounts, tipo) {
+    // `trem` = ondas EXTRA que saem no mesmo POST, usando o recurso nativo "Adicionar ataque
+    // adicional" do jogo (o mesmo que a UI mostra quando a composição leva nobre).
+    //
+    // Mapeado na tela real: as ondas extras vão como train[N][unidade], indexadas A PARTIR DE 2
+    // (a onda 1 é o ataque base, nos campos normais). O jogo monta essas linhas no cliente e
+    // manda tudo num POST só — então o servidor aceita campos train[] que não existiam no
+    // "confirmar", que é exatamente o que fazemos aqui.
+    //
+    // Por que importa: com um comando por onda, cada "confirmar" enxerga o estoque CHEIO, os
+    // pedidos somados passam do que a aldeia tem e o servidor recusa as ondas que chegam depois.
+    // Num POST só o jogo aloca as N ondas de uma vez — some a corrida por tropa, e o espaçamento
+    // entre elas passa a ser o do servidor (o mínimo, que é o que um trem de nobre quer).
+    async function cmdPrepare(vid, x, y, amounts, tipo, trem) {
       const p1 = new URLSearchParams();
       Object.entries(amounts).forEach(([u, a]) => { if (a > 0) p1.set(u, String(a)); });
       p1.set('x', String(x)); p1.set('y', String(y)); p1.set('input', x + '|' + y);
@@ -11318,6 +11330,13 @@
       });
       if (!params.h) params.h = CSRF;
       params[nomeTipo] = params[nomeTipo] || 'l';   // garante o tipo no corpo do passo 2
+      // Ondas extras do trem, no formato do jogo. Índice começa em 2 porque a 1 é o ataque base.
+      (trem || []).forEach((am, i) => {
+        Object.keys(am || {}).forEach((u) => {
+          const q = parseInt(am[u], 10) || 0;
+          if (q > 0) params['train[' + (i + 2) + '][' + u + ']'] = String(q);
+        });
+      });
       const action = form.getAttribute('action') || ('/game.php?village=' + vid + '&screen=place&action=command&h=' + CSRF);
       return {
         action: absUrl(action), params: params, dur: dur,
@@ -11372,7 +11391,9 @@
         // digitada não cabe mais. c.parcial null = segue o padrão geral; true/false força só
         // este comando. Precisa clampar ANTES do cmdPrepare — é o confirmar que fixa os números
         // que vão de fato pro disparo (c.prep), então ajustar depois seria tarde demais.
-        const parcial = ccParcialEfetivo(c);
+        // Trem não entra no modo parcial: cortar UMA onda mudaria a forma do trem (e a graça
+        // dele é justamente o jogo alocar as N de uma vez). Melhor falhar visível que sair torto.
+        const parcial = ccParcialEfetivo(c) && !c.trem;
         let amounts = c.amounts;
         if (parcial) {
           let avail = {};
@@ -11399,28 +11420,43 @@
         // comando que já leva qualquer outra tropa. Só vale pra ataque (apoio não tem piso).
         if (!ehApoio) {
           try {
-            const soExplorador = Object.keys(amounts).every((u) => u === 'spy');
-            if (!soExplorador) {
-              const pontos = await getVillagePoints();
-              const pts = parseInt(pontos[String(c.origin)], 10) || 0;
-              const minPop = pts > 0 ? Math.ceil((FAKE_LIMIT_PCT / 100) * pts) : 0;
-              const falta = minPop - ccFakePopOf(amounts);
-              if (falta > 0) {
-                const precisa = (amounts.spy || 0) + Math.ceil(falta / (FAKE_POP.spy || 2));
-                let temSpy = 0;
-                try { temSpy = ((await getVillageState(c.origin)).avail || {}).spy || 0; } catch (e) { temSpy = precisa; }
-                if (temSpy >= precisa) {
-                  amounts = Object.assign({}, amounts, { spy: precisa });
-                  c.amounts = amounts; save();
-                  pushLog('Central: ' + c.x + '|' + c.y + ' — completado com ' + precisa + ' explorador(es) pro piso de população (' + minPop + ' hab.).', '', 'cmd');
-                } else {
-                  pushLog('⚠ ' + c.x + '|' + c.y + ': piso de população é ' + minPop + ' hab. e faltam exploradores pra completar — o servidor provavelmente vai recusar.', 'err', 'cmd');
+            const pontos = await getVillagePoints();
+            const pts = parseInt(pontos[String(c.origin)], 10) || 0;
+            const minPop = pts > 0 ? Math.ceil((FAKE_LIMIT_PCT / 100) * pts) : 0;
+            if (minPop > 0) {
+              // Cada onda do trem é um ATAQUE separado pro servidor, então o piso vale pra CADA
+              // uma — não pra soma. Por isso a checagem roda onda a onda, e o explorador extra
+              // sai do estoque que ainda não foi comprometido pelas ondas anteriores.
+              let sobraSpy = null;
+              try { sobraSpy = ((await getVillageState(c.origin)).avail || {}).spy || 0; } catch (e) { sobraSpy = null; }
+              const ondas = [amounts].concat(c.trem || []);
+              let mexeu = false, semSpy = 0;
+              const ajustadas = ondas.map((am) => {
+                if (Object.keys(am || {}).every((u) => u === 'spy')) return am;   // só-explorador é isento
+                const falta = minPop - ccFakePopOf(am);
+                if (falta <= 0) { if (sobraSpy != null) sobraSpy -= (am.spy || 0); return am; }
+                const extra = Math.ceil(falta / (FAKE_POP.spy || 2));
+                const precisa = (am.spy || 0) + extra;
+                if (sobraSpy == null || sobraSpy >= precisa) {
+                  if (sobraSpy != null) sobraSpy -= precisa;
+                  mexeu = true;
+                  return Object.assign({}, am, { spy: precisa });
                 }
+                semSpy++; if (sobraSpy != null) sobraSpy -= (am.spy || 0);
+                return am;
+              });
+              if (mexeu) {
+                amounts = ajustadas[0];
+                c.amounts = amounts;
+                if (c.trem) c.trem = ajustadas.slice(1);
+                save();
+                pushLog('Central: ' + c.x + '|' + c.y + ' — onda(s) completadas com explorador pro piso de população (' + minPop + ' hab.).', '', 'cmd');
               }
+              if (semSpy) pushLog('⚠ ' + c.x + '|' + c.y + ': ' + semSpy + ' onda(s) abaixo do piso de ' + minPop + ' hab. e sem explorador pra completar — o servidor deve recusar.', 'err', 'cmd');
             }
           } catch (e) { /* sem pontos (village.txt falhou): segue e deixa o servidor decidir */ }
         }
-        const p = await cmdPrepare(c.origin, c.x, c.y, amounts, ehApoio ? 'support' : 'attack');
+        const p = await cmdPrepare(c.origin, c.x, c.y, amounts, ehApoio ? 'support' : 'attack', c.trem);
         ancorar();                                    // reancora o relógio junto do preparo
         const est = ccEstimaDeComando(c);
         // Se o servidor confirmou mas não deu a duração, NÃO derruba o comando: cai na estimativa
@@ -11868,11 +11904,12 @@
       });
       return a;
     }
-    function cmdAdicionar(tipo, x, y, amounts, arriveAt, origem) {
+    function cmdAdicionar(tipo, x, y, amounts, arriveAt, origem, trem) {
       const c = { id: genId(), tipo: tipo, origin: origem || CUR_VID, x: String(x), y: String(y),
                   amounts: amounts, arriveAt: arriveAt, durMs: null, sendAt: 0, fireAt: 0,
                   prep: null, state: 'novo', erro: null, sentAt: null, desvioMs: null,
-                  parcial: null };   // null = segue config.cmd.enviarParcial · true/false = força só este
+                  parcial: null,   // null = segue config.cmd.enviarParcial · true/false = força só este
+                  trem: (trem && trem.length) ? trem : null };   // ondas extras no mesmo POST
       config.cmd.fila.push(c); save();
       cmdTick(); ccRender();
       return c;
@@ -12576,6 +12613,7 @@
       const gapEl = document.getElementById('cc-op-gap'); if (gapEl) gapEl.value = cfg.gapMs;
       const coordEl = document.getElementById('cc-op-coord'); if (coordEl) coordEl.value = a ? (a.coord || '') : '';
       const chEl = document.getElementById('cc-op-chegada'); if (chEl) chEl.value = a ? (a.chegadaLocal || '') : '';
+      const tremEl = document.getElementById('cc-op-trem'); if (tremEl) tremEl.checked = !!(a && a.trem);
       // Antes do return de "sem alvo": a trilha/navegação tem que aparecer mesmo sem alvo criado.
       ccOpRenderEtapas();
 
@@ -12760,7 +12798,9 @@
         return dizer('Tem onda de apoio, mas o parâmetro de apoio ainda não foi confirmado neste mundo.');
       }
       const offsets = ccOpCalcularOffsets(a);
-      let armados = 0; const pulados = [];
+      let armados = 0, tremes = 0; const pulados = [];
+      // Prepara as ondas válidas mantendo a ordem da lista (é a ordem de chegada).
+      const prontas = [];
       a.ondas.forEach((o, i) => {
         const rotO = 'onda ' + (i + 1);
         const v = CCVILAS.find((z) => String(z.vid) === String(o.vid));
@@ -12771,13 +12811,35 @@
         const chega = base + offsets[o.id];
         const t = (v.x != null) ? ccTempoViagemMs(v.x, v.y, alvoP.x, alvoP.y, amounts) : null;
         if (t != null && (chega - t) <= srvNowP()) { pulados.push(rotO + ' (longe demais)'); return; }
-        cmdAdicionar(o.tipo === 'support' ? 'support' : 'attack', alvoP.x, alvoP.y, amounts, chega, v.vid);
-        armados++;
+        prontas.push({ o: o, v: v, amounts: amounts, chega: chega, tipo: o.tipo === 'support' ? 'support' : 'attack' });
       });
+      if (a.trem) {
+        // Trem: ondas de ATAQUE da mesma origem viram UM comando, enviado num POST só pelo
+        // recurso nativo do jogo. Some a corrida por tropa entre elas (o jogo aloca as N de uma
+        // vez) e o espaçamento passa a ser o mínimo do servidor — que é o que um NT quer.
+        // Apoio fica de fora: o formato train[] é do formulário de ataque.
+        const grupos = {};
+        prontas.forEach((p) => {
+          if (p.tipo !== 'attack') { cmdAdicionar(p.tipo, alvoP.x, alvoP.y, p.amounts, p.chega, p.v.vid); armados++; return; }
+          (grupos[String(p.v.vid)] = grupos[String(p.v.vid)] || []).push(p);
+        });
+        Object.keys(grupos).forEach((vid) => {
+          const g = grupos[vid];
+          // A chegada do trem é a da PRIMEIRA onda dele: todas saem juntas, então o horário das
+          // demais deixa de ser controlável — o servidor é quem espaça.
+          const extras = g.slice(1).map((p) => p.amounts);
+          cmdAdicionar('attack', alvoP.x, alvoP.y, g[0].amounts, g[0].chega, vid, extras);
+          armados += g.length;
+          if (extras.length) tremes++;
+        });
+      } else {
+        prontas.forEach((p) => { cmdAdicionar(p.tipo, alvoP.x, alvoP.y, p.amounts, p.chega, p.v.vid); armados++; });
+      }
       ccHistAdd(alvoP.coord); ccHistRender();
       save();
       if (!armados) return dizer('Nada armado. ' + (pulados.length ? pulados.join(', ') : ''));
       dizer(armados + ' onda(s) armada(s) → ' + alvoP.coord + ', a 1ª chegando ' + srvClockMs(base) +
+            (tremes ? ' · ' + tremes + ' trem(ns) num POST só' : '') +
             (pulados.length ? ' · pulada(s): ' + pulados.join(', ') : ''),
             pulados.length ? '#a2643a' : '#2e7d3a');
     }
@@ -13575,7 +13637,8 @@
         const diaSai = ccDiaRel(saiMs), diaCheg = ccDiaRel(c.arriveAt);
         const selo = (t) => '<br><span style="color:#a8564a;font-size:9px">' + t + '</span>';
         return '<div style="display:grid;grid-template-columns:42px 108px 108px 1fr 78px 78px 56px 18px;gap:4px;align-items:center;padding:3px 5px;border-bottom:1px solid rgba(0,0,0,.07);font-size:10px">' +
-          '<span style="color:' + (c.tipo === 'support' ? '#1f6fb2' : '#b5602f') + '">' + rot + (c.ondas ? ' ' + c.onda + '/' + c.ondas : '') + '</span>' +
+          '<span style="color:' + (c.tipo === 'support' ? '#1f6fb2' : '#b5602f') + '">' + rot + (c.ondas ? ' ' + c.onda + '/' + c.ondas : '') +
+            (c.trem ? '<br><span style="color:#8b5426;font-size:9px" title="trem: ' + (c.trem.length + 1) + ' ondas num POST só, pelo recurso nativo do jogo">🚂 ' + (c.trem.length + 1) + ' ondas</span>' : '') + '</span>' +
           '<span style="color:#8a7d6d;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(orgNome || String(org)) + '">' +
             esc(String(org)) + (orgNome ? '<br><span style="color:#584526">' + esc(orgNome) + '</span>' : '') + '</span>' +
           '<span style="color:#a2643a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(alvoNome || (c.x + '|' + c.y)) + '">' +
@@ -14243,6 +14306,8 @@
           '</div>' +
           // ---- Etapa 3: as tropas ----
           '<div id="cc-op-e3" style="display:none">' +
+            '<label class="twmgr-check" style="font-size:10px;margin-bottom:5px" title="Ondas de ATAQUE da mesma aldeia saem num POST só, pelo recurso nativo &quot;ataque adicional&quot; do jogo. O jogo aloca as N ondas de uma vez, então some a disputa por tropa entre elas (a causa real de onda recusada num NT) e o espaçamento vira o mínimo do servidor. Em troca, o horário individual de cada onda do trem deixa de ser controlável — elas saem juntas.">' +
+              '<input id="cc-op-trem" type="checkbox"> Trem: agrupar ondas da mesma aldeia num envio só <span style="color:#8a7d6d">(NT)</span></label>' +
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">' +
               '<span style="font-size:9px;color:#6f6153">Ondas <span style="color:#8a7d6d">(ordem de chegada)</span></span>' +
               '<span style="font-size:9px"><a id="cc-op-tudo-geral" style="cursor:pointer;color:#2e7d3a">🧺 tudo (todas as ondas)</a> · ' +
@@ -14410,6 +14475,10 @@
         ev.preventDefault();
         const a = ccOpAtivo(); if (a) ccOpAplicarTudo(a);
       };
+      document.getElementById('cc-op-trem').addEventListener('change', (e) => {
+        const a = ccOpAtivo(); if (!a) return;
+        a.trem = e.target.checked; save(); ccOpRender();
+      });
       const ordEl = document.getElementById('cc-fila-ordem');
       ordEl.value = config.cmd.filaOrdem || 'chegada';
       ordEl.addEventListener('change', () => { config.cmd.filaOrdem = ordEl.value; save(); ccRender(); });

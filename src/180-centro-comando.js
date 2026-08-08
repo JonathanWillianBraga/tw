@@ -260,8 +260,12 @@
       body: new URLSearchParams(cmd.payload.params).toString(),
     }).then((r) => r.text()).then((t2) => {
       cmd.rttEnvioMs = Math.round(performance.now() - t0);
-      if (/n[aã]o tem tropas suficientes|not enough|insuficient/i.test(t2)) {
-        cmd.state = 'falhou'; cmd.erro = 'tropas insuficientes';
+      // Estrutural (erroDeComando, em 050-envio.js): procurar uma frase específica deixava passar
+      // recusa com outra redação — "Não existem unidades suficientes" não casava com "não tem
+      // tropas suficientes" — e o comando era dado como enviado sem ter saído.
+      const errCmd = erroDeComando(t2);
+      if (errCmd) {
+        cmd.state = 'falhou'; cmd.erro = errCmd;
       } else if (/selecione uma aldeia alvo/i.test(t2)) {
         // Ambíguo: é também o estado normal da praça DEPOIS de um envio que deu certo.
         cmd.state = 'incerto'; cmd.erro = 'resposta ambígua — confira na tela de comandos';

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.81.0
+// @version      11.82.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -140,7 +140,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.81.0';
+  const VERSION = '11.82.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -3200,10 +3200,28 @@
     const action = form.getAttribute('action') || ('/game.php?village=' + vid + '&screen=place&action=command&h=' + CSRF);
     return { action: absUrl(action), params: params, dur: dur };
   }
+  // Recusa do servidor num POST de comando, lida de forma ESTRUTURAL.
+  //
+  // Por que não basta procurar uma frase: o código antigo testava "não tem tropas suficientes",
+  // mas o servidor responde "Não existem unidades suficientes" — não casava, a função devolvia
+  // sucesso e o comando era dado como enviado sem NADA ter saído. Medido na conta real: 3
+  // comandos marcados "enviado" com desvio +0ms, e só 1 existia de fato no jogo.
+  // O .error_box é a caixa que o próprio jogo usa pra recusa (o mesmo elemento que o preparo já
+  // lê), então vale pra qualquer motivo — tropa, população, NAP, proteção — sem adivinhar texto.
+  function erroDeComando(t2) {
+    try {
+      const doc = new DOMParser().parseFromString(t2, 'text/html');
+      const el = doc.querySelector('.error_box, .error, #command_confirmation_error');
+      if (el) { const m = (el.textContent || '').replace(/\s+/g, ' ').trim(); if (m) return m.slice(0, 150); }
+    } catch (e) { /* sem DOM utilizável: cai no texto abaixo */ }
+    if (/n[aã]o (tem|existem|h[áa]) (tropas|unidades) suficientes|enough (units|troops)/i.test(t2)) return 'recusado: tropas insuficientes';
+    return null;
+  }
   async function fakeFire(prep) {
     const r2 = await fetch(prep.action, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(prep.params).toString() });
     const t2 = await r2.text();
-    if (/n[aã]o tem tropas suficientes|not enough/i.test(t2)) throw new Error('recusado: tropas insuficientes');
+    const err = erroDeComando(t2);
+    if (err) throw new Error(err);
     return true;
   }
   const attackPrepare = fakePrepare, attackFire = fakeFire;
@@ -11324,7 +11342,10 @@
         body: prep.body || new URLSearchParams(prep.params).toString(),
       });
       const t2 = await r2.text();
-      if (/n[aã]o tem tropas suficientes|not enough/i.test(t2)) throw new Error('recusado: tropas insuficientes');
+      // Checagem estrutural (erroDeComando, em 050-envio.js): o texto exato da recusa varia, e
+      // confiar numa frase específica fazia comando sumir marcado como "enviado".
+      const err = erroDeComando(t2);
+      if (err) throw new Error(err);
       return true;
     }
 
@@ -14721,7 +14742,7 @@
       const action = form.getAttribute('action') || ('/game.php?village=' + vid + '&screen=place&action=command&h=' + CSRF);
       const r2 = await fetch(absUrl(action), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p2.toString() });
       const t2 = await r2.text();
-      if (/n[aã]o tem tropas suficientes|not enough/i.test(t2)) throw new Error('Servidor recusou: tropas insuficientes.');
+      { const err = erroDeComando(t2); if (err) throw new Error('Servidor recusou: ' + err); }
       return dur && dur > 0 ? dur : null;
     }
 
@@ -15440,8 +15461,12 @@
       body: new URLSearchParams(cmd.payload.params).toString(),
     }).then((r) => r.text()).then((t2) => {
       cmd.rttEnvioMs = Math.round(performance.now() - t0);
-      if (/n[aã]o tem tropas suficientes|not enough|insuficient/i.test(t2)) {
-        cmd.state = 'falhou'; cmd.erro = 'tropas insuficientes';
+      // Estrutural (erroDeComando, em 050-envio.js): procurar uma frase específica deixava passar
+      // recusa com outra redação — "Não existem unidades suficientes" não casava com "não tem
+      // tropas suficientes" — e o comando era dado como enviado sem ter saído.
+      const errCmd = erroDeComando(t2);
+      if (errCmd) {
+        cmd.state = 'falhou'; cmd.erro = errCmd;
       } else if (/selecione uma aldeia alvo/i.test(t2)) {
         // Ambíguo: é também o estado normal da praça DEPOIS de um envio que deu certo.
         cmd.state = 'incerto'; cmd.erro = 'resposta ambígua — confira na tela de comandos';

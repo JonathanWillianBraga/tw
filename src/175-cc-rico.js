@@ -335,7 +335,10 @@
         body: prep.body || new URLSearchParams(prep.params).toString(),
       });
       const t2 = await r2.text();
-      if (/n[aã]o tem tropas suficientes|not enough/i.test(t2)) throw new Error('recusado: tropas insuficientes');
+      // Checagem estrutural (erroDeComando, em 050-envio.js): o texto exato da recusa varia, e
+      // confiar numa frase específica fazia comando sumir marcado como "enviado".
+      const err = erroDeComando(t2);
+      if (err) throw new Error(err);
       return true;
     }
 
@@ -3732,7 +3735,7 @@
       const action = form.getAttribute('action') || ('/game.php?village=' + vid + '&screen=place&action=command&h=' + CSRF);
       const r2 = await fetch(absUrl(action), { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p2.toString() });
       const t2 = await r2.text();
-      if (/n[aã]o tem tropas suficientes|not enough/i.test(t2)) throw new Error('Servidor recusou: tropas insuficientes.');
+      { const err = erroDeComando(t2); if (err) throw new Error('Servidor recusou: ' + err); }
       return dur && dur > 0 ? dur : null;
     }
 

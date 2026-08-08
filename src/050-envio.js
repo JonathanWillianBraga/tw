@@ -26,10 +26,28 @@
     const action = form.getAttribute('action') || ('/game.php?village=' + vid + '&screen=place&action=command&h=' + CSRF);
     return { action: absUrl(action), params: params, dur: dur };
   }
+  // Recusa do servidor num POST de comando, lida de forma ESTRUTURAL.
+  //
+  // Por que não basta procurar uma frase: o código antigo testava "não tem tropas suficientes",
+  // mas o servidor responde "Não existem unidades suficientes" — não casava, a função devolvia
+  // sucesso e o comando era dado como enviado sem NADA ter saído. Medido na conta real: 3
+  // comandos marcados "enviado" com desvio +0ms, e só 1 existia de fato no jogo.
+  // O .error_box é a caixa que o próprio jogo usa pra recusa (o mesmo elemento que o preparo já
+  // lê), então vale pra qualquer motivo — tropa, população, NAP, proteção — sem adivinhar texto.
+  function erroDeComando(t2) {
+    try {
+      const doc = new DOMParser().parseFromString(t2, 'text/html');
+      const el = doc.querySelector('.error_box, .error, #command_confirmation_error');
+      if (el) { const m = (el.textContent || '').replace(/\s+/g, ' ').trim(); if (m) return m.slice(0, 150); }
+    } catch (e) { /* sem DOM utilizável: cai no texto abaixo */ }
+    if (/n[aã]o (tem|existem|h[áa]) (tropas|unidades) suficientes|enough (units|troops)/i.test(t2)) return 'recusado: tropas insuficientes';
+    return null;
+  }
   async function fakeFire(prep) {
     const r2 = await fetch(prep.action, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(prep.params).toString() });
     const t2 = await r2.text();
-    if (/n[aã]o tem tropas suficientes|not enough/i.test(t2)) throw new Error('recusado: tropas insuficientes');
+    const err = erroDeComando(t2);
+    if (err) throw new Error(err);
     return true;
   }
   const attackPrepare = fakePrepare, attackFire = fakeFire;

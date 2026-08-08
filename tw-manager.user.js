@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.92.0
+// @version      11.93.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.92.0';
+  const VERSION = '11.93.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -11778,9 +11778,19 @@
       config.cmd.hist.unshift({ t: srvClockMs(saiuEm), alvo: c.x + '|' + c.y, tipo: c.tipo, desvio: c.desvioMs });
       config.cmd.hist = config.cmd.hist.slice(0, 50);
       save();
-      // A resposta é tratada depois, sem segurar a próxima onda.
-      voo.then(() => { setTimeout(() => ccMedir(c), 20000); })
-         .catch((e) => { cmdFalha(c, e.message || e); });
+      // A medição é AGENDADA NO DISCO, não num setTimeout em memória.
+      //
+      // Antes era `setTimeout(() => ccMedir(c), 20000)` dentro do `.then`. Um timer de 20s
+      // preso numa closure morre em tudo que acontece o tempo todo: F5, aba estrangulada em 2º
+      // plano, e — o caso observado ao vivo — "Outra aba já está ativa; esta ficará em espera",
+      // quando outra aba assume a trava e esta para de trabalhar. Não havia retry nem log: a
+      // amostra sumia calada, e `calib.n` ficava em zero pra sempre.
+      //
+      // Agora só marca a hora e salva. Quem executa é a varredura do cmdTick, que roda em
+      // qualquer aba viva e sobrevive a reload.
+      c.medirApos = srvNowP() + 20000;
+      save();
+      voo.catch((e) => { cmdFalha(c, e.message || e); });
     }
 
     // Mede o erro REAL: lê a chegada que o jogo registrou e compara com a que pedimos.
@@ -11818,6 +11828,24 @@
       // Sem data legível, chegada que "já passou" faz muito tempo é na verdade amanhã.
       if (semData && d.getTime() < agora.getTime() - 6 * 3600000) d = new Date(d.getTime() + 86400000);
       return { ms: d.getTime(), temMs: ms != null };
+    }
+
+    // Uma medição por tick. Só entra comando enviado, com a hora de medir vencida, ainda sem
+    // resultado. `medTent` é o teto: comando cancelado no jogo nunca vai aparecer na praça, e sem
+    // teto ele tentaria pra sempre a cada tick.
+    let _medindo = false;
+    function ccVarrerMedicoes() {
+      if (_medindo) return;
+      const agora = srvNowP();
+      const alvo = cmdFila().find((c) => c.state === 'enviado' && c.medirApos && !c.medido
+        && c.medirApos <= agora && (c.medTent || 0) < 5);
+      if (!alvo) return;
+      alvo.medTent = (alvo.medTent || 0) + 1;
+      // Espaça a retentativa: 1 min por tentativa, pra um alvo teimoso não ocupar todo tick.
+      alvo.medirApos = agora + 60000;
+      save();
+      _medindo = true;
+      ccMedir(alvo).catch(() => {}).then(() => { _medindo = false; });
     }
 
     async function ccMedir(c) {
@@ -11900,6 +11928,11 @@
       }
       const prepLead = (config.cmd.prepLeadSec || 60) * 1000;
       const silLead = (config.cmd.silenceLeadSec || 10) * 1000;
+
+      // Varredura das medições pendentes. Substitui o setTimeout em memória: roda em qualquer
+      // aba viva, sobrevive a reload e a troca de trava. Uma por tick, pra não sair em rajada;
+      // teto de tentativas pra um comando cancelado não ficar tentando pra sempre.
+      ccVarrerMedicoes();
 
       // Preparo: um por vez, pra não sair request em rajada.
       for (const c of pend) {

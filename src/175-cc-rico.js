@@ -384,24 +384,40 @@
         // digitada não cabe mais. c.parcial null = segue o padrão geral; true/false força só
         // este comando. Precisa clampar ANTES do cmdPrepare — é o confirmar que fixa os números
         // que vão de fato pro disparo (c.prep), então ajustar depois seria tarde demais.
-        // Trem não entra no modo parcial: cortar UMA onda mudaria a forma do trem (e a graça
-        // dele é justamente o jogo alocar as N de uma vez). Melhor falhar visível que sair torto.
-        const parcial = ccParcialEfetivo(c) && !c.trem;
+        const parcial = ccParcialEfetivo(c);
         let amounts = c.amounts;
         if (parcial) {
-          let avail = {};
-          try { avail = (await getVillageState(c.origin)).avail || {}; } catch (e) { /* sem leitura, segue com o pedido original */ }
-          const clamped = {}; let temAlgo = false, reduziu = false;
-          Object.keys(amounts || {}).forEach((u) => {
-            const pedido = amounts[u] || 0;
-            const v = Math.min(pedido, avail[u] || 0);
-            if (v > 0) { clamped[u] = v; temAlgo = true; }
-            if (v < pedido) reduziu = true;
-          });
-          if (!temAlgo) { cmdFalha(c, 'pulado: sem tropa disponível na origem (modo parcial)'); return false; }
-          if (reduziu) {
-            pushLog('Central: ' + c.x + '|' + c.y + ' — tropa reduzida por modo parcial (' + ccTropaTxt(amounts) + ' → ' + ccTropaTxt(clamped) + ').', '', 'cmd');
-            amounts = clamped; c.amounts = clamped; save();
+          let avail = null;
+          try { avail = (await getVillageState(c.origin)).avail || {}; } catch (e) { avail = null; }
+          if (avail) {
+            // Aloca ONDA A ONDA, na ordem em que saem: a 1ª pega o que pediu (até o que existe),
+            // a 2ª fica com o que sobrou, e assim por diante — é o que aconteceria mandando na
+            // mão. Vale também pro trem: cortar as ondas do fim é melhor que o servidor recusar
+            // o envio inteiro, que é o que acontecia quando o trem ficava fora do modo parcial.
+            const resta = Object.assign({}, avail);
+            const ondas = [amounts].concat(c.trem || []);
+            let reduziu = false;
+            const cortadas = ondas.map((am) => {
+              const out = {};
+              Object.keys(am || {}).forEach((u) => {
+                const pedido = am[u] || 0; if (pedido <= 0) return;
+                const v = Math.min(pedido, Math.max(0, resta[u] || 0));
+                if (v > 0) out[u] = v;
+                if (v < pedido) reduziu = true;
+                resta[u] = (resta[u] || 0) - v;
+              });
+              return out;
+            }).filter((am) => Object.keys(am).length);   // onda que ficou sem nada sai do trem
+            if (!cortadas.length) { cmdFalha(c, 'pulado: sem tropa disponível na origem (modo parcial)'); return false; }
+            const perdidas = ondas.length - cortadas.length;
+            if (reduziu || perdidas) {
+              pushLog('Central: ' + c.x + '|' + c.y + ' — modo parcial ajustou a tropa ao que a aldeia tem' +
+                (perdidas ? ' · ' + perdidas + ' onda(s) removida(s) por ficarem sem tropa' : '') +
+                (ondas.length > 1 ? ' (trem: ' + ondas.length + ' → ' + cortadas.length + ' ondas)' : ''), '', 'cmd');
+              amounts = cortadas[0]; c.amounts = amounts;
+              c.trem = (cortadas.length > 1) ? cortadas.slice(1) : null;
+              save();
+            }
           }
         }
         // Rede de segurança do piso de população (1% dos pontos da origem — regra real do mundo,
@@ -2454,8 +2470,16 @@
           // que se quer é confirmar que está tudo certo, não só a ausência de vermelho.
           const info = {};
           const faltaT = [], faltaC = [];
-          Object.keys(c.amounts || {}).forEach((u) => {
-            const q = c.amounts[u] || 0; if (q <= 0) return;
+          // Um comando de trem leva TODAS as ondas dele no mesmo envio, então o que ele consome
+          // é a SOMA delas. Contar só c.amounts (a 1ª onda) fazia a conferência dizer "ok" num
+          // trem que pedia o triplo do que a aldeia tinha — e o erro só aparecia no disparo.
+          const ondasCmd = [c.amounts].concat(c.trem || []);
+          const pedido = {};
+          ondasCmd.forEach((am) => Object.keys(am || {}).forEach((u) => {
+            pedido[u] = (pedido[u] || 0) + (am[u] || 0);
+          }));
+          Object.keys(pedido).forEach((u) => {
+            const q = pedido[u] || 0; if (q <= 0) return;
             const dT = restaT[u] || 0, dC = restaC[u] || 0;
             if (q > dT) faltaT.push({ u: u, pede: q, tem: Math.max(0, dT) });
             else if (q > dC) faltaC.push({ u: u, pede: q, tem: Math.max(0, dC) });
@@ -2464,11 +2488,19 @@
           let piso = null;
           // Piso de população: só ataque tem, e ataque só de explorador é isento (regra do jogo).
           if (c.tipo !== 'support') {
-            const soSpy = Object.keys(c.amounts || {}).every((u) => u === 'spy');
-            const pop = ccFakePopOf(c.amounts);
             const pts = _ccPontos ? (parseInt(_ccPontos[String(c.origin)], 10) || 0) : 0;
             const minPop = pts > 0 ? Math.ceil((FAKE_LIMIT_PCT / 100) * pts) : 0;
-            info.pop = { atual: pop, min: minPop, isento: soSpy, semPontos: !pts };
+            // Cada onda do trem é um ataque separado pro servidor, então o piso vale pra CADA
+            // uma — o que decide é a PIOR delas, não a soma nem só a primeira.
+            let pior = null;
+            ondasCmd.forEach((am) => {
+              if (Object.keys(am || {}).every((u) => u === 'spy')) return;   // só-explorador é isento
+              const p = ccFakePopOf(am);
+              if (pior == null || p < pior) pior = p;
+            });
+            const soSpy = (pior == null);
+            const pop = soSpy ? ccFakePopOf(c.amounts) : pior;
+            info.pop = { atual: pop, min: minPop, isento: soSpy, semPontos: !pts, ondas: ondasCmd.length };
             const falta = minPop - pop;
             if (!soSpy && pts && falta > 0) {
               const precisa = Math.ceil(falta / (FAKE_POP.spy || 2));

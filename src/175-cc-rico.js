@@ -2699,7 +2699,12 @@
             (conf[c.id].nivel === 'erro' ? '⛔ ' : '⚠ ') + esc(conf[c.id].msg) + '</span>' : '') +
           // Tropas que saem neste comando — largura total, pra não espremer a grade.
           '<span style="grid-column:1/-1;font-size:9px;color:#8a7d6d;margin:1px 0 0 46px;line-height:1.6">' +
-            (ccTropaResumo(c.amounts) || '<span style="color:#584526">— sem tropa —</span>') +
+            // Num trem a linha de cima vira o cabeçalho: as ondas aparecem uma a uma logo abaixo,
+            // senão só se veria a tropa da 1ª e não daria pra conferir o que as outras levam.
+            (c.trem
+              ? '<b style="color:#8b5426">🚂 ' + (c.trem.length + 1) + ' ondas saem juntas</b>' +
+                '<span style="color:#8a7d6d"> — mesmo envio, espaçadas pelo servidor</span>'
+              : (ccTropaResumo(c.amounts) || '<span style="color:#584526">— sem tropa —</span>')) +
             // População vs o piso de 1% dos pontos da origem — mostrado SEMPRE, não só quando
             // falha: numa operação você quer confirmar que passou, não deduzir pelo silêncio.
             (popTxt ? ' &nbsp;<span style="color:' + popCor + '" title="população deste comando' +
@@ -2715,6 +2720,12 @@
               esc(c.parcial == null ? ('geral (' + (ccParcialEfetivo(c) ? 'parcial' : 'exato') + ')') : (c.parcial ? 'forçado parcial' : 'forçado exato')) +
               '</a>' : '') +
           '</span>' +
+          // Cada onda do trem, numerada e na ordem em que vai sair — é a conferência visual de
+          // que o agrupamento pegou o que devia (e do que cada uma leva).
+          (c.trem ? [c.amounts].concat(c.trem).map((am, k) =>
+            '<span style="grid-column:1/-1;font-size:9px;color:#8a7d6d;margin:1px 0 0 58px;line-height:1.6">' +
+              '<b style="color:#8b5426">' + (k + 1) + 'ª</b> ' +
+              (ccTropaResumo(am) || '<span style="color:#584526">— sem tropa —</span>') + '</span>').join('') : '') +
           // Grade pra mexer na tropa sem desarmar o comando. O número embaixo é o que a origem
           // tem EM CASA agora — é o teto real pra quem sai já, já.
           (_ccFilaEdit === c.id ? '<span style="grid-column:1/-1;display:flex;flex-wrap:wrap;gap:3px;margin:4px 0 2px 46px">' +

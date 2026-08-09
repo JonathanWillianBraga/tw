@@ -141,32 +141,43 @@ E **LANÇAR** quando a leitura falhar, em vez de devolver "não achei". Foi exat
 defeito do Desviar: `comandoAindaExiste` devolvia "sumiu" sempre — a tela consultada era
 stateful e a regex procurava links montados por JavaScript. Todo cancelamento virava sucesso.
 
-## O parcial: por TIPO, não por quantidade — conferido ao vivo
-
-Inspecionei a `#units_away` no br143 em vez de deduzir. O formulário é:
+## O corpo do "voltar" — CAPTURADO, não deduzido
 
     POST /game.php?village=<origem>&screen=place&action=withdraw_selected_unit_counts
-         &mode=units&h=<csrf>
+         &mode=units
     corpo: from-table=other
-           checkbox_<unidade>=on     ← quais TIPOS voltam (checkbox no <th> da coluna)
-           id_<awayId>=on            ← quais APOIOS (checkbox .troop-request-selector da linha)
+           withdraw_unit[<awayId>][<unidade>]=<QUANTIDADE>
+           h=<csrf>                                     ← no CORPO, não na URL
 
-Duas coisas importantes:
+**A quantidade é livre.** Dá pra devolver 300 de 1.688.
 
-1. **Não existe campo de quantidade.** Apesar do nome da ação (`..._unit_counts`), não há
-   `input[type=text|number]` em lugar nenhum da tabela, e a célula da unidade — que tem um
-   `data-unit-count="130"` promissor — **não vira input** ao clicar nem ao dar duplo clique
-   (testado). A `info_village` do destino também não oferece retirada.
-   Marcar "lança" devolve TODAS as lanças daquele apoio.
-2. **O checkbox da linha não tem `name`.** Só `class="troop-request-selector"` e
-   `data-away-id`. Quem monta `id_<awayId>=on` é o JS do jogo — por isso montamos o corpo à
-   mão em vez de serializar o formulário.
+### Como isso foi obtido, e por que a dedução falhou
 
-A granularidade fina sai de escolher **quais apoios**, já que cada um tem composição própria.
+Primeiro eu li o HTML da tela e concluí, errado, que só dava pra escolher o TIPO: não há
+`input` de número em lugar nenhum da `#units_away`, e a célula com `data-unit-count="130"` não
+vira campo nem em clique nem em duplo clique. Também deduzi `checkbox_<u>=on` + `id_<awayId>=on`
+a partir dos checkboxes visíveis. Publiquei assim (v11.114.0) e **o servidor ignorou o pedido**.
+
+O que resolveu foi **capturar o formulário do próprio jogo**: marcar as caixas na página e ler
+`new FormData(form)` — sem enviar. Aí apareceu o `withdraw_unit[...]`, que o JS do jogo **cria
+na hora** e portanto nunca esteve no HTML servido.
+
+Detalhes que só a captura mostrou:
+
+- é preciso **esperar** (~400ms) depois de marcar: ler o FormData na mesma linha pega o estado
+  no meio da atualização e traz campo de outra unidade, com valor errado
+- o jogo emite um campo pra **cada unidade que aquele apoio tem**, valendo 0 nas que não voltam
+- `checkbox_<u>=on` é só atalho de interface e o checkbox da linha **nem `name` tem** — nenhum
+  dos dois vai no corpo
+- o `h` vai no **corpo** (é um `input[type=hidden]` do formulário), não na URL
+
+**A lição:** ler o HTML mostra o que a tela é; capturar o FormData mostra o que ela ENVIA.
+Quando o formulário é montado por JavaScript, só o segundo vale.
+
+E a v11.114.0 é o argumento a favor da confirmação por efeito: o POST errado voltou **HTTP
+200**. Quem disse que não funcionou foi a releitura da praça.
 
 ## Aberto
 
 - se dá pra reduzir as 44 requisições
 - o `td[1]` é distância ou tempo? o valor "162.4" parece campos, mas confirmar antes de exibir
-- o servidor aceitaria um `unit_count_<u>=N`? o nome da ação sugere que sim, mas chutar campo
-  em requisição que MOVE TROPA não se faz — só com captura de um envio real do jogo

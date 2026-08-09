@@ -265,6 +265,8 @@
       ".twmgr-ap-nome{font-size:11px;color:#463b30;min-width:0}",
       ".twmgr-ap-nome b{font-size:12px}",
       ".twmgr-ap-coord{color:#8a7d6d;font-size:10px;margin-left:4px}",
+      ".twmgr-ap-maplink{text-decoration:none;cursor:pointer}",
+      ".twmgr-ap-maplink:hover{color:#8b5426;text-decoration:underline}",
       ".twmgr-ap-dono{font-size:9px;color:#a2643a;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
       ".twmgr-ap-tropas{display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end}",
       ".twmgr-ap-t{display:inline-flex;align-items:center;gap:3px;background:#fbf7ef;border:1px solid #ece4d8;border-radius:11px;padding:1px 7px 1px 4px;font-size:10px;color:#463b30;white-space:nowrap}",

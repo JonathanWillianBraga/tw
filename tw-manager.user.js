@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.128.0
+// @version      11.129.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.128.0';
+  const VERSION = '11.129.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -8660,6 +8660,21 @@
     return 'há ' + dd + (dd > 1 ? ' dias' : ' dia');
   }
 
+  // Link pro mapa, centralizado naquela coordenada — mesma convenção que o próprio jogo usa
+  // pra abrir o mapa num ponto específico (x/y na query string do screen=map).
+  function apoiosMapUrl(coord) {
+    const m = (coord || '').split('|');
+    if (m.length !== 2) return null;
+    return '/game.php?village=' + CUR_VID + '&screen=map&x=' + encodeURIComponent(m[0]) + '&y=' + encodeURIComponent(m[1]);
+  }
+  // A coordenada em si vira o link: clicável, abre numa aba nova (o painel de Apoios não
+  // perde estado) pra dar uma olhada na posição e decidir se vale manter o apoio ali.
+  function apoiosCoordLink(coord) {
+    const url = apoiosMapUrl(coord);
+    if (!url) return esc(coord || '');
+    return '<a class="twmgr-ap-coord twmgr-ap-maplink" href="' + esc(url) + '" target="_blank" rel="noopener" title="ver ' + esc(coord) + ' no mapa">' + esc(coord) + '</a>';
+  }
+
   function apoiosRender() {
     const box = document.getElementById('twmgr-apoios-corpo');
     if (!box) return;
@@ -8705,7 +8720,7 @@
         + '<span class="twmgr-ap-barra" style="height:' + pct + '%;top:auto;bottom:0"></span>'
         + '<span class="twmgr-ap-seta">' + (aberto ? '▼' : '▶') + '</span>'
         + '<span class="twmgr-ap-nome"><b>' + esc(d.nome || d.coord) + '</b>'
-        + '<span class="twmgr-ap-coord">' + esc(d.coord) + '</span>'
+        + apoiosCoordLink(d.coord)
         + '<div class="twmgr-ap-dono">' + (d.dono ? esc(d.dono) : '<i>bárbara</i>')
         + ' · ' + d.origens.length + (d.origens.length > 1 ? ' origens' : ' origem') + '</div>'
         + '</span>'
@@ -8720,7 +8735,7 @@
         + '" data-coord="' + esc(d.coord) + '"' + (_apSelLinha[o.awayId] ? ' checked' : '')
         + (o.awayId ? '' : ' disabled title="não li o id deste apoio"') + '> '
         + esc(o.nome || o.coord)
-        + '<span class="twmgr-ap-coord">' + esc(o.coord) + '</span>'
+        + apoiosCoordLink(o.coord)
         + (o.dist ? '<span class="twmgr-ap-dist">' + esc(o.dist) + '</span>' : '') + '</span>'
         // Na linha marcada, o que NÃO vai voltar aparece apagado. A prévia fica onde a decisão
         // está, em vez de obrigar a conferir a escolha de unidade num segundo lugar.
@@ -8770,6 +8785,11 @@
       box.addEventListener('click', async (e) => {
         const t = e.target;
         if (!t.closest) return;
+
+        // 0. clicar na coordenada abre o mapa numa aba nova — deixa a navegação padrão do link
+        // acontecer e sai antes de qualquer outro caso (senão o clique também abriria/fecharia
+        // o cartão do destino, já que a coordenada mora dentro de .twmgr-ap-dest).
+        if (t.closest('.twmgr-ap-maplink')) return;
 
         // 1. marcar/desmarcar um apoio
         const cb = t.closest('.twmgr-ap-cb');
@@ -10585,6 +10605,8 @@
       ".twmgr-ap-nome{font-size:11px;color:#463b30;min-width:0}",
       ".twmgr-ap-nome b{font-size:12px}",
       ".twmgr-ap-coord{color:#8a7d6d;font-size:10px;margin-left:4px}",
+      ".twmgr-ap-maplink{text-decoration:none;cursor:pointer}",
+      ".twmgr-ap-maplink:hover{color:#8b5426;text-decoration:underline}",
       ".twmgr-ap-dono{font-size:9px;color:#a2643a;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
       ".twmgr-ap-tropas{display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end}",
       ".twmgr-ap-t{display:inline-flex;align-items:center;gap:3px;background:#fbf7ef;border:1px solid #ece4d8;border-radius:11px;padding:1px 7px 1px 4px;font-size:10px;color:#463b30;white-space:nowrap}",

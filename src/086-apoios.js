@@ -558,6 +558,21 @@
     return 'há ' + dd + (dd > 1 ? ' dias' : ' dia');
   }
 
+  // Link pro mapa, centralizado naquela coordenada — mesma convenção que o próprio jogo usa
+  // pra abrir o mapa num ponto específico (x/y na query string do screen=map).
+  function apoiosMapUrl(coord) {
+    const m = (coord || '').split('|');
+    if (m.length !== 2) return null;
+    return '/game.php?village=' + CUR_VID + '&screen=map&x=' + encodeURIComponent(m[0]) + '&y=' + encodeURIComponent(m[1]);
+  }
+  // A coordenada em si vira o link: clicável, abre numa aba nova (o painel de Apoios não
+  // perde estado) pra dar uma olhada na posição e decidir se vale manter o apoio ali.
+  function apoiosCoordLink(coord) {
+    const url = apoiosMapUrl(coord);
+    if (!url) return esc(coord || '');
+    return '<a class="twmgr-ap-coord twmgr-ap-maplink" href="' + esc(url) + '" target="_blank" rel="noopener" title="ver ' + esc(coord) + ' no mapa">' + esc(coord) + '</a>';
+  }
+
   function apoiosRender() {
     const box = document.getElementById('twmgr-apoios-corpo');
     if (!box) return;
@@ -603,7 +618,7 @@
         + '<span class="twmgr-ap-barra" style="height:' + pct + '%;top:auto;bottom:0"></span>'
         + '<span class="twmgr-ap-seta">' + (aberto ? '▼' : '▶') + '</span>'
         + '<span class="twmgr-ap-nome"><b>' + esc(d.nome || d.coord) + '</b>'
-        + '<span class="twmgr-ap-coord">' + esc(d.coord) + '</span>'
+        + apoiosCoordLink(d.coord)
         + '<div class="twmgr-ap-dono">' + (d.dono ? esc(d.dono) : '<i>bárbara</i>')
         + ' · ' + d.origens.length + (d.origens.length > 1 ? ' origens' : ' origem') + '</div>'
         + '</span>'
@@ -618,7 +633,7 @@
         + '" data-coord="' + esc(d.coord) + '"' + (_apSelLinha[o.awayId] ? ' checked' : '')
         + (o.awayId ? '' : ' disabled title="não li o id deste apoio"') + '> '
         + esc(o.nome || o.coord)
-        + '<span class="twmgr-ap-coord">' + esc(o.coord) + '</span>'
+        + apoiosCoordLink(o.coord)
         + (o.dist ? '<span class="twmgr-ap-dist">' + esc(o.dist) + '</span>' : '') + '</span>'
         // Na linha marcada, o que NÃO vai voltar aparece apagado. A prévia fica onde a decisão
         // está, em vez de obrigar a conferir a escolha de unidade num segundo lugar.
@@ -668,6 +683,11 @@
       box.addEventListener('click', async (e) => {
         const t = e.target;
         if (!t.closest) return;
+
+        // 0. clicar na coordenada abre o mapa numa aba nova — deixa a navegação padrão do link
+        // acontecer e sai antes de qualquer outro caso (senão o clique também abriria/fecharia
+        // o cartão do destino, já que a coordenada mora dentro de .twmgr-ap-dest).
+        if (t.closest('.twmgr-ap-maplink')) return;
 
         // 1. marcar/desmarcar um apoio
         const cb = t.closest('.twmgr-ap-cb');

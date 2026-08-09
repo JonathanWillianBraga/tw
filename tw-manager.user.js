@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.126.0
+// @version      11.127.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.126.0';
+  const VERSION = '11.127.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -214,7 +214,7 @@
   // Por cor: um modo único ('none'|'a'|'b'|'c') + qtd (só p/ a/b; C manda 1x).
   const defFarmMatrix = () => ({ greenEmpty: { mode: 'a', qty: 1 }, greenFull: { mode: 'b', qty: 1 }, yellowEmpty: { mode: 'none', qty: 1 }, yellowFull: { mode: 'none', qty: 1 }, blue: { mode: 'b', qty: 1 } });
   const FARM_COLORS = ['greenEmpty', 'greenFull', 'yellowEmpty', 'yellowFull', 'blue'];
-  const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, blueMaxWall: 0, delay: 500, mode: 'suave', group: null, repeat: false, repeatMin: 10, minCL: 0, order: 'dist', dynTemplate: false, matrix: defFarmMatrix(), sentReports: {}, defended: {} });
+  const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, blueMaxWall: 0, delay: 500, mode: 'suave', group: null, repeat: false, repeatMin: 10, minCL: 0, clReserve: 0, spyReserve: 0, order: 'dist', dynTemplate: false, matrix: defFarmMatrix(), sentReports: {}, defended: {} });
   const defWall = () => ({ running: false, nextAt: 0, interval: 600, wallMin: 1, wallMax: 6, ramMode: 'auto', ramFixed: 20, ramWall6: 24, axeCount: 80, spyCount: 1, sentDemo: {} });
   // Recrutar no molde do "Gerente de conta → Tropas": MODELOS nomeados aplicados a aldeias.
   //
@@ -492,6 +492,8 @@
     if (c.farm.repeatMin == null) c.farm.repeatMin = (c.farm.cooldownMin != null ? c.farm.cooldownMin : 10);
     delete c.farm.cooldownMin;
     if (c.farm.minCL == null) c.farm.minCL = 0;
+    if (c.farm.clReserve == null) c.farm.clReserve = 0;
+    if (c.farm.spyReserve == null) c.farm.spyReserve = 0;
     if (!c.farm.order) c.farm.order = 'dist';
     if (c.farm.dynTemplate == null) c.farm.dynTemplate = false;
     if (!c.farm.matrix) c.farm.matrix = defFarmMatrix();
@@ -2021,6 +2023,11 @@
     const repeatOn = !!cfg.repeat;
     const repeatMs = Math.max(0, cfg.repeatMin || 0) * 60000;
     const minCL = cfg.minCL || 0, dyn = !!cfg.dynTemplate, M = cfg.matrix || {};
+    // RESERVA: quanto tem que SOBRAR na aldeia. Diferente do "mín. cav. leve", que só decide se a
+    // origem entra: com mínimo 50 e envio de 5, uma aldeia com 52 passava no mínimo e ia pra 47.
+    // A reserva desconta ANTES de comparar, então o piso é de verdade.
+    const resCL = Math.max(0, cfg.clReserve || 0), resSpy = Math.max(0, cfg.spyReserve || 0);
+    const livre = (a, u) => Math.max(0, (a[u] || 0) - (u === 'light' ? resCL : u === 'spy' ? resSpy : 0));
     const sent = cfg.sentReports || {}, defended = cfg.defended || {};
     // "Saques ativos agora": poda os que já pousaram (destino sumiu da lista de comandos) + os muito antigos.
     cfg.activeSends = (cfg.activeSends || []).filter((s) => pendingCoords.has(s.coord) && (now - (s.at || 0) < 12 * 3600 * 1000));
@@ -2171,9 +2178,13 @@
         }
         const avail = await getAvail(c.s.vid);
         if (minCL > 0 && (avail.light || 0) < minCL) continue;   // origem drenada -> tenta a próxima mais próxima
+        // No C quem monta a tropa é o jogo, então o piso usa a MESMA estimativa que o desconto
+        // logo abaixo (estCL). É aproximação, e é a única honesta: não dá pra saber a composição
+        // do template C antes de mandar.
+        if (mode === 'c' && (resCL > 0 || resSpy > 0) && livre(avail, 'light') < estCL) continue;
         // Modo dinâmico A/B manda {light: estCL, spy: 1}. Se a origem não tem isso (ex.: aldeia recém-noblada
         // sem CL), o servidor recusa e o log mentia "enviado". Pula pra próxima origem em vez de falso-positivo.
-        if (dyn && mode !== 'c') { if ((avail.light || 0) < estCL) continue; if ((avail.spy || 0) < 1) continue; }
+        if (dyn && mode !== 'c') { if (livre(avail, 'light') < estCL) continue; if (livre(avail, 'spy') < 1) continue; }
         // Sem template dinâmico o A/B manda a composição fixa do assistente. Antes a gente disparava
         // e deixava o servidor recusar — 1 requisição jogada fora por origem sem tropa. Agora confere
         // antes, usando as unidades lidas do próprio template. Se não deu pra ler (mapa vazio), passa
@@ -2181,7 +2192,7 @@
         if (!dyn && !useCalc && mode !== 'c') {
           const need = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {};
           let falta = false;
-          for (const u in need) { if ((avail[u] || 0) < need[u]) { falta = true; break; } }
+          for (const u in need) { if (livre(avail, u) < need[u]) { falta = true; break; } }
           if (falta) continue;
         }
         // Envio calculado = O TEMPLATE DO USUÁRIO subido até o mínimo do mundo. Mantém as unidades que
@@ -2200,7 +2211,7 @@
           if (falta > 0) calcAmounts.light = (calcAmounts.light || 0) + Math.ceil(falta / (FAKE_POP.light || 4));
           if (!Object.keys(calcAmounts).length) continue;
           let semTropa = false;
-          for (const u in calcAmounts) { if ((avail[u] || 0) < calcAmounts[u]) { semTropa = true; break; } }
+          for (const u in calcAmounts) { if (livre(avail, u) < calcAmounts[u]) { semTropa = true; break; } }
           if (semTropa) continue;   // origem não tem o template + o complemento -> tenta a próxima
         }
         try {
@@ -10122,6 +10133,8 @@
     const rp = document.getElementById('twmgr-farm-repeat'); if (rp) config.farm.repeat = rp.checked;
     const rm = document.getElementById('twmgr-farm-repeatmin'); if (rm) { config.farm.repeatMin = parseInt(rm.value, 10); if (isNaN(config.farm.repeatMin) || config.farm.repeatMin < 1) config.farm.repeatMin = 10; }
     const mc = document.getElementById('twmgr-farm-mincl'); if (mc) config.farm.minCL = Math.max(0, parseInt(mc.value, 10) || 0);
+    const rcl = document.getElementById('twmgr-farm-rescl'); if (rcl) config.farm.clReserve = Math.max(0, parseInt(rcl.value, 10) || 0);
+    const rsp = document.getElementById('twmgr-farm-resspy'); if (rsp) config.farm.spyReserve = Math.max(0, parseInt(rsp.value, 10) || 0);
     const od = document.getElementById('twmgr-farm-order'); if (od) config.farm.order = od.value || 'dist';
     const dy = document.getElementById('twmgr-farm-dyn'); if (dy) config.farm.dynTemplate = dy.checked;
     if (!config.farm.matrix) config.farm.matrix = defFarmMatrix();
@@ -10634,6 +10647,10 @@
           '<div class="twmgr-row"><span class="twmgr-lbl">Muralha máx. (nível)</span><input id="twmgr-farm-wall" class="twmgr-inp" type="number" min="0" max="20" value="20" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Muralha máx. do azul</span><input id="twmgr-farm-bluewall" class="twmgr-inp" type="number" min="0" max="20" value="0" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Mínimo CL p/ farmar</span><input id="twmgr-farm-mincl" class="twmgr-inp" type="number" min="0" value="0" style="width:66px"></div>') +
+        sec('Reserva na aldeia',
+          '<div class="twmgr-row"><span class="twmgr-lbl">' + unitIcon('light', 'Cavalaria leve') + ' Reservar cav. leve</span><input id="twmgr-farm-rescl" class="twmgr-inp" type="number" min="0" value="0" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">' + unitIcon('spy', 'Explorador') + ' Reservar exploradores</span><input id="twmgr-farm-resspy" class="twmgr-inp" type="number" min="0" value="0" style="width:66px"></div>' +
+          '<div class="twmgr-hint" style="margin:4px 0 0">Quanto tem que <b>sobrar</b> na origem. Diferente do "Mínimo CL": com mínimo 50 e envio de 5, uma aldeia com 52 passava e ia pra 47 — a reserva desconta antes de comparar. No <b>C</b> quem monta a tropa é o jogo, então ali o piso usa a mesma estimativa do desconto.</div>') +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Modo</span><select id="twmgr-farm-mode" class="twmgr-inp" style="width:120px"><option value="agressivo">Agressivo</option><option value="suave">Suave</option></select></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Ordem de farm</span><select id="twmgr-farm-order" class="twmgr-inp" style="width:130px"><option value="dist">Por distância</option><option value="recurso">Por recurso</option></select></div>' +
@@ -11103,6 +11120,8 @@
     document.getElementById('twmgr-farm-repeatmin').value = config.farm.repeatMin != null ? config.farm.repeatMin : 10;
     document.getElementById('twmgr-farm-repeatrow').style.display = config.farm.repeat ? 'flex' : 'none';
     document.getElementById('twmgr-farm-mincl').value = config.farm.minCL != null ? config.farm.minCL : 0;
+    document.getElementById('twmgr-farm-rescl').value = config.farm.clReserve != null ? config.farm.clReserve : 0;
+    document.getElementById('twmgr-farm-resspy').value = config.farm.spyReserve != null ? config.farm.spyReserve : 0;
     document.getElementById('twmgr-farm-order').value = config.farm.order || 'dist';
     document.getElementById('twmgr-farm-dyn').checked = !!config.farm.dynTemplate;
     (function () {
@@ -11115,7 +11134,7 @@
     })();
     document.getElementById('twmgr-farm-start').addEventListener('click', farmStart);
     document.getElementById('twmgr-farm-stop').addEventListener('click', farmStop);
-    ['twmgr-farm-wood', 'twmgr-farm-stone', 'twmgr-farm-iron', 'twmgr-farm-dist', 'twmgr-farm-wall', 'twmgr-farm-bluewall', 'twmgr-farm-int', 'twmgr-farm-mode', 'twmgr-farm-group', 'twmgr-farm-repeatmin', 'twmgr-farm-mincl', 'twmgr-farm-order', 'twmgr-farm-dyn'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
+    ['twmgr-farm-wood', 'twmgr-farm-stone', 'twmgr-farm-iron', 'twmgr-farm-dist', 'twmgr-farm-wall', 'twmgr-farm-bluewall', 'twmgr-farm-int', 'twmgr-farm-mode', 'twmgr-farm-group', 'twmgr-farm-repeatmin', 'twmgr-farm-mincl', 'twmgr-farm-rescl', 'twmgr-farm-resspy', 'twmgr-farm-order', 'twmgr-farm-dyn'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
     document.getElementById('twmgr-farm-repeat').addEventListener('change', (e) => { document.getElementById('twmgr-farm-repeatrow').style.display = e.target.checked ? 'flex' : 'none'; readFarmCfg(); });
     FARM_COLORS.forEach((k) => {
       const boxes = ['-a', '-b', '-c'].map((s) => document.getElementById('twmgr-fm-' + k + s));
@@ -17078,6 +17097,11 @@
       const delayBase = cfg.mode === 'agressivo' ? 200 : 500;
       const cooldownMs = Math.max(0, cfg.cooldownMin || 0) * 60000;
       const minCL = cfg.minCL || 0, dyn = !!cfg.dynTemplate, M = cfg.matrix || {};
+      // A reserva do Saque vale aqui também — este motor é uma cópia mais antiga que roda quando o
+      // ciclo é retomado DENTRO da Central, e deixar sem a reserva faria a mesma config drenar a
+      // aldeia dependendo de onde o usuário estava. Aqui a checagem é por ALDEIA (o motor antigo
+      // não confere tropa por alvo), então o piso é "não usa a origem que já está na reserva".
+      const resCL = Math.max(0, cfg.clReserve || 0), resSpy = Math.max(0, cfg.spyReserve || 0);
       const sent = cfg.sentReports || {}, defended = cfg.defended || {};
       // "Saques ativos agora": poda os que já pousaram (destino sumiu da lista de comandos) + os muito antigos.
       cfg.activeSends = (cfg.activeSends || []).filter((s) => pendingCoords.has(s.coord) && (now - (s.at || 0) < 12 * 3600 * 1000));
@@ -17091,7 +17115,16 @@
       const colorTxt = (t) => ({ green: 'verde', yellow: 'amarelo', blue: 'azul', red: 'vermelho' }[t.color] || t.color) + (t.full ? ' cheio' : ' vazio');
       let count = 0;
       for (const v of villages) {
-        if (minCL > 0) { try { if (((await getVillageState(v.vid)).avail.light || 0) < minCL) { pushLog(v.name + ': pulada — menos de ' + minCL + ' cavalaria leve.', '', 'farm'); continue; } } catch (e) {} }
+        if (minCL > 0 || resCL > 0 || resSpy > 0) {
+          let pular = '';
+          try {
+            const av = (await getVillageState(v.vid)).avail || {};
+            if (minCL > 0 && (av.light || 0) < minCL) pular = 'menos de ' + minCL + ' cavalaria leve';
+            else if (resCL > 0 && (av.light || 0) <= resCL) pular = 'a cavalaria leve está na reserva (' + resCL + ')';
+            else if (resSpy > 0 && (av.spy || 0) <= resSpy) pular = 'os exploradores estão na reserva (' + resSpy + ')';
+          } catch (e) {}
+          if (pular) { pushLog(v.name + ': pulada — ' + pular + '.', '', 'farm'); continue; }
+        }
         let tpl = null;
         if (!dyn) { try { tpl = await getFarmTemplates(v.vid); } catch (e) { tpl = null; } }
         let targets;

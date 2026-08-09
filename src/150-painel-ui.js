@@ -458,6 +458,10 @@
           '<div class="twmgr-row"><span class="twmgr-lbl">Muralha máx. (nível)</span><input id="twmgr-farm-wall" class="twmgr-inp" type="number" min="0" max="20" value="20" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Muralha máx. do azul</span><input id="twmgr-farm-bluewall" class="twmgr-inp" type="number" min="0" max="20" value="0" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Mínimo CL p/ farmar</span><input id="twmgr-farm-mincl" class="twmgr-inp" type="number" min="0" value="0" style="width:66px"></div>') +
+        sec('Reserva na aldeia',
+          '<div class="twmgr-row"><span class="twmgr-lbl">' + unitIcon('light', 'Cavalaria leve') + ' Reservar cav. leve</span><input id="twmgr-farm-rescl" class="twmgr-inp" type="number" min="0" value="0" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">' + unitIcon('spy', 'Explorador') + ' Reservar exploradores</span><input id="twmgr-farm-resspy" class="twmgr-inp" type="number" min="0" value="0" style="width:66px"></div>' +
+          '<div class="twmgr-hint" style="margin:4px 0 0">Quanto tem que <b>sobrar</b> na origem. Diferente do "Mínimo CL": com mínimo 50 e envio de 5, uma aldeia com 52 passava e ia pra 47 — a reserva desconta antes de comparar. No <b>C</b> quem monta a tropa é o jogo, então ali o piso usa a mesma estimativa do desconto.</div>') +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Modo</span><select id="twmgr-farm-mode" class="twmgr-inp" style="width:120px"><option value="agressivo">Agressivo</option><option value="suave">Suave</option></select></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Ordem de farm</span><select id="twmgr-farm-order" class="twmgr-inp" style="width:130px"><option value="dist">Por distância</option><option value="recurso">Por recurso</option></select></div>' +
@@ -927,6 +931,8 @@
     document.getElementById('twmgr-farm-repeatmin').value = config.farm.repeatMin != null ? config.farm.repeatMin : 10;
     document.getElementById('twmgr-farm-repeatrow').style.display = config.farm.repeat ? 'flex' : 'none';
     document.getElementById('twmgr-farm-mincl').value = config.farm.minCL != null ? config.farm.minCL : 0;
+    document.getElementById('twmgr-farm-rescl').value = config.farm.clReserve != null ? config.farm.clReserve : 0;
+    document.getElementById('twmgr-farm-resspy').value = config.farm.spyReserve != null ? config.farm.spyReserve : 0;
     document.getElementById('twmgr-farm-order').value = config.farm.order || 'dist';
     document.getElementById('twmgr-farm-dyn').checked = !!config.farm.dynTemplate;
     (function () {
@@ -939,7 +945,7 @@
     })();
     document.getElementById('twmgr-farm-start').addEventListener('click', farmStart);
     document.getElementById('twmgr-farm-stop').addEventListener('click', farmStop);
-    ['twmgr-farm-wood', 'twmgr-farm-stone', 'twmgr-farm-iron', 'twmgr-farm-dist', 'twmgr-farm-wall', 'twmgr-farm-bluewall', 'twmgr-farm-int', 'twmgr-farm-mode', 'twmgr-farm-group', 'twmgr-farm-repeatmin', 'twmgr-farm-mincl', 'twmgr-farm-order', 'twmgr-farm-dyn'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
+    ['twmgr-farm-wood', 'twmgr-farm-stone', 'twmgr-farm-iron', 'twmgr-farm-dist', 'twmgr-farm-wall', 'twmgr-farm-bluewall', 'twmgr-farm-int', 'twmgr-farm-mode', 'twmgr-farm-group', 'twmgr-farm-repeatmin', 'twmgr-farm-mincl', 'twmgr-farm-rescl', 'twmgr-farm-resspy', 'twmgr-farm-order', 'twmgr-farm-dyn'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
     document.getElementById('twmgr-farm-repeat').addEventListener('change', (e) => { document.getElementById('twmgr-farm-repeatrow').style.display = e.target.checked ? 'flex' : 'none'; readFarmCfg(); });
     FARM_COLORS.forEach((k) => {
       const boxes = ['-a', '-b', '-c'].map((s) => document.getElementById('twmgr-fm-' + k + s));

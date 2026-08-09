@@ -4443,6 +4443,11 @@
       const delayBase = cfg.mode === 'agressivo' ? 200 : 500;
       const cooldownMs = Math.max(0, cfg.cooldownMin || 0) * 60000;
       const minCL = cfg.minCL || 0, dyn = !!cfg.dynTemplate, M = cfg.matrix || {};
+      // A reserva do Saque vale aqui também — este motor é uma cópia mais antiga que roda quando o
+      // ciclo é retomado DENTRO da Central, e deixar sem a reserva faria a mesma config drenar a
+      // aldeia dependendo de onde o usuário estava. Aqui a checagem é por ALDEIA (o motor antigo
+      // não confere tropa por alvo), então o piso é "não usa a origem que já está na reserva".
+      const resCL = Math.max(0, cfg.clReserve || 0), resSpy = Math.max(0, cfg.spyReserve || 0);
       const sent = cfg.sentReports || {}, defended = cfg.defended || {};
       // "Saques ativos agora": poda os que já pousaram (destino sumiu da lista de comandos) + os muito antigos.
       cfg.activeSends = (cfg.activeSends || []).filter((s) => pendingCoords.has(s.coord) && (now - (s.at || 0) < 12 * 3600 * 1000));
@@ -4456,7 +4461,16 @@
       const colorTxt = (t) => ({ green: 'verde', yellow: 'amarelo', blue: 'azul', red: 'vermelho' }[t.color] || t.color) + (t.full ? ' cheio' : ' vazio');
       let count = 0;
       for (const v of villages) {
-        if (minCL > 0) { try { if (((await getVillageState(v.vid)).avail.light || 0) < minCL) { pushLog(v.name + ': pulada — menos de ' + minCL + ' cavalaria leve.', '', 'farm'); continue; } } catch (e) {} }
+        if (minCL > 0 || resCL > 0 || resSpy > 0) {
+          let pular = '';
+          try {
+            const av = (await getVillageState(v.vid)).avail || {};
+            if (minCL > 0 && (av.light || 0) < minCL) pular = 'menos de ' + minCL + ' cavalaria leve';
+            else if (resCL > 0 && (av.light || 0) <= resCL) pular = 'a cavalaria leve está na reserva (' + resCL + ')';
+            else if (resSpy > 0 && (av.spy || 0) <= resSpy) pular = 'os exploradores estão na reserva (' + resSpy + ')';
+          } catch (e) {}
+          if (pular) { pushLog(v.name + ': pulada — ' + pular + '.', '', 'farm'); continue; }
+        }
         let tpl = null;
         if (!dyn) { try { tpl = await getFarmTemplates(v.vid); } catch (e) { tpl = null; } }
         let targets;

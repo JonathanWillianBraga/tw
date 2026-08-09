@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.103.0
+// @version      11.104.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.103.0';
+  const VERSION = '11.104.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -12431,6 +12431,48 @@
       });
       return a;
     }
+    // ===== Bônus noturno =====
+    // Mecânica do jogo que a Central ignorava. Confirmado no `get_config` do br143:
+    //
+    //     <night> <active>2</active> <start_hour>23</start_hour> <end_hour>7</end_hour>
+    //             <def_factor>2</def_factor> </night>
+    //
+    // Ataque que CHEGA entre 23h e 7h enfrenta defensor com defesa DOBRADA. Agendar um
+    // horário bonito sem olhar isso é jogar tropa fora com precisão de milissegundo.
+    //
+    // A janela cruza a meia-noite (23 → 7), então a comparação é `h >= ini || h < fim`.
+    // Quando não cruza (ex.: 1 → 7), vira `h >= ini && h < fim`. Errar isso inverteria o aviso.
+    let NOITE = null;
+    async function noiteConfig() {
+      if (NOITE) return NOITE;
+      try {
+        const r = await fetch('/interface.php?func=get_config', { credentials: 'include' });
+        const t = await r.text();
+        const bloco = (t.match(/<night>[\s\S]*?<\/night>/) || [''])[0];
+        const num = (tag) => {
+          const m = bloco.match(new RegExp('<' + tag + '>\\s*([\\d.]+)\\s*</' + tag + '>'));
+          return m ? parseFloat(m[1]) : null;
+        };
+        NOITE = { ativo: (num('active') || 0) > 0, ini: num('start_hour'), fim: num('end_hour'),
+                  fator: num('def_factor') };
+      } catch (e) { NOITE = { ativo: false }; }
+      return NOITE;
+    }
+    // Recebe hora do SERVIDOR em ms. Sem config lida ainda, devolve false — nunca inventa aviso.
+    function emBonusNoturno(msServidor) {
+      if (!NOITE || !NOITE.ativo || NOITE.ini == null || NOITE.fim == null) return false;
+      const h = new Date(msServidor - wallToServerOffset()).getHours();
+      return (NOITE.ini > NOITE.fim) ? (h >= NOITE.ini || h < NOITE.fim)
+                                     : (h >= NOITE.ini && h < NOITE.fim);
+    }
+    function avisaNoite(c) {
+      if (!emBonusNoturno(c.arriveAt)) return;
+      pushLog('🌙 ' + c.x + '|' + c.y + ' chega às ' + srvClockMs(c.arriveAt)
+        + ', DENTRO do bônus noturno (' + NOITE.ini + 'h–' + NOITE.fim + 'h): o defensor tem '
+        + NOITE.fator + '× a defesa. O comando segue armado — mas se for ataque de verdade, '
+        + 'vale mover a chegada pra fora da janela.', 'err', 'cmd');
+    }
+
     function cmdAdicionar(tipo, x, y, amounts, arriveAt, origem, trem) {
       const c = { id: genId(), tipo: tipo, origin: origem || CUR_VID, x: String(x), y: String(y),
                   amounts: amounts, arriveAt: arriveAt, durMs: null, sendAt: 0, fireAt: 0,
@@ -12438,6 +12480,9 @@
                   parcial: null,   // null = segue config.cmd.enviarParcial · true/false = força só este
                   trem: (trem && trem.length) ? trem : null };   // ondas extras no mesmo POST
       config.cmd.fila.push(c); save();
+      // Avisa no ARMAR, que é quando ainda dá pra mudar o horário. A leitura da config é
+      // assíncrona e cacheada; o aviso sai um instante depois, sem segurar o armamento.
+      noiteConfig().then(() => avisaNoite(c)).catch(() => {});
       cmdTick(); ccRender();
       return c;
     }

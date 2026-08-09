@@ -146,8 +146,7 @@
       }
       const lista = Object.keys(porDestino).map((k) => porDestino[k]);
       // Ordena pelo volume: a aldeia com mais tropa é a que interessa primeiro.
-      const soma = (t) => Object.keys(t).reduce((a, u) => a + t[u], 0);
-      lista.sort((a, b) => soma(b.total) - soma(a.total));
+      lista.sort((a, b) => apoiosSoma(b.total) - apoiosSoma(a.total));
       _apCache = { lista: lista, unidades: Object.keys(unidades), origens: origens.length,
                    falhas: falhas, at: Date.now() };
       _apCacheAt = Date.now();
@@ -161,14 +160,21 @@
   function apoiosIcone(u) {
     // Reusa o ícone do jogo. Sem depender de mapa de emoji por unidade, que quebraria em
     // mundo com unidade diferente — exatamente o que esta tela evita.
-    return '<img src="' + (IMG_BASE || '/graphic/') + 'unit/unit_' + u + '.png" alt="' + esc(u)
-      + '" title="' + esc(unitPt(u)) + '" style="width:15px;height:15px;vertical-align:-3px">';
+    // Delega pro unitIcon() do core: ele conhece o formato real do IMG_BASE (que já vem
+    // com o /asset/<hash>/ e ainda espera um "graphic/" na frente) e cai pro texto quando
+    // não achou a base. Montar a URL aqui de novo foi como o ícone quebrou da primeira vez.
+    return unitIcon(u, esc(unitPt(u)));
   }
+  // Só as unidades que existem NAQUELE apoio. Mostrar dez zeros por linha afoga o que importa —
+  // e o conjunto de unidades muda por mundo, então uma grade fixa desperdiçaria coluna.
   function apoiosLinhaTropas(tropas, unidades) {
     const ks = unidades.filter((u) => (tropas[u] || 0) > 0);
     if (!ks.length) return '<span style="color:#8a7340">—</span>';
-    return ks.map((u) => apoiosIcone(u) + ' <b>' + fmtN(tropas[u]) + '</b>').join('&nbsp; ');
+    return '<span class="twmgr-ap-tropas">'
+      + ks.map((u) => '<span class="twmgr-ap-t">' + apoiosIcone(u) + '<b>' + fmtN(tropas[u]) + '</b></span>').join('')
+      + '</span>';
   }
+  function apoiosSoma(t) { return Object.keys(t).reduce((a, u) => a + t[u], 0); }
 
   function apoiosRender() {
     const box = document.getElementById('twmgr-apoios-corpo');
@@ -184,31 +190,50 @@
         + 'Nenhum apoio seu parado fora de casa.</div>';
       return;
     }
-    box.innerHTML = lista.map((d) => {
+    // A barra lateral tem a largura proporcional ao volume. É o único jeito de bater o olho
+    // numa lista de 20 destinos e ver onde está a tropa — a leitura dos números vem depois.
+    const maior = lista.reduce((m, d) => Math.max(m, apoiosSoma(d.total)), 0) || 1;
+    const totalGeral = lista.reduce((a, d) => a + apoiosSoma(d.total), 0);
+    const nOrigens = {};
+    lista.forEach((d) => d.origens.forEach((o) => { nOrigens[o.vid] = 1; }));
+
+    const topo = '<div class="twmgr-ap-topo">'
+      + '<div><div class="twmgr-ap-big">' + lista.length + '</div>'
+        + '<div class="twmgr-ap-lbl">aldeias apoiadas</div></div>'
+      + '<div><div class="twmgr-ap-big">' + fmtN(totalGeral) + '</div>'
+        + '<div class="twmgr-ap-lbl">tropas fora</div></div>'
+      + '<div><div class="twmgr-ap-big">' + Object.keys(nOrigens).length + '</div>'
+        + '<div class="twmgr-ap-lbl">origens</div></div>'
+      + '<div style="flex:1"></div>'
+      + '<div style="text-align:right"><div class="twmgr-ap-lbl">lido às</div>'
+        + '<div style="font-size:10px;color:#6f6153">' + new Date(_apCache.at).toLocaleTimeString('pt-BR') + '</div></div>'
+      + '</div>';
+
+    box.innerHTML = topo + lista.map((d) => {
       const aberto = !!_apAberto[d.coord];
+      const pct = Math.max(8, Math.round(apoiosSoma(d.total) / maior * 100));
       const cab = '<div class="twmgr-ap-dest" data-coord="' + esc(d.coord) + '">'
-        + '<span class="twmgr-ap-seta">' + (aberto ? '▾' : '▸') + '</span>'
-        + '<span class="twmgr-ap-nome"><b>' + esc(d.nome || d.coord) + '</b> '
-        + '<span style="color:#6f6153">' + esc(d.coord) + '</span>'
-        + (d.dono ? '<div class="sub">' + esc(d.dono) + '</div>' : '')
+        + '<span class="twmgr-ap-barra" style="height:' + pct + '%;top:auto;bottom:0"></span>'
+        + '<span class="twmgr-ap-seta">' + (aberto ? '▼' : '▶') + '</span>'
+        + '<span class="twmgr-ap-nome"><b>' + esc(d.nome || d.coord) + '</b>'
+        + '<span class="twmgr-ap-coord">' + esc(d.coord) + '</span>'
+        + '<div class="twmgr-ap-dono">' + (d.dono ? esc(d.dono) : '<i>bárbara</i>')
+        + ' · ' + d.origens.length + (d.origens.length > 1 ? ' origens' : ' origem') + '</div>'
         + '</span>'
-        + '<span class="twmgr-ap-tropas">' + apoiosLinhaTropas(d.total, unidades) + '</span>'
-        + '<span class="twmgr-ap-qtd">' + d.origens.length + ' aldeia' + (d.origens.length > 1 ? 's' : '') + '</span>'
+        + apoiosLinhaTropas(d.total, unidades)
         + '</div>';
-      if (!aberto) return cab;
+      if (!aberto) return '<div class="twmgr-ap-cartao">' + cab + '</div>';
       const filhos = d.origens.map((o) =>
         '<div class="twmgr-ap-orig">'
-        + '<span class="twmgr-ap-nome">de <b>' + esc(o.nome || o.coord) + '</b> '
-        + '<span style="color:#6f6153">' + esc(o.coord) + '</span></span>'
-        + '<span class="twmgr-ap-tropas">' + apoiosLinhaTropas(o.tropas, unidades) + '</span>'
-        + '<span class="twmgr-ap-qtd">' + esc(o.dist || '') + '</span>'
+        + '<span>' + esc(o.nome || o.coord)
+        + '<span class="twmgr-ap-coord">' + esc(o.coord) + '</span>'
+        + (o.dist ? '<span class="twmgr-ap-dist">' + esc(o.dist) + '</span>' : '') + '</span>'
+        + apoiosLinhaTropas(o.tropas, unidades)
         + '</div>').join('');
-      return cab + filhos;
+      return '<div class="twmgr-ap-cartao on">' + cab + filhos + '</div>';
     }).join('')
-      + '<div style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:6px">'
-      + lista.length + ' aldeia(s) apoiada(s) · ' + origens + ' origem(ns) lida(s)'
-      + (falhas ? ' · <b style="color:#b03030">' + falhas + ' falha(s) de leitura</b>' : '')
-      + ' · ' + new Date(_apCache.at).toLocaleTimeString('pt-BR') + '</div>';
+      + (falhas ? '<div style="font-size:9px;color:#b03030;text-align:right;margin-top:5px">'
+        + falhas + ' aldeia(s) não puderam ser lidas — os totais estão incompletos</div>' : '');
   }
 
   async function apoiosLer(forcar) {

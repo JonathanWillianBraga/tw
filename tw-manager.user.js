@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.113.0
+// @version      11.114.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.113.0';
+  const VERSION = '11.114.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -7929,8 +7929,7 @@
       }
       const lista = Object.keys(porDestino).map((k) => porDestino[k]);
       // Ordena pelo volume: a aldeia com mais tropa é a que interessa primeiro.
-      const soma = (t) => Object.keys(t).reduce((a, u) => a + t[u], 0);
-      lista.sort((a, b) => soma(b.total) - soma(a.total));
+      lista.sort((a, b) => apoiosSoma(b.total) - apoiosSoma(a.total));
       _apCache = { lista: lista, unidades: Object.keys(unidades), origens: origens.length,
                    falhas: falhas, at: Date.now() };
       _apCacheAt = Date.now();
@@ -7944,14 +7943,21 @@
   function apoiosIcone(u) {
     // Reusa o ícone do jogo. Sem depender de mapa de emoji por unidade, que quebraria em
     // mundo com unidade diferente — exatamente o que esta tela evita.
-    return '<img src="' + (IMG_BASE || '/graphic/') + 'unit/unit_' + u + '.png" alt="' + esc(u)
-      + '" title="' + esc(unitPt(u)) + '" style="width:15px;height:15px;vertical-align:-3px">';
+    // Delega pro unitIcon() do core: ele conhece o formato real do IMG_BASE (que já vem
+    // com o /asset/<hash>/ e ainda espera um "graphic/" na frente) e cai pro texto quando
+    // não achou a base. Montar a URL aqui de novo foi como o ícone quebrou da primeira vez.
+    return unitIcon(u, esc(unitPt(u)));
   }
+  // Só as unidades que existem NAQUELE apoio. Mostrar dez zeros por linha afoga o que importa —
+  // e o conjunto de unidades muda por mundo, então uma grade fixa desperdiçaria coluna.
   function apoiosLinhaTropas(tropas, unidades) {
     const ks = unidades.filter((u) => (tropas[u] || 0) > 0);
     if (!ks.length) return '<span style="color:#8a7340">—</span>';
-    return ks.map((u) => apoiosIcone(u) + ' <b>' + fmtN(tropas[u]) + '</b>').join('&nbsp; ');
+    return '<span class="twmgr-ap-tropas">'
+      + ks.map((u) => '<span class="twmgr-ap-t">' + apoiosIcone(u) + '<b>' + fmtN(tropas[u]) + '</b></span>').join('')
+      + '</span>';
   }
+  function apoiosSoma(t) { return Object.keys(t).reduce((a, u) => a + t[u], 0); }
 
   function apoiosRender() {
     const box = document.getElementById('twmgr-apoios-corpo');
@@ -7967,31 +7973,50 @@
         + 'Nenhum apoio seu parado fora de casa.</div>';
       return;
     }
-    box.innerHTML = lista.map((d) => {
+    // A barra lateral tem a largura proporcional ao volume. É o único jeito de bater o olho
+    // numa lista de 20 destinos e ver onde está a tropa — a leitura dos números vem depois.
+    const maior = lista.reduce((m, d) => Math.max(m, apoiosSoma(d.total)), 0) || 1;
+    const totalGeral = lista.reduce((a, d) => a + apoiosSoma(d.total), 0);
+    const nOrigens = {};
+    lista.forEach((d) => d.origens.forEach((o) => { nOrigens[o.vid] = 1; }));
+
+    const topo = '<div class="twmgr-ap-topo">'
+      + '<div><div class="twmgr-ap-big">' + lista.length + '</div>'
+        + '<div class="twmgr-ap-lbl">aldeias apoiadas</div></div>'
+      + '<div><div class="twmgr-ap-big">' + fmtN(totalGeral) + '</div>'
+        + '<div class="twmgr-ap-lbl">tropas fora</div></div>'
+      + '<div><div class="twmgr-ap-big">' + Object.keys(nOrigens).length + '</div>'
+        + '<div class="twmgr-ap-lbl">origens</div></div>'
+      + '<div style="flex:1"></div>'
+      + '<div style="text-align:right"><div class="twmgr-ap-lbl">lido às</div>'
+        + '<div style="font-size:10px;color:#6f6153">' + new Date(_apCache.at).toLocaleTimeString('pt-BR') + '</div></div>'
+      + '</div>';
+
+    box.innerHTML = topo + lista.map((d) => {
       const aberto = !!_apAberto[d.coord];
+      const pct = Math.max(8, Math.round(apoiosSoma(d.total) / maior * 100));
       const cab = '<div class="twmgr-ap-dest" data-coord="' + esc(d.coord) + '">'
-        + '<span class="twmgr-ap-seta">' + (aberto ? '▾' : '▸') + '</span>'
-        + '<span class="twmgr-ap-nome"><b>' + esc(d.nome || d.coord) + '</b> '
-        + '<span style="color:#6f6153">' + esc(d.coord) + '</span>'
-        + (d.dono ? '<div class="sub">' + esc(d.dono) + '</div>' : '')
+        + '<span class="twmgr-ap-barra" style="height:' + pct + '%;top:auto;bottom:0"></span>'
+        + '<span class="twmgr-ap-seta">' + (aberto ? '▼' : '▶') + '</span>'
+        + '<span class="twmgr-ap-nome"><b>' + esc(d.nome || d.coord) + '</b>'
+        + '<span class="twmgr-ap-coord">' + esc(d.coord) + '</span>'
+        + '<div class="twmgr-ap-dono">' + (d.dono ? esc(d.dono) : '<i>bárbara</i>')
+        + ' · ' + d.origens.length + (d.origens.length > 1 ? ' origens' : ' origem') + '</div>'
         + '</span>'
-        + '<span class="twmgr-ap-tropas">' + apoiosLinhaTropas(d.total, unidades) + '</span>'
-        + '<span class="twmgr-ap-qtd">' + d.origens.length + ' aldeia' + (d.origens.length > 1 ? 's' : '') + '</span>'
+        + apoiosLinhaTropas(d.total, unidades)
         + '</div>';
-      if (!aberto) return cab;
+      if (!aberto) return '<div class="twmgr-ap-cartao">' + cab + '</div>';
       const filhos = d.origens.map((o) =>
         '<div class="twmgr-ap-orig">'
-        + '<span class="twmgr-ap-nome">de <b>' + esc(o.nome || o.coord) + '</b> '
-        + '<span style="color:#6f6153">' + esc(o.coord) + '</span></span>'
-        + '<span class="twmgr-ap-tropas">' + apoiosLinhaTropas(o.tropas, unidades) + '</span>'
-        + '<span class="twmgr-ap-qtd">' + esc(o.dist || '') + '</span>'
+        + '<span>' + esc(o.nome || o.coord)
+        + '<span class="twmgr-ap-coord">' + esc(o.coord) + '</span>'
+        + (o.dist ? '<span class="twmgr-ap-dist">' + esc(o.dist) + '</span>' : '') + '</span>'
+        + apoiosLinhaTropas(o.tropas, unidades)
         + '</div>').join('');
-      return cab + filhos;
+      return '<div class="twmgr-ap-cartao on">' + cab + filhos + '</div>';
     }).join('')
-      + '<div style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:6px">'
-      + lista.length + ' aldeia(s) apoiada(s) · ' + origens + ' origem(ns) lida(s)'
-      + (falhas ? ' · <b style="color:#b03030">' + falhas + ' falha(s) de leitura</b>' : '')
-      + ' · ' + new Date(_apCache.at).toLocaleTimeString('pt-BR') + '</div>';
+      + (falhas ? '<div style="font-size:9px;color:#b03030;text-align:right;margin-top:5px">'
+        + falhas + ' aldeia(s) não puderam ser lidas — os totais estão incompletos</div>' : '');
   }
 
   async function apoiosLer(forcar) {
@@ -9751,12 +9776,26 @@
       ".twmgr-pq-up,.twmgr-pq-down,.twmgr-pq-rm{cursor:pointer;text-align:center;font-size:11px;color:#a2643a;opacity:.75}",
       ".twmgr-pq-up:hover,.twmgr-pq-down:hover{opacity:1}",
       ".twmgr-pq-rm{color:#c0483a}.twmgr-pq-rm:hover{opacity:1}",
-      ".twmgr-ap-dest{display:grid;grid-template-columns:14px 1fr auto 74px;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px solid rgba(0,0,0,.07);cursor:pointer;font-size:11px;color:#463b30}",
-      ".twmgr-ap-dest:hover{background:rgba(255,255,255,.45)}",
-      ".twmgr-ap-seta{color:#8a7340;font-size:10px}",
-      ".twmgr-ap-orig{display:grid;grid-template-columns:1fr auto 74px;align-items:center;gap:6px;padding:3px 6px 3px 26px;background:rgba(0,0,0,.035);border-bottom:1px solid rgba(0,0,0,.05);font-size:10px;color:#5a4b3a}",
-      ".twmgr-ap-tropas{white-space:nowrap;text-align:right}",
-      ".twmgr-ap-qtd{text-align:right;color:#6f6153;font-size:10px}",
+      ".twmgr-ap-topo{display:flex;align-items:center;gap:10px;background:#fdfaf4;border:1px solid #e8dfcc;border-radius:9px;padding:8px 11px;margin-bottom:8px}",
+      ".twmgr-ap-big{font-size:17px;font-weight:700;color:#8b5426;line-height:1}",
+      ".twmgr-ap-lbl{font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:#8a7d6d}",
+      ".twmgr-ap-cartao{background:#ffffff;border:1px solid #ece4d8;border-radius:8px;margin-bottom:5px;overflow:hidden}",
+      ".twmgr-ap-cartao.on{border-color:#ddd2c0;box-shadow:0 1px 4px rgba(125,81,15,.09)}",
+      ".twmgr-ap-dest{display:grid;grid-template-columns:12px minmax(0,1fr) minmax(0,auto);align-items:center;gap:9px;padding:7px 10px;cursor:pointer;position:relative}",
+      ".twmgr-ap-dest:hover{background:#f6f1e8}",
+      ".twmgr-ap-barra{position:absolute;left:0;top:0;bottom:0;width:3px;background:#a2643a;opacity:.75}",
+      ".twmgr-ap-seta{color:#a2643a;font-size:9px;justify-self:center}",
+      ".twmgr-ap-nome{font-size:11px;color:#463b30;min-width:0}",
+      ".twmgr-ap-nome b{font-size:12px}",
+      ".twmgr-ap-coord{color:#8a7d6d;font-size:10px;margin-left:4px}",
+      ".twmgr-ap-dono{font-size:9px;color:#a2643a;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      ".twmgr-ap-tropas{display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end}",
+      ".twmgr-ap-t{display:inline-flex;align-items:center;gap:3px;background:#fbf7ef;border:1px solid #ece4d8;border-radius:11px;padding:1px 7px 1px 4px;font-size:10px;color:#463b30;white-space:nowrap}",
+      ".twmgr-ap-t b{font-weight:700}",
+      ".twmgr-ap-t .twmgr-ui{width:14px;height:14px}",
+      ".twmgr-ap-orig{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:center;gap:9px;padding:5px 10px 5px 24px;background:#faf7f0;border-top:1px dashed #e8dfcc;font-size:10px;color:#6f6153;position:relative}",
+      ".twmgr-ap-orig:before{content:\"\";position:absolute;left:13px;top:0;bottom:0;width:1px;background:#e8dfcc}",
+      ".twmgr-ap-dist{font-size:9px;color:#8a7d6d;margin-left:5px}",
       ".twmgr-bld-item{display:grid;grid-template-columns:22px 16px 18px 1fr 44px 18px 18px 18px;align-items:center;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:#463b30}",
       ".twmgr-bld-item:last-child{border-bottom:none}",
       ".twmgr-bld-item.twmgr-bld-off{opacity:.42;filter:grayscale(.6)}",

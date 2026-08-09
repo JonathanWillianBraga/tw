@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.122.0
+// @version      11.124.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.122.0';
+  const VERSION = '11.124.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5841,11 +5841,44 @@
     if (_nbVelCache == null) _nbVelCache = 35;   // padrão do TW; só vale se /interface.php falhar
     return _nbVelCache;
   }
+  // Nível da Academia de todas as aldeias, numa requisição só (mode=buildings traz o prédio
+  // inteiro de cada aldeia). Serve pra mostrar quem PODE formar nobre mesmo sem ter um agora —
+  // aldeia com Academia perto do alvo é candidata a produzir; aldeia longe só gasta moeda à toa.
+  let _nbAcadCache = null, _nbAcadAt = 0;
+  async function nobleAcademias(forcar) {
+    if (!forcar && _nbAcadCache && (Date.now() - _nbAcadAt) < 300000) return _nbAcadCache;
+    const res = await fetch('/game.php?village=' + CUR_VID
+      + '&screen=overview_villages&mode=buildings&page=-1', { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const tb = doc.querySelector('#buildings_table') || doc.querySelector('table.overview_table');
+    if (!tb) throw new Error('não achei a tabela de edifícios');
+    // O índice da coluna sai do cabeçalho: a ordem dos prédios varia por mundo.
+    let iSnob = -1;
+    [].forEach.call(tb.querySelectorAll('th'), (th, i) => {
+      const im = th.querySelector('img');
+      if (im && /\/snob\.webp/.test(im.getAttribute('src') || '')) iSnob = i;
+    });
+    const out = {};
+    if (iSnob >= 0) {
+      tb.querySelectorAll('tr').forEach((tr) => {
+        const q = tr.querySelector('.quickedit-vn[data-id]'); if (!q) return;
+        const tds = tr.querySelectorAll('td'); if (tds.length < iSnob + 1) return;
+        const lvl = parseInt((tds[iSnob].textContent || '').replace(/\D/g, ''), 10) || 0;
+        if (lvl > 0) out[String(q.getAttribute('data-id'))] = lvl;
+      });
+    }
+    _nbAcadCache = out; _nbAcadAt = Date.now();
+    return out;
+  }
   // Quem PODERIA noblar o alvo: toda aldeia sua com nobre em casa, ordenada por distância.
   // É a resposta pra "por que esse alvo não anda" — a caixa antes só mostrava quem já ia,
   // e num alvo em "Aguardando" (que nem chega a ser planejado) isso era sempre vazio.
   async function nobleCandidatos(alvo) {
-    const [todas, snob, vel] = await Promise.all([getAllVillagesCached(), nobleSnobPorAldeia(), nobleVelNobre()]);
+    const [todas, snob, vel, acad] = await Promise.all([
+      getAllVillagesCached(), nobleSnobPorAldeia(), nobleVelNobre(),
+      nobleAcademias().catch(() => ({})),   // sem Academias: a tabela segue, só sem a coluna
+    ]);
     const tpl0 = nobleTplsDe(alvo)[0];
     const limite = (tpl0 && tpl0.t && tpl0.t.maxHoras != null) ? tpl0.t.maxHoras : null;
     const out = [];
@@ -5854,7 +5887,9 @@
       if (+m[1] === alvo.x && +m[2] === alvo.y) return;      // a própria aldeia do alvo não é origem
       const tropa = snob[String(v.vid)] || {};
       const n = tropa.snob || 0;
-      if (!n) return;                                        // sem nobre em casa não é candidata
+      const ac = acad[String(v.vid)] || 0;
+      // Entra quem tem nobre AGORA ou quem tem Academia (pode formar). Sem os dois, não serve.
+      if (!n && !ac) return;
       const d = fieldDist(+m[1], +m[2], alvo.x, alvo.y);
       const horas = (d * vel) / 60;
       // Escolta: o que falta pra fechar a composição do modelo nesta origem.
@@ -5865,7 +5900,7 @@
         const tem = tropa[u] || 0;
         if (tem < pedido) faltaEsc.push({ u: u, pede: pedido, tem: tem });
       });
-      out.push({ vid: v.vid, nome: v.name || v.coord, coord: v.coord, nobres: n,
+      out.push({ vid: v.vid, nome: v.name || v.coord, coord: v.coord, nobres: n, acad: ac,
                  d: d, horas: horas, dentro: (limite == null) || (horas <= limite),
                  faltaEsc: faltaEsc });
     });
@@ -5895,17 +5930,27 @@
                   + '"Planejar todos os alvos" em Produção — aí ele passa a ser avaliado.' };
     }
     if (!cand) return { cor: '#8a7340', t: 'Carregando o diagnóstico…', d: '' };
-    if (!cand.length) {
+    // `cand` traz duas coisas diferentes: quem TEM nobre agora e quem só tem ACADEMIA (podia
+    // formar). O veredito de envio só olha a primeira — academia não ataca. A segunda entra como
+    // a saída sugerida, que é a pergunta seguinte: "e daí, o que eu faço?".
+    const comNobre = cand.filter((c) => c.nobres > 0);
+    const acadDentro = cand.filter((c) => c.acad > 0 && c.dentro && !c.nobres);
+    const dicaAcad = acadDentro.length
+      ? ' Dentro do limite há ' + acadDentro.length + ' aldeia(s) com Academia (mais perto: '
+        + esc(acadDentro[0].nome) + ', ' + fmtDur(Math.round(acadDentro[0].horas * 3600))
+        + ') — formar nobre lá resolve.'
+      : ' Nenhuma aldeia com Academia dentro do limite: construa uma mais perto, ou aumente o limite de horas.';
+    if (!comNobre.length) {
       return { cor: '#a8564a', t: 'Nenhuma aldeia sua tem nobre disponível.',
-               d: 'Sem nobre parado não há o que mandar. Ligue "Formar nobre quando faltar" (ou cunhe) pra o módulo produzir.' };
+               d: 'Sem nobre parado não há o que mandar. Ligue "Formar nobre quando faltar" (ou cunhe) pra o módulo produzir.' + dicaAcad };
     }
-    const dentro = cand.filter((c) => c.dentro);
+    const dentro = comNobre.filter((c) => c.dentro);
     if (!dentro.length) {
-      const maisPerto = cand[0];
+      const maisPerto = comNobre[0];
       return { cor: '#a8564a', t: 'Os nobres existem, mas estão longe demais.',
                d: 'A aldeia mais próxima com nobre disponível é ' + esc(maisPerto.nome) + ', a '
                   + fmtDur(Math.round(maisPerto.horas * 3600)) + ' de viagem — acima do limite do modelo. '
-                  + 'Aumente o limite de horas ou forme nobre numa aldeia mais perto.' };
+                  + 'Aumente o limite de horas ou forme nobre numa aldeia mais perto.' + dicaAcad };
     }
     const comEscolta = dentro.filter((c) => !c.faltaEsc.length);
     if (!comEscolta.length) {
@@ -5973,9 +6018,10 @@
         'Se o relatório não chegar, ligue "Ler relatórios" em Alvos.</div></div>';
     }
     // Quem PODERIA ir. Sem isto, alvo em "Aguardando" mostrava caixa vazia e não explicava nada.
-    html += '<div style="color:#8b5426;font-weight:700;margin:6px 0 2px">Aldeias suas com nobre disponível</div>';
+    html += '<div style="color:#8b5426;font-weight:700;margin:6px 0 2px">Aldeias suas que podem noblar este alvo' +
+      ' <span style="color:#8a7340;font-weight:400">(nobre pronto ou Academia pra formar)</span></div>';
     if (_nbCandCoord !== a.coord) html += '<span style="color:#8a7340">— carregando… —</span>';
-    else if (!_nbCand || !_nbCand.length) html += '<span style="color:#a8564a">— nenhuma aldeia sua tem nobre disponível agora —</span>';
+    else if (!_nbCand || !_nbCand.length) html += '<span style="color:#a8564a">— nenhuma aldeia sua tem nobre nem Academia —</span>';
     else {
       const usados = {};
       envios.forEach((e) => { usados[String(e.vid)] = 1; });
@@ -5983,15 +6029,19 @@
       const tplH = (tpl0 && tpl0.t && tpl0.t.maxHoras != null) ? tpl0.t.maxHoras : null;
       // Ordenado por TEMPO, não por distância — é o tempo que decide se cabe no limite.
       const dentro = _nbCand.filter((c) => c.dentro), fora = _nbCand.filter((c) => !c.dentro);
+      const acadLivre = _nbCand.filter((c) => c.dentro && c.acad > 0 && !c.nobres);
       html += '<table style="width:100%;font-size:10px;border-collapse:collapse">' +
-        '<tr style="color:#8a7340"><td>aldeia</td><td style="width:74px">viagem</td><td style="width:58px">dist.</td><td style="width:48px">nobres</td><td style="width:88px"></td></tr>' +
+        '<tr style="color:#8a7340"><td>aldeia</td><td style="width:74px">viagem</td><td style="width:52px">dist.</td><td style="width:44px" title="nobre pronto agora">nobres</td><td style="width:52px" title="nível da Academia: pode formar nobre">acad.</td><td style="width:82px"></td></tr>' +
         _nbCand.slice(0, 12).map((c) => '<tr' + (c.dentro ? '' : ' style="opacity:.5"') + '>' +
           '<td>' + esc(c.nome) + ' <span style="color:#8a7340">' + esc(c.coord) + '</span></td>' +
           '<td><b style="color:' + (c.dentro ? '#3f8f52' : '#a8564a') + '">' + fmtDur(Math.round(c.horas * 3600)) + '</b></td>' +
           '<td style="color:#8a7340">' + c.d.toFixed(1) + '</td>' +
-          '<td><b style="color:#3f8f52">' + c.nobres + '</b></td>' +
+          '<td>' + (c.nobres ? '<b style="color:#3f8f52">' + c.nobres + '</b>' : '<span style="color:#8a7340">—</span>') + '</td>' +
+          '<td>' + (c.acad ? '<span style="color:#8b5426">nv ' + c.acad + '</span>' : '<span style="color:#8a7340">—</span>') + '</td>' +
           '<td style="color:#8b5426">' + (usados[String(c.vid)] ? 'vai mandar'
             : !c.dentro ? '<span style="color:#a8564a">fora do limite</span>'
+            // Sem nobre em casa, "sem escolta" seria conversa fiada: o que falta é o nobre.
+            : !c.nobres ? '<span style="color:#8b5426" title="tem Academia no alcance — pode formar nobre pra este alvo">pode formar</span>'
             : c.faltaEsc.length ? '<span style="color:#a8564a" title="' + esc(c.faltaEsc.map((f) => f.u + ' ' + f.pede + '/' + f.tem).join(', ')) + '">sem escolta</span>'
             : '') + '</td></tr>').join('') +
         '</table>' +
@@ -6000,6 +6050,8 @@
           '<b style="color:' + (dentro.length ? '#3f8f52' : '#a8564a') + '">' + dentro.reduce((s, c) => s + c.nobres, 0) +
           ' nobre(s) dentro do limite</b>' + (tplH != null ? ' de ' + tplH + ' h' : '') +
           (fora.length ? ' · ' + fora.reduce((s, c) => s + c.nobres, 0) + ' fora (aldeia longe demais)' : '') +
+          (acadLivre.length ? ' · <b style="color:#8b5426">' + acadLivre.length
+            + ' com Academia no alcance</b> (podem formar nobre pra este alvo)' : '') +
           '. Viagem calculada pela velocidade do nobre neste mundo.</div>';
     }
     // Veredito no TOPO: é a pergunta que se faz ao abrir a caixa. O resto vira a evidência dele.
@@ -6544,12 +6596,22 @@
   //   falta   = quantos nobres ainda faltam do que o modelo pede
   async function noblePlanejarComTpl(alvo, op, origens) {
     const tpl = op.t;
+    // `dentroDoLimite` alimenta a PRODUCAO de nobre (nobleRecrutar). Ate aqui ele recebia
+    // `origens` inteiro, sem filtro nenhum -- o limite de horas so era aplicado la no laco de
+    // ENVIO. Resultado: o modulo formava (e ate cunhava) nobre em aldeia longe demais pra
+    // alcancar o alvo, gastando moeda num nobre que nunca ia servir. Era o "fazendo nobre em
+    // aldeia que nao tem nada a ver com o planner" relatado nos testes.
+    // A viagem sai da velocidade do nobre do mundo, medida contra o servidor (35 min/campo
+    // cravado neste). O envio segue tendo a duracao REAL do jogo como palavra final.
+    const velN = await nobleVelNobre();
+    const limH = Math.max(1, tpl.maxHoras || 6);
+    const noAlcance = (origens || []).filter((o) => ((o.d * velN) / 60) <= limH);
     // Quantos AINDA faltam, nao quantos o modelo pede: lealdade baixa precisa de menos, e
     // comando ja a caminho conta como se tivesse pousado.
     const need = noblePrecisaDe(alvo, tpl);
     const precisa = need.precisa;
     if (precisa <= 0) {
-      return { pronto: false, envios: [], falta: 0, dentroDoLimite: origens, tpl: tpl,
+      return { pronto: false, envios: [], falta: 0, dentroDoLimite: noAlcance, tpl: tpl,
                tplId: op.id, tplNome: tpl.name, coberto: true,
                lealdade: need.lealdade, prevista: need.prevista, voando: need.voando,
                motivo: need.voando ? ('coberto: ' + nobleTxtVoo(alvo.coord)) : 'lealdade zerada' };
@@ -6558,7 +6620,7 @@
     const limite = Math.max(1, tpl.maxHoras || 6) * 3600;
     const comNobre = origens.filter((o) => o.nobres > 0);
     if (!comNobre.length) {
-      return { pronto: false, envios: [], falta: precisa, dentroDoLimite: origens, tpl: tpl, tplId: op.id, tplNome: tpl.name, motivo: 'nenhum nobre disponível' };
+      return { pronto: false, envios: [], falta: precisa, dentroDoLimite: noAlcance, tpl: tpl, tplId: op.id, tplNome: tpl.name, motivo: 'nenhum nobre disponível' };
     }
 
     // "So NT" exige os nobres todos saindo da MESMA aldeia; senao pode somar de varias, da mais
@@ -6567,7 +6629,7 @@
       ? comNobre.filter((o) => o.nobres >= precisa).slice(0, 1)
       : comNobre;
     if (!candidatos.length) {
-      return { pronto: false, envios: [], falta: precisa, dentroDoLimite: origens, tpl: tpl, tplId: op.id, tplNome: tpl.name,
+      return { pronto: false, envios: [], falta: precisa, dentroDoLimite: noAlcance, tpl: tpl, tplId: op.id, tplNome: tpl.name,
                motivo: 'nenhuma aldeia com ' + precisa + ' nobres (modo só NT)' };
     }
 
@@ -6628,7 +6690,7 @@
       pronto: envios.length > 0,
       envios: envios, falta: Math.max(0, faltam), levando: levando, precisa: precisa,
       lealdade: need.lealdade, prevista: need.prevista, voando: need.voando,
-      dentroDoLimite: origens, tpl: tpl, tplId: op.id, tplNome: tpl.name,
+      dentroDoLimite: noAlcance, tpl: tpl, tplId: op.id, tplNome: tpl.name,
       motivo: faltam > 0
         ? ('parcial: ' + levando + ' de ' + precisa + ' nobre(s)')
         : null,
@@ -10692,7 +10754,7 @@
             '<div class="twmgr-fld"><span title="Forma o nobre onde JÁ existe moeda guardada">Formar nobre quando faltar</span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-prod" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px"><b>Nunca cunha.</b> Cunhar converte recurso em moeda sem volta, num alvo que pode nem sair — isso fica com você, no modo <b>Cunhar</b> do Mercado.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto pra mais longe, e a que não conseguir agora <b>não interrompe</b> — tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto pra mais longe, <b>parando no limite de viagem do modelo</b> — aldeia que não alcança o alvo nem é considerada, porque o nobre formado lá nunca seria usado. A que não conseguir agora (moeda, recurso, fila) <b>não interrompe</b>: tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>' +
             '<div class="twmgr-fld" style="margin-top:9px"><span title="Por padrão, se a leva sai incompleta E há nobre em produção, ele segura pra mandar tudo junto — porque a lealdade regenera entre uma chegada e outra. Ligado, manda o que estiver pronto agora e completa nos ciclos seguintes. NÃO há risco de excesso: o que falta é recalculado todo ciclo pela lealdade prevista, que já desconta os nobres voando.">Enviar parcial sempre <span style="color:#8a7d6d">(não esperar fechar a leva)</span></span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-parcial" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Some o "segurando: +N em produção". Em troca, se demorar muito entre um nobre e outro, a lealdade regenera no meio e o primeiro rende menos.</div>' +

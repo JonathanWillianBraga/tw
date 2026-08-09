@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.98.0
+// @version      11.99.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.98.0';
+  const VERSION = '11.99.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -11981,6 +11981,24 @@
         //
         // Erros reais medidos nesta conta: +100, +71, -64ms. 3s é folga de trinta vezes.
         const TETO_PLAUSIVEL_MS = 3000;
+
+        // GUARDA DE DERIVA. Se a MINHA escada soltou atrasada, o erro medido não fala da rede —
+        // fala de mim, e aprender com ele envenena o estimador. O motor `cc` já tem esta guarda
+        // (GUARDA_DERIVA_MS 50); este não tinha.
+        //
+        // Aconteceu ao vivo: `desvio 613ms` produziu `erro +828ms`, e o viés saltou de +24 pra
+        // +207 num passo só — três quartos daquele erro eram contenção de thread, não latência.
+        // Corrigir contenção com lead é impossível: no disparo seguinte, sem contenção, o lead
+        // inflado vira erro pro outro lado. É como o viés começou a passear em vez de convergir.
+        const DERIVA_MAX_MS = 50;
+        if (Math.abs(c.desvioMs || 0) > DERIVA_MAX_MS) {
+          pushLog('📏 ' + c.x + '|' + c.y + ': erro de ' + Math.round(erroMs) + 'ms NÃO entrou na '
+            + 'calibração — minha escada soltou ' + c.desvioMs + 'ms atrasada, então esse número '
+            + 'mede contenção, não rede.', '', 'cmd');
+          c.medido = { chegouEm: chegouEm, erroMs: erroMs, descartada: true, deriva: c.desvioMs };
+          save();
+          return;
+        }
         if (Math.abs(erroMs) > TETO_PLAUSIVEL_MS) {
           pushLog('📏 ' + c.x + '|' + c.y + ': medição de ' + Math.round(erroMs / 1000) + 's ignorada — '
             + 'isso não é latência, é o comando errado. A calibração não aprendeu com ela.', 'err', 'cmd');

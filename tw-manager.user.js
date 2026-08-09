@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.115.0
+// @version      11.117.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.115.0';
+  const VERSION = '11.117.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5797,17 +5797,19 @@
       const m = (img.getAttribute('src') || '').match(/unit_(\w+)\./);
       if (m) ordem.push(m[1]);
     });
-    const iSnob = ordem.indexOf('snob');
+    // Guarda TODAS as unidades, não só o nobre: o diagnóstico precisa saber se a origem consegue
+    // montar a escolta do modelo — foi o caso real de uma aldeia com nobre e só 26 bárbaros
+    // contra os 50 que o modelo pede.
     const out = {};
-    if (iSnob >= 0) {
-      tabela.querySelectorAll('tr').forEach((tr) => {
-        const q = tr.querySelector('.quickedit-vn[data-id]'); if (!q) return;
-        const vid = q.getAttribute('data-id'); if (!vid) return;
-        const cels = tr.querySelectorAll('td.unit-item');
-        if (cels.length !== ordem.length) return;
-        out[String(vid)] = parseInt((cels[iSnob].textContent || '').replace(/\D/g, ''), 10) || 0;
-      });
-    }
+    tabela.querySelectorAll('tr').forEach((tr) => {
+      const q = tr.querySelector('.quickedit-vn[data-id]'); if (!q) return;
+      const vid = q.getAttribute('data-id'); if (!vid) return;
+      const cels = tr.querySelectorAll('td.unit-item');
+      if (cels.length !== ordem.length) return;
+      const n = {};
+      cels.forEach((td, i) => { n[ordem[i]] = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0; });
+      out[String(vid)] = n;
+    });
     _nbSnobCache = out; _nbSnobAt = Date.now();
     return out;
   }
@@ -5844,15 +5846,73 @@
     (todas || []).forEach((v) => {
       const m = (v.coord || '').match(/(\d+)\|(\d+)/); if (!m) return;
       if (+m[1] === alvo.x && +m[2] === alvo.y) return;      // a própria aldeia do alvo não é origem
-      const n = snob[String(v.vid)] || 0;
+      const tropa = snob[String(v.vid)] || {};
+      const n = tropa.snob || 0;
       if (!n) return;                                        // sem nobre em casa não é candidata
       const d = fieldDist(+m[1], +m[2], alvo.x, alvo.y);
       const horas = (d * vel) / 60;
+      // Escolta: o que falta pra fechar a composição do modelo nesta origem.
+      const esc = (tpl0 && tpl0.t && tpl0.t.escolta) || {};
+      const faltaEsc = [];
+      Object.keys(esc).forEach((u) => {
+        const pedido = +esc[u] || 0; if (pedido <= 0) return;
+        const tem = tropa[u] || 0;
+        if (tem < pedido) faltaEsc.push({ u: u, pede: pedido, tem: tem });
+      });
       out.push({ vid: v.vid, nome: v.name || v.coord, coord: v.coord, nobres: n,
-                 d: d, horas: horas, dentro: (limite == null) || (horas <= limite) });
+                 d: d, horas: horas, dentro: (limite == null) || (horas <= limite),
+                 faltaEsc: faltaEsc });
     });
     out.sort((a, b) => a.horas - b.horas);
     return out;
+  }
+  // ---- Por que este alvo não está sendo atacado? ----
+  // As causas moram em lugares diferentes (fila, alcance, estoque de nobre, escolta), e antes o
+  // usuário tinha que juntar as peças na mão. Aqui elas são checadas NA ORDEM em que o motor
+  // esbarra nelas, e a primeira que bater é a resposta — as seguintes nem são alcançadas.
+  function nobleDiagnostico(alvo, p, cand) {
+    const idx = (config.noble.alvos || []).findIndex((z) => z.coord === alvo.coord);
+    const det = nobleEmVooDetalhe(alvo.coord);
+    if (alvo.noblada) return { cor: '#3f8f52', t: 'Conquistada.', d: 'Continua na lista só pelo tempo de exibição.' };
+    if (alvo.perdida) return { cor: '#a8564a', t: 'Perdida pra outro jogador.', d: '' };
+    if (p && p.propria) return { cor: '#8a7340', t: 'É sua aldeia.', d: 'Nada a noblar — tire da fila.' };
+    if (det.voando) {
+      return { cor: '#3f8f52', t: det.voando + ' nobre(s) a caminho.',
+               d: 'Enquanto a lealdade prevista não zerar, ele segue recebendo. Nada travado aqui.' };
+    }
+    // Fila serial: o alvo nem chega a ser planejado, então nenhuma outra causa foi avaliada.
+    if (p && p.estado === 'aguardando') {
+      const frente = (config.noble.alvos || []).slice(0, Math.max(0, idx)).find((z) => !z.noblada && !z.perdida);
+      return { cor: '#a07a42', t: 'Esperando a vez na fila.',
+               d: 'O alvo ' + (frente ? esc(frente.coord) : 'da frente') + ' ainda não garantiu a queda, e a fila é serial: '
+                  + 'os de trás não são nem planejados. Se este alvo usa nobres de OUTRA região, ligue '
+                  + '"Planejar todos os alvos" em Produção — aí ele passa a ser avaliado.' };
+    }
+    if (!cand) return { cor: '#8a7340', t: 'Carregando o diagnóstico…', d: '' };
+    if (!cand.length) {
+      return { cor: '#a8564a', t: 'Nenhuma aldeia sua tem nobre em casa.',
+               d: 'Sem nobre parado não há o que mandar. Ligue "Formar nobre quando faltar" (ou cunhe) pra o módulo produzir.' };
+    }
+    const dentro = cand.filter((c) => c.dentro);
+    if (!dentro.length) {
+      const maisPerto = cand[0];
+      return { cor: '#a8564a', t: 'Os nobres existem, mas estão longe demais.',
+               d: 'A mais próxima com nobre é ' + esc(maisPerto.nome) + ', a ' + fmtDur(Math.round(maisPerto.horas * 3600))
+                  + ' de viagem — acima do limite do modelo. Aumente o limite de horas ou forme nobre numa aldeia mais perto.' };
+    }
+    const comEscolta = dentro.filter((c) => !c.faltaEsc.length);
+    if (!comEscolta.length) {
+      const c = dentro[0];
+      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+      return { cor: '#a8564a', t: 'Tem nobre no alcance, mas falta escolta.',
+               d: esc(c.nome) + ' alcança em ' + fmtDur(Math.round(c.horas * 3600)) + ', mas não fecha a composição do modelo: '
+                  + c.faltaEsc.map((f) => (rot[f.u] || f.u) + ' ' + f.pede + ' pedidos / ' + f.tem + ' tem').join(', ')
+                  + '. Reduza a escolta do modelo ou recrute nessa aldeia.' };
+    }
+    if (p && p.pronto) return { cor: '#3f8f52', t: 'Pronto pra enviar.', d: 'Use "Enviar agora" ou espere o próximo ciclo.' };
+    return { cor: '#a07a42', t: p && p.motivo ? esc(p.motivo) : 'Sem impedimento óbvio.',
+             d: comEscolta.reduce((s, c) => s + c.nobres, 0) + ' nobre(s) em ' + comEscolta.length
+                + ' aldeia(s) alcançam e fecham a escolta. Se ainda assim não sai, veja o log do módulo.' };
   }
   // Qual alvo está com a caixa "quem vai noblar" aberta (um por vez — abrir vários empurraria a
   // fila pra fora da tela). Só de tela, não vai pro config.
@@ -5910,7 +5970,10 @@
           '<td><b style="color:' + (c.dentro ? '#3f8f52' : '#a8564a') + '">' + fmtDur(Math.round(c.horas * 3600)) + '</b></td>' +
           '<td style="color:#8a7340">' + c.d.toFixed(1) + '</td>' +
           '<td><b style="color:#3f8f52">' + c.nobres + '</b></td>' +
-          '<td style="color:#8b5426">' + (usados[String(c.vid)] ? 'vai mandar' : (c.dentro ? '' : '<span style="color:#a8564a">fora do limite</span>')) + '</td></tr>').join('') +
+          '<td style="color:#8b5426">' + (usados[String(c.vid)] ? 'vai mandar'
+            : !c.dentro ? '<span style="color:#a8564a">fora do limite</span>'
+            : c.faltaEsc.length ? '<span style="color:#a8564a" title="' + esc(c.faltaEsc.map((f) => f.u + ' ' + f.pede + '/' + f.tem).join(', ')) + '">sem escolta</span>'
+            : '') + '</td></tr>').join('') +
         '</table>' +
         (_nbCand.length > 12 ? '<div style="color:#8a7340">…e mais ' + (_nbCand.length - 12) + ' aldeia(s)</div>' : '') +
         '<div style="color:#8a7340;margin-top:3px">' +
@@ -5919,8 +5982,13 @@
           (fora.length ? ' · ' + fora.reduce((s, c) => s + c.nobres, 0) + ' fora (aldeia longe demais)' : '') +
           '. Viagem calculada pela velocidade do nobre neste mundo.</div>';
     }
+    // Veredito no TOPO: é a pergunta que se faz ao abrir a caixa. O resto vira a evidência dele.
+    const dg = nobleDiagnostico(a, p, (_nbCandCoord === a.coord) ? _nbCand : null);
+    const cab = '<div style="border-left:3px solid ' + dg.cor + ';padding:3px 0 3px 7px;margin-bottom:6px">' +
+      '<div style="color:' + dg.cor + ';font-weight:700">' + dg.t + '</div>' +
+      (dg.d ? '<div style="color:#6f6153;line-height:1.45">' + dg.d + '</div>' : '') + '</div>';
     return '<tr><td colspan="8" style="background:#fbf7ee;border-top:none;font-size:10px;padding:6px 10px">' +
-      '<div style="color:#6f6153;margin-bottom:3px">Quem nobla <b>' + esc(a.coord) + '</b></div>' + html + '</td></tr>';
+      '<div style="color:#6f6153;margin-bottom:3px">Situação de <b>' + esc(a.coord) + '</b></div>' + cab + html + '</td></tr>';
   }
   // Texto honesto pro estado da fila: separa o que voa do que já pousou.
   function nobleTxtVoo(coord) {

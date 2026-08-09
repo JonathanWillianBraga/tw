@@ -626,7 +626,12 @@
           const mc = lbl ? (lbl.textContent || '').match(/(\d{1,3})\|(\d{1,3})/) : null;
           if (!mc || mc[1] !== String(c.x) || mc[2] !== String(c.y)) return;
           const a = tr.querySelector('a[href*="screen=info_command"]');
-          if (a) hrefs.push(a.href);
+          if (!a) return;
+          // `data-endtime` é a chegada em segundos, na própria linha. Serve pra identificar qual
+          // linha é qual sem abrir nada; a precisão de ms vem depois, só da linha escolhida.
+          const et = tr.querySelector('span[data-endtime]');
+          const seg = et ? parseInt(et.getAttribute('data-endtime'), 10) : 0;
+          hrefs.push({ href: a.href, chega: seg ? seg * 1000 : 0 });
         });
         // IRMÃOS = só os que ainda PODEM estar na praça. A fila guarda todo comando enviado pra
         // sempre; a praça só mostra o que está voando. Comparar os dois inteiros fazia a
@@ -641,21 +646,62 @@
           && String(o.y) === String(c.y) && o.state === 'enviado' && o.arriveAt
           && o.arriveAt > agoraMed && !o.medido)
           .sort((a, b) => a.arriveAt - b.arriveAt);
-        const idx = irmaos.findIndex((o) => o.id === c.id);
-        // Contagem diferente = ambíguo. Medida errada é pior que medida nenhuma: ela vira
-        // correção permanente no viés. Recusa e diz por quê.
         let href = null;
         if (!hrefs.length) {
           pushLog('📏 ' + c.x + '|' + c.y + ': não achei o comando na praça pra medir. '
             + 'Ele saiu mesmo? A calibração automática fica parada até uma medição dar certo.', 'err', 'cmd');
           return;
         }
-        if (irmaos.length > 1 && hrefs.length !== irmaos.length) {
-          pushLog('📏 ' + c.x + '|' + c.y + ': ' + hrefs.length + ' comando(s) na praça contra '
-            + irmaos.length + ' na fila — não dá pra saber qual é qual. Medição recusada.', '', 'cmd');
-          return;
+        // CASA POR TEMPO, não por contagem. A regra de contagem igual (v11.91) recusava sempre
+        // que a fila e a praça divergiam — e elas divergem por um motivo banal e permanente:
+        // comando CANCELADO no jogo some da praça mas fica na fila com chegada no futuro. Foi o
+        // que apareceu ao vivo, "2 na praça contra 3 na fila", com o 3º sendo um cancelado.
+        //
+        // O `data-endtime` da própria linha dá a chegada em segundos — grosso pra medir, exato
+        // de sobra pra IDENTIFICAR, já que os comandos aqui estão a minutos um do outro. Escolhe
+        // a linha mais perto da chegada pedida, e só aceita se ELE for o dono mais próximo dela:
+        // sem exclusividade, dois comandos casariam com a mesma linha (erro que já aconteceu no
+        // motor `cc` e gerou aferições que eram aritmética de uma chegada só).
+        const JANELA_CASA_MS = 5000;
+        const ESPACO_SEGURO_MS = 30000;
+        const dist = (o, l) => Math.abs(l.chega - o.arriveAt);
+        // Espaçamento mínimo entre os irmãos decide QUAL modo usar.
+        let espaco = Infinity;
+        for (let i = 1; i < irmaos.length; i++) espaco = Math.min(espaco, irmaos[i].arriveAt - irmaos[i - 1].arriveAt);
+
+        let melhor = null;
+        if (espaco >= ESPACO_SEGURO_MS) {
+          // COMANDOS FOLGADOS: casa pelo tempo. Comando cancelado simplesmente não acha par, em
+          // vez de estragar a contagem de todo mundo.
+          hrefs.forEach((l) => {
+            if (dist(c, l) > JANELA_CASA_MS) return;
+            if (irmaos.some((o) => o.id !== c.id && dist(o, l) < dist(c, l))) return;   // não é meu
+            if (!melhor || dist(c, l) < dist(c, melhor)) melhor = l;
+          });
+          if (!melhor) {
+            pushLog('📏 ' + c.x + '|' + c.y + ': nenhuma chegada na praça bate com a pedida ('
+              + srvClockMs(c.arriveAt) + '). Cancelado, ou outra está mais perto dela.', '', 'cmd');
+            return;
+          }
+        } else {
+          // ONDA: casar por tempo aqui é matematicamente ambíguo. Simulado com espaçamento de
+          // 100ms e erro de 85ms, o vizinho mais próximo casa TODO MUNDO deslocado de um — e
+          // devolveria -15ms onde o erro real é +85ms. Medida errada é pior que medida nenhuma:
+          // ela vira correção permanente no viés.
+          //
+          // Em onda vale a ordem (o servidor processa a conta em fila, o i-ésimo enviado é o
+          // i-ésimo a chegar) e só com contagem igual. Diferente, recusa.
+          if (hrefs.length !== irmaos.length) {
+            pushLog('📏 ' + c.x + '|' + c.y + ': onda de ' + irmaos.length + ' comando(s) contra '
+              + hrefs.length + ' na praça — em onda não dá pra casar por tempo. Medição recusada.', '', 'cmd');
+            return;
+          }
+          const ordenadas = hrefs.slice().sort((a, b) => a.chega - b.chega);
+          const idx = irmaos.findIndex((o) => o.id === c.id);
+          melhor = (idx >= 0) ? ordenadas[idx] : null;
+          if (!melhor) return;
         }
-        href = (idx >= 0 && hrefs[idx]) ? hrefs[idx] : hrefs[0];
+        href = melhor.href;
         const d2 = new DOMParser().parseFromString(await (await fetch(href, { credentials: 'include' })).text(), 'text/html');
         const p = parseChegadaDetalhe(d2.body.textContent || '');
         if (!p) {

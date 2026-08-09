@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.99.0
+// @version      11.100.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.99.0';
+  const VERSION = '11.100.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -11792,6 +11792,22 @@
       const voo = cmdFire(c.prep);
       c.state = 'enviado'; c.sentAt = saiuEm;
       c.desvioMs = Math.round(saiuEm - c.fireAt);
+      // INSTRUMENTAÇÃO — testa a hipótese "dá pra prever o atraso com uma sonda antes".
+      //
+      // A sonda já roda no silenceOn, uns 10s antes; o valor só não era guardado. Guardando-o
+      // junto do comando, depois de ~10 disparos dá pra correlacionar sonda × erro real e
+      // decidir com dado. Se correlacionar, o lead passa a sair da sonda; se não, fica provado
+      // que não dá — e a gente para de tentar.
+      //
+      // Já se sabe que a sonda NÃO explica o nível (85ms de sonda contra ~184ms de POST real):
+      // ela mede um GET de imagem estática, o disparo é um POST que o servidor processa. O que
+      // esta medição responde é outra coisa: ela acompanha a VARIAÇÃO? Dois comandos a 1 minuto
+      // de distância deram -67 e +249ms de erro; se a sonda tiver subido junto, serve.
+      c.netPre = {
+        rttMin: Math.round(NETLAT.rttMin || 0), rttMed: Math.round(NETLAT.rttMed || 0),
+        jitter: Math.round(NETLAT.jitter || 0),
+        idadeMs: Math.round(Date.now() - (NETLAT.at || Date.now())),
+      };
       const rot = c.ondas ? (' [onda ' + c.onda + '/' + c.ondas + ']') : '';
       pushLog('⚔ ' + (c.tipo === 'support' ? 'Apoio' : c.tipo === 'nobre' ? 'Nobre' : 'Ataque') + ' → ' + c.x + '|' + c.y + rot +
               ' · saiu ' + srvClockMs(saiuEm) + ' (desvio ' + (c.desvioMs >= 0 ? '+' : '') + c.desvioMs + 'ms)', 'ok', 'cmd');

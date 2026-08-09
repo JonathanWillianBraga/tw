@@ -787,7 +787,13 @@
           // O viés precisa poder ficar NEGATIVO: chegada adiantada só se corrige atrasando o
           // disparo. Antes o clamp do fireAtFor jogava lead negativo fora, então metade da faixa
           // aqui era decorativa.
-          k.biasMs = Math.max(-1500, Math.min(1500, Math.round((k.biasMs || 0) + erroMs * alpha)));
+          // MIRA +2ms ATRASADO, não zero. O erro aqui é assimétrico: num snipe, chegar
+          // adiantado PERDE o comando; chegar 2ms tarde não custa nada. Mirar exatamente zero
+          // deixa metade da dispersão cair do lado ruim. Com ±219ms de ruído medido, os 2ms não
+          // resolvem sozinhos, mas movem a distribuição inteira pro lado barato de graça.
+          const ALVO_ATRASO_MS = 2;
+          k.biasMs = Math.max(-1500, Math.min(1500,
+            Math.round((k.biasMs || 0) + (erroMs - ALVO_ATRASO_MS) * alpha)));
           k.n = (k.n || 0) + 1;
         } else {
           pushLog('📏 ' + c.x + '|' + c.y + ': a chegada veio SEM milésimos, então esta amostra não '

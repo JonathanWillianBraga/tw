@@ -117,8 +117,13 @@
       }
       if (!total) return;
       const cb = tr.querySelector('input.troop-request-selector[data-away-id], input[data-away-id]');
+      // O id do DESTINO, do link da primeira célula: é a chave da retirada em bloco.
+      const lk = Array.prototype.slice.call(tr.querySelectorAll('a'))
+        .map((a) => a.getAttribute('href') || '').filter((h) => /screen=info_village/.test(h))[0];
+      const mid = lk && lk.match(/[?&]id=(\d+)/);
       out.push({ coord: alvo.coord, dono: alvo.dono, nome: alvo.nome,
                  dist: (tds[1].textContent || '').trim(),
+                 destId: mid ? mid[1] : null,
                  awayId: cb ? cb.getAttribute('data-away-id') : null,
                  tropas: tropas });
     });
@@ -142,7 +147,8 @@
         catch (e) { falhas++; pushLog('Apoios: não li ' + (o.nome || o.vid) + ' (' + (e.message || e) + ').', 'err', 'apoios'); }
         itens.forEach((it) => {
           const d = porDestino[it.coord] || (porDestino[it.coord] = {
-            coord: it.coord, dono: it.dono, nome: it.nome, total: {}, origens: [] });
+            coord: it.coord, dono: it.dono, nome: it.nome, destId: it.destId, total: {}, origens: [] });
+          if (!d.destId) d.destId = it.destId;
           d.origens.push({ vid: o.vid, nome: o.nome, coord: o.coord,
                            dist: it.dist, awayId: it.awayId, tropas: it.tropas });
           Object.keys(it.tropas).forEach((u) => {
@@ -264,6 +270,117 @@
     return ped;
   }
 
+  // ── Retirada em bloco, pela tela do DESTINO ─────────────────────────────────
+  // A `info_village` do destino lista TODAS as minhas origens que apoiam aquela aldeia, e tem
+  // ação própria. Um pedido resolve o destino inteiro, em vez de um POST por praça — com 43
+  // origens isso é 1 requisição no lugar de 43, o que importa numa conta que bate 429 global.
+  //
+  //   POST screen=place&action=withdraw_selected_units_village_info&mode=units
+  //   corpo: village_id=<destino>
+  //          checkbox_<unidade>=on
+  //          withdraw_unit[<awayId>][units][<unidade>]=<quantidade>
+  //          withdraw_unit[<awayId>][home][<origem>]=on
+  //          h=<csrf>
+  //
+  // Gate próprio, DIFERENTE do da praça (array simples, não {other:[...]}):
+  //
+  //   POST screen=settings&ajaxaction=set_village_info_checkboxes
+  //   corpo: info_village_checkboxes=["spear","sword"] · h=<csrf>
+  //
+  // Os campos de quantidade só existem depois que a coluna é marcada — o JS do jogo os cria.
+  // Foi por olhar a tela com as colunas desligadas que eu concluí, errado, que ela não tinha
+  // quantidade.
+  async function apoiosDestinoLer(destId) {
+    const r = await fetch('/game.php?village=' + CUR_VID + '&screen=info_village&id=' + destId,
+      { credentials: 'include', cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' na tela do destino ' + destId);
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+    const f = Array.prototype.slice.call(doc.querySelectorAll('#content_value form'))
+      .filter((x) => /withdraw_selected_units_village_info/.test(x.getAttribute('action') || ''))[0];
+    if (!f) return { linhas: [], colunas: [] };   // sem apoio meu ali: não é erro
+    const linhas = [];
+    f.querySelectorAll('td.unit-item[data-away-id]').forEach((td) => {
+      const n = parseInt(td.getAttribute('data-unit-count'), 10) || 0;
+      if (n > 0) linhas.push({ away: td.getAttribute('data-away-id'),
+                               org: td.getAttribute('data-village-id'), u: td.id, n: n });
+    });
+    const colunas = [];
+    f.querySelectorAll('input[name^="checkbox_"]').forEach((c) => {
+      if (c.hasAttribute('checked')) colunas.push(c.getAttribute('name').slice(9));
+    });
+    return { linhas: linhas, colunas: colunas };
+  }
+
+  async function apoiosPatchColunasDestino(unids) {
+    const p = new URLSearchParams();
+    p.set('info_village_checkboxes', JSON.stringify(unids));
+    p.set('h', CSRF);
+    const r = await fetch('/game.php?village=' + CUR_VID + '&screen=settings&ajaxaction=set_village_info_checkboxes',
+      { method: 'POST', credentials: 'include', cache: 'no-store',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+        body: p.toString() });
+    const t = (await r.text()).trim();
+    if (!r.ok || t.indexOf('true') < 0) {
+      throw new Error('não consegui liberar as colunas na tela do destino (o jogo respondeu "'
+        + t.slice(0, 60) + '") — sem isso a retirada é ignorada em silêncio');
+    }
+  }
+
+  // Devolve as aldeias de origem que ESTA tela atendeu. Quem não estiver aqui sobra pro caminho
+  // da praça — a tela do destino pode não listar apoio que ainda está a caminho, e "não estava
+  // na lista" nunca pode virar "não existe".
+  async function apoiosRetirarDestino(destId, origens, unids) {
+    const querOrg = {};
+    origens.forEach((o) => { querOrg[o.vid] = 1; });
+    const est = await apoiosDestinoLer(destId);
+    const alvos = est.linhas.filter((l) => querOrg[l.org] && unids.indexOf(l.u) >= 0);
+    if (!alvos.length) return [];
+
+    const precisa = {};
+    alvos.forEach((l) => { precisa[l.u] = 1; });
+    const uniao = est.colunas.slice();
+    Object.keys(precisa).forEach((u) => { if (uniao.indexOf(u) < 0) uniao.push(u); });
+    await apoiosPatchColunasDestino(uniao);
+
+    try {
+      const p = new URLSearchParams();
+      p.set('village_id', String(destId));
+      Object.keys(precisa).forEach((u) => p.set('checkbox_' + u, 'on'));
+      alvos.forEach((l) => {
+        p.set('withdraw_unit[' + l.away + '][units][' + l.u + ']', String(l.n));
+        p.set('withdraw_unit[' + l.away + '][home][' + l.org + ']', 'on');
+      });
+      p.set('h', CSRF);
+      const r = await fetch('/game.php?village=' + CUR_VID
+        + '&screen=place&action=withdraw_selected_units_village_info&mode=units',
+        { method: 'POST', credentials: 'include', cache: 'no-store',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p.toString() });
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' ao pedir a retirada no destino ' + destId);
+      const eb = new DOMParser().parseFromString(await r.text(), 'text/html').querySelector('.error_box');
+      if (eb) throw new Error('o jogo recusou: ' + (eb.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160));
+
+      // CONFIRMAÇÃO POR EFEITO: relê a tela e exige que cada (apoio, unidade) pedido sumiu.
+      await sleep(700);
+      const depois = await apoiosDestinoLer(destId);
+      const ainda = depois.linhas.filter((l) =>
+        alvos.some((a) => a.away === l.away && a.u === l.u));
+      if (ainda.length) {
+        throw new Error('o destino ainda mostra ' + ainda.length + ' item(ns) parado(s) ('
+          + ainda.slice(0, 2).map((l) => unitPt(l.u) + ' x' + l.n).join(', ')
+          + ') — a retirada NÃO foi aceita');
+      }
+      const atendidas = {};
+      alvos.forEach((l) => { atendidas[l.org] = 1; });
+      return Object.keys(atendidas);
+    } finally {
+      if (uniao.length !== est.colunas.length) {
+        try { await apoiosPatchColunasDestino(est.colunas); }
+        catch (e) { pushLog('Apoios: não consegui devolver as colunas da tela do destino ('
+          + (e.message || e) + ').', 'err', 'apoios'); }
+      }
+    }
+  }
+
   async function apoiosRetirarDe(vid, pedidos) {
     // 1) liberar as colunas. Só o que vai voltar entra no pedido; mandar unidade com 0 é
     // inofensivo, mas unidade FORA da preferência é ignorada sem aviso nenhum.
@@ -340,11 +457,32 @@
     if (!d) throw new Error('destino ' + coord + ' não está na leitura atual');
     const sel = apoiosUnidSel(coord, Object.keys(d.total));
     if (!sel.length) throw new Error('nenhuma unidade marcada — nada a retirar');
-    // Agrupa por aldeia de origem: um POST por praça.
+    const marcadas = d.origens.filter((o) => _apSelLinha[o.awayId]);
+    if (!marcadas.length) throw new Error('nenhum apoio marcado');
+
+    // Caminho rápido: a tela do destino resolve TODAS as origens de uma vez.
+    let jaFeitas = {};
+    if (d.destId) {
+      const atendidas = await apoiosRetirarDestino(d.destId, marcadas, sel);
+      atendidas.forEach((v) => { jaFeitas[v] = 1; });
+      marcadas.forEach((o) => { if (jaFeitas[o.vid]) delete _apSelLinha[o.awayId]; });
+    }
+    const sobra = marcadas.filter((o) => !jaFeitas[o.vid]);
+    if (!sobra.length) {
+      const t = marcadas.reduce((a, o) => a + apoiosSoma(apoiosPedido(o, sel)), 0);
+      pushLog('Apoios: mandei voltar ' + fmtN(t) + ' tropa(s) de ' + marcadas.length
+        + ' aldeia(s) em ' + coord + ' numa requisição só — confirmado relendo o destino.',
+        'ok', 'apoios');
+      return marcadas.length;
+    }
+    // Sobrou quem a tela do destino não listou (apoio ainda a caminho, por exemplo): esses vão
+    // pelo caminho da praça, um POST por aldeia. Ficar em silêncio aqui seria transformar
+    // "voltar tudo" em "voltar quase tudo".
+    pushLog('Apoios: ' + sobra.length + ' apoio(s) não estavam na tela de ' + coord
+      + ' — retirando pela praça de cada um.', '', 'apoios');
     const porOrigem = {};
     let totalTropa = 0;
-    d.origens.forEach((o) => {
-      if (!_apSelLinha[o.awayId]) return;
+    sobra.forEach((o) => {
       if (!o.awayId) throw new Error('não li o id do apoio vindo de ' + (o.nome || o.coord)
         + ' — sem ele eu não sei o que estou mandando voltar');
       const ped = apoiosPedido(o, sel);
@@ -355,7 +493,7 @@
         { awayId: o.awayId, unidades: ped, antes: o.tropas });
     });
     const vids = Object.keys(porOrigem);
-    if (!vids.length) throw new Error('nenhum apoio marcado com as unidades escolhidas');
+    if (!vids.length) return marcadas.length - sobra.length;
     let ok = 0;
     for (const vid of vids) {
       await apoiosRetirarDe(vid, porOrigem[vid]);
@@ -365,7 +503,7 @@
     }
     pushLog('Apoios: mandei voltar ' + fmtN(totalTropa) + ' tropa(s) em ' + ok + ' apoio(s) de '
       + coord + ' — confirmado relendo a praça.', 'ok', 'apoios');
-    return ok;
+    return ok + (marcadas.length - sobra.length);
   }
 
   function apoiosRender() {

@@ -202,32 +202,41 @@ retirada manual.
 Quem denunciou todas foi a releitura da praça. É por isso que a confirmação por efeito não é
 opcional aqui.
 
-## A tela do DESTINO existe, e foi descartada — de propósito
+## A tela do DESTINO — o caminho rápido (1 requisição em vez de 43)
 
-`info_village&id=<destino>` tem a seção "Defesas" com uma AÇÃO PRÓPRIA:
+`info_village&id=<destino>` tem a seção "Defesas", que lista **todas as minhas origens que
+apoiam aquela aldeia**, com ação própria:
 
     POST screen=place&action=withdraw_selected_units_village_info&mode=units
     corpo: village_id=<destino>
            checkbox_<unidade>=on
-           withdraw_unit[<awayId>][home][<origem>]=on     ← "on", NÃO quantidade
+           withdraw_unit[<awayId>][units][<unidade>]=<QUANTIDADE>
+           withdraw_unit[<awayId>][home][<origem>]=on
            h=<csrf>
 
-E um gate próprio, diferente do da praça:
+Gate próprio, **diferente** do da praça (array simples, não `{other:[...]}`):
 
     POST screen=settings&ajaxaction=set_village_info_checkboxes
-    corpo: info_village_checkboxes=["light","knight"]     ← array simples, não {other:[...]}
+    corpo: info_village_checkboxes=["spear","sword"] · h=<csrf>
 
-Seria tentador: **1 requisição por destino** em vez de uma por origem (43, numa conta que bate
-429 global). Mas ela **omite origens**: no destino 457|613 a lista trouxe 22 aldeias e a 5835
-NÃO estava lá, embora a praça da 5835 mostre apoio ativo naquele destino. Provavelmente ela só
-lista o que JÁ CHEGOU, enquanto a `units_away` inclui o que está a caminho.
+Confirmado ao vivo: retirou 90 espadachins de uma origem e deixou a outra linha intacta, numa
+requisição só.
 
-Uma tela que omite origens em silêncio transformaria "voltar tudo" em "voltar quase tudo", e a
-verificação feita contra ela confirmaria o sucesso. Fica registrada como possível otimização
-futura, **desde que a diferença seja explicada antes**.
+### Duas conclusões minhas que estavam ERRADAS, e como
 
-Os `awayId` também **não são os mesmos** nas duas telas — são tokens por visão, não ids de
-entidade. Quem for usar a tela do destino tem que ler os ids DELA.
+**"Essa tela não tem quantidade."** Tem. Eu inspecionei com as colunas de unidade DESLIGADAS, e
+os campos `withdraw_unit[...][units][...]` só são criados pelo JS depois que a coluna é marcada.
+Mesmo erro da praça, cometido duas vezes: **habilitar o estado da interface antes de concluir
+que um campo não existe.**
+
+**"Essa tela omite origens."** Não omite. Eu tinha visto a 5835 fora da lista de um destino, mas
+noutro destino ela aparece normalmente (`withdraw_unit[340305065][home][5835]`) — e com o MESMO
+awayId da praça, o que também derruba a outra conclusão apressada de que os awayId seriam
+tokens por visão. **São ids estáveis.**
+
+Mesmo assim o módulo trata a possibilidade de a tela não listar alguém (apoio ainda a caminho,
+por exemplo): quem não aparecer na resposta dela é retirado pela praça, um POST por aldeia, e o
+log DIZ que isso aconteceu. "Não estava na lista" nunca pode virar "não existe".
 
 ## Aberto
 

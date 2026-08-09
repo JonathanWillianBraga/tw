@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.119.0
+// @version      11.120.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.119.0';
+  const VERSION = '11.120.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5896,15 +5896,16 @@
     }
     if (!cand) return { cor: '#8a7340', t: 'Carregando o diagnóstico…', d: '' };
     if (!cand.length) {
-      return { cor: '#a8564a', t: 'Nenhuma aldeia sua tem nobre em casa.',
+      return { cor: '#a8564a', t: 'Nenhuma aldeia sua tem nobre disponível.',
                d: 'Sem nobre parado não há o que mandar. Ligue "Formar nobre quando faltar" (ou cunhe) pra o módulo produzir.' };
     }
     const dentro = cand.filter((c) => c.dentro);
     if (!dentro.length) {
       const maisPerto = cand[0];
       return { cor: '#a8564a', t: 'Os nobres existem, mas estão longe demais.',
-               d: 'A mais próxima com nobre é ' + esc(maisPerto.nome) + ', a ' + fmtDur(Math.round(maisPerto.horas * 3600))
-                  + ' de viagem — acima do limite do modelo. Aumente o limite de horas ou forme nobre numa aldeia mais perto.' };
+               d: 'A aldeia mais próxima com nobre disponível é ' + esc(maisPerto.nome) + ', a '
+                  + fmtDur(Math.round(maisPerto.horas * 3600)) + ' de viagem — acima do limite do modelo. '
+                  + 'Aumente o limite de horas ou forme nobre numa aldeia mais perto.' };
     }
     const comEscolta = dentro.filter((c) => !c.faltaEsc.length);
     if (!comEscolta.length) {
@@ -5972,9 +5973,9 @@
         'Se o relatório não chegar, ligue "Ler relatórios" em Alvos.</div></div>';
     }
     // Quem PODERIA ir. Sem isto, alvo em "Aguardando" mostrava caixa vazia e não explicava nada.
-    html += '<div style="color:#8b5426;font-weight:700;margin:6px 0 2px">Aldeias suas com nobre em casa</div>';
+    html += '<div style="color:#8b5426;font-weight:700;margin:6px 0 2px">Aldeias suas com nobre disponível</div>';
     if (_nbCandCoord !== a.coord) html += '<span style="color:#8a7340">— carregando… —</span>';
-    else if (!_nbCand || !_nbCand.length) html += '<span style="color:#a8564a">— nenhuma aldeia sua tem nobre em casa agora —</span>';
+    else if (!_nbCand || !_nbCand.length) html += '<span style="color:#a8564a">— nenhuma aldeia sua tem nobre disponível agora —</span>';
     else {
       const usados = {};
       envios.forEach((e) => { usados[String(e.vid)] = 1; });

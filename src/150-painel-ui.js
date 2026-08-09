@@ -305,6 +305,10 @@
     // Status) precisa refazer a conta quando a aba aparece — senão o ajuste só acontecia por
     // acidente, na primeira vez que o usuário reordenava a tabela.
     if (name === 'recruit') aoAparecer();
+    // A tabela de nobres parados não vale nada velha. Com o módulo parado o ciclo não roda pra
+    // atualizá-la, então abrir a aba também conta como um momento de conferir — mas só se a
+    // leitura já passou do prazo, senão trocar de aba viraria uma requisição por clique.
+    if (name === 'noble' && typeof nobleOciososAuto === 'function') nobleOciososAuto();
   }
   // Rotinas que só funcionam com o elemento visível. Chamado por showTab e showSub.
   function aoAparecer() {
@@ -733,6 +737,12 @@
           '</div>' +
           '<div id="twmgr-nb-lista" class="twmgr-bld-vils" style="margin-top:6px"></div>' +
           '<div id="twmgr-nb-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>') +
+        sec('Nobres parados',
+          '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">' +
+            '<button id="twmgr-nb-ocio-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px" title="força a releitura agora, sem esperar o próximo check">↻ Conferir agora</button>' +
+            '<span style="font-size:9px;color:#8a7d6d;flex:1">Aldeias suas com nobre em casa que <b>não vai sair</b> — e o motivo de cada uma. Confere sozinho a cada <b>30 min</b>; nobre já escalado no plano do ciclo não entra aqui.</span>' +
+          '</div>' +
+          '<div id="twmgr-nb-ocio"></div>') +
         sec('Modelos de envio',
           '<div id="twmgr-nb-chips" class="twmgr-chips"></div>' +
           '<div class="twmgr-card2">' +
@@ -818,12 +828,6 @@
         '</div>' +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
-        sec('Nobres parados',
-          '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">' +
-            '<button id="twmgr-nb-ocio-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">Conferir</button>' +
-            '<span style="font-size:9px;color:#8a7d6d;flex:1">Aldeias suas com nobre em casa que <b>não vai sair</b> — e o motivo de cada uma. Nobre já escalado no plano do ciclo não entra aqui.</span>' +
-          '</div>' +
-          '<div id="twmgr-nb-ocio"></div>') +
         modLog('noble') +
       '</div>' +
       '<div id="twmgr-tab-paladin" style="display:none">' +
@@ -1197,7 +1201,7 @@
     document.getElementById('twmgr-nb-start').addEventListener('click', nobleStart);
     document.getElementById('twmgr-nb-stop').addEventListener('click', nobleStop);
     document.getElementById('twmgr-nb-ocio-go').addEventListener('click', nobleConferirOciosos);
-    renderNobleOciosos();
+    renderNobleOciosos();   // só desenha o estado atual; quem dispara a leitura é showTab
     setNobleStatus(config.noble.running);
 
     document.getElementById('twmgr-pq-start').addEventListener('click', researchStart);

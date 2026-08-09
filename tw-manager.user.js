@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.128.0
+// @version      11.129.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.128.0';
+  const VERSION = '11.129.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -6076,7 +6076,7 @@
     if (_nbOcioCarregando) { box.innerHTML = '<span class="twmgr-lbl">lendo as aldeias…</span>'; return; }
     if (_nbOcioErr) { box.innerHTML = '<span style="color:#b03030;font-size:10px">' + esc(_nbOcioErr) + '</span>'; return; }
     if (!_nbOcio) {
-      box.innerHTML = '<span class="twmgr-lbl">Clique em <b>Conferir</b> pra ver onde estão os nobres que não vão sair.</span>';
+      box.innerHTML = '<span class="twmgr-lbl">Ainda não conferido nesta sessão — abre sozinho ao entrar na aba.</span>';
       return;
     }
     if (!_nbOcio.length) {
@@ -6098,6 +6098,7 @@
         + '. O nome da aldeia leva direto à Academia dela.</div>';
   }
   async function nobleConferirOciosos() {
+    if (_nbOcioCarregando) return;                  // dois cliques seguidos não viram dois fetches
     _nbOcioCarregando = true; _nbOcioErr = null; renderNobleOciosos();
     try {
       _nbOcio = await nobleOciosos();
@@ -6107,6 +6108,16 @@
     }
     _nbOcioCarregando = false;
     renderNobleOciosos();
+  }
+  // Conferência automática. O prazo é generoso de propósito: o que muda essa tabela é nobre
+  // ficando pronto (2h37 na Academia), nobre decolando ou escolta sendo recrutada — nada disso
+  // acontece de minuto em minuto, e cada leitura é uma requisição. Dispara em dois momentos, os
+  // dois "de graça": no fim do ciclo do módulo e ao abrir a aba. Botão manual atropela o prazo.
+  const NB_OCIO_TTL = 30 * 60 * 1000;
+  function nobleOciososAuto() {
+    if (_nbOcioCarregando) return;
+    if (_nbOcio && (Date.now() - _nbOcioAt) < NB_OCIO_TTL) { renderNobleOciosos(); return; }
+    nobleConferirOciosos();
   }
   // Qual alvo está com a caixa "quem vai noblar" aberta (um por vez — abrir vários empurraria a
   // fila pra fora da tela). Só de tela, não vai pro config.
@@ -7282,6 +7293,9 @@
     save();
     renderNoblePlano();
     refreshCards('noble');
+    // Depois do plano, não antes: o `usados` deste ciclo já está aplicado, então o nobre que
+    // acabou de decolar não aparece como parado. Respeita o prazo — não é uma leitura por ciclo.
+    nobleOciososAuto();
     const daVez = (config.noble.alvos || []).filter((a) => !a.noblada && !a.perdida)[0];
     pushLog('Noblar: fila de ' + naFila + ' aldeia(s)'
       + (daVez ? ' — a vez é de ' + daVez.coord : '')
@@ -10625,6 +10639,10 @@
     // Status) precisa refazer a conta quando a aba aparece — senão o ajuste só acontecia por
     // acidente, na primeira vez que o usuário reordenava a tabela.
     if (name === 'recruit') aoAparecer();
+    // A tabela de nobres parados não vale nada velha. Com o módulo parado o ciclo não roda pra
+    // atualizá-la, então abrir a aba também conta como um momento de conferir — mas só se a
+    // leitura já passou do prazo, senão trocar de aba viraria uma requisição por clique.
+    if (name === 'noble' && typeof nobleOciososAuto === 'function') nobleOciososAuto();
   }
   // Rotinas que só funcionam com o elemento visível. Chamado por showTab e showSub.
   function aoAparecer() {
@@ -11053,6 +11071,12 @@
           '</div>' +
           '<div id="twmgr-nb-lista" class="twmgr-bld-vils" style="margin-top:6px"></div>' +
           '<div id="twmgr-nb-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>') +
+        sec('Nobres parados',
+          '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">' +
+            '<button id="twmgr-nb-ocio-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px" title="força a releitura agora, sem esperar o próximo check">↻ Conferir agora</button>' +
+            '<span style="font-size:9px;color:#8a7d6d;flex:1">Aldeias suas com nobre em casa que <b>não vai sair</b> — e o motivo de cada uma. Confere sozinho a cada <b>30 min</b>; nobre já escalado no plano do ciclo não entra aqui.</span>' +
+          '</div>' +
+          '<div id="twmgr-nb-ocio"></div>') +
         sec('Modelos de envio',
           '<div id="twmgr-nb-chips" class="twmgr-chips"></div>' +
           '<div class="twmgr-card2">' +
@@ -11138,12 +11162,6 @@
         '</div>' +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
-        sec('Nobres parados',
-          '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">' +
-            '<button id="twmgr-nb-ocio-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">Conferir</button>' +
-            '<span style="font-size:9px;color:#8a7d6d;flex:1">Aldeias suas com nobre em casa que <b>não vai sair</b> — e o motivo de cada uma. Nobre já escalado no plano do ciclo não entra aqui.</span>' +
-          '</div>' +
-          '<div id="twmgr-nb-ocio"></div>') +
         modLog('noble') +
       '</div>' +
       '<div id="twmgr-tab-paladin" style="display:none">' +
@@ -11517,7 +11535,7 @@
     document.getElementById('twmgr-nb-start').addEventListener('click', nobleStart);
     document.getElementById('twmgr-nb-stop').addEventListener('click', nobleStop);
     document.getElementById('twmgr-nb-ocio-go').addEventListener('click', nobleConferirOciosos);
-    renderNobleOciosos();
+    renderNobleOciosos();   // só desenha o estado atual; quem dispara a leitura é showTab
     setNobleStatus(config.noble.running);
 
     document.getElementById('twmgr-pq-start').addEventListener('click', researchStart);

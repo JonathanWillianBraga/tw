@@ -390,7 +390,7 @@
     if (_nbOcioCarregando) { box.innerHTML = '<span class="twmgr-lbl">lendo as aldeias…</span>'; return; }
     if (_nbOcioErr) { box.innerHTML = '<span style="color:#b03030;font-size:10px">' + esc(_nbOcioErr) + '</span>'; return; }
     if (!_nbOcio) {
-      box.innerHTML = '<span class="twmgr-lbl">Clique em <b>Conferir</b> pra ver onde estão os nobres que não vão sair.</span>';
+      box.innerHTML = '<span class="twmgr-lbl">Ainda não conferido nesta sessão — abre sozinho ao entrar na aba.</span>';
       return;
     }
     if (!_nbOcio.length) {
@@ -412,6 +412,7 @@
         + '. O nome da aldeia leva direto à Academia dela.</div>';
   }
   async function nobleConferirOciosos() {
+    if (_nbOcioCarregando) return;                  // dois cliques seguidos não viram dois fetches
     _nbOcioCarregando = true; _nbOcioErr = null; renderNobleOciosos();
     try {
       _nbOcio = await nobleOciosos();
@@ -421,6 +422,16 @@
     }
     _nbOcioCarregando = false;
     renderNobleOciosos();
+  }
+  // Conferência automática. O prazo é generoso de propósito: o que muda essa tabela é nobre
+  // ficando pronto (2h37 na Academia), nobre decolando ou escolta sendo recrutada — nada disso
+  // acontece de minuto em minuto, e cada leitura é uma requisição. Dispara em dois momentos, os
+  // dois "de graça": no fim do ciclo do módulo e ao abrir a aba. Botão manual atropela o prazo.
+  const NB_OCIO_TTL = 30 * 60 * 1000;
+  function nobleOciososAuto() {
+    if (_nbOcioCarregando) return;
+    if (_nbOcio && (Date.now() - _nbOcioAt) < NB_OCIO_TTL) { renderNobleOciosos(); return; }
+    nobleConferirOciosos();
   }
   // Qual alvo está com a caixa "quem vai noblar" aberta (um por vez — abrir vários empurraria a
   // fila pra fora da tela). Só de tela, não vai pro config.
@@ -1596,6 +1607,9 @@
     save();
     renderNoblePlano();
     refreshCards('noble');
+    // Depois do plano, não antes: o `usados` deste ciclo já está aplicado, então o nobre que
+    // acabou de decolar não aparece como parado. Respeita o prazo — não é uma leitura por ciclo.
+    nobleOciososAuto();
     const daVez = (config.noble.alvos || []).filter((a) => !a.noblada && !a.perdida)[0];
     pushLog('Noblar: fila de ' + naFila + ' aldeia(s)'
       + (daVez ? ' — a vez é de ' + daVez.coord : '')

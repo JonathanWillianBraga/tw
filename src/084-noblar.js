@@ -102,6 +102,72 @@
   function nobleEmVoo(coord) {
     return nobleVoos(coord).reduce((a, e) => a + (e.n || 1), 0);
   }
+  // O total do nobleEmVoo junta duas coisas bem diferentes, e chamar as duas de "a caminho"
+  // confunde: o que o JOGO lista está mesmo voando; o que sobra do caderno local já POUSOU e só
+  // não teve relatório de nobre ainda (é contado de propósito, pra não mandar um a mais na
+  // janela em que a lealdade lida ainda é a antiga). Aqui elas saem separadas, pra tela poder
+  // dizer a verdade sobre cada uma.
+  // Qual alvo está com a caixa "quem vai noblar" aberta (um por vez — abrir vários empurraria a
+  // fila pra fora da tela). Só de tela, não vai pro config.
+  let _nbQuemAberto = null;
+  // A caixa em si. Junta as duas metades da resposta, que vêm de fontes diferentes:
+  //   - JÁ INDO  -> do jogo (nobleComandosNoJogo), com a origem lida da 2ª coluna
+  //   - VAI SAIR -> do plano do ciclo (p.envios), que é o que o módulo escolheu mandar
+  // Alvo esperando a vez não tem plano calculado ainda, e a caixa diz isso em vez de mentir
+  // "ninguém" — o planejamento dele só roda quando ele destrava.
+  function nobleLinhaQuem(a, p) {
+    const voos = nobleVoos(a.coord).filter((e) => e.doJogo);
+    const envios = (p && p.envios) || [];
+    const linha = (ico, txt, extra) => '<div style="display:flex;gap:6px;padding:1px 0">' +
+      '<span style="flex:0 0 14px">' + ico + '</span><span style="flex:1">' + txt + '</span>' +
+      '<span style="color:#8a7340">' + (extra || '') + '</span></div>';
+    let html = '';
+    if (voos.length) {
+      html += '<div style="color:#3f8f52;font-weight:700;margin-bottom:2px">Já a caminho</div>' +
+        voos.map((e) => linha('⚔', esc(e.origemNome || e.origem || 'origem desconhecida') +
+          (e.origem && e.origemNome ? ' <span style="color:#8a7340">' + esc(e.origem) + '</span>' : ''),
+          e.chega ? 'chega ' + new Date(e.chega).toLocaleTimeString('pt-BR') : '')).join('');
+    }
+    if (envios.length) {
+      html += '<div style="color:#8b5426;font-weight:700;margin:4px 0 2px">Vai sair neste ciclo</div>' +
+        envios.map((e) => linha('👑', esc(e.nome || e.coord || e.vid) +
+          (e.coord ? ' <span style="color:#8a7340">' + esc(e.coord) + '</span>' : ''),
+          (e.d != null ? e.d.toFixed(1) + ' campos · ' : '') + (e.durSec ? fmtDur(e.durSec) : ''))).join('');
+    }
+    if (!html) {
+      const estado = (p && p.estado) || 'aguardando';
+      html = '<span style="color:#8a7340">' + (estado === 'aguardando'
+        ? '— esperando a vez na fila; as origens só são escolhidas quando ele destrava —'
+        : '— nenhum nobre indo nem planejado —') + '</span>';
+    }
+    const d = nobleEmVooDetalhe(a.coord);
+    if (d.pousados) {
+      html += '<div style="color:#a07a42;margin-top:4px">* ' + d.pousados +
+        ' nobre(s) já pousaram e ainda não têm relatório — contam como cobertura até o relatório chegar.</div>';
+    }
+    return '<tr><td colspan="8" style="background:#fbf7ee;border-top:none;font-size:10px;padding:6px 10px">' +
+      '<div style="color:#6f6153;margin-bottom:3px">Quem nobla <b>' + esc(a.coord) + '</b></div>' + html + '</td></tr>';
+  }
+  // Texto honesto pro estado da fila: separa o que voa do que já pousou.
+  function nobleTxtVoo(coord) {
+    const d = nobleEmVooDetalhe(coord);
+    const p = [];
+    if (d.voando) p.push(d.voando + ' a caminho');
+    if (d.pousados) p.push(d.pousados + ' pousado(s), sem relatório');
+    return p.join(' + ') || '0 a caminho';
+  }
+  function nobleEmVooDetalhe(coord) {
+    const lista = nobleVoos(coord);
+    const agora = Date.now();
+    let voando = 0, pousados = 0;
+    lista.forEach((e) => {
+      const n = e.n || 1;
+      if (e.doJogo && (e.chega || 0) > agora) voando += n;
+      else if (e.doJogo) voando += n;          // veio do jogo: está na lista de comandos, logo não pousou
+      else pousados += n;
+    });
+    return { voando: voando, pousados: pousados, total: voando + pousados };
+  }
   // ===== O que o JOGO diz que está a caminho =====
   // O `emVoo` é um caderno PARTICULAR: só sabe do que este navegador, com esta config, mandou.
   // Comando disparado na mão, de outra sessão, ou antes do módulo existir era invisível — e aí o
@@ -123,7 +189,22 @@
     const out = {};
     const agora = Date.now();
     doc.querySelectorAll('#commands_table tr, tr.command-row').forEach((tr) => {
-      if (!tr.querySelector('img[src*="/snob"]') && !tr.querySelector('[data-icon-hint*="obre"]')) return;
+      // RETORNO não está a caminho do alvo — já bateu e está voltando pra casa. O jogo lista os
+      // dois na mesma tela, e o filtro por hint casava "Com nobre (retornando)" (medido na conta
+      // real: 3 das 4 linhas que casavam eram retorno). Daí alvo sem nenhum nobre indo aparecer
+      // como "coberto: N a caminho" — e a linha ainda dizer "Nobres retornando" ao lado.
+      // O img[src*="/snob"] já escapava sozinho, porque o arquivo do retorno é "return_snob.webp"
+      // e não tem a barra antes de "snob"; quem deixava passar era só o hint.
+      const tipos = tr.querySelectorAll('[data-command-type]');
+      for (let i = 0; i < tipos.length; i++) {
+        if ((tipos[i].getAttribute('data-command-type') || '') === 'return') return;
+      }
+      const temNobre = tr.querySelector('img[src*="/snob"]') ||
+        Array.prototype.some.call(tr.querySelectorAll('[data-icon-hint]'), (e) => {
+          const h = e.getAttribute('data-icon-hint') || '';
+          return /obre/i.test(h) && !/retorn/i.test(h);
+        });
+      if (!temNobre) return;
       const tds = tr.querySelectorAll('td');
       if (!tds.length) return;
       const m = (tds[0].textContent || '').match(/\((\d{1,3})\|(\d{1,3})\)/);
@@ -133,7 +214,12 @@
         if (/\d{1,2}:\d{2}:\d{2}/.test(td.textContent || '')) { chega = desviarParseArriveAt(td.textContent); break; }
       }
       const coord = m[1] + '|' + m[2];
-      (out[coord] = out[coord] || []).push({ at: agora, chega: chega || (agora + 3600000), n: 1, doJogo: 1 });
+      // 2ª coluna é a ORIGEM ("Zidane (476|563) K54"). Sem ela dá pra saber que há nobre indo,
+      // mas não DE ONDE — que é o que se quer saber ao olhar a fila.
+      const oTxt = ((tds[1] && tds[1].textContent) || '').replace(/\s+/g, ' ').trim();
+      const om = oTxt.match(/\((\d{1,3})\|(\d{1,3})\)/);
+      (out[coord] = out[coord] || []).push({ at: agora, chega: chega || (agora + 3600000), n: 1, doJogo: 1,
+        origem: om ? (om[1] + '|' + om[2]) : null, origemNome: oTxt.split('(')[0].trim() || null });
     });
     return out;
   }
@@ -541,7 +627,7 @@
       return { pronto: false, envios: [], falta: 0, dentroDoLimite: origens, tpl: tpl,
                tplId: op.id, tplNome: tpl.name, coberto: true,
                lealdade: need.lealdade, prevista: need.prevista, voando: need.voando,
-               motivo: need.voando ? ('coberto: ' + need.voando + ' a caminho') : 'lealdade zerada' };
+               motivo: need.voando ? ('coberto: ' + nobleTxtVoo(alvo.coord)) : 'lealdade zerada' };
     }
 
     const limite = Math.max(1, tpl.maxHoras || 6) * 3600;
@@ -1217,8 +1303,14 @@
           ? 'projetada pra daqui a ' + fmtDur(a.ultDur) + ', que é a viagem do próximo nobre'
           : 'sem viagem medida ainda — projetada só até a última chegada marcada';
         const voando = nobleEmVoo(a.coord);
+        const detVoo = nobleEmVooDetalhe(a.coord);
+        // Número clicável: abre a caixa com QUEM está mandando / vai mandar. O tooltip já
+        // separa voando de pousado, porque o total sozinho mentia ("3" com 1 nobre indo).
         const atksCel = voando
-          ? '<b style="color:#3f8f52">' + voando + '</b>' : '<span style="color:#8a7340">—</span>';
+          ? '<a class="twmgr-nb-quem" data-coord="' + esc(a.coord) + '" style="cursor:pointer;color:#3f8f52;font-weight:700" ' +
+            'title="' + esc(nobleTxtVoo(a.coord)) + ' — clique pra ver de quais aldeias">' + voando +
+            (detVoo.pousados ? '<span style="color:#a07a42">*</span>' : '') + '</a>'
+          : '<a class="twmgr-nb-quem" data-coord="' + esc(a.coord) + '" style="cursor:pointer;color:#8a7340" title="ver de quais aldeias sai o nobre">—</a>';
         // O estado é SÓ de quem entrou no processo. Quem espera a vez fica em "Aguardando".
         const chave = fim ? (a.noblada ? 'noblada' : 'perdida') : (p.estado || 'aguardando');
         const E = NB_ESTADOS[chave] || NB_ESTADOS.aguardando;
@@ -1239,7 +1331,8 @@
           '<td>' + atksCel + '</td>' +
           '<td>' + nobleLealdadeCel(prev, dicaPrev) + '</td>' +
           '<td>' + estado + '</td>' +
-          '<td><a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '" title="tirar da fila">✕</a></td></tr>';
+          '<td><a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '" title="tirar da fila">✕</a></td></tr>' +
+          (_nbQuemAberto === a.coord ? nobleLinhaQuem(a, p) : '');
       }).join('') + '</tbody></table>';
     const info = document.getElementById('twmgr-nb-info');
     if (info) {
@@ -1404,6 +1497,11 @@
     box.addEventListener('click', (e) => {
       const el = e.target, coord = el.getAttribute && el.getAttribute('data-coord');
       if (!coord) return;
+      if (el.classList.contains('twmgr-nb-quem')) {
+        _nbQuemAberto = (_nbQuemAberto === coord) ? null : coord;   // clicar de novo fecha
+        renderNoblePlano();
+        return;
+      }
       // Reordenar a fila = mover no PRÓPRIO array de alvos, que é o que o motor percorre.
       // Guardar um número de posição à parte abriria a porta pra tela e motor discordarem.
       if (el.classList.contains('twmgr-nb-up') || el.classList.contains('twmgr-nb-dn')) {

@@ -2521,12 +2521,14 @@
     }
     // Quanto sobra numa aldeia depois da reserva de casa e do que o plano já comprometeu nela.
     //
-    // Usa `v.casa` DE PROPÓSITO, e não `v.avail`. O `avail` segue o botão global de fonte de
-    // tropa lá embaixo: em "todas as minhas tropas" ele vale casa + o que está fora apoiando +
-    // o que está voltando. Isso faz sentido pra AGENDAR ataque, que sai daqui a horas e pode
-    // esperar a tropa chegar — mas a blindagem dispara AGORA. Contando o que não está na aldeia,
-    // a divisão prometia defesa que não existe e o envio saía menor (ou falhava) sem explicação.
-    // Aqui só vale o que está em casa neste instante, independente daquele botão.
+    // O estoque vem de `v.avail`, que SEGUE o seletor de fonte da lista de Origens: com "na
+    // aldeia agora" é só o que está parado aqui; com "suas próprias" entra também o que está
+    // fora apoiando e o que está voltando. Quem manda é a escolha do usuário.
+    //
+    // Vale saber o que cada uma significa na hora de enviar: em "suas próprias" a divisão conta
+    // tropa que ainda não chegou, então o envio daquela linha vai sair menor (ou falhar) até ela
+    // pousar em casa. É útil pra montar o plano agora e disparar quando a tropa voltar; não é
+    // útil pra mandar tudo de uma vez.
     function ccBlzLivre(v) {
       const b = config.cmd.blz;
       const usado = { spear: 0, sword: 0, heavy: 0 };
@@ -2534,10 +2536,10 @@
         const q = (b.plano[num] || {})[v.vid]; if (!q) return;
         BLZ_UNITS.forEach((u) => { usado[u] += q[u] || 0; });
       });
-      const casa = v.casa || v.avail || {};
+      const estoque = v.avail || {};
       const livre = {};
       BLZ_UNITS.forEach((u) => {
-        livre[u] = Math.max(0, (casa[u] || 0) - (b.reserva[u] || 0) - usado[u]);
+        livre[u] = Math.max(0, (estoque[u] || 0) - (b.reserva[u] || 0) - usado[u]);
       });
       return livre;
     }
@@ -4102,7 +4104,7 @@
             '</div>' +
             '<div style="font-size:10px;color:#6f6153;margin:7px 0 2px">Reserva de casa ' +
               '<span style="color:#8a7d6d;font-weight:400">— o que NUNCA sai, por aldeia</span></div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-bottom:3px">A divisão conta só a tropa que está <b>na aldeia agora</b> — apoio sai na hora, tropa voltando não dá pra mandar.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-bottom:3px">A divisão usa a <b>fonte de tropa</b> escolhida na lista de Origens, abaixo. Em <b>"suas próprias"</b> ela conta o que está fora e voltando — esse pedaço só sai depois que a tropa pousar em casa.</div>' +
             '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
               BLZ_UNITS.map((u) => '<label title="' + BLZ_ROT[u] + '" style="display:flex;align-items:center;gap:3px;font-size:10px">' +
                 unitIcon(u, BLZ_ROT[u]) +

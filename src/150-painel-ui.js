@@ -816,6 +816,12 @@
         '</div>' +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
+        sec('Nobres parados',
+          '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">' +
+            '<button id="twmgr-nb-ocio-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">Conferir</button>' +
+            '<span style="font-size:9px;color:#8a7d6d;flex:1">Aldeias suas com nobre em casa que <b>não vai sair</b> — e o motivo de cada uma. Nobre já escalado no plano do ciclo não entra aqui.</span>' +
+          '</div>' +
+          '<div id="twmgr-nb-ocio"></div>') +
         modLog('noble') +
       '</div>' +
       '<div id="twmgr-tab-paladin" style="display:none">' +
@@ -1186,6 +1192,8 @@
     renderNoblePlano();
     document.getElementById('twmgr-nb-start').addEventListener('click', nobleStart);
     document.getElementById('twmgr-nb-stop').addEventListener('click', nobleStop);
+    document.getElementById('twmgr-nb-ocio-go').addEventListener('click', nobleConferirOciosos);
+    renderNobleOciosos();
     setNobleStatus(config.noble.running);
 
     document.getElementById('twmgr-pq-start').addEventListener('click', researchStart);

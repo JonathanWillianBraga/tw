@@ -291,6 +291,137 @@
              d: comEscolta.reduce((s, c) => s + c.nobres, 0) + ' nobre(s) em ' + comEscolta.length
                 + ' aldeia(s) alcançam e fecham a escolta. Se ainda assim não sai, veja o log do módulo.' };
   }
+  // ===== Nobres parados: quais aldeias têm nobre que não vai sair =====
+  // O card já dizia "N nobres parados", mas número sem endereço não dá pra agir: o que se quer
+  // saber é QUAL aldeia e POR QUE aquele nobre não decola. É o mesmo conjunto de causas do
+  // diagnóstico por alvo, só que olhado do outro lado — da ORIGEM, não do destino. Aqui a
+  // pergunta não é "por que este alvo não anda", e sim "por que este nobre está encostado".
+  //
+  // Nobre comprometido no plano do ciclo NÃO conta como parado: ele tem destino, só não decolou
+  // ainda. Sem esse desconto a tela acusaria de ocioso justamente o nobre que vai sair agora.
+  async function nobleOciosos() {
+    const [todas, snob, vel] = await Promise.all([
+      getAllVillagesCached(), nobleSnobPorAldeia(true), nobleVelNobre(),
+    ]);
+    const alvos = (config.noble.alvos || []).filter((a) => !a.noblada && !a.perdida);
+    const plano = config.noble.plano || [];
+    const estadoDe = {};
+    plano.forEach((p) => { estadoDe[p.coord] = p.estado; });
+    const comprometidos = {};
+    plano.forEach((p) => (p.envios || []).forEach((e) => {
+      const k = String(e.vid);
+      comprometidos[k] = (comprometidos[k] || 0) + (e.qtd || 1);
+    }));
+    // Cada alvo carrega o SEU modelo (limite de horas e escolta podem diferir por alvo), então o
+    // alcance é avaliado par a par, não contra um limite global.
+    const alvosPrep = alvos.map((a) => {
+      const tp = nobleTplsDe(a)[0];
+      const t = (tp && tp.t) || {};
+      return { a: a, esc: t.escolta || {}, lim: (t.maxHoras != null) ? t.maxHoras : null };
+    });
+    const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+    const out = [];
+    (todas || []).forEach((v) => {
+      const m = (v.coord || '').match(/(\d+)\|(\d+)/); if (!m) return;
+      const tropa = snob[String(v.vid)] || {};
+      const livres = Math.max(0, (tropa.snob || 0) - (comprometidos[String(v.vid)] || 0));
+      if (!livres) return;                                    // sem nobre sobrando: nada a relatar
+      const dist = alvosPrep.map((p) => {
+        const h = (fieldDist(+m[1], +m[2], p.a.x, p.a.y) * vel) / 60;
+        return { p: p, horas: h, dentro: (p.lim == null) || (h <= p.lim) };
+      }).sort((a, b) => a.horas - b.horas);
+      const item = { vid: v.vid, nome: v.name || v.coord, coord: v.coord, nobres: livres };
+      if (!dist.length) {
+        item.cor = '#8a7340'; item.motivo = 'sem alvo na fila';
+        item.det = 'A fila de alvos está vazia — não há pra onde mandar.';
+        out.push(item); return;
+      }
+      const dentro = dist.filter((d) => d.dentro);
+      if (!dentro.length) {
+        const p0 = dist[0];
+        item.cor = '#a8564a'; item.motivo = 'nenhum alvo no alcance';
+        item.det = 'O alvo mais perto é ' + esc(p0.p.a.coord) + ', a ' + fmtDur(Math.round(p0.horas * 3600))
+          + (p0.p.lim != null ? ' — o modelo dele para em ' + p0.p.lim + ' h' : '') + '.';
+        out.push(item); return;
+      }
+      // Alcança alguém. Então ou falta escolta, ou o alvo já está resolvido, ou é a fila segurando.
+      const comEsc = dentro.filter((d) => Object.keys(d.p.esc).every((u) => (tropa[u] || 0) >= (+d.p.esc[u] || 0)));
+      if (!comEsc.length) {
+        const d0 = dentro[0];
+        const falta = Object.keys(d0.p.esc).filter((u) => (tropa[u] || 0) < (+d0.p.esc[u] || 0))
+          .map((u) => (rot[u] || u) + ' ' + (tropa[u] || 0) + '/' + d0.p.esc[u]);
+        item.cor = '#a8564a'; item.motivo = 'falta escolta';
+        item.det = 'Alcança ' + esc(d0.p.a.coord) + ' em ' + fmtDur(Math.round(d0.horas * 3600))
+          + ', mas não fecha a composição: ' + falta.join(', ') + '.';
+        out.push(item); return;
+      }
+      // Alvo com nobre já a caminho o bastante não precisa deste — é reserva, não desperdício.
+      const abertos = comEsc.filter((d) => {
+        const e = estadoDe[d.p.a.coord];
+        return e !== 'enviados' && e !== 'garantida' && e !== 'noblada';
+      });
+      if (!abertos.length) {
+        const d0 = comEsc[0];
+        item.cor = '#3f8f52'; item.motivo = 'reserva';
+        item.det = 'Os alvos no alcance (o mais perto é ' + esc(d0.p.a.coord)
+          + ') já têm nobre suficiente a caminho. Este fica de reserva.';
+        out.push(item); return;
+      }
+      const d0 = abertos[0];
+      const est = estadoDe[d0.p.a.coord];
+      if (est === 'aguardando') {
+        item.cor = '#a07a42'; item.motivo = 'preso pela fila serial';
+        item.det = 'Alcança ' + esc(d0.p.a.coord) + ' em ' + fmtDur(Math.round(d0.horas * 3600))
+          + ' e tem a escolta, mas esse alvo espera a vez. Ligue "Planejar todos os alvos" pra este nobre sair.';
+      } else {
+        item.cor = '#a07a42'; item.motivo = 'deve sair no próximo ciclo';
+        item.det = 'Alcança ' + esc(d0.p.a.coord) + ' em ' + fmtDur(Math.round(d0.horas * 3600))
+          + ' e fecha a escolta. Se não sair, o teto de comandos por ciclo pode estar cheio.';
+      }
+      out.push(item);
+    });
+    out.sort((a, b) => b.nobres - a.nobres);
+    return out;
+  }
+  // Estado de tela da lista de ociosos (não vai pro config: é uma leitura, não uma configuração).
+  let _nbOcio = null, _nbOcioAt = 0, _nbOcioErr = null, _nbOcioCarregando = false;
+  function renderNobleOciosos() {
+    const box = document.getElementById('twmgr-nb-ocio'); if (!box) return;
+    if (_nbOcioCarregando) { box.innerHTML = '<span class="twmgr-lbl">lendo as aldeias…</span>'; return; }
+    if (_nbOcioErr) { box.innerHTML = '<span style="color:#b03030;font-size:10px">' + esc(_nbOcioErr) + '</span>'; return; }
+    if (!_nbOcio) {
+      box.innerHTML = '<span class="twmgr-lbl">Clique em <b>Conferir</b> pra ver onde estão os nobres que não vão sair.</span>';
+      return;
+    }
+    if (!_nbOcio.length) {
+      box.innerHTML = '<span style="color:#3f8f52;font-size:10px">Nenhum nobre parado — todos estão a caminho ou já comprometidos no plano.</span>';
+      return;
+    }
+    const total = _nbOcio.reduce((s, o) => s + o.nobres, 0);
+    box.innerHTML = '<table style="width:100%;font-size:10px;border-collapse:collapse">' +
+      '<tr style="color:#8a7340"><td>aldeia</td><td style="width:42px">nobres</td><td style="width:130px">motivo</td><td>detalhe</td></tr>' +
+      _nbOcio.map((o) => '<tr style="border-top:1px solid #efe7d8">' +
+        '<td style="padding:2px 0"><a href="/game.php?village=' + esc(String(o.vid)) + '&screen=snob" target="_blank" style="color:#5c4423">' +
+          esc(o.nome) + '</a> <span style="color:#8a7340">' + esc(o.coord) + '</span></td>' +
+        '<td><b style="color:#8b5426">' + o.nobres + '</b></td>' +
+        '<td style="color:' + o.cor + '">' + esc(o.motivo) + '</td>' +
+        '<td style="color:#6f6153">' + o.det + '</td></tr>').join('') +
+      '</table>' +
+      '<div style="color:#8a7340;font-size:9px;margin-top:3px"><b>' + total + ' nobre(s)</b> parados em '
+        + _nbOcio.length + ' aldeia(s). Lido às ' + new Date(_nbOcioAt).toLocaleTimeString('pt-BR')
+        + '. O nome da aldeia leva direto à Academia dela.</div>';
+  }
+  async function nobleConferirOciosos() {
+    _nbOcioCarregando = true; _nbOcioErr = null; renderNobleOciosos();
+    try {
+      _nbOcio = await nobleOciosos();
+      _nbOcioAt = Date.now();
+    } catch (e) {
+      _nbOcioErr = 'não deu pra ler: ' + (e.message || e);
+    }
+    _nbOcioCarregando = false;
+    renderNobleOciosos();
+  }
   // Qual alvo está com a caixa "quem vai noblar" aberta (um por vez — abrir vários empurraria a
   // fila pra fora da tela). Só de tela, não vai pro config.
   let _nbQuemAberto = null, _nbCand = null, _nbCandCoord = null;

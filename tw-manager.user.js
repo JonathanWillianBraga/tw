@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.122.0
+// @version      11.123.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.122.0';
+  const VERSION = '11.123.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -10783,7 +10783,7 @@
             '<div class="twmgr-fld"><span title="Forma o nobre onde JÁ existe moeda guardada">Formar nobre quando faltar</span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-prod" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px"><b>Nunca cunha.</b> Cunhar converte recurso em moeda sem volta, num alvo que pode nem sair — isso fica com você, no modo <b>Cunhar</b> do Mercado.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto pra mais longe, e a que não conseguir agora <b>não interrompe</b> — tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto pra mais longe, <b>parando no limite de viagem do modelo</b> — aldeia que não alcança o alvo nem é considerada, porque o nobre formado lá nunca seria usado. A que não conseguir agora (moeda, recurso, fila) <b>não interrompe</b>: tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>' +
             '<div class="twmgr-fld" style="margin-top:9px"><span title="Por padrão, se a leva sai incompleta E há nobre em produção, ele segura pra mandar tudo junto — porque a lealdade regenera entre uma chegada e outra. Ligado, manda o que estiver pronto agora e completa nos ciclos seguintes. NÃO há risco de excesso: o que falta é recalculado todo ciclo pela lealdade prevista, que já desconta os nobres voando.">Enviar parcial sempre <span style="color:#8a7d6d">(não esperar fechar a leva)</span></span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-parcial" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Some o "segurando: +N em produção". Em troca, se demorar muito entre um nobre e outro, a lealdade regenera no meio e o primeiro rende menos.</div>' +

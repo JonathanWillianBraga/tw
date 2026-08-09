@@ -469,29 +469,44 @@
   // unidade (FAKE_POP, a mesma tabela de população usada em Saque/Fakes). Lê DIRETO dos
   // campos na tela (não de config.recruit), pra atualizar enquanto o usuário digita, antes
   // de salvar.
+  // Capacidade da fazenda da aldeia ATUAL, lida do cabeçalho do jogo. Serve só de referência
+  // na tela — some se a tela não tiver a barra (nem toda screen mostra).
+  function rcFazendaAtual() {
+    const e = document.getElementById('pop_max_label');
+    const n = e ? (parseInt((e.textContent || '').replace(/\D/g, ''), 10) || 0) : 0;
+    return n > 0 ? n : null;
+  }
   function rcAtualizarPop() {
     const el = document.getElementById('twmgr-rc-pop-v'); if (!el) return;
+    const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
     const campos = document.querySelectorAll('.twmgr-rc-r');
     if (campos.length) {
-      // Modo receita: o número não é quantidade, é peso — então o útil aqui é mostrar a fatia
-      // da fazenda que cada unidade vai levar, que é o que o usuário está de fato decidindo.
-      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+      // Receita: o peso JÁ É a fatia da fazenda, então a % sai direto da proporção dos pesos.
       let soma = 0; const pesos = [];
       campos.forEach((i) => {
         const v = parseInt(i.value, 10);
         if (!Number.isNaN(v) && v > 0) { pesos.push([i.getAttribute('data-unit'), v]); soma += v; }
       });
       el.innerHTML = soma
-        ? pesos.map(([u, v]) => esc(rot[u] || u) + ' ' + Math.round(100 * v / soma) + '%').join(' · ')
+        ? pesos.map(([u, v]) => esc(rot[u] || u) + ' <b>' + Math.round(100 * v / soma) + '%</b>').join(' · ')
         : '—';
       return;
     }
-    let pop = 0;
+    // Fixo: aqui o número é PEÇA, e peça não diz nada sobre peso na fazenda — 500 cavalarias
+    // ocupam o mesmo que 2.000 lanceiros. Então mostra a fatia de cada unidade na população
+    // total do modelo, que é a informação que falta na hora de montar a composição.
+    let pop = 0; const porU = [];
     document.querySelectorAll('.twmgr-rc-t').forEach((i) => {
       const v = parseInt(i.value, 10);
-      if (!Number.isNaN(v) && v > 0) pop += v * (FAKE_POP[i.getAttribute('data-unit')] || 0);
+      if (Number.isNaN(v) || v <= 0) return;
+      const p = v * (FAKE_POP[i.getAttribute('data-unit')] || 0);
+      if (p > 0) { porU.push([i.getAttribute('data-unit'), p]); pop += p; }
     });
-    el.textContent = fmtN(pop);
+    const fz = rcFazendaAtual();
+    el.innerHTML = fmtN(pop) +
+      (pop && fz ? ' <span style="color:#a2643a">(' + Math.round(100 * pop / fz) + '% da fazenda desta aldeia, de ' + fmtN(fz) + ')</span>' : '') +
+      (porU.length > 1 ? '<br><span style="color:#8a7d6d">' +
+        porU.map(([u, p]) => esc(rot[u] || u) + ' <b>' + Math.round(100 * p / pop) + '%</b>').join(' · ') + '</span>' : '');
   }
   function rcLerEditor() {
     const t = rcTplAtivo(); if (!t) return;

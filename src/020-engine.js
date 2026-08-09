@@ -1019,6 +1019,11 @@
     const repeatOn = !!cfg.repeat;
     const repeatMs = Math.max(0, cfg.repeatMin || 0) * 60000;
     const minCL = cfg.minCL || 0, dyn = !!cfg.dynTemplate, M = cfg.matrix || {};
+    // RESERVA: quanto tem que SOBRAR na aldeia. Diferente do "mín. cav. leve", que só decide se a
+    // origem entra: com mínimo 50 e envio de 5, uma aldeia com 52 passava no mínimo e ia pra 47.
+    // A reserva desconta ANTES de comparar, então o piso é de verdade.
+    const resCL = Math.max(0, cfg.clReserve || 0), resSpy = Math.max(0, cfg.spyReserve || 0);
+    const livre = (a, u) => Math.max(0, (a[u] || 0) - (u === 'light' ? resCL : u === 'spy' ? resSpy : 0));
     const sent = cfg.sentReports || {}, defended = cfg.defended || {};
     // "Saques ativos agora": poda os que já pousaram (destino sumiu da lista de comandos) + os muito antigos.
     cfg.activeSends = (cfg.activeSends || []).filter((s) => pendingCoords.has(s.coord) && (now - (s.at || 0) < 12 * 3600 * 1000));
@@ -1169,9 +1174,13 @@
         }
         const avail = await getAvail(c.s.vid);
         if (minCL > 0 && (avail.light || 0) < minCL) continue;   // origem drenada -> tenta a próxima mais próxima
+        // No C quem monta a tropa é o jogo, então o piso usa a MESMA estimativa que o desconto
+        // logo abaixo (estCL). É aproximação, e é a única honesta: não dá pra saber a composição
+        // do template C antes de mandar.
+        if (mode === 'c' && (resCL > 0 || resSpy > 0) && livre(avail, 'light') < estCL) continue;
         // Modo dinâmico A/B manda {light: estCL, spy: 1}. Se a origem não tem isso (ex.: aldeia recém-noblada
         // sem CL), o servidor recusa e o log mentia "enviado". Pula pra próxima origem em vez de falso-positivo.
-        if (dyn && mode !== 'c') { if ((avail.light || 0) < estCL) continue; if ((avail.spy || 0) < 1) continue; }
+        if (dyn && mode !== 'c') { if (livre(avail, 'light') < estCL) continue; if (livre(avail, 'spy') < 1) continue; }
         // Sem template dinâmico o A/B manda a composição fixa do assistente. Antes a gente disparava
         // e deixava o servidor recusar — 1 requisição jogada fora por origem sem tropa. Agora confere
         // antes, usando as unidades lidas do próprio template. Se não deu pra ler (mapa vazio), passa
@@ -1179,7 +1188,7 @@
         if (!dyn && !useCalc && mode !== 'c') {
           const need = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {};
           let falta = false;
-          for (const u in need) { if ((avail[u] || 0) < need[u]) { falta = true; break; } }
+          for (const u in need) { if (livre(avail, u) < need[u]) { falta = true; break; } }
           if (falta) continue;
         }
         // Envio calculado = O TEMPLATE DO USUÁRIO subido até o mínimo do mundo. Mantém as unidades que
@@ -1198,7 +1207,7 @@
           if (falta > 0) calcAmounts.light = (calcAmounts.light || 0) + Math.ceil(falta / (FAKE_POP.light || 4));
           if (!Object.keys(calcAmounts).length) continue;
           let semTropa = false;
-          for (const u in calcAmounts) { if ((avail[u] || 0) < calcAmounts[u]) { semTropa = true; break; } }
+          for (const u in calcAmounts) { if (livre(avail, u) < calcAmounts[u]) { semTropa = true; break; } }
           if (semTropa) continue;   // origem não tem o template + o complemento -> tenta a próxima
         }
         try {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.124.0
+// @version      11.128.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.124.0';
+  const VERSION = '11.128.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -214,7 +214,7 @@
   // Por cor: um modo único ('none'|'a'|'b'|'c') + qtd (só p/ a/b; C manda 1x).
   const defFarmMatrix = () => ({ greenEmpty: { mode: 'a', qty: 1 }, greenFull: { mode: 'b', qty: 1 }, yellowEmpty: { mode: 'none', qty: 1 }, yellowFull: { mode: 'none', qty: 1 }, blue: { mode: 'b', qty: 1 } });
   const FARM_COLORS = ['greenEmpty', 'greenFull', 'yellowEmpty', 'yellowFull', 'blue'];
-  const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, blueMaxWall: 0, delay: 500, mode: 'suave', group: null, repeat: false, repeatMin: 10, minCL: 0, order: 'dist', dynTemplate: false, matrix: defFarmMatrix(), sentReports: {}, defended: {} });
+  const defFarm = () => ({ running: false, nextAt: 0, interval: 600, minWood: 1000, minStone: 1000, minIron: 1000, maxDist: 13, maxWall: 20, blueMaxWall: 0, delay: 500, mode: 'suave', group: null, repeat: false, repeatMin: 10, minCL: 0, clReserve: 0, spyReserve: 0, order: 'dist', dynTemplate: false, matrix: defFarmMatrix(), sentReports: {}, defended: {} });
   const defWall = () => ({ running: false, nextAt: 0, interval: 600, wallMin: 1, wallMax: 6, ramMode: 'auto', ramFixed: 20, ramWall6: 24, axeCount: 80, spyCount: 1, sentDemo: {} });
   // Recrutar no molde do "Gerente de conta → Tropas": MODELOS nomeados aplicados a aldeias.
   //
@@ -492,6 +492,8 @@
     if (c.farm.repeatMin == null) c.farm.repeatMin = (c.farm.cooldownMin != null ? c.farm.cooldownMin : 10);
     delete c.farm.cooldownMin;
     if (c.farm.minCL == null) c.farm.minCL = 0;
+    if (c.farm.clReserve == null) c.farm.clReserve = 0;
+    if (c.farm.spyReserve == null) c.farm.spyReserve = 0;
     if (!c.farm.order) c.farm.order = 'dist';
     if (c.farm.dynTemplate == null) c.farm.dynTemplate = false;
     if (!c.farm.matrix) c.farm.matrix = defFarmMatrix();
@@ -2021,6 +2023,11 @@
     const repeatOn = !!cfg.repeat;
     const repeatMs = Math.max(0, cfg.repeatMin || 0) * 60000;
     const minCL = cfg.minCL || 0, dyn = !!cfg.dynTemplate, M = cfg.matrix || {};
+    // RESERVA: quanto tem que SOBRAR na aldeia. Diferente do "mín. cav. leve", que só decide se a
+    // origem entra: com mínimo 50 e envio de 5, uma aldeia com 52 passava no mínimo e ia pra 47.
+    // A reserva desconta ANTES de comparar, então o piso é de verdade.
+    const resCL = Math.max(0, cfg.clReserve || 0), resSpy = Math.max(0, cfg.spyReserve || 0);
+    const livre = (a, u) => Math.max(0, (a[u] || 0) - (u === 'light' ? resCL : u === 'spy' ? resSpy : 0));
     const sent = cfg.sentReports || {}, defended = cfg.defended || {};
     // "Saques ativos agora": poda os que já pousaram (destino sumiu da lista de comandos) + os muito antigos.
     cfg.activeSends = (cfg.activeSends || []).filter((s) => pendingCoords.has(s.coord) && (now - (s.at || 0) < 12 * 3600 * 1000));
@@ -2171,9 +2178,13 @@
         }
         const avail = await getAvail(c.s.vid);
         if (minCL > 0 && (avail.light || 0) < minCL) continue;   // origem drenada -> tenta a próxima mais próxima
+        // No C quem monta a tropa é o jogo, então o piso usa a MESMA estimativa que o desconto
+        // logo abaixo (estCL). É aproximação, e é a única honesta: não dá pra saber a composição
+        // do template C antes de mandar.
+        if (mode === 'c' && (resCL > 0 || resSpy > 0) && livre(avail, 'light') < estCL) continue;
         // Modo dinâmico A/B manda {light: estCL, spy: 1}. Se a origem não tem isso (ex.: aldeia recém-noblada
         // sem CL), o servidor recusa e o log mentia "enviado". Pula pra próxima origem em vez de falso-positivo.
-        if (dyn && mode !== 'c') { if ((avail.light || 0) < estCL) continue; if ((avail.spy || 0) < 1) continue; }
+        if (dyn && mode !== 'c') { if (livre(avail, 'light') < estCL) continue; if (livre(avail, 'spy') < 1) continue; }
         // Sem template dinâmico o A/B manda a composição fixa do assistente. Antes a gente disparava
         // e deixava o servidor recusar — 1 requisição jogada fora por origem sem tropa. Agora confere
         // antes, usando as unidades lidas do próprio template. Se não deu pra ler (mapa vazio), passa
@@ -2181,7 +2192,7 @@
         if (!dyn && !useCalc && mode !== 'c') {
           const need = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {};
           let falta = false;
-          for (const u in need) { if ((avail[u] || 0) < need[u]) { falta = true; break; } }
+          for (const u in need) { if (livre(avail, u) < need[u]) { falta = true; break; } }
           if (falta) continue;
         }
         // Envio calculado = O TEMPLATE DO USUÁRIO subido até o mínimo do mundo. Mantém as unidades que
@@ -2200,7 +2211,7 @@
           if (falta > 0) calcAmounts.light = (calcAmounts.light || 0) + Math.ceil(falta / (FAKE_POP.light || 4));
           if (!Object.keys(calcAmounts).length) continue;
           let semTropa = false;
-          for (const u in calcAmounts) { if ((avail[u] || 0) < calcAmounts[u]) { semTropa = true; break; } }
+          for (const u in calcAmounts) { if (livre(avail, u) < calcAmounts[u]) { semTropa = true; break; } }
           if (semTropa) continue;   // origem não tem o template + o complemento -> tenta a próxima
         }
         try {
@@ -8108,8 +8119,25 @@
   // errados, que é o pior tipo de defeito. As unidades saem do CABEÇALHO, e a contagem é
   // conferida contra a linha; se divergir, lança em vez de somar.
 
-  const APOIOS_TTL_MS = 5 * 60000;      // cache curto: tropa se move, mas não a cada segundo
-  let _apCache = null, _apCacheAt = 0, _apLendo = false;
+  // A leitura CUSTA 44 requisições numa conta que bate 429 global, então ela não expira sozinha
+  // e não se perde num F5: fica gravada, e só é refeita quando o usuário pede ou depois de uma
+  // retirada. Vive numa chave PRÓPRIA, fora do config — o `save()` reescreve o config o tempo
+  // todo, e carregar dezenas de KB de apoio junto seria desperdício em cada ciclo de módulo.
+  const APOIOS_KEY = KEY + '_apoios';
+  let _apCache = null, _apLendo = false;
+
+  function apoiosSalvar() {
+    try { localStorage.setItem(APOIOS_KEY, JSON.stringify(_apCache)); }
+    catch (e) { pushLog('Apoios: não consegui guardar a leitura (' + (e.message || e) + ').', 'err', 'apoios'); }
+  }
+  function apoiosCarregar() {
+    try {
+      const s = localStorage.getItem(APOIOS_KEY);
+      if (!s) return;
+      const c = JSON.parse(s);
+      if (c && c.lista && c.unidades) _apCache = c;
+    } catch (e) { /* leitura velha ilegível: só começa vazio */ }
+  }
 
   // As unidades desta tabela, na ordem das colunas. Vem do `<th><img src="...unit_XXX...">`.
   function apoiosUnidadesDe(tabela) {
@@ -8208,8 +8236,13 @@
       }
       if (!total) return;
       const cb = tr.querySelector('input.troop-request-selector[data-away-id], input[data-away-id]');
+      // O id do DESTINO, do link da primeira célula: é a chave da retirada em bloco.
+      const lk = Array.prototype.slice.call(tr.querySelectorAll('a'))
+        .map((a) => a.getAttribute('href') || '').filter((h) => /screen=info_village/.test(h))[0];
+      const mid = lk && lk.match(/[?&]id=(\d+)/);
       out.push({ coord: alvo.coord, dono: alvo.dono, nome: alvo.nome,
                  dist: (tds[1].textContent || '').trim(),
+                 destId: mid ? mid[1] : null,
                  awayId: cb ? cb.getAttribute('data-away-id') : null,
                  tropas: tropas });
     });
@@ -8218,7 +8251,7 @@
 
   // Passo 3: inverter. De "origem → destinos" para "destino → origens".
   async function apoiosMontar(forcar, aoAndar) {
-    if (!forcar && _apCache && (Date.now() - _apCacheAt) < APOIOS_TTL_MS) return _apCache;
+    if (!forcar && _apCache) return _apCache;   // sem expiração: quem decide reler e o usuario
     if (_apLendo) throw new Error('já estou lendo os apoios — espere terminar');
     _apLendo = true;
     try {
@@ -8233,7 +8266,8 @@
         catch (e) { falhas++; pushLog('Apoios: não li ' + (o.nome || o.vid) + ' (' + (e.message || e) + ').', 'err', 'apoios'); }
         itens.forEach((it) => {
           const d = porDestino[it.coord] || (porDestino[it.coord] = {
-            coord: it.coord, dono: it.dono, nome: it.nome, total: {}, origens: [] });
+            coord: it.coord, dono: it.dono, nome: it.nome, destId: it.destId, total: {}, origens: [] });
+          if (!d.destId) d.destId = it.destId;
           d.origens.push({ vid: o.vid, nome: o.nome, coord: o.coord,
                            dist: it.dist, awayId: it.awayId, tropas: it.tropas });
           Object.keys(it.tropas).forEach((u) => {
@@ -8248,7 +8282,7 @@
       lista.sort((a, b) => apoiosSoma(b.total) - apoiosSoma(a.total));
       _apCache = { lista: lista, unidades: Object.keys(unidades), origens: origens.length,
                    falhas: falhas, at: Date.now() };
-      _apCacheAt = Date.now();
+      apoiosSalvar();
       return _apCache;
     } finally { _apLendo = false; }
   }
@@ -8275,20 +8309,37 @@
   }
   function apoiosSoma(t) { return Object.keys(t).reduce((a, u) => a + t[u], 0); }
 
-  // A mesma linha de chips, mas com o número editável. O `data-max` é o teto: pedir mais do que
-  // está lá não é um pedido, é um erro de digitação.
-  function apoiosLinhaCampos(o, unidades) {
+  // Depois de uma retirada CONFIRMADA, tira do cache o que voltou, em vez de reler tudo.
+  // O que sai daqui já foi conferido contra o jogo (a retirada só chega neste ponto se a
+  // releitura bateu); refazer a leitura inteira pra ver o mesmo número custaria 44 requisições
+  // numa conta que bate 429 global.
+  function apoiosPodar(coord, vids, unids) {
+    if (!_apCache) return;
+    const d = _apCache.lista.filter((x) => x.coord === coord)[0];
+    if (!d) return;
+    const alvo = {};
+    vids.forEach((v) => { alvo[v] = 1; });
+    d.origens = d.origens.filter((o) => {
+      if (!alvo[o.vid]) return true;
+      unids.forEach((u) => { delete o.tropas[u]; });
+      return apoiosSoma(o.tropas) > 0;         // origem que zerou sai da lista
+    });
+    d.total = {};
+    d.origens.forEach((o) => Object.keys(o.tropas).forEach((u) => {
+      d.total[u] = (d.total[u] || 0) + o.tropas[u];
+    }));
+    if (!d.origens.length) _apCache.lista = _apCache.lista.filter((x) => x.coord !== coord);
+    apoiosSalvar();
+  }
+
+  // Os mesmos chips, mas apagando as unidades que NÃO vão voltar. É a prévia do que o botão vai
+  // fazer naquela linha, sem inventar um segundo lugar pra olhar.
+  function apoiosLinhaPrevia(o, unidades, sel) {
     const ks = unidades.filter((u) => (o.tropas[u] || 0) > 0);
-    const m = _apQtd[o.awayId] || {};
+    if (!ks.length) return '<span style="color:#8a7340">—</span>';
     return '<span class="twmgr-ap-tropas">'
-      + ks.map((u) => {
-        const max = o.tropas[u];
-        const v = (m[u] === undefined) ? max : m[u];
-        return '<span class="twmgr-ap-t' + (v > 0 ? '' : ' zero') + '">' + apoiosIcone(u)
-          + '<input class="twmgr-ap-q" type="text" inputmode="numeric" data-away="' + esc(o.awayId)
-          + '" data-unid="' + esc(u) + '" data-max="' + max + '" value="' + v
-          + '" title="de ' + fmtN(max) + '">' + '</span>';
-      }).join('')
+      + ks.map((u) => '<span class="twmgr-ap-t' + (sel.indexOf(u) >= 0 ? '' : ' zero') + '">'
+          + apoiosIcone(u) + '<b>' + fmtN(o.tropas[u]) + '</b></span>').join('')
       + '</span>';
   }
 
@@ -8320,8 +8371,15 @@
   //
   // Um POST por aldeia de ORIGEM: os awayId pertencem à praça dela.
   const _apSelLinha = {};                      // awayId -> marcado?
-  const _apQtd = {};                           // awayId -> {unidade: quanto voltar}
+  const _apSelUnid = {};                       // coord destino -> {unidade: volta?}
   const _apPref = {};                          // vid -> colunas marcadas no servidor
+
+  // Quais unidades voltam. Sem escolha explícita, todas — "mandar voltar" quer dizer voltar.
+  function apoiosUnidSel(coord, unidades) {
+    const m = _apSelUnid[coord];
+    if (!m) return unidades.slice();
+    return unidades.filter((u) => m[u]);
+  }
 
   // O GATE. Descoberto interceptando a página: marcar a coluna dispara
   //
@@ -8347,17 +8405,122 @@
     }
   }
 
-  // Quanto voltar de cada unidade daquele apoio. Sem escolha explícita, volta tudo — é o que
-  // "mandar voltar" quer dizer.
-  function apoiosPedido(o) {
-    const m = _apQtd[o.awayId] || {};
+  // O que volta daquele apoio: as unidades escolhidas, INTEIRAS.
+  function apoiosPedido(o, sel) {
     const ped = {};
-    Object.keys(o.tropas).forEach((u) => {
-      const max = o.tropas[u];
-      const v = (m[u] === undefined) ? max : m[u];
-      ped[u] = Math.max(0, Math.min(max, v | 0));
-    });
+    sel.forEach((u) => { if ((o.tropas[u] || 0) > 0) ped[u] = o.tropas[u]; });
     return ped;
+  }
+
+  // ── Retirada em bloco, pela tela do DESTINO ─────────────────────────────────
+  // A `info_village` do destino lista TODAS as minhas origens que apoiam aquela aldeia, e tem
+  // ação própria. Um pedido resolve o destino inteiro, em vez de um POST por praça — com 43
+  // origens isso é 1 requisição no lugar de 43, o que importa numa conta que bate 429 global.
+  //
+  //   POST screen=place&action=withdraw_selected_units_village_info&mode=units
+  //   corpo: village_id=<destino>
+  //          checkbox_<unidade>=on
+  //          withdraw_unit[<awayId>][units][<unidade>]=<quantidade>
+  //          withdraw_unit[<awayId>][home][<origem>]=on
+  //          h=<csrf>
+  //
+  // Gate próprio, DIFERENTE do da praça (array simples, não {other:[...]}):
+  //
+  //   POST screen=settings&ajaxaction=set_village_info_checkboxes
+  //   corpo: info_village_checkboxes=["spear","sword"] · h=<csrf>
+  //
+  // Os campos de quantidade só existem depois que a coluna é marcada — o JS do jogo os cria.
+  // Foi por olhar a tela com as colunas desligadas que eu concluí, errado, que ela não tinha
+  // quantidade.
+  async function apoiosDestinoLer(destId) {
+    const r = await fetch('/game.php?village=' + CUR_VID + '&screen=info_village&id=' + destId,
+      { credentials: 'include', cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' na tela do destino ' + destId);
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+    const f = Array.prototype.slice.call(doc.querySelectorAll('#content_value form'))
+      .filter((x) => /withdraw_selected_units_village_info/.test(x.getAttribute('action') || ''))[0];
+    if (!f) return { linhas: [], colunas: [] };   // sem apoio meu ali: não é erro
+    const linhas = [];
+    f.querySelectorAll('td.unit-item[data-away-id]').forEach((td) => {
+      const n = parseInt(td.getAttribute('data-unit-count'), 10) || 0;
+      if (n > 0) linhas.push({ away: td.getAttribute('data-away-id'),
+                               org: td.getAttribute('data-village-id'), u: td.id, n: n });
+    });
+    const colunas = [];
+    f.querySelectorAll('input[name^="checkbox_"]').forEach((c) => {
+      if (c.hasAttribute('checked')) colunas.push(c.getAttribute('name').slice(9));
+    });
+    return { linhas: linhas, colunas: colunas };
+  }
+
+  async function apoiosPatchColunasDestino(unids) {
+    const p = new URLSearchParams();
+    p.set('info_village_checkboxes', JSON.stringify(unids));
+    p.set('h', CSRF);
+    const r = await fetch('/game.php?village=' + CUR_VID + '&screen=settings&ajaxaction=set_village_info_checkboxes',
+      { method: 'POST', credentials: 'include', cache: 'no-store',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+        body: p.toString() });
+    const t = (await r.text()).trim();
+    if (!r.ok || t.indexOf('true') < 0) {
+      throw new Error('não consegui liberar as colunas na tela do destino (o jogo respondeu "'
+        + t.slice(0, 60) + '") — sem isso a retirada é ignorada em silêncio');
+    }
+  }
+
+  // Devolve as aldeias de origem que ESTA tela atendeu. Quem não estiver aqui sobra pro caminho
+  // da praça — a tela do destino pode não listar apoio que ainda está a caminho, e "não estava
+  // na lista" nunca pode virar "não existe".
+  async function apoiosRetirarDestino(destId, origens, unids) {
+    const querOrg = {};
+    origens.forEach((o) => { querOrg[o.vid] = 1; });
+    const est = await apoiosDestinoLer(destId);
+    const alvos = est.linhas.filter((l) => querOrg[l.org] && unids.indexOf(l.u) >= 0);
+    if (!alvos.length) return [];
+
+    const precisa = {};
+    alvos.forEach((l) => { precisa[l.u] = 1; });
+    const uniao = est.colunas.slice();
+    Object.keys(precisa).forEach((u) => { if (uniao.indexOf(u) < 0) uniao.push(u); });
+    await apoiosPatchColunasDestino(uniao);
+
+    try {
+      const p = new URLSearchParams();
+      p.set('village_id', String(destId));
+      Object.keys(precisa).forEach((u) => p.set('checkbox_' + u, 'on'));
+      alvos.forEach((l) => {
+        p.set('withdraw_unit[' + l.away + '][units][' + l.u + ']', String(l.n));
+        p.set('withdraw_unit[' + l.away + '][home][' + l.org + ']', 'on');
+      });
+      p.set('h', CSRF);
+      const r = await fetch('/game.php?village=' + CUR_VID
+        + '&screen=place&action=withdraw_selected_units_village_info&mode=units',
+        { method: 'POST', credentials: 'include', cache: 'no-store',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p.toString() });
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' ao pedir a retirada no destino ' + destId);
+      const eb = new DOMParser().parseFromString(await r.text(), 'text/html').querySelector('.error_box');
+      if (eb) throw new Error('o jogo recusou: ' + (eb.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160));
+
+      // CONFIRMAÇÃO POR EFEITO: relê a tela e exige que cada (apoio, unidade) pedido sumiu.
+      await sleep(700);
+      const depois = await apoiosDestinoLer(destId);
+      const ainda = depois.linhas.filter((l) =>
+        alvos.some((a) => a.away === l.away && a.u === l.u));
+      if (ainda.length) {
+        throw new Error('o destino ainda mostra ' + ainda.length + ' item(ns) parado(s) ('
+          + ainda.slice(0, 2).map((l) => unitPt(l.u) + ' x' + l.n).join(', ')
+          + ') — a retirada NÃO foi aceita');
+      }
+      const atendidas = {};
+      alvos.forEach((l) => { atendidas[l.org] = 1; });
+      return Object.keys(atendidas);
+    } finally {
+      if (uniao.length !== est.colunas.length) {
+        try { await apoiosPatchColunasDestino(est.colunas); }
+        catch (e) { pushLog('Apoios: não consegui devolver as colunas da tela do destino ('
+          + (e.message || e) + ').', 'err', 'apoios'); }
+      }
+    }
   }
 
   async function apoiosRetirarDe(vid, pedidos) {
@@ -8434,14 +8597,38 @@
   async function apoiosRetirarSelecao(coord) {
     const d = _apCache && _apCache.lista.filter((x) => x.coord === coord)[0];
     if (!d) throw new Error('destino ' + coord + ' não está na leitura atual');
-    // Agrupa por aldeia de origem: um POST por praça.
+    const sel = apoiosUnidSel(coord, Object.keys(d.total));
+    if (!sel.length) throw new Error('nenhuma unidade marcada — nada a retirar');
+    const marcadas = d.origens.filter((o) => _apSelLinha[o.awayId]);
+    if (!marcadas.length) throw new Error('nenhum apoio marcado');
+
+    // Caminho rápido: a tela do destino resolve TODAS as origens de uma vez.
+    let jaFeitas = {};
+    if (d.destId) {
+      const atendidas = await apoiosRetirarDestino(d.destId, marcadas, sel);
+      atendidas.forEach((v) => { jaFeitas[v] = 1; });
+      marcadas.forEach((o) => { if (jaFeitas[o.vid]) delete _apSelLinha[o.awayId]; });
+      if (atendidas.length) apoiosPodar(coord, atendidas, sel);
+    }
+    const sobra = marcadas.filter((o) => !jaFeitas[o.vid]);
+    if (!sobra.length) {
+      const t = marcadas.reduce((a, o) => a + apoiosSoma(apoiosPedido(o, sel)), 0);
+      pushLog('Apoios: mandei voltar ' + fmtN(t) + ' tropa(s) de ' + marcadas.length
+        + ' aldeia(s) em ' + coord + ' numa requisição só — confirmado relendo o destino.',
+        'ok', 'apoios');
+      return marcadas.length;
+    }
+    // Sobrou quem a tela do destino não listou (apoio ainda a caminho, por exemplo): esses vão
+    // pelo caminho da praça, um POST por aldeia. Ficar em silêncio aqui seria transformar
+    // "voltar tudo" em "voltar quase tudo".
+    pushLog('Apoios: ' + sobra.length + ' apoio(s) não estavam na tela de ' + coord
+      + ' — retirando pela praça de cada um.', '', 'apoios');
     const porOrigem = {};
     let totalTropa = 0;
-    d.origens.forEach((o) => {
-      if (!_apSelLinha[o.awayId]) return;
+    sobra.forEach((o) => {
       if (!o.awayId) throw new Error('não li o id do apoio vindo de ' + (o.nome || o.coord)
         + ' — sem ele eu não sei o que estou mandando voltar');
-      const ped = apoiosPedido(o);
+      const ped = apoiosPedido(o, sel);
       const soma = apoiosSoma(ped);
       if (!soma) return;                       // marcado mas com tudo zerado: nada a fazer
       totalTropa += soma;
@@ -8449,17 +8636,28 @@
         { awayId: o.awayId, unidades: ped, antes: o.tropas });
     });
     const vids = Object.keys(porOrigem);
-    if (!vids.length) throw new Error('nada marcado com quantidade acima de zero');
+    if (!vids.length) return marcadas.length - sobra.length;
     let ok = 0;
     for (const vid of vids) {
       await apoiosRetirarDe(vid, porOrigem[vid]);
       ok += porOrigem[vid].length;
-      porOrigem[vid].forEach((pd) => { delete _apSelLinha[pd.awayId]; delete _apQtd[pd.awayId]; });
+      porOrigem[vid].forEach((pd) => { delete _apSelLinha[pd.awayId]; });
+      apoiosPodar(coord, [vid], sel);
       await sleep(200);
     }
     pushLog('Apoios: mandei voltar ' + fmtN(totalTropa) + ' tropa(s) em ' + ok + ' apoio(s) de '
       + coord + ' — confirmado relendo a praça.', 'ok', 'apoios');
-    return ok;
+    return ok + (marcadas.length - sobra.length);
+  }
+
+  function apoiosIdade(at) {
+    const min = Math.max(0, Math.round((Date.now() - at) / 60000));
+    if (min < 1) return 'agora';
+    if (min < 60) return 'há ' + min + ' min';
+    const h = Math.round(min / 60);
+    if (h < 24) return 'há ' + h + 'h';
+    const dd = Math.round(h / 24);
+    return 'há ' + dd + (dd > 1 ? ' dias' : ' dia');
   }
 
   function apoiosRender() {
@@ -8491,8 +8689,13 @@
       + '<div><div class="twmgr-ap-big">' + Object.keys(nOrigens).length + '</div>'
         + '<div class="twmgr-ap-lbl">origens</div></div>'
       + '<div style="flex:1"></div>'
-      + '<div style="text-align:right"><div class="twmgr-ap-lbl">lido às</div>'
-        + '<div style="font-size:10px;color:#6f6153">' + new Date(_apCache.at).toLocaleTimeString('pt-BR') + '</div></div>'
+      // Como a leitura não expira mais sozinha, a IDADE dela é o dado que importa: o usuário
+      // precisa saber se está olhando algo de 2 minutos ou de ontem.
+      + '<div style="text-align:right"><div class="twmgr-ap-lbl">lido ' + esc(apoiosIdade(_apCache.at)) + '</div>'
+        + '<div style="font-size:10px;color:#6f6153">'
+        + new Date(_apCache.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit',
+                                                          hour: '2-digit', minute: '2-digit' })
+        + '</div></div>'
       + '</div>';
 
     box.innerHTML = topo + lista.map((d) => {
@@ -8509,6 +8712,8 @@
         + apoiosLinhaTropas(d.total, unidades)
         + '</div>';
       if (!aberto) return '<div class="twmgr-ap-cartao">' + cab + '</div>';
+      const uDest = Object.keys(d.total);
+      const selU = apoiosUnidSel(d.coord, uDest);
       const filhos = d.origens.map((o) =>
         '<div class="twmgr-ap-orig">'
         + '<span><input type="checkbox" class="twmgr-ap-cb" data-away="' + esc(o.awayId || '')
@@ -8517,20 +8722,18 @@
         + esc(o.nome || o.coord)
         + '<span class="twmgr-ap-coord">' + esc(o.coord) + '</span>'
         + (o.dist ? '<span class="twmgr-ap-dist">' + esc(o.dist) + '</span>' : '') + '</span>'
-        // Marcada, a linha vira editável: um campo por unidade, começando no total. É onde a
-        // quantidade parcial acontece — o `max` no dataset evita pedir mais do que existe.
-        + (_apSelLinha[o.awayId] ? apoiosLinhaCampos(o, unidades) : apoiosLinhaTropas(o.tropas, unidades))
+        // Na linha marcada, o que NÃO vai voltar aparece apagado. A prévia fica onde a decisão
+        // está, em vez de obrigar a conferir a escolha de unidade num segundo lugar.
+        + (_apSelLinha[o.awayId] ? apoiosLinhaPrevia(o, unidades, selU) : apoiosLinhaTropas(o.tropas, unidades))
         + '</div>').join('');
-      // A barra de ação: atalhos de tipo (zeram ou enchem a coluna em todas as linhas) e o
-      // botão. Só aparece expandido, pra não haver botão de mover tropa a um clique de
-      // distância numa lista fechada.
-      const uDest = Object.keys(d.total);
+      // A barra de ação: quais unidades voltam (padrão: todas) e o botão. Só aparece expandido,
+      // pra não haver botão de mover tropa a um clique de distância numa lista fechada.
       const marcadas = d.origens.filter((o) => _apSelLinha[o.awayId]).length;
       const acoes = '<div class="twmgr-ap-acoes" data-coord="' + esc(d.coord) + '">'
-        + '<span class="twmgr-ap-lbl">tudo/nada</span>'
-        + uDest.map((u) => '<span class="twmgr-ap-u on" data-coord="' + esc(d.coord)
-            + '" data-unid="' + esc(u) + '" title="' + esc(unitPt(u))
-            + ' — clique alterna entre tudo e nada">' + apoiosIcone(u) + '</span>').join('')
+        + '<span class="twmgr-ap-lbl">voltam</span>'
+        + uDest.map((u) => '<span class="twmgr-ap-u' + (selU.indexOf(u) >= 0 ? ' on' : '')
+            + '" data-coord="' + esc(d.coord) + '" data-unid="' + esc(u) + '" title="'
+            + esc(unitPt(u)) + '">' + apoiosIcone(u) + '</span>').join('')
         + '<span style="flex:1"></span>'
         + '<button class="twmgr-ap-todos" data-coord="' + esc(d.coord) + '">'
         + (marcadas === d.origens.length ? 'desmarcar' : 'marcar todas') + '</button>'
@@ -8560,6 +8763,8 @@
   }
 
   function bindApoiosHandlers() {
+    apoiosCarregar();                          // a leitura anterior sobrevive ao F5
+    apoiosRender();
     const box = document.getElementById('twmgr-apoios-corpo');
     if (box) {
       box.addEventListener('click', async (e) => {
@@ -8574,21 +8779,15 @@
           apoiosRender();
           return;
         }
-        // 2. atalho de coluna: zera ou enche aquela unidade em todas as linhas marcadas
+        // 2. ligar/desligar uma unidade neste destino
         const un = t.closest('.twmgr-ap-u');
         if (un) {
           const c = un.getAttribute('data-coord'), u = un.getAttribute('data-unid');
           const d = _apCache.lista.filter((x) => x.coord === c)[0];
-          const alvos = d.origens.filter((o) => _apSelLinha[o.awayId] && (o.tropas[u] || 0) > 0);
-          if (!alvos.length) return;           // nada marcado: o atalho não teria efeito visível
-          const temAlgum = alvos.some((o) => {
-            const m = _apQtd[o.awayId] || {};
-            return (m[u] === undefined ? o.tropas[u] : m[u]) > 0;
-          });
-          alvos.forEach((o) => {
-            const m = _apQtd[o.awayId] || (_apQtd[o.awayId] = {});
-            m[u] = temAlgum ? 0 : o.tropas[u];
-          });
+          const m = _apSelUnid[c] || (_apSelUnid[c] = (() => {
+            const o = {}; Object.keys(d.total).forEach((k) => { o[k] = 1; }); return o;
+          })());
+          if (m[u]) delete m[u]; else m[u] = 1;
           apoiosRender();
           return;
         }
@@ -8613,19 +8812,20 @@
           const marc = d.origens.filter((o) => _apSelLinha[o.awayId]);
           // Soma o que EXATAMENTE vai voltar, por unidade. O usuário confirma o número que ele
           // vai ver mudar no jogo — não uma descrição do que pedi.
+          const selUn = apoiosUnidSel(c, Object.keys(d.total));
           const porU = {};
           marc.forEach((o) => {
-            const ped = apoiosPedido(o);
-            Object.keys(ped).forEach((u) => { if (ped[u] > 0) porU[u] = (porU[u] || 0) + ped[u]; });
+            const ped = apoiosPedido(o, selUn);
+            Object.keys(ped).forEach((u) => { porU[u] = (porU[u] || 0) + ped[u]; });
           });
           const resumo = Object.keys(porU).map((u) => fmtN(porU[u]) + ' ' + unitPt(u));
           if (!window.confirm('Mandar voltar de ' + (d.nome || c) + ' (' + c + ')?\n\n'
-              + (resumo.length ? resumo.join('\n') : 'NADA — está tudo zerado')
-              + '\n\nEm ' + marc.length + ' apoio(s).')) return;
+              + (resumo.length ? resumo.join('\n') : 'NADA — nenhuma unidade marcada')
+              + '\n\nEm ' + marc.length + ' apoio(s). Volta TUDO dessas unidades.')) return;
           go.disabled = true; go.textContent = 'retirando…';
           try {
             await apoiosRetirarSelecao(c);
-            await apoiosLer(true);             // relê: os números têm que refletir a retirada
+            apoiosRender();                    // o cache já foi podado do que voltou
           } catch (err) {
             pushLog('Apoios: ' + (err.message || err), 'err', 'apoios');
             window.alert('Não consegui retirar:\n\n' + (err.message || err));
@@ -8640,25 +8840,6 @@
         _apAberto[c] = !_apAberto[c];
         apoiosRender();
       });
-    }
-    if (box) {
-      // Guardar sem re-renderizar: re-render a cada tecla arrancaria o foco do campo.
-      box.addEventListener('input', (e) => {
-        const q = e.target.closest && e.target.closest('.twmgr-ap-q');
-        if (!q) return;
-        const away = q.getAttribute('data-away'), u = q.getAttribute('data-unid');
-        const max = parseInt(q.getAttribute('data-max'), 10) || 0;
-        const v = Math.max(0, Math.min(max, parseInt((q.value || '').replace(/\D/g, ''), 10) || 0));
-        (_apQtd[away] || (_apQtd[away] = {}))[u] = v;
-        q.parentElement.classList.toggle('zero', v === 0);
-      });
-      // Só ao sair do campo é que o texto é normalizado — corrigir enquanto digita atrapalha.
-      box.addEventListener('blur', (e) => {
-        const q = e.target.closest && e.target.closest('.twmgr-ap-q');
-        if (!q) return;
-        const away = q.getAttribute('data-away'), u = q.getAttribute('data-unid');
-        q.value = String((_apQtd[away] || {})[u] || 0);
-      }, true);
     }
     const b = document.getElementById('twmgr-apoios-ler');
     if (b) b.addEventListener('click', () => apoiosLer(true));
@@ -10083,6 +10264,8 @@
     const rp = document.getElementById('twmgr-farm-repeat'); if (rp) config.farm.repeat = rp.checked;
     const rm = document.getElementById('twmgr-farm-repeatmin'); if (rm) { config.farm.repeatMin = parseInt(rm.value, 10); if (isNaN(config.farm.repeatMin) || config.farm.repeatMin < 1) config.farm.repeatMin = 10; }
     const mc = document.getElementById('twmgr-farm-mincl'); if (mc) config.farm.minCL = Math.max(0, parseInt(mc.value, 10) || 0);
+    const rcl = document.getElementById('twmgr-farm-rescl'); if (rcl) config.farm.clReserve = Math.max(0, parseInt(rcl.value, 10) || 0);
+    const rsp = document.getElementById('twmgr-farm-resspy'); if (rsp) config.farm.spyReserve = Math.max(0, parseInt(rsp.value, 10) || 0);
     const od = document.getElementById('twmgr-farm-order'); if (od) config.farm.order = od.value || 'dist';
     const dy = document.getElementById('twmgr-farm-dyn'); if (dy) config.farm.dynTemplate = dy.checked;
     if (!config.farm.matrix) config.farm.matrix = defFarmMatrix();
@@ -10418,9 +10601,7 @@
       ".twmgr-ap-acoes button:hover:not(:disabled){background:#f6ecdd}",
       ".twmgr-ap-acoes button:disabled{opacity:.45;cursor:default}",
       ".twmgr-ap-go{font-weight:700}",
-      ".twmgr-ap-q{width:46px;font-size:10px;font-weight:700;text-align:right;border:1px solid #ddd2c0;border-radius:3px;background:#fff;color:#463b30;padding:0 2px}",
-      ".twmgr-ap-t.zero{opacity:.45}",
-      ".twmgr-ap-t.zero .twmgr-ap-q{color:#8a7d6d}",
+      ".twmgr-ap-t.zero{opacity:.35;filter:grayscale(1)}",
       ".twmgr-bld-item{display:grid;grid-template-columns:22px 16px 18px 1fr 44px 18px 18px 18px;align-items:center;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:#463b30}",
       ".twmgr-bld-item:last-child{border-bottom:none}",
       ".twmgr-bld-item.twmgr-bld-off{opacity:.42;filter:grayscale(.6)}",
@@ -10597,6 +10778,10 @@
           '<div class="twmgr-row"><span class="twmgr-lbl">Muralha máx. (nível)</span><input id="twmgr-farm-wall" class="twmgr-inp" type="number" min="0" max="20" value="20" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Muralha máx. do azul</span><input id="twmgr-farm-bluewall" class="twmgr-inp" type="number" min="0" max="20" value="0" style="width:66px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Mínimo CL p/ farmar</span><input id="twmgr-farm-mincl" class="twmgr-inp" type="number" min="0" value="0" style="width:66px"></div>') +
+        sec('Reserva na aldeia',
+          '<div class="twmgr-row"><span class="twmgr-lbl">' + unitIcon('light', 'Cavalaria leve') + ' Reservar cav. leve</span><input id="twmgr-farm-rescl" class="twmgr-inp" type="number" min="0" value="0" style="width:66px"></div>' +
+          '<div class="twmgr-row"><span class="twmgr-lbl">' + unitIcon('spy', 'Explorador') + ' Reservar exploradores</span><input id="twmgr-farm-resspy" class="twmgr-inp" type="number" min="0" value="0" style="width:66px"></div>' +
+          '<div class="twmgr-hint" style="margin:4px 0 0">Quanto tem que <b>sobrar</b> na origem. Diferente do "Mínimo CL": com mínimo 50 e envio de 5, uma aldeia com 52 passava e ia pra 47 — a reserva desconta antes de comparar. No <b>C</b> quem monta a tropa é o jogo, então ali o piso usa a mesma estimativa do desconto.</div>') +
         sec('Ritmo',
           '<div class="twmgr-row"><span class="twmgr-lbl">Modo</span><select id="twmgr-farm-mode" class="twmgr-inp" style="width:120px"><option value="agressivo">Agressivo</option><option value="suave">Suave</option></select></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Ordem de farm</span><select id="twmgr-farm-order" class="twmgr-inp" style="width:130px"><option value="dist">Por distância</option><option value="recurso">Por recurso</option></select></div>' +
@@ -11003,7 +11188,7 @@
         modLog('obra') +
       '</div>' +
       '<div id="twmgr-tab-apoios" style="display:none">' +
-        hint('🛡️ O jogo só mostra tropa fora agrupada por <b>origem</b> — "a aldeia 001 tem 1999 lanças fora". Nunca por <b>destino</b>. Esta tela inverte: uma linha por aldeia que você está apoiando, com o total somado; clique pra ver quais aldeias suas mandaram.') +
+        hint('🛡️ O jogo só mostra tropa fora agrupada por <b>origem</b> — "a aldeia 001 tem 1999 lanças fora". Nunca por <b>destino</b>. Esta tela inverte: uma linha por aldeia que você está apoiando, com o total somado; clique pra ver quais aldeias suas mandaram. A leitura <b>fica guardada</b> e só é refeita quando você clica em <b>↻ Ler apoios</b> — ela custa uma requisição por aldeia sua com tropa fora.') +
         sec('Apoios enviados',
           '<div class="twmgr-row">' +
             '<button id="twmgr-apoios-ler" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">↻ Ler apoios</button>' +
@@ -11072,6 +11257,8 @@
     document.getElementById('twmgr-farm-repeatmin').value = config.farm.repeatMin != null ? config.farm.repeatMin : 10;
     document.getElementById('twmgr-farm-repeatrow').style.display = config.farm.repeat ? 'flex' : 'none';
     document.getElementById('twmgr-farm-mincl').value = config.farm.minCL != null ? config.farm.minCL : 0;
+    document.getElementById('twmgr-farm-rescl').value = config.farm.clReserve != null ? config.farm.clReserve : 0;
+    document.getElementById('twmgr-farm-resspy').value = config.farm.spyReserve != null ? config.farm.spyReserve : 0;
     document.getElementById('twmgr-farm-order').value = config.farm.order || 'dist';
     document.getElementById('twmgr-farm-dyn').checked = !!config.farm.dynTemplate;
     (function () {
@@ -11084,7 +11271,7 @@
     })();
     document.getElementById('twmgr-farm-start').addEventListener('click', farmStart);
     document.getElementById('twmgr-farm-stop').addEventListener('click', farmStop);
-    ['twmgr-farm-wood', 'twmgr-farm-stone', 'twmgr-farm-iron', 'twmgr-farm-dist', 'twmgr-farm-wall', 'twmgr-farm-bluewall', 'twmgr-farm-int', 'twmgr-farm-mode', 'twmgr-farm-group', 'twmgr-farm-repeatmin', 'twmgr-farm-mincl', 'twmgr-farm-order', 'twmgr-farm-dyn'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
+    ['twmgr-farm-wood', 'twmgr-farm-stone', 'twmgr-farm-iron', 'twmgr-farm-dist', 'twmgr-farm-wall', 'twmgr-farm-bluewall', 'twmgr-farm-int', 'twmgr-farm-mode', 'twmgr-farm-group', 'twmgr-farm-repeatmin', 'twmgr-farm-mincl', 'twmgr-farm-rescl', 'twmgr-farm-resspy', 'twmgr-farm-order', 'twmgr-farm-dyn'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('change', readFarmCfg); });
     document.getElementById('twmgr-farm-repeat').addEventListener('change', (e) => { document.getElementById('twmgr-farm-repeatrow').style.display = e.target.checked ? 'flex' : 'none'; readFarmCfg(); });
     FARM_COLORS.forEach((k) => {
       const boxes = ['-a', '-b', '-c'].map((s) => document.getElementById('twmgr-fm-' + k + s));
@@ -17049,6 +17236,11 @@
       const delayBase = cfg.mode === 'agressivo' ? 200 : 500;
       const cooldownMs = Math.max(0, cfg.cooldownMin || 0) * 60000;
       const minCL = cfg.minCL || 0, dyn = !!cfg.dynTemplate, M = cfg.matrix || {};
+      // A reserva do Saque vale aqui também — este motor é uma cópia mais antiga que roda quando o
+      // ciclo é retomado DENTRO da Central, e deixar sem a reserva faria a mesma config drenar a
+      // aldeia dependendo de onde o usuário estava. Aqui a checagem é por ALDEIA (o motor antigo
+      // não confere tropa por alvo), então o piso é "não usa a origem que já está na reserva".
+      const resCL = Math.max(0, cfg.clReserve || 0), resSpy = Math.max(0, cfg.spyReserve || 0);
       const sent = cfg.sentReports || {}, defended = cfg.defended || {};
       // "Saques ativos agora": poda os que já pousaram (destino sumiu da lista de comandos) + os muito antigos.
       cfg.activeSends = (cfg.activeSends || []).filter((s) => pendingCoords.has(s.coord) && (now - (s.at || 0) < 12 * 3600 * 1000));
@@ -17062,7 +17254,16 @@
       const colorTxt = (t) => ({ green: 'verde', yellow: 'amarelo', blue: 'azul', red: 'vermelho' }[t.color] || t.color) + (t.full ? ' cheio' : ' vazio');
       let count = 0;
       for (const v of villages) {
-        if (minCL > 0) { try { if (((await getVillageState(v.vid)).avail.light || 0) < minCL) { pushLog(v.name + ': pulada — menos de ' + minCL + ' cavalaria leve.', '', 'farm'); continue; } } catch (e) {} }
+        if (minCL > 0 || resCL > 0 || resSpy > 0) {
+          let pular = '';
+          try {
+            const av = (await getVillageState(v.vid)).avail || {};
+            if (minCL > 0 && (av.light || 0) < minCL) pular = 'menos de ' + minCL + ' cavalaria leve';
+            else if (resCL > 0 && (av.light || 0) <= resCL) pular = 'a cavalaria leve está na reserva (' + resCL + ')';
+            else if (resSpy > 0 && (av.spy || 0) <= resSpy) pular = 'os exploradores estão na reserva (' + resSpy + ')';
+          } catch (e) {}
+          if (pular) { pushLog(v.name + ': pulada — ' + pular + '.', '', 'farm'); continue; }
+        }
         let tpl = null;
         if (!dyn) { try { tpl = await getFarmTemplates(v.vid); } catch (e) { tpl = null; } }
         let targets;

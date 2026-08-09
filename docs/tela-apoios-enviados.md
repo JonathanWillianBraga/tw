@@ -202,6 +202,42 @@ retirada manual.
 Quem denunciou todas foi a releitura da praça. É por isso que a confirmação por efeito não é
 opcional aqui.
 
+## A tela do DESTINO — o caminho rápido (1 requisição em vez de 43)
+
+`info_village&id=<destino>` tem a seção "Defesas", que lista **todas as minhas origens que
+apoiam aquela aldeia**, com ação própria:
+
+    POST screen=place&action=withdraw_selected_units_village_info&mode=units
+    corpo: village_id=<destino>
+           checkbox_<unidade>=on
+           withdraw_unit[<awayId>][units][<unidade>]=<QUANTIDADE>
+           withdraw_unit[<awayId>][home][<origem>]=on
+           h=<csrf>
+
+Gate próprio, **diferente** do da praça (array simples, não `{other:[...]}`):
+
+    POST screen=settings&ajaxaction=set_village_info_checkboxes
+    corpo: info_village_checkboxes=["spear","sword"] · h=<csrf>
+
+Confirmado ao vivo: retirou 90 espadachins de uma origem e deixou a outra linha intacta, numa
+requisição só.
+
+### Duas conclusões minhas que estavam ERRADAS, e como
+
+**"Essa tela não tem quantidade."** Tem. Eu inspecionei com as colunas de unidade DESLIGADAS, e
+os campos `withdraw_unit[...][units][...]` só são criados pelo JS depois que a coluna é marcada.
+Mesmo erro da praça, cometido duas vezes: **habilitar o estado da interface antes de concluir
+que um campo não existe.**
+
+**"Essa tela omite origens."** Não omite. Eu tinha visto a 5835 fora da lista de um destino, mas
+noutro destino ela aparece normalmente (`withdraw_unit[340305065][home][5835]`) — e com o MESMO
+awayId da praça, o que também derruba a outra conclusão apressada de que os awayId seriam
+tokens por visão. **São ids estáveis.**
+
+Mesmo assim o módulo trata a possibilidade de a tela não listar alguém (apoio ainda a caminho,
+por exemplo): quem não aparecer na resposta dela é retirado pela praça, um POST por aldeia, e o
+log DIZ que isso aconteceu. "Não estava na lista" nunca pode virar "não existe".
+
 ## Aberto
 
 - se dá pra reduzir as 44 requisições

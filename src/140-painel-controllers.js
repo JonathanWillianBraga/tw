@@ -254,6 +254,8 @@
     const rp = document.getElementById('twmgr-farm-repeat'); if (rp) config.farm.repeat = rp.checked;
     const rm = document.getElementById('twmgr-farm-repeatmin'); if (rm) { config.farm.repeatMin = parseInt(rm.value, 10); if (isNaN(config.farm.repeatMin) || config.farm.repeatMin < 1) config.farm.repeatMin = 10; }
     const mc = document.getElementById('twmgr-farm-mincl'); if (mc) config.farm.minCL = Math.max(0, parseInt(mc.value, 10) || 0);
+    const rcl = document.getElementById('twmgr-farm-rescl'); if (rcl) config.farm.clReserve = Math.max(0, parseInt(rcl.value, 10) || 0);
+    const rsp = document.getElementById('twmgr-farm-resspy'); if (rsp) config.farm.spyReserve = Math.max(0, parseInt(rsp.value, 10) || 0);
     const od = document.getElementById('twmgr-farm-order'); if (od) config.farm.order = od.value || 'dist';
     const dy = document.getElementById('twmgr-farm-dyn'); if (dy) config.farm.dynTemplate = dy.checked;
     if (!config.farm.matrix) config.farm.matrix = defFarmMatrix();

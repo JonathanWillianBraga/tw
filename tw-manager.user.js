@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.117.0
+// @version      11.118.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.117.0';
+  const VERSION = '11.118.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -8036,86 +8036,134 @@
   }
   function apoiosSoma(t) { return Object.keys(t).reduce((a, u) => a + t[u], 0); }
 
+  // A mesma linha de chips, mas com o número editável. O `data-max` é o teto: pedir mais do que
+  // está lá não é um pedido, é um erro de digitação.
+  function apoiosLinhaCampos(o, unidades) {
+    const ks = unidades.filter((u) => (o.tropas[u] || 0) > 0);
+    const m = _apQtd[o.awayId] || {};
+    return '<span class="twmgr-ap-tropas">'
+      + ks.map((u) => {
+        const max = o.tropas[u];
+        const v = (m[u] === undefined) ? max : m[u];
+        return '<span class="twmgr-ap-t' + (v > 0 ? '' : ' zero') + '">' + apoiosIcone(u)
+          + '<input class="twmgr-ap-q" type="text" inputmode="numeric" data-away="' + esc(o.awayId)
+          + '" data-unid="' + esc(u) + '" data-max="' + max + '" value="' + v
+          + '" title="de ' + fmtN(max) + '">' + '</span>';
+      }).join('')
+      + '</span>';
+  }
+
   // ── Retirar apoio ───────────────────────────────────────────────────────────
-  // O QUE O JOGO OFERECE, conferido na tela ao vivo (não deduzido):
+  // O CORPO REAL, capturado do próprio formulário do jogo (marquei as caixas na página e li o
+  // FormData sem enviar). Não foi deduzido, e a primeira versão que eu deduzi estava errada:
   //
   //   POST /game.php?village=<origem>&screen=place&action=withdraw_selected_unit_counts
-  //        &mode=units&h=<csrf>
-  //   corpo: from-table=other · checkbox_<unidade>=on (quais TIPOS voltam)
-  //                            · id_<awayId>=on       (quais APOIOS)
+  //        &mode=units
+  //   corpo: from-table=other
+  //          withdraw_unit[<awayId>][<unidade>]=<QUANTIDADE>
+  //          h=<csrf>                                   ← no CORPO, não na URL
   //
-  // A seleção é por TIPO DE UNIDADE, não por quantidade: marcar "lança" devolve TODAS as
-  // lanças daquele apoio. Procurei campo de quantidade na `#units_away` e na info_village do
-  // destino e não existe — o `data-unit-count` da célula não vira input. A granularidade fina
-  // sai de escolher QUAIS apoios, já que cada um tem composição própria.
+  // Três coisas que só apareceram na captura:
+  //
+  //   1. A QUANTIDADE É LIVRE. O jogo preenche com o total, mas o campo é um número — dá pra
+  //      devolver 300 de 1.688. Eu tinha concluído que não dava, olhando a tela: os campos não
+  //      existem no HTML servido, o JS os cria quando a linha é marcada.
+  //   2. `checkbox_<unidade>=on` e `id_<awayId>=on` NÃO vão no corpo. O checkbox da coluna é só
+  //      atalho de interface, e o da linha nem `name` tem. Foi o que eu mandei na v11.114.0 e o
+  //      servidor ignorou — a retirada não aconteceu.
+  //   3. O jogo emite um campo pra CADA unidade que aquele apoio tem, valendo 0 nas que não
+  //      voltam. Mandamos igual, pra não depender de o servidor tratar campo ausente como zero.
+  //
+  // A v11.114.0 é o argumento a favor da confirmação por efeito: o POST errado voltou HTTP 200,
+  // e quem disse que não funcionou foi a releitura da praça, não a resposta.
   //
   // Um POST por aldeia de ORIGEM: os awayId pertencem à praça dela.
   const _apSelLinha = {};                      // awayId -> marcado?
-  const _apSelUnid = {};                       // coord destino -> {unidade: marcada?}
+  const _apQtd = {};                           // awayId -> {unidade: quanto voltar}
 
-  function apoiosUnidSel(coord, unidades) {
-    // Sem escolha explícita, volta tudo — é o que "mandar voltar" quer dizer.
-    const m = _apSelUnid[coord];
-    if (!m) return unidades.slice();
-    const ks = unidades.filter((u) => m[u]);
-    return ks.length ? ks : [];
+  // Quanto voltar de cada unidade daquele apoio. Sem escolha explícita, volta tudo — é o que
+  // "mandar voltar" quer dizer.
+  function apoiosPedido(o) {
+    const m = _apQtd[o.awayId] || {};
+    const ped = {};
+    Object.keys(o.tropas).forEach((u) => {
+      const max = o.tropas[u];
+      const v = (m[u] === undefined) ? max : m[u];
+      ped[u] = Math.max(0, Math.min(max, v | 0));
+    });
+    return ped;
   }
 
-  async function apoiosRetirarDe(vid, awayIds, unids) {
+  async function apoiosRetirarDe(vid, pedidos) {
     const p = new URLSearchParams();
     p.set('from-table', 'other');
-    unids.forEach((u) => p.set('checkbox_' + u, 'on'));
-    awayIds.forEach((id) => p.set('id_' + id, 'on'));
+    pedidos.forEach((pd) => {
+      Object.keys(pd.unidades).forEach((u) => {
+        p.set('withdraw_unit[' + pd.awayId + '][' + u + ']', String(pd.unidades[u]));
+      });
+    });
+    p.set('h', CSRF);
     const r = await fetch('/game.php?village=' + vid
-      + '&screen=place&action=withdraw_selected_unit_counts&mode=units&h=' + CSRF,
+      + '&screen=place&action=withdraw_selected_unit_counts&mode=units',
       { method: 'POST', credentials: 'include', cache: 'no-store',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p.toString() });
     if (!r.ok) throw new Error('HTTP ' + r.status + ' ao pedir a retirada em ' + vid);
+    const html = await r.text();
+    // Se o jogo recusou, ele DIZ. Melhor mostrar a frase dele do que só "não aceitou".
+    const eb = new DOMParser().parseFromString(html, 'text/html').querySelector('.error_box');
+    if (eb) throw new Error('o jogo recusou: ' + (eb.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160));
 
     // CONFIRMAÇÃO POR EFEITO. O TW responde 200 com página de erro, então `r.ok` não prova
     // nada — foi exatamente assim que o Desviar reportou sucesso com o exército parado.
-    // Relê a praça e exige que cada unidade pedida esteja zerada naquele apoio.
+    // Relê a praça e exige que cada apoio tenha caído para o que deveria sobrar.
     await sleep(700);
     const depois = await apoiosDetalhe(vid);
     const porId = {};
     depois.forEach((it) => { if (it.awayId) porId[it.awayId] = it.tropas; });
     const teimosos = [];
-    awayIds.forEach((id) => {
-      const t = porId[id];
-      if (!t) return;                          // apoio sumiu da lista: voltou inteiro
-      unids.forEach((u) => { if ((t[u] || 0) > 0) teimosos.push(id + '/' + u); });
+    pedidos.forEach((pd) => {
+      const t = porId[pd.awayId] || {};
+      Object.keys(pd.unidades).forEach((u) => {
+        const esperado = Math.max(0, (pd.antes[u] || 0) - pd.unidades[u]);
+        const agora = t[u] || 0;
+        if (agora > esperado) teimosos.push(unitPt(u) + ': esperava ' + esperado + ', achei ' + agora);
+      });
     });
     if (teimosos.length) {
-      throw new Error('a praça de ' + vid + ' ainda mostra ' + teimosos.length
-        + ' item(ns) parado(s) depois do pedido — a retirada NÃO foi aceita');
+      throw new Error('a praça de ' + vid + ' não bateu depois do pedido — ' + teimosos.slice(0, 3).join('; ')
+        + (teimosos.length > 3 ? ' (+' + (teimosos.length - 3) + ')' : '') + '. A retirada NÃO foi aceita.');
     }
-    return awayIds.length;
+    return pedidos.length;
   }
 
   async function apoiosRetirarSelecao(coord) {
     const d = _apCache && _apCache.lista.filter((x) => x.coord === coord)[0];
     if (!d) throw new Error('destino ' + coord + ' não está na leitura atual');
-    const unids = apoiosUnidSel(coord, Object.keys(d.total));
-    if (!unids.length) throw new Error('nenhuma unidade marcada — nada a retirar');
     // Agrupa por aldeia de origem: um POST por praça.
     const porOrigem = {};
+    let totalTropa = 0;
     d.origens.forEach((o) => {
       if (!_apSelLinha[o.awayId]) return;
       if (!o.awayId) throw new Error('não li o id do apoio vindo de ' + (o.nome || o.coord)
         + ' — sem ele eu não sei o que estou mandando voltar');
-      (porOrigem[o.vid] || (porOrigem[o.vid] = [])).push(o.awayId);
+      const ped = apoiosPedido(o);
+      const soma = apoiosSoma(ped);
+      if (!soma) return;                       // marcado mas com tudo zerado: nada a fazer
+      totalTropa += soma;
+      (porOrigem[o.vid] || (porOrigem[o.vid] = [])).push(
+        { awayId: o.awayId, unidades: ped, antes: o.tropas });
     });
     const vids = Object.keys(porOrigem);
-    if (!vids.length) throw new Error('nenhum apoio marcado');
+    if (!vids.length) throw new Error('nada marcado com quantidade acima de zero');
     let ok = 0;
     for (const vid of vids) {
-      await apoiosRetirarDe(vid, porOrigem[vid], unids);
+      await apoiosRetirarDe(vid, porOrigem[vid]);
       ok += porOrigem[vid].length;
-      porOrigem[vid].forEach((id) => { delete _apSelLinha[id]; });
+      porOrigem[vid].forEach((pd) => { delete _apSelLinha[pd.awayId]; delete _apQtd[pd.awayId]; });
       await sleep(200);
     }
-    pushLog('Apoios: mandei voltar ' + ok + ' apoio(s) de ' + coord
-      + ' (' + unids.map(unitPt).join(', ') + ') — confirmado relendo a praça.', 'ok', 'apoios');
+    pushLog('Apoios: mandei voltar ' + fmtN(totalTropa) + ' tropa(s) em ' + ok + ' apoio(s) de '
+      + coord + ' — confirmado relendo a praça.', 'ok', 'apoios');
     return ok;
   }
 
@@ -8174,18 +8222,20 @@
         + esc(o.nome || o.coord)
         + '<span class="twmgr-ap-coord">' + esc(o.coord) + '</span>'
         + (o.dist ? '<span class="twmgr-ap-dist">' + esc(o.dist) + '</span>' : '') + '</span>'
-        + apoiosLinhaTropas(o.tropas, unidades)
+        // Marcada, a linha vira editável: um campo por unidade, começando no total. É onde a
+        // quantidade parcial acontece — o `max` no dataset evita pedir mais do que existe.
+        + (_apSelLinha[o.awayId] ? apoiosLinhaCampos(o, unidades) : apoiosLinhaTropas(o.tropas, unidades))
         + '</div>').join('');
-      // A barra de ação: quais TIPOS voltam (padrão: todos) e o botão. Só aparece expandido,
-      // pra não haver botão de mover tropa a um clique de distância numa lista fechada.
+      // A barra de ação: atalhos de tipo (zeram ou enchem a coluna em todas as linhas) e o
+      // botão. Só aparece expandido, pra não haver botão de mover tropa a um clique de
+      // distância numa lista fechada.
       const uDest = Object.keys(d.total);
-      const sel = apoiosUnidSel(d.coord, uDest);
       const marcadas = d.origens.filter((o) => _apSelLinha[o.awayId]).length;
       const acoes = '<div class="twmgr-ap-acoes" data-coord="' + esc(d.coord) + '">'
-        + '<span class="twmgr-ap-lbl">voltar</span>'
-        + uDest.map((u) => '<span class="twmgr-ap-u' + (sel.indexOf(u) >= 0 ? ' on' : '')
-            + '" data-coord="' + esc(d.coord) + '" data-unid="' + esc(u) + '" title="'
-            + esc(unitPt(u)) + '">' + apoiosIcone(u) + '</span>').join('')
+        + '<span class="twmgr-ap-lbl">tudo/nada</span>'
+        + uDest.map((u) => '<span class="twmgr-ap-u on" data-coord="' + esc(d.coord)
+            + '" data-unid="' + esc(u) + '" title="' + esc(unitPt(u))
+            + ' — clique alterna entre tudo e nada">' + apoiosIcone(u) + '</span>').join('')
         + '<span style="flex:1"></span>'
         + '<button class="twmgr-ap-todos" data-coord="' + esc(d.coord) + '">'
         + (marcadas === d.origens.length ? 'desmarcar' : 'marcar todas') + '</button>'
@@ -8229,15 +8279,21 @@
           apoiosRender();
           return;
         }
-        // 2. ligar/desligar um tipo de unidade
+        // 2. atalho de coluna: zera ou enche aquela unidade em todas as linhas marcadas
         const un = t.closest('.twmgr-ap-u');
         if (un) {
           const c = un.getAttribute('data-coord'), u = un.getAttribute('data-unid');
           const d = _apCache.lista.filter((x) => x.coord === c)[0];
-          const m = _apSelUnid[c] || (_apSelUnid[c] = (() => {
-            const o = {}; Object.keys(d.total).forEach((k) => { o[k] = 1; }); return o;
-          })());
-          if (m[u]) delete m[u]; else m[u] = 1;
+          const alvos = d.origens.filter((o) => _apSelLinha[o.awayId] && (o.tropas[u] || 0) > 0);
+          if (!alvos.length) return;           // nada marcado: o atalho não teria efeito visível
+          const temAlgum = alvos.some((o) => {
+            const m = _apQtd[o.awayId] || {};
+            return (m[u] === undefined ? o.tropas[u] : m[u]) > 0;
+          });
+          alvos.forEach((o) => {
+            const m = _apQtd[o.awayId] || (_apQtd[o.awayId] = {});
+            m[u] = temAlgum ? 0 : o.tropas[u];
+          });
           apoiosRender();
           return;
         }
@@ -8259,11 +8315,18 @@
         if (go) {
           const c = go.getAttribute('data-coord');
           const d = _apCache.lista.filter((x) => x.coord === c)[0];
-          const unids = apoiosUnidSel(c, Object.keys(d.total));
-          const n = d.origens.filter((o) => _apSelLinha[o.awayId]).length;
-          if (!window.confirm('Mandar voltar ' + n + ' apoio(s) de ' + (d.nome || c) + ' (' + c + ')?\n\n'
-              + 'Unidades: ' + (unids.length ? unids.map(unitPt).join(', ') : 'NENHUMA')
-              + '\n\nO jogo devolve TODAS as unidades desses tipos nos apoios marcados.')) return;
+          const marc = d.origens.filter((o) => _apSelLinha[o.awayId]);
+          // Soma o que EXATAMENTE vai voltar, por unidade. O usuário confirma o número que ele
+          // vai ver mudar no jogo — não uma descrição do que pedi.
+          const porU = {};
+          marc.forEach((o) => {
+            const ped = apoiosPedido(o);
+            Object.keys(ped).forEach((u) => { if (ped[u] > 0) porU[u] = (porU[u] || 0) + ped[u]; });
+          });
+          const resumo = Object.keys(porU).map((u) => fmtN(porU[u]) + ' ' + unitPt(u));
+          if (!window.confirm('Mandar voltar de ' + (d.nome || c) + ' (' + c + ')?\n\n'
+              + (resumo.length ? resumo.join('\n') : 'NADA — está tudo zerado')
+              + '\n\nEm ' + marc.length + ' apoio(s).')) return;
           go.disabled = true; go.textContent = 'retirando…';
           try {
             await apoiosRetirarSelecao(c);
@@ -8282,6 +8345,25 @@
         _apAberto[c] = !_apAberto[c];
         apoiosRender();
       });
+    }
+    if (box) {
+      // Guardar sem re-renderizar: re-render a cada tecla arrancaria o foco do campo.
+      box.addEventListener('input', (e) => {
+        const q = e.target.closest && e.target.closest('.twmgr-ap-q');
+        if (!q) return;
+        const away = q.getAttribute('data-away'), u = q.getAttribute('data-unid');
+        const max = parseInt(q.getAttribute('data-max'), 10) || 0;
+        const v = Math.max(0, Math.min(max, parseInt((q.value || '').replace(/\D/g, ''), 10) || 0));
+        (_apQtd[away] || (_apQtd[away] = {}))[u] = v;
+        q.parentElement.classList.toggle('zero', v === 0);
+      });
+      // Só ao sair do campo é que o texto é normalizado — corrigir enquanto digita atrapalha.
+      box.addEventListener('blur', (e) => {
+        const q = e.target.closest && e.target.closest('.twmgr-ap-q');
+        if (!q) return;
+        const away = q.getAttribute('data-away'), u = q.getAttribute('data-unid');
+        q.value = String((_apQtd[away] || {})[u] || 0);
+      }, true);
     }
     const b = document.getElementById('twmgr-apoios-ler');
     if (b) b.addEventListener('click', () => apoiosLer(true));
@@ -10041,6 +10123,9 @@
       ".twmgr-ap-acoes button:hover:not(:disabled){background:#f6ecdd}",
       ".twmgr-ap-acoes button:disabled{opacity:.45;cursor:default}",
       ".twmgr-ap-go{font-weight:700}",
+      ".twmgr-ap-q{width:46px;font-size:10px;font-weight:700;text-align:right;border:1px solid #ddd2c0;border-radius:3px;background:#fff;color:#463b30;padding:0 2px}",
+      ".twmgr-ap-t.zero{opacity:.45}",
+      ".twmgr-ap-t.zero .twmgr-ap-q{color:#8a7d6d}",
       ".twmgr-bld-item{display:grid;grid-template-columns:22px 16px 18px 1fr 44px 18px 18px 18px;align-items:center;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:#463b30}",
       ".twmgr-bld-item:last-child{border-bottom:none}",
       ".twmgr-bld-item.twmgr-bld-off{opacity:.42;filter:grayscale(.6)}",

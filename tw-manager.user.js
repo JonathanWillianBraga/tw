@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.135.0
+// @version      11.136.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.135.0';
+  const VERSION = '11.136.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -15774,6 +15774,7 @@
       linhas.sort((a, b) => (a.d == null ? 1e9 : a.d) - (b.d == null ? 1e9 : b.d));
 
       const rotUn = {}; UNITS.forEach(([u, n]) => { rotUn[u] = n; });
+      const listaUnid = ccUnidadesDaAba();   // fora do laço: a soma lá embaixo usa a mesma lista
       cont.innerHTML = linhas.map((L) => {
         const v = L.v, on = !!sel[v.vid];
         const ov = ccOrigOverrideGet(v.vid);
@@ -15785,8 +15786,7 @@
         else { sit = ''; cor = '#8a7d6d'; }
         // Estoque por unidade. Mostra o número em uso e, entre parênteses, o que está fora/voltando —
         // assim dá pra ver a diferença sem precisar alternar a fonte.
-        const listaU = ccUnidadesDaAba();
-        const tropas = listaU.map((u) => {
+        const tropas = listaUnid.map((u) => {
           const q = (v.avail && v.avail[u]) || 0;
           const foraT = ((v.fora && v.fora[u]) || 0) + ((v.transito && v.transito[u]) || 0);
           if (!q && !foraT) return '';
@@ -15864,6 +15864,23 @@
         av.innerHTML = !temComp ? '<span style="color:#8a7d6d">digite as tropas pra ver os tempos</span>'
           : ('unidade mais lenta: ' + txtLenta + ' · mundo ' + (m.speed || 1) + '×/' + (m.unitSpeed || 1) + '×' +
              (m.confiavel ? '' : ' · <span style="color:#a2643a">velocidades de reserva (o servidor confirma no preparo)</span>'));
+      }
+      // Soma das tropas das origens MARCADAS. Sem ela, saber quanto tem no total significava
+      // somar linha a linha na mão — e é justamente esse número que decide se dá pra atender a
+      // tabela da tribo. Segue a fonte de tropa escolhida e as unidades da aba, igual às linhas.
+      const soma = document.getElementById('cc-origens-soma');
+      if (soma) {
+        const marcadas = linhas.filter((L) => sel[L.v.vid]);
+        const tot = {};
+        marcadas.forEach((L) => {
+          listaUnid.forEach((u) => { tot[u] = (tot[u] || 0) + (((L.v.avail || {})[u]) || 0); });
+        });
+        const partes = listaUnid.filter((u) => tot[u] > 0)
+          .map((u) => '<span title="' + esc(rotUn[u] || u) + '">' + unitIcon(u, rotUn[u] || u) + '<b>' + fmtN(tot[u]) + '</b></span>');
+        soma.innerHTML = !marcadas.length
+          ? '<span style="color:#8a7d6d">nenhuma origem marcada</span>'
+          : ('<b>' + marcadas.length + '</b> origem(ns) marcada(s): ' +
+             (partes.length ? partes.join(' &nbsp;') : '<span style="color:#8a7d6d">sem tropa</span>'));
       }
       ccResumo();
     }
@@ -16977,6 +16994,7 @@
           '<div style="display:grid;grid-template-columns:18px 128px 40px 58px 40px 1fr;gap:6px;font-size:9px;color:#8a7d6d;padding:0 5px 2px">' +
             '<span></span><span>aldeia</span><span>dist.</span><span>viagem</span><span>mais lenta</span><span>saída</span></div>' +
           '<div id="cc-origens" style="height:240px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+          '<div id="cc-origens-soma" style="font-size:10px;color:#6f6153;margin-top:3px"></div>' +
           '<div id="cc-resumo" style="font-size:10px;color:#6f6153;margin-top:3px"></div>' +
           '</div>' +
         '</div>' +

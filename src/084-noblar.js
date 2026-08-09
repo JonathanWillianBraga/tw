@@ -1314,7 +1314,7 @@
           item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'teto do ciclo';
           pushLog('Noblar (auto): ' + alvo.coord + ' segurado — teto de ' + (config.noble.autoMax || 8)
             + ' comando(s) por ciclo já batido.', '', 'noble');
-        } else if (r.falta > 0 && vindo > 0) {
+        } else if (r.falta > 0 && vindo > 0 && !config.noble.parcialSempre) {
           // Parcial COM nobre a caminho: segura. Mandar agora gasta o unico que existe e a
           // lealdade (regen ~1/h) volta antes do proximo chegar. Foi a regra do usuario:
           // parcial e pra quando nao da pra recrutar mais.
@@ -1328,8 +1328,10 @@
           const n = await nobleEnviarItem(item, ' (auto)');
           enviadosNoCiclo += n;
           if (r.falta > 0) {
-            pushLog('Noblar (auto): ' + alvo.coord + ' foi PARCIAL (' + r.levando + ' de ' + r.precisa
-              + ') porque não havia nobre pra recrutar.', '', 'noble');
+            pushLog('Noblar (auto): ' + alvo.coord + ' foi PARCIAL (' + r.levando + ' de ' + r.precisa + ') — '
+              + (config.noble.parcialSempre && vindo > 0
+                 ? 'manda o que está pronto (opção ligada); o resto sai nos próximos ciclos, e o teto encolhe sozinho.'
+                 : 'não havia nobre pra recrutar.'), '', 'noble');
           }
         }
       }
@@ -1927,6 +1929,7 @@
     if (g('twmgr-nb-int')) c.interval = Math.max(1, parseInt(g('twmgr-nb-int').value, 10) || 15) * 60;
     if (g('twmgr-nb-prod')) c.produzir = g('twmgr-nb-prod').checked;
     if (g('twmgr-nb-paralelo')) c.paralelo = g('twmgr-nb-paralelo').checked;
+    if (g('twmgr-nb-parcial')) c.parcialSempre = g('twmgr-nb-parcial').checked;
     if (g('twmgr-nb-rel')) c.lerRelatorios = g('twmgr-nb-rel').checked;
     if (g('twmgr-nb-lpa')) c.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(g('twmgr-nb-lpa').value, 10) || 25));
     if (g('twmgr-nb-regen')) c.lealdadeRegen = Math.max(0, Math.min(10, parseFloat(g('twmgr-nb-regen').value) || 0));

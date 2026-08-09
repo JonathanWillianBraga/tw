@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.116.0
+// @version      11.117.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.116.0';
+  const VERSION = '11.117.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -314,6 +314,12 @@
     // fila segue dando a primeira escolha — muda só que alvo de outra região deixa de esperar
     // por quem não disputa nobre com ele.
     paralelo: false,
+    // Envia o nobre que estiver pronto AGORA em vez de esperar fechar a leva. Seguro contra
+    // excesso: `precisa` é recalculado todo ciclo a partir da lealdade PREVISTA, que já desconta
+    // cada nobre voando — então mandar aos poucos nunca passa do necessário, o teto só encolhe.
+    // A troca real é outra: com muito tempo entre um nobre e outro, a lealdade regenera no meio
+    // e o primeiro rende menos. Por isso é opção, não padrão.
+    parcialSempre: false,
     // Pós-conquista: joga a aldeia tomada num grupo estático.
     posGrupo: false, posGrupoId: '', posFeitos: {},
     posBandeira: false, posBandeiraTipo: '', posBandeiraNivel: 1,
@@ -6983,7 +6989,7 @@
           item.motivo = (item.motivo ? item.motivo + ' · ' : '') + 'teto do ciclo';
           pushLog('Noblar (auto): ' + alvo.coord + ' segurado — teto de ' + (config.noble.autoMax || 8)
             + ' comando(s) por ciclo já batido.', '', 'noble');
-        } else if (r.falta > 0 && vindo > 0) {
+        } else if (r.falta > 0 && vindo > 0 && !config.noble.parcialSempre) {
           // Parcial COM nobre a caminho: segura. Mandar agora gasta o unico que existe e a
           // lealdade (regen ~1/h) volta antes do proximo chegar. Foi a regra do usuario:
           // parcial e pra quando nao da pra recrutar mais.
@@ -6997,8 +7003,10 @@
           const n = await nobleEnviarItem(item, ' (auto)');
           enviadosNoCiclo += n;
           if (r.falta > 0) {
-            pushLog('Noblar (auto): ' + alvo.coord + ' foi PARCIAL (' + r.levando + ' de ' + r.precisa
-              + ') porque não havia nobre pra recrutar.', '', 'noble');
+            pushLog('Noblar (auto): ' + alvo.coord + ' foi PARCIAL (' + r.levando + ' de ' + r.precisa + ') — '
+              + (config.noble.parcialSempre && vindo > 0
+                 ? 'manda o que está pronto (opção ligada); o resto sai nos próximos ciclos, e o teto encolhe sozinho.'
+                 : 'não havia nobre pra recrutar.'), '', 'noble');
           }
         }
       }
@@ -7596,6 +7604,7 @@
     if (g('twmgr-nb-int')) c.interval = Math.max(1, parseInt(g('twmgr-nb-int').value, 10) || 15) * 60;
     if (g('twmgr-nb-prod')) c.produzir = g('twmgr-nb-prod').checked;
     if (g('twmgr-nb-paralelo')) c.paralelo = g('twmgr-nb-paralelo').checked;
+    if (g('twmgr-nb-parcial')) c.parcialSempre = g('twmgr-nb-parcial').checked;
     if (g('twmgr-nb-rel')) c.lerRelatorios = g('twmgr-nb-rel').checked;
     if (g('twmgr-nb-lpa')) c.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(g('twmgr-nb-lpa').value, 10) || 25));
     if (g('twmgr-nb-regen')) c.lealdadeRegen = Math.max(0, Math.min(10, parseFloat(g('twmgr-nb-regen').value) || 0));
@@ -10526,6 +10535,9 @@
               '<label class="twmgr-sw"><input id="twmgr-nb-prod" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px"><b>Nunca cunha.</b> Cunhar converte recurso em moeda sem volta, num alvo que pode nem sair — isso fica com você, no modo <b>Cunhar</b> do Mercado.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto pra mais longe, e a que não conseguir agora <b>não interrompe</b> — tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>' +
+            '<div class="twmgr-fld" style="margin-top:9px"><span title="Por padrão, se a leva sai incompleta E há nobre em produção, ele segura pra mandar tudo junto — porque a lealdade regenera entre uma chegada e outra. Ligado, manda o que estiver pronto agora e completa nos ciclos seguintes. NÃO há risco de excesso: o que falta é recalculado todo ciclo pela lealdade prevista, que já desconta os nobres voando.">Enviar parcial sempre <span style="color:#8a7d6d">(não esperar fechar a leva)</span></span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-parcial" type="checkbox"><i></i></label></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Some o "segurando: +N em produção". Em troca, se demorar muito entre um nobre e outro, a lealdade regenera no meio e o primeiro rende menos.</div>' +
             '<div class="twmgr-fld" style="margin-top:9px"><span title="Por padrão a fila é serial: o alvo da vez trava os de trás até a lealdade prevista dele chegar a zero, pra reservar o nobre que ainda vai sair da Academia. Ligado, todo alvo é planejado no mesmo ciclo e pega o que sobrou — a ordem da fila segue dando a primeira escolha. Útil quando os alvos estão em regiões diferentes e não disputam os mesmos nobres.">Planejar todos os alvos <span style="color:#8a7d6d">(não travar a fila)</span></span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-paralelo" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Desligado, alvo de outra região fica em <b>Aguardando</b> mesmo tendo nobre perto dele. Ligado, ele é planejado — e se não achar nobre, diz <b>sem nobres</b> em vez de esconder o motivo.</div>' +
@@ -10920,8 +10932,9 @@
 
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
     document.getElementById('twmgr-nb-paralelo').checked = !!config.noble.paralelo;
+    document.getElementById('twmgr-nb-parcial').checked = !!config.noble.parcialSempre;
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
-     'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen', 'twmgr-nb-paralelo',
+     'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen', 'twmgr-nb-paralelo', 'twmgr-nb-parcial',
      'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid',
      'twmgr-nb-posband'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);

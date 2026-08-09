@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.89.0
+// @version      11.107.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.89.0';
+  const VERSION = '11.107.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -900,6 +900,16 @@
 
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
   function lockOther() { const l = readLock(); return !!(l && l.id !== TAB_ID && (Date.now() - l.ts) < 12000); }
+  // Modo silêncio do motor `cmd` da Central. Vale pra TODAS as abas, inclusive a que gravou:
+  // quem tem um disparo de precisão em curso é justamente quem mais precisa que o resto pare.
+  // A validade é a que o próprio silenceOn carimba; se ele morrer sem limpar, a chave expira.
+  const CC_FREEZE_KEY = KEY + '_freeze';
+  function centralSilenciando() {
+    try {
+      const f = JSON.parse(localStorage.getItem(CC_FREEZE_KEY) || 'null');
+      return !!(f && f.until && Date.now() < f.until);
+    } catch (e) { return false; }
+  }
   function claimLock() { localStorage.setItem(LOCKKEY, JSON.stringify({ id: TAB_ID, ts: Date.now() })); }
   // Guarda para DENTRO dos laços longos. Os ciclos duram de 1 a 10 minutos e até aqui nada era
   // reconferido depois da entrada do tick — com três consequências:
@@ -919,7 +929,17 @@
     if (captchaBlocked()) return 'bot-check na tela';
     // A Central tem prioridade: um disparo de precisão não pode disputar a rede nem a
     // trava com um ciclo de saque. Os laços longos param e retomam no tick seguinte.
-    if (mod !== 'cc' && ccJanelaCritica()) return 'Central disparando';
+    //
+    // São DUAS Centrais e cada uma avisa de um jeito: o motor `cc` pela janela crítica, e o
+    // motor `cmd` (175-cc-rico.js) gravando a chave de silêncio. A segunda estava sendo escrita
+    // e NUNCA lida — o comentário lá dizia que as abas respeitariam "via lockOther()", mas
+    // lockOther() lê outra chave. Efeito medido ao vivo: o Saque atravessou a janela de disparo
+    // mandando 36 ataques e o comando saiu 556ms depois da hora. Meio segundo de contenção de
+    // thread, que viés nenhum corrige — ele corrige atraso constante, não pico.
+    //
+    // O `silenceOn` cancela o PRÓXIMO timer de cada módulo, o que não faz nada contra um ciclo
+    // já rodando (o do Saque dura de 3 a 10 min). Quem para laço em andamento é este devoParar.
+    if (mod !== 'cc' && mod !== 'cmd' && (ccJanelaCritica() || centralSilenciando())) return 'Central disparando';
     claimLock();
     return null;
   }

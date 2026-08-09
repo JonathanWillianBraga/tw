@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.89.0
+// @version      11.107.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.89.0';
+  const VERSION = '11.107.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -900,6 +900,16 @@
 
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
   function lockOther() { const l = readLock(); return !!(l && l.id !== TAB_ID && (Date.now() - l.ts) < 12000); }
+  // Modo silêncio do motor `cmd` da Central. Vale pra TODAS as abas, inclusive a que gravou:
+  // quem tem um disparo de precisão em curso é justamente quem mais precisa que o resto pare.
+  // A validade é a que o próprio silenceOn carimba; se ele morrer sem limpar, a chave expira.
+  const CC_FREEZE_KEY = KEY + '_freeze';
+  function centralSilenciando() {
+    try {
+      const f = JSON.parse(localStorage.getItem(CC_FREEZE_KEY) || 'null');
+      return !!(f && f.until && Date.now() < f.until);
+    } catch (e) { return false; }
+  }
   function claimLock() { localStorage.setItem(LOCKKEY, JSON.stringify({ id: TAB_ID, ts: Date.now() })); }
   // Guarda para DENTRO dos laços longos. Os ciclos duram de 1 a 10 minutos e até aqui nada era
   // reconferido depois da entrada do tick — com três consequências:
@@ -919,7 +929,17 @@
     if (captchaBlocked()) return 'bot-check na tela';
     // A Central tem prioridade: um disparo de precisão não pode disputar a rede nem a
     // trava com um ciclo de saque. Os laços longos param e retomam no tick seguinte.
-    if (mod !== 'cc' && ccJanelaCritica()) return 'Central disparando';
+    //
+    // São DUAS Centrais e cada uma avisa de um jeito: o motor `cc` pela janela crítica, e o
+    // motor `cmd` (175-cc-rico.js) gravando a chave de silêncio. A segunda estava sendo escrita
+    // e NUNCA lida — o comentário lá dizia que as abas respeitariam "via lockOther()", mas
+    // lockOther() lê outra chave. Efeito medido ao vivo: o Saque atravessou a janela de disparo
+    // mandando 36 ataques e o comando saiu 556ms depois da hora. Meio segundo de contenção de
+    // thread, que viés nenhum corrige — ele corrige atraso constante, não pico.
+    //
+    // O `silenceOn` cancela o PRÓXIMO timer de cada módulo, o que não faz nada contra um ciclo
+    // já rodando (o do Saque dura de 3 a 10 min). Quem para laço em andamento é este devoParar.
+    if (mod !== 'cc' && mod !== 'cmd' && (ccJanelaCritica() || centralSilenciando())) return 'Central disparando';
     claimLock();
     return null;
   }
@@ -10262,42 +10282,72 @@
   }
 
   // Depois de enviar o apoio, procura o cmd_id do apoio recém-saído da aldeia originVid.
-  // Estratégia: lê /screen=place&mode=units da origem e pega comando "out" mais recente cujo
-  // destino bate com o coord esperado. Se o servidor não expõe cmd_id lá, cai pro overview.
+  //
+  // Lê a PRAÇA da origem, não `overview_villages&mode=commands`.
+  //
+  // Aquela tela é STATEFUL — o jogo lembra o último `mode` e redireciona. Medido na conta do
+  // usuário: o mesmo endereço devolveu `mode=combined`, sem link de comando nenhum, e a
+  // contagem de ids deu ZERO. Funciona ou não dependendo do que a aba visitou antes, que é o
+  // pior tipo de dependência possível — o envio parecia funcionar e a confirmação não.
+  //
+  // A praça é por aldeia e não guarda estado. Os ids vêm em `.quickedit-out[data-id]`, que está
+  // no HTML servido; os links de `info_command` são montados por JavaScript e NÃO estão lá.
   async function findLatestSupportCommand(originVid, targetCoord) {
     try {
-      // Tentativa 1: overview_villages&mode=commands na origem (mais confiável)
-      const res = await fetch('/game.php?village=' + originVid + '&screen=overview_villages&mode=commands&page=-1&_=' + Date.now(),
+      const res = await fetch('/game.php?village=' + originVid + '&screen=place&_=' + Date.now(),
         { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) return null;
       const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-      // Cada comando tem link tipo /game.php?...&screen=info_command&id=NNN
-      let bestId = null, bestTs = -Infinity;
-      doc.querySelectorAll('a[href*="screen=info_command"]').forEach((a) => {
-        const href = a.getAttribute('href') || '';
-        const idm = href.match(/[?&]id=(\d+)/); if (!idm) return;
-        const id = idm[1];
-        const row = a.closest('tr'); if (!row) return;
-        // Confirma que destino é o targetCoord
-        const txt = row.textContent || '';
+      let bestId = null, bestNum = -Infinity;
+      doc.querySelectorAll('tr.command-row').forEach((row) => {
+        const txt = (row.textContent || '').replace(/\s+/g, ' ');
         if (targetCoord && txt.indexOf(targetCoord) < 0) return;
-        // Ignora comandos que já são "return" (retorno) — só queremos o support outgoing
-        if (row.querySelector('img[src*="return"]')) return;
-        // pega ts do timer se possível — senão usa maior id como proxy (id cresce com o tempo)
-        const idNum = parseInt(id, 10);
-        if (idNum > bestTs) { bestTs = idNum; bestId = id; }
+        // Só o apoio SAINDO. "Retorno" e "interrompido" são tropa voltando, não o que queremos.
+        if (/Retorno|interrompid/i.test(txt)) return;
+        const el = row.querySelector('.quickedit-out[data-id]');
+        if (!el) return;
+        const id = el.getAttribute('data-id');
+        const n = parseInt(id, 10);
+        if (n > bestNum) { bestNum = n; bestId = id; }   // id cresce com o tempo
       });
       return bestId;
     } catch (e) { return null; }
   }
 
   // O comando ainda existe na lista de saídas da aldeia? É a ÚNICA prova de cancelamento que vale.
+  //
+  // Duas coisas estavam erradas aqui, e juntas faziam esta função responder "sumiu" SEMPRE — ou
+  // seja, todo cancelamento era reportado como sucesso, independentemente do que aconteceu.
+  // Medido na conta do usuário (ago/2026):
+  //
+  //   1. usava `overview_villages&mode=commands`, que o jogo REDIRECIONA pra `mode=combined`.
+  //      A tela devolvida não tem link de comando nenhum: a contagem de ids deu ZERO.
+  //   2. procurava por regex em `[?&]id=N`, mas os links de `info_command` são montados por
+  //      JavaScript — não estão no HTML servido. Mesmo na tela certa, a regex acharia zero.
+  //
+  // Agora lê a PRAÇA da aldeia de origem e pega `.quickedit-out[data-id]`, que vem no HTML.
+  // Conferido: 38 linhas, 38 ids, comando vivo encontrado, comando cancelado não encontrado.
+  //
+  // E a trava que faltava: lista VAZIA agora LANÇA em vez de devolver "sumiu". Confundir
+  // "não achei nada" com "não existe" foi exatamente o defeito — e é um erro que só aparece
+  // quando custa caro, porque o caso normal (tropa fora, cancelamento urgente) é justamente
+  // quando ninguém confere na mão.
   async function comandoAindaExiste(vid, cmdId) {
-    const r = await fetch('/game.php?village=' + vid + '&screen=overview_villages&mode=commands&page=-1&_=' + Date.now(),
+    const r = await fetch('/game.php?village=' + vid + '&screen=place&_=' + Date.now(),
       { credentials: 'include', cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao reler os comandos');
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao reler a praça');
     const html = await r.text();
-    if (!/screen=info_command|commands_table/.test(html)) throw new Error('resposta não parece a tela de comandos');
-    return new RegExp('[?&]id=' + cmdId + '\\b').test(html);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const linhas = doc.querySelectorAll('tr.command-row');
+    if (!linhas.length) {
+      // Pode ser aldeia sem comando nenhum — mas nós ACABAMOS de mandar um apoio daqui, então
+      // lista vazia significa que a leitura falhou, não que o comando sumiu.
+      throw new Error('a praça de ' + vid + ' voltou sem nenhum comando — não dá pra confirmar');
+    }
+    const ids = [];
+    doc.querySelectorAll('.quickedit-out[data-id]').forEach((e) => ids.push(e.getAttribute('data-id')));
+    if (!ids.length) throw new Error('não consegui ler os ids dos comandos da praça de ' + vid);
+    return ids.indexOf(String(cmdId)) >= 0;
   }
 
   // Cancela e CONFIRMA. Antes isto era `if (r.ok) return true` — mas o TW responde HTTP 200 com
@@ -10345,6 +10395,19 @@
     return (config.desviar.pending || []).some((p) => p.state === 'waiting' && p.sendAt && p.sendAt <= lim);
   }
 
+  // Espera entre tentativas de cancelamento. Cresce, mas começa curta: com tropa fora de casa,
+  // esperar minutos pra tentar de novo é pior que insistir. Teto de 6 tentativas (~5 min no
+  // total) — depois disso é problema que só a mão resolve, e aí a notificação é o caminho.
+  const DESV_RETRY_MS = [5000, 15000, 30000, 60000, 120000];
+  const DESV_CANCEL_MAX = 6;
+
+  // Dispara a tentativa AGORA, sem esperar o `cancelAt` de novo (ele já passou).
+  function scheduleDesviarCancelAgora(id) {
+    const cur = (config.desviar.pending || []).find((x) => x.id === id);
+    if (!cur || cur.state !== 'scheduled') return;
+    scheduleDesviarCancel(Object.assign({}, cur, { cancelAt: serverNow() }));
+  }
+
   function scheduleDesviarCancel(item) {
     const delay = Math.max(0, item.cancelAt - serverNow());
     desvAgendar(item.id + ':cancel', delay, async () => {
@@ -10352,15 +10415,36 @@
       if (!cur || cur.state !== 'scheduled') return;
       try {
         await cancelCommand(cur.vid, cur.cmdId);   // lança se não conseguir CONFIRMAR
-        cur.state = 'canceled'; cur.err = '';
+        cur.state = 'canceled'; cur.err = ''; cur.cancelTent = 0;
       } catch (e) { cur.state = 'failed'; cur.err = e.message || String(e); }
-      save();
       if (cur.state === 'canceled') {
+        save();
         pushLog('🚨 Desvio OK — tropa voltando (aldeia ' + cur.vid + ', comando ' + cur.cmdId + ').', 'ok', 'desv');
+        desviarRefreshRowStates();
+        return;
+      }
+      // FALHOU. Isto significa tropa FORA DE CASA, que é o pior estado do módulo — e até agora
+      // era o único SEM saída: `failed` não era retentado por ninguém, nem por um F5 (o
+      // desviarResumeAll só ressuscitava `scheduled`). Uma queda de rede de dois segundos
+      // deixava o exército fora até você notar o log.
+      //
+      // Agora retenta com espera crescente. O cancelamento é idempotente do jeito que importa:
+      // `cancelCommand` confirma pelo EFEITO (o comando sumiu da lista), então retentar um
+      // cancelamento que já funcionou devolve sucesso em vez de estragar algo.
+      cur.cancelTent = (cur.cancelTent || 0) + 1;
+      save();
+      const espera = DESV_RETRY_MS[Math.min(cur.cancelTent - 1, DESV_RETRY_MS.length - 1)];
+      if (cur.cancelTent < DESV_CANCEL_MAX) {
+        cur.state = 'scheduled';   // volta pra fila: é o estado que o resume e o timer entendem
+        save();
+        pushLog('🚨 Desvio: o cancelamento da aldeia ' + cur.vid + ' falhou (' + cur.err
+          + '). Tentativa ' + cur.cancelTent + ' de ' + DESV_CANCEL_MAX + ' — repito em '
+          + Math.round(espera / 1000) + 's. A tropa segue FORA.', 'err', 'desv');
+        desvAgendar(cur.id + ':cancel', espera, () => scheduleDesviarCancelAgora(cur.id));
       } else {
-        // Falha aqui = tropa FORA DE CASA. Tem que gritar, não virar uma linha discreta.
-        pushLog('🚨 DESVIO FALHOU — a tropa da aldeia ' + cur.vid + ' NÃO voltou: ' + cur.err
-          + '. Cancele o comando ' + cur.cmdId + ' na mão, agora.', 'err', 'desv');
+        pushLog('🚨 DESVIO FALHOU — a tropa da aldeia ' + cur.vid + ' NÃO voltou depois de '
+          + cur.cancelTent + ' tentativas: ' + cur.err + '. Cancele o comando ' + cur.cmdId
+          + ' na mão, agora.', 'err', 'desv');
         if (config.captcha && config.captcha.enabled) { try { fireCaptchaNotification('desvio-falhou/' + cur.vid, true); } catch (e2) {} }
       }
       desviarRefreshRowStates();
@@ -10649,6 +10733,15 @@
     // 1) tropa já fora: só reagenda a volta
     (config.desviar.pending || []).forEach((item) => {
       if (item.state === 'scheduled') scheduleDesviarCancel(item);
+      // `failed` com tentativas sobrando volta pra fila. Antes ficava aqui pra sempre: o pior
+      // estado do módulo — tropa fora — era o único que um F5 não recuperava. Se o navegador
+      // fechou no meio das retentativas, é exatamente quando mais se precisa que elas voltem.
+      else if (item.state === 'failed' && item.cmdId && (item.cancelTent || 0) < DESV_CANCEL_MAX) {
+        item.state = 'scheduled';
+        pushLog('🚨 Desvio: retomando o cancelamento da aldeia ' + item.vid + ' (tentativa '
+          + ((item.cancelTent || 0) + 1) + ' de ' + DESV_CANCEL_MAX + '). A tropa está FORA.', 'err', 'desv');
+        scheduleDesviarCancel(Object.assign({}, item, { cancelAt: agora }));
+      }
     });
     // 2) saída ainda por vir: reagenda a partir das marcas (que sobrevivem no localStorage)
     const coords = {};
@@ -11431,12 +11524,25 @@
     // (4) Compensação de latência: o request precisa CHEGAR ao servidor em sendAt, então sai antes.
     // rttMin/2 estima o tempo de ida. Substitui o antigo "offset" fixo de 150ms, que era chute.
     function fireAtFor(sendAtSrvMs, ajusteManualMs) {
-      const ida = (NETLAT.rttMin || 300) / 2;
-      // biasMs vem do laço fechado (ccMedir): é o erro real medido nos envios anteriores.
-      // Modelar o relógio sozinho dá ~±50ms; corrigir pelo resultado medido é o que leva a ±10ms.
+      // SEM `rttMin/2`. Ele era um MODELO da ida, e o modelo não corresponde ao real: a sonda
+      // HEAD estimava 85ms contra ~184ms medidos num POST de verdade na praça. O motor `cc` já
+      // tirou este termo da conta por isso. Pior que impreciso, ele BRIGA com o viés — os dois
+      // corrigem a mesma coisa, e a soma passa do alvo.
+      //
+      // E existe um erro que modelo de rede nenhum enxerga: o relógio de referência é o Timing
+      // do jogo, calibrado na resposta do carregamento de PÁGINA, que pode estar dezenas ou
+      // centenas de ms adiantado do relógio real do servidor. Foi o que apareceu no uso real —
+      // lead de 180ms e chegada 200ms ADIANTADA, aritmética que só fecha com o relógio à frente.
+      // Só a chegada publicada pelo jogo revela isso, e é o que o viés aprende.
+      //
+      // Então o viés carrega tudo: latência de ida e desvio de relógio juntos. Com `calib.n = 0`
+      // o lead é ZERO — sai na hora pedida, e a primeira medição ensina o resto.
       const bias = (config.cmd && config.cmd.calib && config.cmd.calib.biasMs) || 0;
-      const lead = ida + bias + (ajusteManualMs || 0);
-      return sendAtSrvMs - Math.max(0, Math.min(lead, 3000));   // teto de 3s por segurança
+      const lead = bias + (ajusteManualMs || 0);
+      // O piso era 0, e isso PROIBIA o viés de atrasar o disparo. Comando chegando adiantado
+      // precisa de correção negativa — o laço não tinha como consertar esse caso nem medindo
+      // certo. Agora vale nos dois sentidos, com o mesmo teto de 3s de cada lado.
+      return sendAtSrvMs - Math.max(-3000, Math.min(lead, 3000));
     }
 
     // (5) Orçamento de erro honesto, calculado ANTES de armar. O usuário decidiu: se estourar,
@@ -11771,50 +11877,273 @@
       // Dispara e NÃO espera a resposta. Num trem de 150ms, aguardar o HTTP (300ms+) faria a
       // onda seguinte perder o próprio horário. A linha é liberada assim que o POST parte.
       const saiuEm = srvNowP();
+      const tPost = performance.now();
       const voo = cmdFire(c.prep);
       c.state = 'enviado'; c.sentAt = saiuEm;
+      // Cronometra o PRÓPRIO POST. Custo zero: ele acontece de qualquer jeito, e o `.then` não
+      // segura a onda (o disparo já é fire-and-forget).
+      //
+      // É um candidato a preditor MELHOR que a sonda, e a razão é simples: a sonda mede um GET
+      // de imagem estática (85ms), o disparo é um POST que o servidor processa (~184ms). São
+      // caminhos diferentes, e a correlação medida com a sonda ficou em 0,55 no melhor caso —
+      // não significativa com 8 amostras.
+      //
+      // O POST não pode prever o PRÓPRIO comando (só se sabe depois que ele voltou), mas pode
+      // prever o PRÓXIMO — que é exatamente o que importa numa onda ou numa fila de comandos
+      // agendados. Se `rttPost[n]` correlacionar com o erro de `[n+1]`, o lead passa a sair daí.
+      voo.then(() => { c.rttPostMs = Math.round(performance.now() - tPost); save(); }).catch(() => {});
       c.desvioMs = Math.round(saiuEm - c.fireAt);
+      // INSTRUMENTAÇÃO — testa a hipótese "dá pra prever o atraso com uma sonda antes".
+      //
+      // A sonda já roda no silenceOn, uns 10s antes; o valor só não era guardado. Guardando-o
+      // junto do comando, depois de ~10 disparos dá pra correlacionar sonda × erro real e
+      // decidir com dado. Se correlacionar, o lead passa a sair da sonda; se não, fica provado
+      // que não dá — e a gente para de tentar.
+      //
+      // Já se sabe que a sonda NÃO explica o nível (85ms de sonda contra ~184ms de POST real):
+      // ela mede um GET de imagem estática, o disparo é um POST que o servidor processa. O que
+      // esta medição responde é outra coisa: ela acompanha a VARIAÇÃO? Dois comandos a 1 minuto
+      // de distância deram -67 e +249ms de erro; se a sonda tiver subido junto, serve.
+      c.netPre = {
+        rttMin: Math.round(NETLAT.rttMin || 0), rttMed: Math.round(NETLAT.rttMed || 0),
+        jitter: Math.round(NETLAT.jitter || 0),
+        idadeMs: Math.round(Date.now() - (NETLAT.at || Date.now())),
+      };
       const rot = c.ondas ? (' [onda ' + c.onda + '/' + c.ondas + ']') : '';
       pushLog('⚔ ' + (c.tipo === 'support' ? 'Apoio' : c.tipo === 'nobre' ? 'Nobre' : 'Ataque') + ' → ' + c.x + '|' + c.y + rot +
               ' · saiu ' + srvClockMs(saiuEm) + ' (desvio ' + (c.desvioMs >= 0 ? '+' : '') + c.desvioMs + 'ms)', 'ok', 'cmd');
       config.cmd.hist.unshift({ t: srvClockMs(saiuEm), alvo: c.x + '|' + c.y, tipo: c.tipo, desvio: c.desvioMs });
       config.cmd.hist = config.cmd.hist.slice(0, 50);
       save();
-      // A resposta é tratada depois, sem segurar a próxima onda.
-      voo.then(() => { setTimeout(() => ccMedir(c), 20000); })
-         .catch((e) => { cmdFalha(c, e.message || e); });
+      // A medição é AGENDADA NO DISCO, não num setTimeout em memória.
+      //
+      // Antes era `setTimeout(() => ccMedir(c), 20000)` dentro do `.then`. Um timer de 20s
+      // preso numa closure morre em tudo que acontece o tempo todo: F5, aba estrangulada em 2º
+      // plano, e — o caso observado ao vivo — "Outra aba já está ativa; esta ficará em espera",
+      // quando outra aba assume a trava e esta para de trabalhar. Não havia retry nem log: a
+      // amostra sumia calada, e `calib.n` ficava em zero pra sempre.
+      //
+      // Agora só marca a hora e salva. Quem executa é a varredura do cmdTick, que roda em
+      // qualquer aba viva e sobrevive a reload.
+      c.medirApos = srvNowP() + 20000;
+      save();
+      voo.catch((e) => { cmdFalha(c, e.message || e); });
     }
 
     // Mede o erro REAL: lê a chegada que o jogo registrou e compara com a que pedimos.
     // O servidor carimba o comando quando PROCESSA o POST, então erroMs é exatamente o atraso
     // entre o nosso disparo e o processamento — sinal limpo, sem modelagem.
+    // A chegada na página de detalhe vem no formato do LOCALE do jogo:
+    //
+    //     Chegada: ago. 08, 2026 20:31:30:331
+    //
+    // A regex antiga exigia `dd/mm/aaaa` colado no horário (`[^\d]{0,6}` entre os dois) e por
+    // isso NUNCA casou nesta conta. Efeito: `calib.n` ficou em zero desde sempre e o motor rodou
+    // o tempo todo com o lead do modelo, sem correção nenhuma — e em silêncio, porque a saída
+    // era um `return` mudo. Descoberto lendo a página de verdade, não o código.
+    //
+    // Agora ancora na palavra "Chegada" e pega o horário COM milésimos logo depois. A data sai
+    // do mesmo trecho, aceitando mês por extenso OU dd/mm/aaaa; sem nenhum dos dois, cai em
+    // hoje/amanhã pelo horário, que é o que o resto do script já faz.
+    const MESES_PT = { jan: 0, fev: 1, mar: 2, abr: 3, mai: 4, jun: 5, jul: 6, ago: 7, set: 8, out: 9, nov: 10, dez: 11 };
+    function parseChegadaDetalhe(texto) {
+      const t = String(texto || '').replace(/\s+/g, ' ');
+      const i = t.search(/Chegada\s*:/i);
+      const trecho = i >= 0 ? t.slice(i, i + 140) : t;
+      const mh = trecho.match(/(\d{1,2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/);
+      if (!mh) return null;
+      const ms = (mh[4] != null) ? +mh[4] : null;
+      let Y = null, M = null, D = null;
+      const mExt = trecho.match(/([a-zç]{3})\.?\s+(\d{1,2}),\s*(\d{4})/i);
+      if (mExt && MESES_PT[mExt[1].toLowerCase()] != null) { M = MESES_PT[mExt[1].toLowerCase()]; D = +mExt[2]; Y = +mExt[3]; }
+      const mBar = trecho.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (mBar) { D = +mBar[1]; M = +mBar[2] - 1; Y = +mBar[3]; }
+      const agora = new Date();
+      const semData = (Y == null);
+      if (semData) { Y = agora.getFullYear(); M = agora.getMonth(); D = agora.getDate(); }
+      let d = new Date(Y, M, D, +mh[1], +mh[2], +mh[3], ms || 0);
+      // Sem data legível, chegada que "já passou" faz muito tempo é na verdade amanhã.
+      if (semData && d.getTime() < agora.getTime() - 6 * 3600000) d = new Date(d.getTime() + 86400000);
+      return { ms: d.getTime(), temMs: ms != null };
+    }
+
+    // Uma medição por tick. Só entra comando enviado, com a hora de medir vencida, ainda sem
+    // resultado. `medTent` é o teto: comando cancelado no jogo nunca vai aparecer na praça, e sem
+    // teto ele tentaria pra sempre a cada tick.
+    let _medindo = false;
+    function ccVarrerMedicoes() {
+      if (_medindo) return;
+      const agora = srvNowP();
+      const alvo = cmdFila().find((c) => c.state === 'enviado' && c.medirApos && !c.medido
+        && c.medirApos <= agora && (c.medTent || 0) < 5);
+      if (!alvo) return;
+      alvo.medTent = (alvo.medTent || 0) + 1;
+      // Espaça a retentativa: 1 min por tentativa, pra um alvo teimoso não ocupar todo tick.
+      alvo.medirApos = agora + 60000;
+      save();
+      _medindo = true;
+      ccMedir(alvo).catch(() => {}).then(() => { _medindo = false; });
+    }
+
     async function ccMedir(c) {
       try {
         const res = await fetch('/game.php?village=' + c.origin + '&screen=place', { credentials: 'include' });
         const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-        let href = null;
+        // Casa por ORDEM, não pelo último que aparecer. O `forEach` antigo sobrescrevia `href` a
+        // cada linha do mesmo alvo, então uma onda de 6 comandos pra uma coordenada media SEMPRE
+        // a mesma linha — a última. A praça lista por chegada, e o servidor processa a conta em
+        // fila: o i-ésimo enviado é o i-ésimo a chegar. Então o índice deste comando entre os
+        // meus pro mesmo alvo é o índice da linha.
+        const hrefs = [];
         doc.querySelectorAll('tr.command-row').forEach((tr) => {
           const lbl = tr.querySelector('.quickedit-label');
           const mc = lbl ? (lbl.textContent || '').match(/(\d{1,3})\|(\d{1,3})/) : null;
           if (!mc || mc[1] !== String(c.x) || mc[2] !== String(c.y)) return;
           const a = tr.querySelector('a[href*="screen=info_command"]');
-          if (a) href = a.href;
+          if (!a) return;
+          // `data-endtime` é a chegada em segundos, na própria linha. Serve pra identificar qual
+          // linha é qual sem abrir nada; a precisão de ms vem depois, só da linha escolhida.
+          const et = tr.querySelector('span[data-endtime]');
+          const seg = et ? parseInt(et.getAttribute('data-endtime'), 10) : 0;
+          hrefs.push({ href: a.href, chega: seg ? seg * 1000 : 0 });
         });
-        if (!href) return;
+        // IRMÃOS = só os que ainda PODEM estar na praça. A fila guarda todo comando enviado pra
+        // sempre; a praça só mostra o que está voando. Comparar os dois inteiros fazia a
+        // contagem nunca mais bater depois do primeiro comando pousar ou ser cancelado — e a
+        // trava de ambiguidade recusava TODA medição, pra sempre. Foi o que apareceu ao vivo:
+        //   "2 comando(s) na praça contra 6 na fila — medição recusada"
+        // Os 4 velhos ja tinham chegado (ou foram cancelados), mas continuavam contando.
+        //
+        // Chegada no futuro e sem medição ainda: é exatamente o conjunto que a praça mostra.
+        const agoraMed = srvNowP();
+        const irmaos = cmdFila().filter((o) => o.origin === c.origin && String(o.x) === String(c.x)
+          && String(o.y) === String(c.y) && o.state === 'enviado' && o.arriveAt
+          && o.arriveAt > agoraMed && !o.medido)
+          .sort((a, b) => a.arriveAt - b.arriveAt);
+        let href = null;
+        if (!hrefs.length) {
+          pushLog('📏 ' + c.x + '|' + c.y + ': não achei o comando na praça pra medir. '
+            + 'Ele saiu mesmo? A calibração automática fica parada até uma medição dar certo.', 'err', 'cmd');
+          return;
+        }
+        // CASA POR TEMPO, não por contagem. A regra de contagem igual (v11.91) recusava sempre
+        // que a fila e a praça divergiam — e elas divergem por um motivo banal e permanente:
+        // comando CANCELADO no jogo some da praça mas fica na fila com chegada no futuro. Foi o
+        // que apareceu ao vivo, "2 na praça contra 3 na fila", com o 3º sendo um cancelado.
+        //
+        // O `data-endtime` da própria linha dá a chegada em segundos — grosso pra medir, exato
+        // de sobra pra IDENTIFICAR, já que os comandos aqui estão a minutos um do outro. Escolhe
+        // a linha mais perto da chegada pedida, e só aceita se ELE for o dono mais próximo dela:
+        // sem exclusividade, dois comandos casariam com a mesma linha (erro que já aconteceu no
+        // motor `cc` e gerou aferições que eram aritmética de uma chegada só).
+        const JANELA_CASA_MS = 5000;
+        const ESPACO_SEGURO_MS = 30000;
+        const dist = (o, l) => Math.abs(l.chega - o.arriveAt);
+        // Espaçamento mínimo entre os irmãos decide QUAL modo usar.
+        let espaco = Infinity;
+        for (let i = 1; i < irmaos.length; i++) espaco = Math.min(espaco, irmaos[i].arriveAt - irmaos[i - 1].arriveAt);
+
+        let melhor = null;
+        if (espaco >= ESPACO_SEGURO_MS) {
+          // COMANDOS FOLGADOS: casa pelo tempo. Comando cancelado simplesmente não acha par, em
+          // vez de estragar a contagem de todo mundo.
+          hrefs.forEach((l) => {
+            if (dist(c, l) > JANELA_CASA_MS) return;
+            if (irmaos.some((o) => o.id !== c.id && dist(o, l) < dist(c, l))) return;   // não é meu
+            if (!melhor || dist(c, l) < dist(c, melhor)) melhor = l;
+          });
+          if (!melhor) {
+            pushLog('📏 ' + c.x + '|' + c.y + ': nenhuma chegada na praça bate com a pedida ('
+              + srvClockMs(c.arriveAt) + '). Cancelado, ou outra está mais perto dela.', '', 'cmd');
+            return;
+          }
+        } else {
+          // ONDA: casar por tempo aqui é matematicamente ambíguo. Simulado com espaçamento de
+          // 100ms e erro de 85ms, o vizinho mais próximo casa TODO MUNDO deslocado de um — e
+          // devolveria -15ms onde o erro real é +85ms. Medida errada é pior que medida nenhuma:
+          // ela vira correção permanente no viés.
+          //
+          // Em onda vale a ordem (o servidor processa a conta em fila, o i-ésimo enviado é o
+          // i-ésimo a chegar) e só com contagem igual. Diferente, recusa.
+          if (hrefs.length !== irmaos.length) {
+            pushLog('📏 ' + c.x + '|' + c.y + ': onda de ' + irmaos.length + ' comando(s) contra '
+              + hrefs.length + ' na praça — em onda não dá pra casar por tempo. Medição recusada.', '', 'cmd');
+            return;
+          }
+          const ordenadas = hrefs.slice().sort((a, b) => a.chega - b.chega);
+          const idx = irmaos.findIndex((o) => o.id === c.id);
+          melhor = (idx >= 0) ? ordenadas[idx] : null;
+          if (!melhor) return;
+        }
+        href = melhor.href;
         const d2 = new DOMParser().parseFromString(await (await fetch(href, { credentials: 'include' })).text(), 'text/html');
-        const m = (d2.body.textContent || '').match(/(\d{2})\/(\d{2})\/(\d{4})[^\d]{0,6}(\d{2}):(\d{2}):(\d{2})(?::(\d{1,3}))?/);
-        if (!m) return;
-        const parede = new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6], +(m[7] || 0)).getTime();
-        const chegouEm = parede + wallToServerOffset();
+        const p = parseChegadaDetalhe(d2.body.textContent || '');
+        if (!p) {
+          pushLog('📏 ' + c.x + '|' + c.y + ': abri o comando mas não achei a chegada na página. '
+            + 'A calibração automática segue parada.', 'err', 'cmd');
+          return;
+        }
+        const chegouEm = p.ms + wallToServerOffset();
         const erroMs = chegouEm - c.arriveAt;              // positivo = chegou atrasado
-        const temMs = (m[7] != null);
+
+        // TETO DE PLAUSIBILIDADE. Acima disto não é latência, é medição errada — casou com o
+        // comando errado, ou a página mudou de formato. Aprender com isso não degrada o viés
+        // aos poucos: destrói de uma vez.
+        //
+        // Aconteceu de verdade (v11.96): o casamento caía num `hrefs[0]` quando a contagem não
+        // batia, mediu -547929ms (NOVE MINUTOS) contra um comando alheio, e o viés saturou no
+        // piso de -1500ms. Todo comando armado passou a sair 1,5s atrasado. O casamento foi
+        // corrigido na v11.97, mas o estrago só foi possível porque nada conferia se o número
+        // fazia sentido — o motor `cc` já tinha esse teto, este não tinha.
+        //
+        // Erros reais medidos nesta conta: +100, +71, -64ms. 3s é folga de trinta vezes.
+        const TETO_PLAUSIVEL_MS = 3000;
+
+        // GUARDA DE DERIVA. Se a MINHA escada soltou atrasada, o erro medido não fala da rede —
+        // fala de mim, e aprender com ele envenena o estimador. O motor `cc` já tem esta guarda
+        // (GUARDA_DERIVA_MS 50); este não tinha.
+        //
+        // Aconteceu ao vivo: `desvio 613ms` produziu `erro +828ms`, e o viés saltou de +24 pra
+        // +207 num passo só — três quartos daquele erro eram contenção de thread, não latência.
+        // Corrigir contenção com lead é impossível: no disparo seguinte, sem contenção, o lead
+        // inflado vira erro pro outro lado. É como o viés começou a passear em vez de convergir.
+        const DERIVA_MAX_MS = 50;
+        if (Math.abs(c.desvioMs || 0) > DERIVA_MAX_MS) {
+          pushLog('📏 ' + c.x + '|' + c.y + ': erro de ' + Math.round(erroMs) + 'ms NÃO entrou na '
+            + 'calibração — minha escada soltou ' + c.desvioMs + 'ms atrasada, então esse número '
+            + 'mede contenção, não rede.', '', 'cmd');
+          c.medido = { chegouEm: chegouEm, erroMs: erroMs, descartada: true, deriva: c.desvioMs };
+          save();
+          return;
+        }
+        if (Math.abs(erroMs) > TETO_PLAUSIVEL_MS) {
+          pushLog('📏 ' + c.x + '|' + c.y + ': medição de ' + Math.round(erroMs / 1000) + 's ignorada — '
+            + 'isso não é latência, é o comando errado. A calibração não aprendeu com ela.', 'err', 'cmd');
+          c.medido = { chegouEm: chegouEm, erroMs: erroMs, descartada: true };
+          save();
+          return;
+        }
+        const temMs = p.temMs;
         c.medido = { chegouEm: chegouEm, erroMs: erroMs, temMs: temMs };
         // Só amostra com milésimos entra na correção — sem isso o sinal é quantizado em 1s.
         if (temMs) {
           const k = config.cmd.calib;
           const alpha = (k.n < 3) ? 0.6 : 0.25;           // aprende rápido no começo, estável depois
-          k.biasMs = Math.max(-1500, Math.min(1500, (k.biasMs || 0) + erroMs * alpha));
+          // O viés precisa poder ficar NEGATIVO: chegada adiantada só se corrige atrasando o
+          // disparo. Antes o clamp do fireAtFor jogava lead negativo fora, então metade da faixa
+          // aqui era decorativa.
+          // MIRA +2ms ATRASADO, não zero. O erro aqui é assimétrico: num snipe, chegar
+          // adiantado PERDE o comando; chegar 2ms tarde não custa nada. Mirar exatamente zero
+          // deixa metade da dispersão cair do lado ruim. Com ±219ms de ruído medido, os 2ms não
+          // resolvem sozinhos, mas movem a distribuição inteira pro lado barato de graça.
+          const ALVO_ATRASO_MS = 2;
+          k.biasMs = Math.max(-1500, Math.min(1500,
+            Math.round((k.biasMs || 0) + (erroMs - ALVO_ATRASO_MS) * alpha)));
           k.n = (k.n || 0) + 1;
+        } else {
+          pushLog('📏 ' + c.x + '|' + c.y + ': a chegada veio SEM milésimos, então esta amostra não '
+            + 'calibra nada (o sinal seria quantizado em 1s). Ligue os milésimos nas configurações '
+            + 'do jogo — sem isso nenhuma calibração automática funciona.', 'err', 'cmd');
         }
         pushLog('📏 ' + c.x + '|' + c.y + ' chegou com desvio de ' + (erroMs > 0 ? '+' : '') + erroMs + 'ms' +
                 (temMs ? '' : ' (sem milésimos — ative nas configurações do jogo)'),
@@ -11827,6 +12156,11 @@
     async function cmdTick() {
       clearTimeout(cmdTimer);
       if (!config.cmd || !config.cmd.enabled) return;
+      // ANTES do early return. A medição acontece DEPOIS do disparo, quando o comando já saiu
+      // de `pendentes` — se ela ficar embaixo do `if (!pend.length) return`, o tick sai antes e
+      // a varredura nunca roda justamente no estado em que ela é necessária: fila só de
+      // enviados. Foi o que aconteceu no teste ao vivo — `medirApos` venceu e nada rodou.
+      ccVarrerMedicoes();
       const pend = cmdPendentes();
       if (!pend.length) {
         if (SILENCE.on) silenceOff();
@@ -11836,6 +12170,7 @@
       }
       const prepLead = (config.cmd.prepLeadSec || 60) * 1000;
       const silLead = (config.cmd.silenceLeadSec || 10) * 1000;
+
 
       // Preparo: um por vez, pra não sair request em rajada.
       for (const c of pend) {
@@ -11852,8 +12187,25 @@
 
       // Silêncio, guiado pelo disparo mais próximo.
       const prox = pend.filter((c) => c.fireAt).sort((a, b) => a.fireAt - b.fireAt)[0];
-      if (prox && prox.fireAt - srvNowP() <= silLead) {
-        if (!SILENCE.on) { silenceOn('comando ' + prox.x + '|' + prox.y); netProbe(3); }
+      // A SONDA SAIU DA JANELA DE SILÊNCIO. Ela rodava dentro do `silenceOn`, ou seja: a gente
+      // calava todos os módulos pra reservar a linha e em seguida disparava 3 requisições nela.
+      // Poluíamos a janela que acabáramos de reservar, a segundos do disparo.
+      //
+      // Não é hipótese solta: o RTT medido é BIMODAL (~350ms ou ~650ms — 650 pra baixar uma
+      // imagem estática é congestionamento), e o grupo congestionado teve erro médio +157ms
+      // contra +61ms do grupo limpo. Com 4 amostras de cada isso não é conclusivo, mas a sonda
+      // dentro do silêncio é indefensável de qualquer forma: ela custa 3 requisições e já se
+      // provou inútil como preditor (r entre 0,21 e 0,55, nada significativo).
+      //
+      // Agora ela roda na janela de PREPARO, ~60s antes — longe do disparo, e o valor continua
+      // sendo gravado em `netPre` pra instrumentação.
+      const faltaProx = prox ? (prox.fireAt - srvNowP()) : Infinity;
+      if (prox && faltaProx > silLead && faltaProx <= silLead + 20000
+          && Date.now() - (NETLAT.at || 0) > 60000) {
+        netProbe(3);
+      }
+      if (prox && faltaProx <= silLead) {
+        if (!SILENCE.on) silenceOn('comando ' + prox.x + '|' + prox.y);
       } else if (SILENCE.on) {
         const tail = (config.cmd.silenceTailSec || 10) * 1000;
         if (!prox || prox.fireAt - srvNowP() > silLead + tail) silenceOff();
@@ -12167,6 +12519,48 @@
       });
       return a;
     }
+    // ===== Bônus noturno =====
+    // Mecânica do jogo que a Central ignorava. Confirmado no `get_config` do br143:
+    //
+    //     <night> <active>2</active> <start_hour>23</start_hour> <end_hour>7</end_hour>
+    //             <def_factor>2</def_factor> </night>
+    //
+    // Ataque que CHEGA entre 23h e 7h enfrenta defensor com defesa DOBRADA. Agendar um
+    // horário bonito sem olhar isso é jogar tropa fora com precisão de milissegundo.
+    //
+    // A janela cruza a meia-noite (23 → 7), então a comparação é `h >= ini || h < fim`.
+    // Quando não cruza (ex.: 1 → 7), vira `h >= ini && h < fim`. Errar isso inverteria o aviso.
+    let NOITE = null;
+    async function noiteConfig() {
+      if (NOITE) return NOITE;
+      try {
+        const r = await fetch('/interface.php?func=get_config', { credentials: 'include' });
+        const t = await r.text();
+        const bloco = (t.match(/<night>[\s\S]*?<\/night>/) || [''])[0];
+        const num = (tag) => {
+          const m = bloco.match(new RegExp('<' + tag + '>\\s*([\\d.]+)\\s*</' + tag + '>'));
+          return m ? parseFloat(m[1]) : null;
+        };
+        NOITE = { ativo: (num('active') || 0) > 0, ini: num('start_hour'), fim: num('end_hour'),
+                  fator: num('def_factor') };
+      } catch (e) { NOITE = { ativo: false }; }
+      return NOITE;
+    }
+    // Recebe hora do SERVIDOR em ms. Sem config lida ainda, devolve false — nunca inventa aviso.
+    function emBonusNoturno(msServidor) {
+      if (!NOITE || !NOITE.ativo || NOITE.ini == null || NOITE.fim == null) return false;
+      const h = new Date(msServidor - wallToServerOffset()).getHours();
+      return (NOITE.ini > NOITE.fim) ? (h >= NOITE.ini || h < NOITE.fim)
+                                     : (h >= NOITE.ini && h < NOITE.fim);
+    }
+    function avisaNoite(c) {
+      if (!emBonusNoturno(c.arriveAt)) return;
+      pushLog('🌙 ' + c.x + '|' + c.y + ' chega às ' + srvClockMs(c.arriveAt)
+        + ', DENTRO do bônus noturno (' + NOITE.ini + 'h–' + NOITE.fim + 'h): o defensor tem '
+        + NOITE.fator + '× a defesa. O comando segue armado — mas se for ataque de verdade, '
+        + 'vale mover a chegada pra fora da janela.', 'err', 'cmd');
+    }
+
     function cmdAdicionar(tipo, x, y, amounts, arriveAt, origem, trem) {
       const c = { id: genId(), tipo: tipo, origin: origem || CUR_VID, x: String(x), y: String(y),
                   amounts: amounts, arriveAt: arriveAt, durMs: null, sendAt: 0, fireAt: 0,
@@ -12174,6 +12568,9 @@
                   parcial: null,   // null = segue config.cmd.enviarParcial · true/false = força só este
                   trem: (trem && trem.length) ? trem : null };   // ondas extras no mesmo POST
       config.cmd.fila.push(c); save();
+      // Avisa no ARMAR, que é quando ainda dá pra mudar o horário. A leitura da config é
+      // assíncrona e cacheada; o aviso sai um instante depois, sem segurar o armamento.
+      noiteConfig().then(() => avisaNoite(c)).catch(() => {});
       cmdTick(); ccRender();
       return c;
     }
@@ -15615,6 +16012,11 @@
     // chegue atrasado, sem esticar a cessão a ponto de gerar lixo.
     FOLGA_ACORDADO: 60,
     FOLGA_ESTRANGULADO: 30000, // aba de fundo SEM keep-awake: acorda muito antes e paga cedendo
+    // Aba de fundo COM o worker acordando: ele entrega no horário, mas a thread principal
+    // ainda precisa rodar a cessão depois de acordar. 250ms é folga pra isso sem virar os
+    // 30s do caso sem nada.
+    FOLGA_WORKER: 250,
+    AQUECER_TIMEOUT: 800,   // aquecimento pendurado nos 2s finais é pior que aquecimento nenhum
     CEDER_ATE: 3,           // últimos 3ms: espera ocupada
     TETO_OCUPADO: 5000,     // trava de segurança da espera ocupada
     AQUECER_ANTES: 2000,    // abre/renova a conexão pra o POST não pagar handshake
@@ -15679,7 +16081,55 @@
     return true;
   }
 
-  const ccDormir = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+  // ── Timer em Web Worker ─────────────────────────────────────────────────────────
+  // O oscilador de áudio resolve o estrangulamento, mas tem uma fragilidade: MORRE a cada
+  // F5 e só religa dentro de um gesto do usuário. Se a aba recarregar entre armar e
+  // disparar, o keep-awake some sem avisar e o comando acorda tarde.
+  //
+  // Worker não depende de gesto nenhum e o navegador não estrangula o timer dele como
+  // estrangula o da thread principal. Ele não executa o disparo — só acorda a thread
+  // principal na hora certa, via postMessage, que também não é estrangulado.
+  //
+  // A REDE DE SEGURANÇA importa mais que o worker: se ele morrer, a Promise nunca
+  // resolveria e o comando ficaria pendurado pra sempre. O setTimeout corre junto e
+  // solta de qualquer jeito. Em aba de fundo ele chega tarde — e tarde é infinitamente
+  // melhor que nunca.
+  let _ccWorker = null, _ccWSeq = 0;
+  const _ccWPend = {};
+  function ccWorkerOk() {
+    if (_ccWorker) return true;
+    try {
+      const src = 'onmessage=function(e){var d=e.data;setTimeout(function(){postMessage(d.id)},d.ms)}';
+      const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+      _ccWorker = new Worker(url);
+      _ccWorker.onmessage = (e) => { const f = _ccWPend[e.data]; if (f) f(); };
+      _ccWorker.onerror = () => { _ccWorker = null; };
+      // Aquece. Medido no navegador: o 1º round-trip custa ~60ms (nascer o worker + a
+      // primeira mensagem); do 2º em diante o erro é de 1ms (150→151, 400→401, 1000→1001).
+      // `id: 0` não tem resolvedor pendurado, então a resposta cai no vazio de propósito.
+      try { _ccWorker.postMessage({ id: 0, ms: 0 }); } catch (e) {}
+      return true;
+    } catch (e) { _ccWorker = null; return false; }
+  }
+  function ccDormir(ms) {
+    ms = Math.max(0, ms);
+    if (ms < 50 || !ccWorkerOk()) return new Promise((r) => setTimeout(r, ms));
+    return new Promise((r) => {
+      const id = ++_ccWSeq;
+      let feito = false;
+      const solta = () => { if (feito) return; feito = true; delete _ccWPend[id]; r(); };
+      _ccWPend[id] = solta;
+      try { _ccWorker.postMessage({ id: id, ms: ms }); }
+      catch (e) { solta(); return; }
+      setTimeout(solta, ms + 250);   // rede de segurança: nunca fica pendurado
+    });
+  }
+  // Sem número redondo repetido. Um período exato é assinatura; o Nexus não repete nenhum
+  // (tick com jitter −400/+700, auto-reload numa faixa de 26 a 34 min).
+  function ccJitter(base, frac) {
+    const f = (frac == null) ? 0.12 : frac;
+    return Math.round(base * (1 - f + Math.random() * 2 * f));
+  }
   // Cede o laço de eventos sem dormir. setTimeout(0) aninhado é preso em 4ms pelo
   // navegador; MessageChannel não é — dá umas dezenas de microssegundos por volta.
   //
@@ -15747,8 +16197,42 @@
     return { min: Math.round(ord[0]), mediana: Math.round(med), max: Math.round(ord[ord.length - 1]), jitter: Math.round(ord[ord.length - 1] - ord[0]), n: rtts.length };
   }
   // Só reabre/renova a conexão. Descarta o resultado de propósito.
+  //
+  // `keepalive` pede pro navegador manter a conexão de pé depois da resposta — é o ponto
+  // inteiro do aquecimento. E o ABORT em 800ms não é detalhe: isto roda 2s antes do
+  // disparo, então um aquecimento pendurado seguraria a escada justamente no pior
+  // instante possível. Aquecimento travado é pior que aquecimento nenhum.
   async function ccAquecer() {
-    try { await fetch(CC_PING + '?w=' + Math.random(), { method: 'HEAD', cache: 'no-store', credentials: 'omit' }); } catch (e) {}
+    const ac = (typeof AbortController === 'function') ? new AbortController() : null;
+    const t = ac ? setTimeout(() => { try { ac.abort(); } catch (e) {} }, CC.AQUECER_TIMEOUT) : null;
+    try {
+      const o = { method: 'HEAD', cache: 'no-store', credentials: 'omit', keepalive: true };
+      if (ac) o.signal = ac.signal;
+      await fetch(CC_PING + '?w=' + Math.random(), o);
+    } catch (e) { /* inclusive o abort: o resultado nunca importou */ }
+    finally { if (t) clearTimeout(t); }
+  }
+
+  // ── WakeLock ────────────────────────────────────────────────────────────────────
+  // Impede a MÁQUINA de dormir antes de um comando agendado — problema diferente do
+  // estrangulamento de timer, que o oscilador e o worker resolvem. Só vale pra quem
+  // agenda de madrugada com o computador ocioso.
+  //
+  // A API exige documento visível pra conceder, e o navegador solta o lock sozinho
+  // quando a aba é escondida. Falhar aqui é normal, não é erro: devolve false e segue.
+  let _ccWakeLock = null;
+  async function ccTrancarSono(ligar) {
+    try {
+      if (!ligar) {
+        if (_ccWakeLock) { const w = _ccWakeLock; _ccWakeLock = null; await w.release(); }
+        return true;
+      }
+      if (_ccWakeLock) return true;
+      if (!navigator.wakeLock || typeof navigator.wakeLock.request !== 'function') return false;
+      _ccWakeLock = await navigator.wakeLock.request('screen');
+      _ccWakeLock.addEventListener('release', () => { _ccWakeLock = null; });
+      return true;
+    } catch (e) { _ccWakeLock = null; return false; }
   }
   // Metade do ida-e-volta da sonda. NÃO entra mais no cálculo do disparo — ficou provado
   // que não tem relação com o custo real de um POST na praça (85ms estimados contra ~184ms
@@ -15767,11 +16251,16 @@
   async function ccEsperarPreciso(alvoMs) {
     for (;;) {
       const falta = alvoMs - ccNow();
-      // Sem keep-awake numa aba de fundo o setTimeout é estrangulado: acorda muito
-      // antes e paga o resto cedendo, que o Chrome não estrangula do mesmo jeito.
-      const folga = (document.hidden && !ccAcordadoOk()) ? CC.FOLGA_ESTRANGULADO : CC.FOLGA_ACORDADO;
+      // Três níveis, não dois. Sem nada, em aba de fundo o setTimeout é estrangulado e
+      // é preciso acordar 30s antes e pagar o resto cedendo. Com o oscilador, a aba nem
+      // é estrangulada. Com só o worker, ele acorda no horário mas a thread principal
+      // ainda tem que rodar a cessão depois — daí a folga intermediária.
+      const folga = (!document.hidden || ccAcordadoOk()) ? CC.FOLGA_ACORDADO
+        : ccWorkerOk() ? CC.FOLGA_WORKER
+        : CC.FOLGA_ESTRANGULADO;
       if (falta <= folga) break;
-      await ccDormir(Math.min(falta - folga, CC.BLOCO_MS));
+      // O jitter nunca ultrapassa o alvo: o `min` com `falta - folga` manda.
+      await ccDormir(Math.min(falta - folga, ccJitter(CC.BLOCO_MS)));
     }
     while (alvoMs - ccNow() > CC.CEDER_ATE) await ccCeder();
     // Espera ocupada nos últimos milissegundos: é o único jeito de acertar abaixo do
@@ -15780,6 +16269,32 @@
     while (ccNow() < alvoMs && performance.now() < limite) { /* ocupado de propósito */ }
     return ccNow();
   }
+
+  // ── Cessão instantânea da trava ─────────────────────────────────────────────────
+  // `lockOther()` só descobre que outra aba assumiu quando alguém pergunta, e a trava tem
+  // 12s de validade — dá pra rodar uma escada inteira achando que ainda se é o dono.
+  //
+  // O evento `storage` dispara em TODAS as outras abas quando uma delas escreve, e não
+  // dispara na que escreveu. Então ele é exatamente o aviso que faltava, de graça: a aba
+  // que perdeu a trava sabe na hora, não daqui a 12s.
+  //
+  // Aqui isso só ANOTA. Quem decide continua sendo `devoParar`/`lockOther` na hora de
+  // agir — um sinal assíncrono não pode abortar um disparo pela metade.
+  let _ccTravaPerdidaEm = 0;
+  try {
+    window.addEventListener('storage', (e) => {
+      if (!e.key || e.key !== LOCKKEY || !e.newValue) return;
+      let dono = null;
+      try { dono = JSON.parse(e.newValue); } catch (er) { return; }
+      if (!dono || dono.id === TAB_ID) return;
+      _ccTravaPerdidaEm = Date.now();
+      if (ccJanelaCritica()) {
+        pushLog('🎯 Central: outra aba assumiu a trava com disparo perto. Esta aba recua — '
+          + 'confira se o comando saiu pela outra.', 'err');
+      }
+    });
+  } catch (e) { /* sem window.addEventListener não há o que fazer */ }
+  function ccTravaPerdidaAgora() { return _ccTravaPerdidaEm > 0 && (Date.now() - _ccTravaPerdidaEm) < 12000; }
 
   // ── Janela crítica ──────────────────────────────────────────────────────────────
   // Tem disparo chegando nos próximos N ms? O Auto-F5 e os laços longos consultam isto
@@ -15815,6 +16330,43 @@
   //
   // A escrita adiantada continua valendo: 'disparando' vai pro disco ANTES do fetch, e
   // uma aba que morra no meio deixa o comando INCERTO, nunca reenviado.
+  // ── Veredito da resposta ────────────────────────────────────────────────────────
+  // ESTRUTURAL, não frase em português. A versão anterior era:
+  //
+  //     if (/n[aã]o tem tropas suficientes|not enough|insuficient/i.test(t2)) ... else ENVIADO
+  //
+  // Ela só sabia dizer "não" quando o jogo escrevia exatamente a frase que ela conhecia.
+  // Qualquer outra coisa — tela de verificação de bot, sessão expirada, página de
+  // manutenção, HTTP 500 — não casava com nada e caía no `else`: o envio mais caro do
+  // script concluía como SUCESSO sem ter saído tropa nenhuma. É a mesma classe de bug que
+  // já custou tempo em três outros módulos deste projeto.
+  //
+  // Ordem: HTTP → bot-check → caixa de erro do jogo → isto é uma tela do jogo? Só sobra
+  // 'enviado' quando nada disso apareceu. Na dúvida devolve INCERTO, que nunca reenvia —
+  // mandar um nobre duas vezes é pior do que não mandar.
+  function ccVeredito(cmd, txt) {
+    if (cmd.httpOk === false) return { state: 'incerto', erro: 'HTTP ' + cmd.httpStatus };
+    if (/bot_check|botprotect|g-recaptcha|captcha/i.test(txt)) {
+      return { state: 'incerto', erro: 'verificação de bot na resposta — confira na tela de comandos' };
+    }
+    // A caixa de erro do jogo fica com `erroDeComando` (050-envio.js), que é o helper
+    // compartilhado e cobre mais redações do que eu cobriria aqui sozinho — inclusive
+    // "Não existem unidades suficientes", que não casa com "não tem tropas suficientes".
+    const errCmd = erroDeComando(txt);
+    if (errCmd) return { state: 'falhou', erro: errCmd };
+    let doc = null;
+    try { doc = new DOMParser().parseFromString(txt, 'text/html'); } catch (e) {}
+    // Sessão expirada ou redirecionado pro portal: a resposta não tem nada de tela do jogo.
+    if (doc && !doc.querySelector('#header_info, #menu_row2, #content_value, .vis')) {
+      return { state: 'incerto', erro: 'a resposta não parece uma tela do jogo (sessão expirada?)' };
+    }
+    if (/selecione uma aldeia alvo/i.test(txt)) {
+      // Ambíguo: é também o estado normal da praça DEPOIS de um envio que deu certo.
+      return { state: 'incerto', erro: 'resposta ambígua — confira na tela de comandos' };
+    }
+    return { state: 'enviado', erro: null };
+  }
+
   function ccDispararAgora(cmd) {
     cmd.state = 'disparando';
     cmd.fireAt = ccNow();
@@ -15834,20 +16386,11 @@
       method: 'POST', credentials: 'include', cache: 'no-store',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams(cmd.payload.params).toString(),
-    }).then((r) => r.text()).then((t2) => {
+    }).then((r) => { cmd.httpOk = r.ok; cmd.httpStatus = r.status; return r.text(); }).then((t2) => {
       cmd.rttEnvioMs = Math.round(performance.now() - t0);
-      // Estrutural (erroDeComando, em 050-envio.js): procurar uma frase específica deixava passar
-      // recusa com outra redação — "Não existem unidades suficientes" não casava com "não tem
-      // tropas suficientes" — e o comando era dado como enviado sem ter saído.
-      const errCmd = erroDeComando(t2);
-      if (errCmd) {
-        cmd.state = 'falhou'; cmd.erro = errCmd;
-      } else if (/selecione uma aldeia alvo/i.test(t2)) {
-        // Ambíguo: é também o estado normal da praça DEPOIS de um envio que deu certo.
-        cmd.state = 'incerto'; cmd.erro = 'resposta ambígua — confira na tela de comandos';
-      } else {
-        cmd.state = 'enviado'; cmd.sentAt = ccNow(); cmd.erro = null;
-      }
+      const v = ccVeredito(cmd, t2);
+      cmd.state = v.state; cmd.erro = v.erro;
+      if (cmd.state === 'enviado') cmd.sentAt = ccNow();
       // Diagnóstico: o quanto ANTES da hora pedida o POST saiu. Não é o erro — o erro
       // depende da viagem até o servidor, que só a chegada publicada pelo jogo revela.
       // (Era aqui que eu somava meioRtt e chamava de "erro líquido"; o número concordava
@@ -16090,8 +16633,24 @@
     // conexão dele. Não existe valor universal, e fingir que existe foi meu erro.
     const anterior = (typeof cc.biasMs === 'number') ? cc.biasMs : 0;
     const pico = Math.abs(erroMs - anterior) > CC.EWMA_BANDA_MS;
-    const alfa = pico ? CC.EWMA_ALFA_PICO
+    const alfaBase = pico ? CC.EWMA_ALFA_PICO
       : (cc.estilo === 'responsivo' ? CC.EWMA_ALFA_RESPONSIVO : CC.EWMA_ALFA_ESTAVEL);
+    // AQUECIMENTO. Com α fixo em 0,1 e o viés começando em ZERO, um atraso sistemático de
+    // 200ms só é absorvido lá pela 22ª amostra:
+    //     1ª:  0 + 200×0,1 =  20  (ainda erra 180)
+    //     2ª: 20 + 180×0,1 =  38  (ainda erra 162)  ...
+    // Ou seja: vinte e poucos comandos errando enquanto o estimador está "correto". Foi
+    // exatamente o que apareceu no uso real -- desvio teimoso de ~200ms.
+    //
+    // A correção é a média corrida clássica: nas primeiras amostras o ganho é 1/n, e ele
+    // cede pro α configurado assim que ficar menor (n≈9 no estável). Com teto de 0,5, pra
+    // nenhuma amostra sozinha definir o viés -- que é a razão do Nexus não usar 1 na
+    // primeira. As duas redes acima (guarda de deriva e teto de plausibilidade) já
+    // barraram amostra ruim antes de chegar aqui.
+    //
+    // Convergência nova, mesmos 200ms: 100 → 150 → 167 → 175 → 180. Cinco comandos.
+    // Pico não ganha aquecimento: amostra fora da banda continua entrando devagar.
+    const alfa = pico ? alfaBase : Math.max(alfaBase, Math.min(0.5, 1 / ((cc.nReal || 0) + 1)));
     cc.biasMs = Math.max(-teto, Math.min(teto, Math.round(anterior + erroMs * alfa)));
     cc.nReal = (cc.nReal || 0) + 1;
     cc.afericoes = (cc.afericoes || []).concat([{ t: cmd.sentAt || ccNow(), erro: cmd.erroRealMs, estimado: cmd.erroMs, bias: cc.biasMs, oculta: document.hidden, acordado: ccAcordadoOk() }]).slice(-50);
@@ -16178,7 +16737,7 @@
           continue;   // reavalia: o preparo pode ter mudado sendAt (duração exata do servidor)
         }
 
-        if (config.cc.manterAcordado) ccManterAcordado(true);
+        if (config.cc.manterAcordado) { ccManterAcordado(true); ccTrancarSono(true); }
         if (cmd.sendAt - ccNow() > CC.AQUECER_ANTES) await ccAquecer();
 
         // UM termo só, e isso é a lição mais cara desta noite.
@@ -16196,12 +16755,26 @@
         const alvoChamada = cmd.sendAt - correcao;
         const real = await ccEsperarPreciso(alvoChamada);
         cmd.atrasoEscadaMs = Math.round(real - alvoChamada);
+        // Última conferência, depois da escada e antes do POST. Duas abas com a Central
+        // ligada guardam cada uma a SUA cópia da fila em memória: as duas leem 'armado' e
+        // as duas disparam. O `state: 'disparando'` gravado no localStorage não protege,
+        // porque a outra aba não releu. Aqui o aviso do evento `storage` vale: se outra aba
+        // assumiu a trava nos últimos 12s, esta recua. Nobre enviado duas vezes não volta.
+        if (ccTravaPerdidaAgora()) {
+          cmd.state = 'cancelado';
+          cmd.erro = 'outra aba assumiu a trava — não disparei pra não duplicar';
+          save();
+          pushLog('🎯 Central: ' + ccRotulo(cmd) + ' NÃO disparado — outra aba tem a trava. '
+            + 'Confira se ela mandou.', 'err');
+          ccRenderPagina();
+          continue;
+        }
         ccDispararAgora(cmd);       // sem await: o próximo da onda não pode esperar a resposta
         ccRenderPagina();
       }
     } finally {
       _ccMotorAtivo = false;
-      if (!ccJanelaCritica(CC.ACORDAR_ANTES)) ccManterAcordado(false);
+      if (!ccJanelaCritica(CC.ACORDAR_ANTES)) { ccManterAcordado(false); ccTrancarSono(false); }
     }
   }
 
@@ -16219,11 +16792,11 @@
     const porConferir = ccPendentesDeConferencia().length;
     if (porConferir) ccConferirPendentes().catch(() => {});
     if (!vivos.length) {
-      ccManterAcordado(false);
-      if (porConferir) ccTimer = setTimeout(ccTick, 30000);
+      ccManterAcordado(false); ccTrancarSono(false);
+      if (porConferir) ccTimer = setTimeout(ccTick, ccJitter(30000));
       return;
     }
-    if (captchaBlocked()) { ccTimer = setTimeout(ccTick, 30000); return; }
+    if (captchaBlocked()) { ccTimer = setTimeout(ccTick, ccJitter(30000)); return; }
     for (const cmd of vivos) {
       if (!ccCalcularSaida(cmd)) {
         // Modo chegada sem duração: uma confirmação só pra descobrir o tempo de viagem.
@@ -16232,13 +16805,13 @@
         catch (e) { cmd.state = 'falhou'; cmd.erro = 'não consegui a duração: ' + (e.message || e); save(); continue; }
       }
     }
-    if (config.cc.manterAcordado && ccJanelaCritica(CC.ACORDAR_ANTES)) ccManterAcordado(true);
+    if (config.cc.manterAcordado && ccJanelaCritica(CC.ACORDAR_ANTES)) { ccManterAcordado(true); ccTrancarSono(true); }
     if (!ccJanelaCritica(CC.ACORDAR_ANTES)) ccReancorarSeSeguro();
     save();
     // O tick só faz manutenção. Quem espera e dispara é o motor, e ele é um só —
     // chamá-lo de novo enquanto roda é no-op, por isso não há mais corrida de re-agendar.
     ccMotor();
-    ccTimer = setTimeout(ccTick, 30000);
+    ccTimer = setTimeout(ccTick, ccJitter(30000));
   }
 
   // Retomada depois de F5. Payload de outra sessão é descartado (token velho).

@@ -26,42 +26,72 @@
   }
 
   // Depois de enviar o apoio, procura o cmd_id do apoio recém-saído da aldeia originVid.
-  // Estratégia: lê /screen=place&mode=units da origem e pega comando "out" mais recente cujo
-  // destino bate com o coord esperado. Se o servidor não expõe cmd_id lá, cai pro overview.
+  //
+  // Lê a PRAÇA da origem, não `overview_villages&mode=commands`.
+  //
+  // Aquela tela é STATEFUL — o jogo lembra o último `mode` e redireciona. Medido na conta do
+  // usuário: o mesmo endereço devolveu `mode=combined`, sem link de comando nenhum, e a
+  // contagem de ids deu ZERO. Funciona ou não dependendo do que a aba visitou antes, que é o
+  // pior tipo de dependência possível — o envio parecia funcionar e a confirmação não.
+  //
+  // A praça é por aldeia e não guarda estado. Os ids vêm em `.quickedit-out[data-id]`, que está
+  // no HTML servido; os links de `info_command` são montados por JavaScript e NÃO estão lá.
   async function findLatestSupportCommand(originVid, targetCoord) {
     try {
-      // Tentativa 1: overview_villages&mode=commands na origem (mais confiável)
-      const res = await fetch('/game.php?village=' + originVid + '&screen=overview_villages&mode=commands&page=-1&_=' + Date.now(),
+      const res = await fetch('/game.php?village=' + originVid + '&screen=place&_=' + Date.now(),
         { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) return null;
       const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-      // Cada comando tem link tipo /game.php?...&screen=info_command&id=NNN
-      let bestId = null, bestTs = -Infinity;
-      doc.querySelectorAll('a[href*="screen=info_command"]').forEach((a) => {
-        const href = a.getAttribute('href') || '';
-        const idm = href.match(/[?&]id=(\d+)/); if (!idm) return;
-        const id = idm[1];
-        const row = a.closest('tr'); if (!row) return;
-        // Confirma que destino é o targetCoord
-        const txt = row.textContent || '';
+      let bestId = null, bestNum = -Infinity;
+      doc.querySelectorAll('tr.command-row').forEach((row) => {
+        const txt = (row.textContent || '').replace(/\s+/g, ' ');
         if (targetCoord && txt.indexOf(targetCoord) < 0) return;
-        // Ignora comandos que já são "return" (retorno) — só queremos o support outgoing
-        if (row.querySelector('img[src*="return"]')) return;
-        // pega ts do timer se possível — senão usa maior id como proxy (id cresce com o tempo)
-        const idNum = parseInt(id, 10);
-        if (idNum > bestTs) { bestTs = idNum; bestId = id; }
+        // Só o apoio SAINDO. "Retorno" e "interrompido" são tropa voltando, não o que queremos.
+        if (/Retorno|interrompid/i.test(txt)) return;
+        const el = row.querySelector('.quickedit-out[data-id]');
+        if (!el) return;
+        const id = el.getAttribute('data-id');
+        const n = parseInt(id, 10);
+        if (n > bestNum) { bestNum = n; bestId = id; }   // id cresce com o tempo
       });
       return bestId;
     } catch (e) { return null; }
   }
 
   // O comando ainda existe na lista de saídas da aldeia? É a ÚNICA prova de cancelamento que vale.
+  //
+  // Duas coisas estavam erradas aqui, e juntas faziam esta função responder "sumiu" SEMPRE — ou
+  // seja, todo cancelamento era reportado como sucesso, independentemente do que aconteceu.
+  // Medido na conta do usuário (ago/2026):
+  //
+  //   1. usava `overview_villages&mode=commands`, que o jogo REDIRECIONA pra `mode=combined`.
+  //      A tela devolvida não tem link de comando nenhum: a contagem de ids deu ZERO.
+  //   2. procurava por regex em `[?&]id=N`, mas os links de `info_command` são montados por
+  //      JavaScript — não estão no HTML servido. Mesmo na tela certa, a regex acharia zero.
+  //
+  // Agora lê a PRAÇA da aldeia de origem e pega `.quickedit-out[data-id]`, que vem no HTML.
+  // Conferido: 38 linhas, 38 ids, comando vivo encontrado, comando cancelado não encontrado.
+  //
+  // E a trava que faltava: lista VAZIA agora LANÇA em vez de devolver "sumiu". Confundir
+  // "não achei nada" com "não existe" foi exatamente o defeito — e é um erro que só aparece
+  // quando custa caro, porque o caso normal (tropa fora, cancelamento urgente) é justamente
+  // quando ninguém confere na mão.
   async function comandoAindaExiste(vid, cmdId) {
-    const r = await fetch('/game.php?village=' + vid + '&screen=overview_villages&mode=commands&page=-1&_=' + Date.now(),
+    const r = await fetch('/game.php?village=' + vid + '&screen=place&_=' + Date.now(),
       { credentials: 'include', cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao reler os comandos');
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao reler a praça');
     const html = await r.text();
-    if (!/screen=info_command|commands_table/.test(html)) throw new Error('resposta não parece a tela de comandos');
-    return new RegExp('[?&]id=' + cmdId + '\\b').test(html);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const linhas = doc.querySelectorAll('tr.command-row');
+    if (!linhas.length) {
+      // Pode ser aldeia sem comando nenhum — mas nós ACABAMOS de mandar um apoio daqui, então
+      // lista vazia significa que a leitura falhou, não que o comando sumiu.
+      throw new Error('a praça de ' + vid + ' voltou sem nenhum comando — não dá pra confirmar');
+    }
+    const ids = [];
+    doc.querySelectorAll('.quickedit-out[data-id]').forEach((e) => ids.push(e.getAttribute('data-id')));
+    if (!ids.length) throw new Error('não consegui ler os ids dos comandos da praça de ' + vid);
+    return ids.indexOf(String(cmdId)) >= 0;
   }
 
   // Cancela e CONFIRMA. Antes isto era `if (r.ok) return true` — mas o TW responde HTTP 200 com
@@ -109,6 +139,19 @@
     return (config.desviar.pending || []).some((p) => p.state === 'waiting' && p.sendAt && p.sendAt <= lim);
   }
 
+  // Espera entre tentativas de cancelamento. Cresce, mas começa curta: com tropa fora de casa,
+  // esperar minutos pra tentar de novo é pior que insistir. Teto de 6 tentativas (~5 min no
+  // total) — depois disso é problema que só a mão resolve, e aí a notificação é o caminho.
+  const DESV_RETRY_MS = [5000, 15000, 30000, 60000, 120000];
+  const DESV_CANCEL_MAX = 6;
+
+  // Dispara a tentativa AGORA, sem esperar o `cancelAt` de novo (ele já passou).
+  function scheduleDesviarCancelAgora(id) {
+    const cur = (config.desviar.pending || []).find((x) => x.id === id);
+    if (!cur || cur.state !== 'scheduled') return;
+    scheduleDesviarCancel(Object.assign({}, cur, { cancelAt: serverNow() }));
+  }
+
   function scheduleDesviarCancel(item) {
     const delay = Math.max(0, item.cancelAt - serverNow());
     desvAgendar(item.id + ':cancel', delay, async () => {
@@ -116,15 +159,36 @@
       if (!cur || cur.state !== 'scheduled') return;
       try {
         await cancelCommand(cur.vid, cur.cmdId);   // lança se não conseguir CONFIRMAR
-        cur.state = 'canceled'; cur.err = '';
+        cur.state = 'canceled'; cur.err = ''; cur.cancelTent = 0;
       } catch (e) { cur.state = 'failed'; cur.err = e.message || String(e); }
-      save();
       if (cur.state === 'canceled') {
+        save();
         pushLog('🚨 Desvio OK — tropa voltando (aldeia ' + cur.vid + ', comando ' + cur.cmdId + ').', 'ok', 'desv');
+        desviarRefreshRowStates();
+        return;
+      }
+      // FALHOU. Isto significa tropa FORA DE CASA, que é o pior estado do módulo — e até agora
+      // era o único SEM saída: `failed` não era retentado por ninguém, nem por um F5 (o
+      // desviarResumeAll só ressuscitava `scheduled`). Uma queda de rede de dois segundos
+      // deixava o exército fora até você notar o log.
+      //
+      // Agora retenta com espera crescente. O cancelamento é idempotente do jeito que importa:
+      // `cancelCommand` confirma pelo EFEITO (o comando sumiu da lista), então retentar um
+      // cancelamento que já funcionou devolve sucesso em vez de estragar algo.
+      cur.cancelTent = (cur.cancelTent || 0) + 1;
+      save();
+      const espera = DESV_RETRY_MS[Math.min(cur.cancelTent - 1, DESV_RETRY_MS.length - 1)];
+      if (cur.cancelTent < DESV_CANCEL_MAX) {
+        cur.state = 'scheduled';   // volta pra fila: é o estado que o resume e o timer entendem
+        save();
+        pushLog('🚨 Desvio: o cancelamento da aldeia ' + cur.vid + ' falhou (' + cur.err
+          + '). Tentativa ' + cur.cancelTent + ' de ' + DESV_CANCEL_MAX + ' — repito em '
+          + Math.round(espera / 1000) + 's. A tropa segue FORA.', 'err', 'desv');
+        desvAgendar(cur.id + ':cancel', espera, () => scheduleDesviarCancelAgora(cur.id));
       } else {
-        // Falha aqui = tropa FORA DE CASA. Tem que gritar, não virar uma linha discreta.
-        pushLog('🚨 DESVIO FALHOU — a tropa da aldeia ' + cur.vid + ' NÃO voltou: ' + cur.err
-          + '. Cancele o comando ' + cur.cmdId + ' na mão, agora.', 'err', 'desv');
+        pushLog('🚨 DESVIO FALHOU — a tropa da aldeia ' + cur.vid + ' NÃO voltou depois de '
+          + cur.cancelTent + ' tentativas: ' + cur.err + '. Cancele o comando ' + cur.cmdId
+          + ' na mão, agora.', 'err', 'desv');
         if (config.captcha && config.captcha.enabled) { try { fireCaptchaNotification('desvio-falhou/' + cur.vid, true); } catch (e2) {} }
       }
       desviarRefreshRowStates();
@@ -413,6 +477,15 @@
     // 1) tropa já fora: só reagenda a volta
     (config.desviar.pending || []).forEach((item) => {
       if (item.state === 'scheduled') scheduleDesviarCancel(item);
+      // `failed` com tentativas sobrando volta pra fila. Antes ficava aqui pra sempre: o pior
+      // estado do módulo — tropa fora — era o único que um F5 não recuperava. Se o navegador
+      // fechou no meio das retentativas, é exatamente quando mais se precisa que elas voltem.
+      else if (item.state === 'failed' && item.cmdId && (item.cancelTent || 0) < DESV_CANCEL_MAX) {
+        item.state = 'scheduled';
+        pushLog('🚨 Desvio: retomando o cancelamento da aldeia ' + item.vid + ' (tentativa '
+          + ((item.cancelTent || 0) + 1) + ' de ' + DESV_CANCEL_MAX + '). A tropa está FORA.', 'err', 'desv');
+        scheduleDesviarCancel(Object.assign({}, item, { cancelAt: agora }));
+      }
     });
     // 2) saída ainda por vir: reagenda a partir das marcas (que sobrevivem no localStorage)
     const coords = {};

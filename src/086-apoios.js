@@ -160,8 +160,10 @@
   function apoiosIcone(u) {
     // Reusa o ícone do jogo. Sem depender de mapa de emoji por unidade, que quebraria em
     // mundo com unidade diferente — exatamente o que esta tela evita.
-    return '<img src="' + (IMG_BASE || '/graphic/') + 'unit/unit_' + u + '.png" alt="' + esc(u)
-      + '" title="' + esc(unitPt(u)) + '" style="width:15px;height:15px;vertical-align:-3px">';
+    // Delega pro unitIcon() do core: ele conhece o formato real do IMG_BASE (que já vem
+    // com o /asset/<hash>/ e ainda espera um "graphic/" na frente) e cai pro texto quando
+    // não achou a base. Montar a URL aqui de novo foi como o ícone quebrou da primeira vez.
+    return unitIcon(u, esc(unitPt(u)));
   }
   // Só as unidades que existem NAQUELE apoio. Mostrar dez zeros por linha afoga o que importa —
   // e o conjunto de unidades muda por mundo, então uma grade fixa desperdiçaria coluna.

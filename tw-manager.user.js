@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.113.0
+// @version      11.113.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.113.0';
+  const VERSION = '11.113.1';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -7912,8 +7912,10 @@
   function apoiosIcone(u) {
     // Reusa o ícone do jogo. Sem depender de mapa de emoji por unidade, que quebraria em
     // mundo com unidade diferente — exatamente o que esta tela evita.
-    return '<img src="' + (IMG_BASE || '/graphic/') + 'unit/unit_' + u + '.png" alt="' + esc(u)
-      + '" title="' + esc(unitPt(u)) + '" style="width:15px;height:15px;vertical-align:-3px">';
+    // Delega pro unitIcon() do core: ele conhece o formato real do IMG_BASE (que já vem
+    // com o /asset/<hash>/ e ainda espera um "graphic/" na frente) e cai pro texto quando
+    // não achou a base. Montar a URL aqui de novo foi como o ícone quebrou da primeira vez.
+    return unitIcon(u, esc(unitPt(u)));
   }
   // Só as unidades que existem NAQUELE apoio. Mostrar dez zeros por linha afoga o que importa —
   // e o conjunto de unidades muda por mundo, então uma grade fixa desperdiçaria coluna.
@@ -9759,6 +9761,7 @@
       ".twmgr-ap-tropas{display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end}",
       ".twmgr-ap-t{display:inline-flex;align-items:center;gap:3px;background:#fbf7ef;border:1px solid #ece4d8;border-radius:11px;padding:1px 7px 1px 4px;font-size:10px;color:#463b30;white-space:nowrap}",
       ".twmgr-ap-t b{font-weight:700}",
+      ".twmgr-ap-t .twmgr-ui{width:14px;height:14px}",
       ".twmgr-ap-orig{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:center;gap:9px;padding:5px 10px 5px 24px;background:#faf7f0;border-top:1px dashed #e8dfcc;font-size:10px;color:#6f6153;position:relative}",
       ".twmgr-ap-orig:before{content:\"\";position:absolute;left:13px;top:0;bottom:0;width:1px;background:#e8dfcc}",
       ".twmgr-ap-dist{font-size:9px;color:#8a7d6d;margin-left:5px}",

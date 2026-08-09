@@ -269,6 +269,7 @@
       ".twmgr-ap-tropas{display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end}",
       ".twmgr-ap-t{display:inline-flex;align-items:center;gap:3px;background:#fbf7ef;border:1px solid #ece4d8;border-radius:11px;padding:1px 7px 1px 4px;font-size:10px;color:#463b30;white-space:nowrap}",
       ".twmgr-ap-t b{font-weight:700}",
+      ".twmgr-ap-t .twmgr-ui{width:14px;height:14px}",
       ".twmgr-ap-orig{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:center;gap:9px;padding:5px 10px 5px 24px;background:#faf7f0;border-top:1px dashed #e8dfcc;font-size:10px;color:#6f6153;position:relative}",
       ".twmgr-ap-orig:before{content:\"\";position:absolute;left:13px;top:0;bottom:0;width:1px;background:#e8dfcc}",
       ".twmgr-ap-dist{font-size:9px;color:#8a7d6d;margin-left:5px}",

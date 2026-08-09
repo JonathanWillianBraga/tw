@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.101.0
+// @version      11.102.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.101.0';
+  const VERSION = '11.102.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -12093,8 +12093,25 @@
 
       // Silêncio, guiado pelo disparo mais próximo.
       const prox = pend.filter((c) => c.fireAt).sort((a, b) => a.fireAt - b.fireAt)[0];
-      if (prox && prox.fireAt - srvNowP() <= silLead) {
-        if (!SILENCE.on) { silenceOn('comando ' + prox.x + '|' + prox.y); netProbe(3); }
+      // A SONDA SAIU DA JANELA DE SILÊNCIO. Ela rodava dentro do `silenceOn`, ou seja: a gente
+      // calava todos os módulos pra reservar a linha e em seguida disparava 3 requisições nela.
+      // Poluíamos a janela que acabáramos de reservar, a segundos do disparo.
+      //
+      // Não é hipótese solta: o RTT medido é BIMODAL (~350ms ou ~650ms — 650 pra baixar uma
+      // imagem estática é congestionamento), e o grupo congestionado teve erro médio +157ms
+      // contra +61ms do grupo limpo. Com 4 amostras de cada isso não é conclusivo, mas a sonda
+      // dentro do silêncio é indefensável de qualquer forma: ela custa 3 requisições e já se
+      // provou inútil como preditor (r entre 0,21 e 0,55, nada significativo).
+      //
+      // Agora ela roda na janela de PREPARO, ~60s antes — longe do disparo, e o valor continua
+      // sendo gravado em `netPre` pra instrumentação.
+      const faltaProx = prox ? (prox.fireAt - srvNowP()) : Infinity;
+      if (prox && faltaProx > silLead && faltaProx <= silLead + 20000
+          && Date.now() - (NETLAT.at || 0) > 60000) {
+        netProbe(3);
+      }
+      if (prox && faltaProx <= silLead) {
+        if (!SILENCE.on) silenceOn('comando ' + prox.x + '|' + prox.y);
       } else if (SILENCE.on) {
         const tail = (config.cmd.silenceTailSec || 10) * 1000;
         if (!prox || prox.fireAt - srvNowP() > silLead + tail) silenceOff();

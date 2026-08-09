@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.133.0
+// @version      11.134.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.133.0';
+  const VERSION = '11.134.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -15182,15 +15182,13 @@
     // marcado, mas fora da conta.
     const BLZ_UNITS = ['spear', 'sword', 'heavy'];       // as três que a tabela da tribo usa
     const BLZ_ROT = { spear: 'lanceiro', sword: 'espadachim', heavy: 'cav. pesada' };
-    // Tropa que faz sentido MANDAR DE APOIO. Nas abas de apoio a lista de origens mostrava as 12
-    // unidades do mundo, incluindo bárbaro, cav. leve e aríete — tropa de ataque, que em apoio só
-    // morre de graça e ainda polui a linha. `archer` entra porque É defesa; se o mundo não tiver,
-    // some sozinho na interseção com CC_UNIDADES_MUNDO.
+    // Tropa que faz sentido MANDAR DE APOIO. Vale SÓ na aba Blindagem — Apoio e Apoio massa
+    // seguem mostrando as unidades todas do mundo, porque são abas de uso geral e filtrar ali
+    // esconderia tropa que o usuário manda de propósito.
     const CC_UNIDADES_DEF = ['spear', 'sword', 'archer', 'heavy', 'catapult', 'knight'];
     function ccUnidadesDaAba() {
       const todas = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
-      const t = ccTipo();
-      if (t !== 'support' && t !== 'massa' && t !== 'blz') return todas;
+      if (ccTipo() !== 'blz') return todas;
       return todas.filter((u) => CC_UNIDADES_DEF.indexOf(u) >= 0);
     }
     // Datas do fórum: "hoje às 14:04", "ontem às 23:03", "em 07.08.2026 às 15:16" e a variante
@@ -15786,12 +15784,8 @@
         // Estoque por unidade. Mostra o número em uso e, entre parênteses, o que está fora/voltando —
         // assim dá pra ver a diferença sem precisar alternar a fonte.
         const listaU = ccUnidadesDaAba();
-        // Na Blindagem a lista mostra o que está EM CASA, ignorando o botão de fonte — é
-        // exatamente o estoque que a divisão usa (ver ccBlzLivre). Mostrar um número aqui e
-        // dividir por outro deixava a conta sem bater na tela.
-        const estoque = (ccTipo() === 'blz') ? (v.casa || v.avail || {}) : (v.avail || {});
         const tropas = listaU.map((u) => {
-          const q = estoque[u] || 0;
+          const q = (v.avail && v.avail[u]) || 0;
           const foraT = ((v.fora && v.fora[u]) || 0) + ((v.transito && v.transito[u]) || 0);
           if (!q && !foraT) return '';
           const rot = rotUn[u] || u;
@@ -16969,19 +16963,9 @@
           // "total" conta a tropa que está fora e volta — necessário pra agendar um full
           // pra daqui a horas com a tropa saqueando agora.
           '<div data-secbody="origens">' +
-          '<div id="cc-fonte-row" style="font-size:10px;margin-bottom:3px">' +
-            // Os dois rótulos diziam "suas próprias" de jeitos diferentes: o primeiro no title, o
-            // segundo no texto. Como "suas próprias" é o nome de UMA linha do jogo (a que vale pro
-            // primeiro botão), ficava impossível saber qual era qual. Agora cada um nomeia a linha
-            // que realmente usa.
-            '<label style="margin-right:10px;cursor:pointer" title="linha &quot;suas próprias&quot; do jogo: a SUA tropa parada nesta aldeia. Apoio de terceiros não entra — você não pode reenviar tropa dos outros."><input type="radio" name="cc-fonte" value="casa"> na aldeia agora</label>' +
-            '<label style="cursor:pointer" title="&quot;suas próprias&quot; + &quot;fora&quot; + &quot;em trânsito&quot;: conta a tropa que ainda vai chegar. Só serve pra AGENDAR — pra mandar agora ela não está aqui."><input type="radio" name="cc-fonte" value="total"> onde quer que estejam (soma fora/trânsito)</label>' +
-          '</div>' +
-          // A Blindagem não usa esta escolha (ver ccBlzLivre): ela dispara agora, então só conta
-          // tropa em casa. Deixar os rádios visíveis e inertes fazia parecer defeito — clicava e
-          // nada mudava. Some, e no lugar fica o motivo.
-          '<div id="cc-fonte-blz" style="display:none;font-size:10px;margin-bottom:3px;color:#8a7d6d">' +
-            'Fonte: <b style="color:#6f6153">na aldeia agora</b> — fixo na Blindagem, porque o apoio sai na hora e tropa fora ou voltando não pode ser enviada.' +
+          '<div style="font-size:10px;margin-bottom:3px">' +
+            '<label style="margin-right:10px;cursor:pointer" title="linha &quot;Na Aldeia&quot; do jogo"><input type="radio" name="cc-fonte" value="casa"> na aldeia agora</label>' +
+            '<label style="cursor:pointer" title="linha &quot;suas próprias&quot; do jogo: inclui o que está fora e em trânsito"><input type="radio" name="cc-fonte" value="total"> suas próprias (inclui fora/trânsito)</label>' +
           '</div>' +
           '<div style="font-size:10px;margin-bottom:5px;display:flex;align-items:center;gap:6px">' +
             '<span style="color:#6f6153">Grupo</span>' +
@@ -17198,8 +17182,6 @@
         const ocfg = document.getElementById('cc-op-cfg'); if (ocfg) ocfg.style.display = op ? 'block' : 'none';
         const bcfg = document.getElementById('cc-blz-cfg'); if (bcfg) bcfg.style.display = blz ? 'block' : 'none';
         if (blz) ccBlzRender();
-        const fRow = document.getElementById('cc-fonte-row'); if (fRow) fRow.style.display = blz ? 'none' : 'block';
-        const fBlz = document.getElementById('cc-fonte-blz'); if (fBlz) fBlz.style.display = blz ? 'block' : 'none';
         const tsec = document.getElementById('cc-tropas-sec'); if (tsec) tsec.style.display = (massa || op || blz) ? 'none' : 'block';
         const osec = document.getElementById('cc-origens-sec'); if (osec) osec.style.display = op ? 'none' : 'block';
         const arow = document.getElementById('cc-armar-row'); if (arow) arow.style.display = (massa || blz) ? 'none' : 'flex';

@@ -202,6 +202,33 @@ retirada manual.
 Quem denunciou todas foi a releitura da praça. É por isso que a confirmação por efeito não é
 opcional aqui.
 
+## A tela do DESTINO existe, e foi descartada — de propósito
+
+`info_village&id=<destino>` tem a seção "Defesas" com uma AÇÃO PRÓPRIA:
+
+    POST screen=place&action=withdraw_selected_units_village_info&mode=units
+    corpo: village_id=<destino>
+           checkbox_<unidade>=on
+           withdraw_unit[<awayId>][home][<origem>]=on     ← "on", NÃO quantidade
+           h=<csrf>
+
+E um gate próprio, diferente do da praça:
+
+    POST screen=settings&ajaxaction=set_village_info_checkboxes
+    corpo: info_village_checkboxes=["light","knight"]     ← array simples, não {other:[...]}
+
+Seria tentador: **1 requisição por destino** em vez de uma por origem (43, numa conta que bate
+429 global). Mas ela **omite origens**: no destino 457|613 a lista trouxe 22 aldeias e a 5835
+NÃO estava lá, embora a praça da 5835 mostre apoio ativo naquele destino. Provavelmente ela só
+lista o que JÁ CHEGOU, enquanto a `units_away` inclui o que está a caminho.
+
+Uma tela que omite origens em silêncio transformaria "voltar tudo" em "voltar quase tudo", e a
+verificação feita contra ela confirmaria o sucesso. Fica registrada como possível otimização
+futura, **desde que a diferença seja explicada antes**.
+
+Os `awayId` também **não são os mesmos** nas duas telas — são tokens por visão, não ids de
+entidade. Quem for usar a tela do destino tem que ler os ids DELA.
+
 ## Aberto
 
 - se dá pra reduzir as 44 requisições

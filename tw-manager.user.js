@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.97.0
+// @version      11.98.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.97.0';
+  const VERSION = '11.98.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -11968,6 +11968,26 @@
         }
         const chegouEm = p.ms + wallToServerOffset();
         const erroMs = chegouEm - c.arriveAt;              // positivo = chegou atrasado
+
+        // TETO DE PLAUSIBILIDADE. Acima disto não é latência, é medição errada — casou com o
+        // comando errado, ou a página mudou de formato. Aprender com isso não degrada o viés
+        // aos poucos: destrói de uma vez.
+        //
+        // Aconteceu de verdade (v11.96): o casamento caía num `hrefs[0]` quando a contagem não
+        // batia, mediu -547929ms (NOVE MINUTOS) contra um comando alheio, e o viés saturou no
+        // piso de -1500ms. Todo comando armado passou a sair 1,5s atrasado. O casamento foi
+        // corrigido na v11.97, mas o estrago só foi possível porque nada conferia se o número
+        // fazia sentido — o motor `cc` já tinha esse teto, este não tinha.
+        //
+        // Erros reais medidos nesta conta: +100, +71, -64ms. 3s é folga de trinta vezes.
+        const TETO_PLAUSIVEL_MS = 3000;
+        if (Math.abs(erroMs) > TETO_PLAUSIVEL_MS) {
+          pushLog('📏 ' + c.x + '|' + c.y + ': medição de ' + Math.round(erroMs / 1000) + 's ignorada — '
+            + 'isso não é latência, é o comando errado. A calibração não aprendeu com ela.', 'err', 'cmd');
+          c.medido = { chegouEm: chegouEm, erroMs: erroMs, descartada: true };
+          save();
+          return;
+        }
         const temMs = p.temMs;
         c.medido = { chegouEm: chegouEm, erroMs: erroMs, temMs: temMs };
         // Só amostra com milésimos entra na correção — sem isso o sinal é quantizado em 1s.

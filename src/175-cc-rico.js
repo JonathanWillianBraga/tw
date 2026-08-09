@@ -532,8 +532,21 @@
       // Dispara e NÃO espera a resposta. Num trem de 150ms, aguardar o HTTP (300ms+) faria a
       // onda seguinte perder o próprio horário. A linha é liberada assim que o POST parte.
       const saiuEm = srvNowP();
+      const tPost = performance.now();
       const voo = cmdFire(c.prep);
       c.state = 'enviado'; c.sentAt = saiuEm;
+      // Cronometra o PRÓPRIO POST. Custo zero: ele acontece de qualquer jeito, e o `.then` não
+      // segura a onda (o disparo já é fire-and-forget).
+      //
+      // É um candidato a preditor MELHOR que a sonda, e a razão é simples: a sonda mede um GET
+      // de imagem estática (85ms), o disparo é um POST que o servidor processa (~184ms). São
+      // caminhos diferentes, e a correlação medida com a sonda ficou em 0,55 no melhor caso —
+      // não significativa com 8 amostras.
+      //
+      // O POST não pode prever o PRÓPRIO comando (só se sabe depois que ele voltou), mas pode
+      // prever o PRÓXIMO — que é exatamente o que importa numa onda ou numa fila de comandos
+      // agendados. Se `rttPost[n]` correlacionar com o erro de `[n+1]`, o lead passa a sair daí.
+      voo.then(() => { c.rttPostMs = Math.round(performance.now() - tPost); save(); }).catch(() => {});
       c.desvioMs = Math.round(saiuEm - c.fireAt);
       // INSTRUMENTAÇÃO — testa a hipótese "dá pra prever o atraso com uma sonda antes".
       //

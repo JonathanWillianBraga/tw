@@ -174,8 +174,33 @@ Detalhes que só a captura mostrou:
 **A lição:** ler o HTML mostra o que a tela é; capturar o FormData mostra o que ela ENVIA.
 Quando o formulário é montado por JavaScript, só o segundo vale.
 
-E a v11.114.0 é o argumento a favor da confirmação por efeito: o POST errado voltou **HTTP
-200**. Quem disse que não funcionou foi a releitura da praça.
+### E MESMO ASSIM não bastava — o gate escondido
+
+Com o corpo correto (v11.117.0) a retirada continuou não acontecendo. O que faltava:
+
+    POST /game.php?village=<vid>&screen=settings&ajaxaction=patch_away_unit_checkboxes
+    corpo: away_units_checkboxes={"other":["spear","sword"]}
+           h=<csrf>
+
+Marcar a coluna da unidade **não é estado de tela**: é preferência de CONTA gravada no servidor,
+e a retirada **só aplica as unidades que estiverem nela**. Fora dela, o pedido é descartado —
+HTTP 200, sem `.error_box`, sem nada.
+
+A medição que fechou o diagnóstico: com a preferência em `[spear, heavy]`, um pedido de 5
+espadachins não movia nada **enquanto 1 cavalaria pesada voltava na mesma requisição**. Gravando
+`[sword]` antes, os 5 espadachins voltaram na hora (1688 → 1683). E quantidade parcial funciona:
+180 → 170 pedindo 10.
+
+Como foi achado: grampeando `fetch`/`XHR` na página e clicando no checkbox da coluna. Nenhuma
+leitura de HTML acharia isso — o efeito colateral do clique estava em outra tela (`settings`).
+
+O módulo salva a preferência anterior, junta com o que precisa, retira, e **devolve a
+preferência do usuário no `finally`** — é a tela dele, e deixá-la mexida estragaria a próxima
+retirada manual.
+
+**Três versões erradas responderam HTTP 200** (v11.114.0 corpo deduzido, v11.117.0 sem o gate).
+Quem denunciou todas foi a releitura da praça. É por isso que a confirmação por efeito não é
+opcional aqui.
 
 ## Aberto
 

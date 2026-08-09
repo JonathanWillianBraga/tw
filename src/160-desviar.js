@@ -26,42 +26,72 @@
   }
 
   // Depois de enviar o apoio, procura o cmd_id do apoio recém-saído da aldeia originVid.
-  // Estratégia: lê /screen=place&mode=units da origem e pega comando "out" mais recente cujo
-  // destino bate com o coord esperado. Se o servidor não expõe cmd_id lá, cai pro overview.
+  //
+  // Lê a PRAÇA da origem, não `overview_villages&mode=commands`.
+  //
+  // Aquela tela é STATEFUL — o jogo lembra o último `mode` e redireciona. Medido na conta do
+  // usuário: o mesmo endereço devolveu `mode=combined`, sem link de comando nenhum, e a
+  // contagem de ids deu ZERO. Funciona ou não dependendo do que a aba visitou antes, que é o
+  // pior tipo de dependência possível — o envio parecia funcionar e a confirmação não.
+  //
+  // A praça é por aldeia e não guarda estado. Os ids vêm em `.quickedit-out[data-id]`, que está
+  // no HTML servido; os links de `info_command` são montados por JavaScript e NÃO estão lá.
   async function findLatestSupportCommand(originVid, targetCoord) {
     try {
-      // Tentativa 1: overview_villages&mode=commands na origem (mais confiável)
-      const res = await fetch('/game.php?village=' + originVid + '&screen=overview_villages&mode=commands&page=-1&_=' + Date.now(),
+      const res = await fetch('/game.php?village=' + originVid + '&screen=place&_=' + Date.now(),
         { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) return null;
       const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-      // Cada comando tem link tipo /game.php?...&screen=info_command&id=NNN
-      let bestId = null, bestTs = -Infinity;
-      doc.querySelectorAll('a[href*="screen=info_command"]').forEach((a) => {
-        const href = a.getAttribute('href') || '';
-        const idm = href.match(/[?&]id=(\d+)/); if (!idm) return;
-        const id = idm[1];
-        const row = a.closest('tr'); if (!row) return;
-        // Confirma que destino é o targetCoord
-        const txt = row.textContent || '';
+      let bestId = null, bestNum = -Infinity;
+      doc.querySelectorAll('tr.command-row').forEach((row) => {
+        const txt = (row.textContent || '').replace(/\s+/g, ' ');
         if (targetCoord && txt.indexOf(targetCoord) < 0) return;
-        // Ignora comandos que já são "return" (retorno) — só queremos o support outgoing
-        if (row.querySelector('img[src*="return"]')) return;
-        // pega ts do timer se possível — senão usa maior id como proxy (id cresce com o tempo)
-        const idNum = parseInt(id, 10);
-        if (idNum > bestTs) { bestTs = idNum; bestId = id; }
+        // Só o apoio SAINDO. "Retorno" e "interrompido" são tropa voltando, não o que queremos.
+        if (/Retorno|interrompid/i.test(txt)) return;
+        const el = row.querySelector('.quickedit-out[data-id]');
+        if (!el) return;
+        const id = el.getAttribute('data-id');
+        const n = parseInt(id, 10);
+        if (n > bestNum) { bestNum = n; bestId = id; }   // id cresce com o tempo
       });
       return bestId;
     } catch (e) { return null; }
   }
 
   // O comando ainda existe na lista de saídas da aldeia? É a ÚNICA prova de cancelamento que vale.
+  //
+  // Duas coisas estavam erradas aqui, e juntas faziam esta função responder "sumiu" SEMPRE — ou
+  // seja, todo cancelamento era reportado como sucesso, independentemente do que aconteceu.
+  // Medido na conta do usuário (ago/2026):
+  //
+  //   1. usava `overview_villages&mode=commands`, que o jogo REDIRECIONA pra `mode=combined`.
+  //      A tela devolvida não tem link de comando nenhum: a contagem de ids deu ZERO.
+  //   2. procurava por regex em `[?&]id=N`, mas os links de `info_command` são montados por
+  //      JavaScript — não estão no HTML servido. Mesmo na tela certa, a regex acharia zero.
+  //
+  // Agora lê a PRAÇA da aldeia de origem e pega `.quickedit-out[data-id]`, que vem no HTML.
+  // Conferido: 38 linhas, 38 ids, comando vivo encontrado, comando cancelado não encontrado.
+  //
+  // E a trava que faltava: lista VAZIA agora LANÇA em vez de devolver "sumiu". Confundir
+  // "não achei nada" com "não existe" foi exatamente o defeito — e é um erro que só aparece
+  // quando custa caro, porque o caso normal (tropa fora, cancelamento urgente) é justamente
+  // quando ninguém confere na mão.
   async function comandoAindaExiste(vid, cmdId) {
-    const r = await fetch('/game.php?village=' + vid + '&screen=overview_villages&mode=commands&page=-1&_=' + Date.now(),
+    const r = await fetch('/game.php?village=' + vid + '&screen=place&_=' + Date.now(),
       { credentials: 'include', cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao reler os comandos');
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao reler a praça');
     const html = await r.text();
-    if (!/screen=info_command|commands_table/.test(html)) throw new Error('resposta não parece a tela de comandos');
-    return new RegExp('[?&]id=' + cmdId + '\\b').test(html);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const linhas = doc.querySelectorAll('tr.command-row');
+    if (!linhas.length) {
+      // Pode ser aldeia sem comando nenhum — mas nós ACABAMOS de mandar um apoio daqui, então
+      // lista vazia significa que a leitura falhou, não que o comando sumiu.
+      throw new Error('a praça de ' + vid + ' voltou sem nenhum comando — não dá pra confirmar');
+    }
+    const ids = [];
+    doc.querySelectorAll('.quickedit-out[data-id]').forEach((e) => ids.push(e.getAttribute('data-id')));
+    if (!ids.length) throw new Error('não consegui ler os ids dos comandos da praça de ' + vid);
+    return ids.indexOf(String(cmdId)) >= 0;
   }
 
   // Cancela e CONFIRMA. Antes isto era `if (r.ok) return true` — mas o TW responde HTTP 200 com

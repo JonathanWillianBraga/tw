@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.110.0
+// @version      11.111.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.110.0';
+  const VERSION = '11.111.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5776,9 +5776,61 @@
   // não teve relatório de nobre ainda (é contado de propósito, pra não mandar um a mais na
   // janela em que a lealdade lida ainda é a antiga). Aqui elas saem separadas, pra tela poder
   // dizer a verdade sobre cada uma.
+  // Nobres de TODAS as aldeias numa requisição só. `type=own_home` devolve UMA linha por aldeia
+  // (só o que está em casa), que é exatamente quem pode sair agora — a versão `complete` traz 5
+  // linhas por aldeia e obrigaria a casar rótulo. Por aldeia seria 1 fetch cada, inviável pra
+  // uma tabela que abre no clique.
+  let _nbSnobCache = null, _nbSnobAt = 0;
+  async function nobleSnobPorAldeia(forcar) {
+    if (!forcar && _nbSnobCache && (Date.now() - _nbSnobAt) < 60000) return _nbSnobCache;
+    const res = await fetch('/game.php?village=' + CUR_VID
+      + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const tabela = doc.querySelector('#units_table') || doc.querySelector('table.overview_table');
+    if (!tabela) throw new Error('não achei a tabela de tropas');
+    // A ordem das colunas sai do cabeçalho DESTA tabela: varia por mundo (arqueiro, milícia...).
+    const ordem = [];
+    (tabela.querySelector('thead tr') || tabela.querySelector('tr')).querySelectorAll('th').forEach((th) => {
+      const img = th.querySelector('img[src*="unit_"]');
+      if (!img) return;
+      const m = (img.getAttribute('src') || '').match(/unit_(\w+)\./);
+      if (m) ordem.push(m[1]);
+    });
+    const iSnob = ordem.indexOf('snob');
+    const out = {};
+    if (iSnob >= 0) {
+      tabela.querySelectorAll('tr').forEach((tr) => {
+        const q = tr.querySelector('.quickedit-vn[data-id]'); if (!q) return;
+        const vid = q.getAttribute('data-id'); if (!vid) return;
+        const cels = tr.querySelectorAll('td.unit-item');
+        if (cels.length !== ordem.length) return;
+        out[String(vid)] = parseInt((cels[iSnob].textContent || '').replace(/\D/g, ''), 10) || 0;
+      });
+    }
+    _nbSnobCache = out; _nbSnobAt = Date.now();
+    return out;
+  }
+  // Quem PODERIA noblar o alvo: toda aldeia sua com nobre em casa, ordenada por distância.
+  // É a resposta pra "por que esse alvo não anda" — a caixa antes só mostrava quem já ia,
+  // e num alvo em "Aguardando" (que nem chega a ser planejado) isso era sempre vazio.
+  async function nobleCandidatos(alvo) {
+    const [todas, snob] = await Promise.all([getAllVillagesCached(), nobleSnobPorAldeia()]);
+    const out = [];
+    (todas || []).forEach((v) => {
+      const m = (v.coord || '').match(/(\d+)\|(\d+)/); if (!m) return;
+      if (+m[1] === alvo.x && +m[2] === alvo.y) return;      // a própria aldeia do alvo não é origem
+      const n = snob[String(v.vid)] || 0;
+      if (!n) return;                                        // sem nobre em casa não é candidata
+      out.push({ vid: v.vid, nome: v.name || v.coord, coord: v.coord, nobres: n,
+                 d: fieldDist(+m[1], +m[2], alvo.x, alvo.y) });
+    });
+    out.sort((a, b) => a.d - b.d);
+    return out;
+  }
   // Qual alvo está com a caixa "quem vai noblar" aberta (um por vez — abrir vários empurraria a
   // fila pra fora da tela). Só de tela, não vai pro config.
-  let _nbQuemAberto = null;
+  let _nbQuemAberto = null, _nbCand = null, _nbCandCoord = null;
   // A caixa em si. Junta as duas metades da resposta, que vêm de fontes diferentes:
   //   - JÁ INDO  -> do jogo (nobleComandosNoJogo), com a origem lida da 2ª coluna
   //   - VAI SAIR -> do plano do ciclo (p.envios), que é o que o módulo escolheu mandar
@@ -5813,6 +5865,28 @@
     if (d.pousados) {
       html += '<div style="color:#a07a42;margin-top:4px">* ' + d.pousados +
         ' nobre(s) já pousaram e ainda não têm relatório — contam como cobertura até o relatório chegar.</div>';
+    }
+    // Quem PODERIA ir. Sem isto, alvo em "Aguardando" mostrava caixa vazia e não explicava nada.
+    html += '<div style="color:#8b5426;font-weight:700;margin:6px 0 2px">Aldeias suas com nobre em casa</div>';
+    if (_nbCandCoord !== a.coord) html += '<span style="color:#8a7340">— carregando… —</span>';
+    else if (!_nbCand || !_nbCand.length) html += '<span style="color:#a8564a">— nenhuma aldeia sua tem nobre em casa agora —</span>';
+    else {
+      const usados = {};
+      envios.forEach((e) => { usados[String(e.vid)] = 1; });
+      const tpl0 = nobleTplsDe(a)[0];
+      const tplH = (tpl0 && tpl0.t && tpl0.t.maxHoras != null) ? tpl0.t.maxHoras : null;
+      html += '<table style="width:100%;font-size:10px;border-collapse:collapse">' +
+        '<tr style="color:#8a7340"><td>aldeia</td><td style="width:64px">dist.</td><td style="width:54px">nobres</td><td style="width:96px"></td></tr>' +
+        _nbCand.slice(0, 12).map((c) => '<tr>' +
+          '<td>' + esc(c.nome) + ' <span style="color:#8a7340">' + esc(c.coord) + '</span></td>' +
+          '<td>' + c.d.toFixed(1) + ' campos</td>' +
+          '<td><b style="color:#3f8f52">' + c.nobres + '</b></td>' +
+          '<td style="color:#8b5426">' + (usados[String(c.vid)] ? 'vai mandar' : '') + '</td></tr>').join('') +
+        '</table>' +
+        (_nbCand.length > 12 ? '<div style="color:#8a7340">…e mais ' + (_nbCand.length - 12) + ' aldeia(s)</div>' : '') +
+        '<div style="color:#8a7340;margin-top:3px">Total: <b>' + _nbCand.reduce((s, c) => s + c.nobres, 0) +
+          '</b> nobre(s) em ' + _nbCand.length + ' aldeia(s)' + (tplH != null ? ', e o modelo corta a viagem em ' + tplH + ' h' : '') +
+          '. A distância é em campos: quem passa do limite de horas é descartado no planejamento.</div>';
     }
     return '<tr><td colspan="8" style="background:#fbf7ee;border-top:none;font-size:10px;padding:6px 10px">' +
       '<div style="color:#6f6153;margin-bottom:3px">Quem nobla <b>' + esc(a.coord) + '</b></div>' + html + '</td></tr>';
@@ -7241,7 +7315,21 @@
       if (!coord) return;
       if (el.classList.contains('twmgr-nb-quem')) {
         _nbQuemAberto = (_nbQuemAberto === coord) ? null : coord;   // clicar de novo fecha
-        renderNoblePlano();
+        _nbCand = null; _nbCandCoord = null;
+        renderNoblePlano();                                          // desenha já, com "carregando…"
+        if (_nbQuemAberto) {
+          const alvo = (config.noble.alvos || []).find((z) => z.coord === coord);
+          if (alvo) {
+            nobleCandidatos(alvo).then((lista) => {
+              if (_nbQuemAberto !== coord) return;                   // fechou/trocou no meio: descarta
+              _nbCand = lista; _nbCandCoord = coord; renderNoblePlano();
+            }).catch((e) => {
+              if (_nbQuemAberto !== coord) return;
+              _nbCand = []; _nbCandCoord = coord; renderNoblePlano();
+              pushLog('Noblar: não consegui listar as aldeias com nobre (' + (e.message || e) + ').', 'err', 'noble');
+            });
+          }
+        }
         return;
       }
       // Reordenar a fila = mover no PRÓPRIO array de alvos, que é o que o motor percorre.

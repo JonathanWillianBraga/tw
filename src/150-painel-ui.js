@@ -858,7 +858,7 @@
         modLog('obra') +
       '</div>' +
       '<div id="twmgr-tab-apoios" style="display:none">' +
-        hint('🛡️ O jogo só mostra tropa fora agrupada por <b>origem</b> — "a aldeia 001 tem 1999 lanças fora". Nunca por <b>destino</b>. Esta tela inverte: uma linha por aldeia que você está apoiando, com o total somado; clique pra ver quais aldeias suas mandaram.') +
+        hint('🛡️ O jogo só mostra tropa fora agrupada por <b>origem</b> — "a aldeia 001 tem 1999 lanças fora". Nunca por <b>destino</b>. Esta tela inverte: uma linha por aldeia que você está apoiando, com o total somado; clique pra ver quais aldeias suas mandaram. A leitura <b>fica guardada</b> e só é refeita quando você clica em <b>↻ Ler apoios</b> — ela custa uma requisição por aldeia sua com tropa fora.') +
         sec('Apoios enviados',
           '<div class="twmgr-row">' +
             '<button id="twmgr-apoios-ler" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">↻ Ler apoios</button>' +

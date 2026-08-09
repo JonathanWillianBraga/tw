@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.125.0
+// @version      11.126.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.125.0';
+  const VERSION = '11.126.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -7977,8 +7977,25 @@
   // errados, que é o pior tipo de defeito. As unidades saem do CABEÇALHO, e a contagem é
   // conferida contra a linha; se divergir, lança em vez de somar.
 
-  const APOIOS_TTL_MS = 5 * 60000;      // cache curto: tropa se move, mas não a cada segundo
-  let _apCache = null, _apCacheAt = 0, _apLendo = false;
+  // A leitura CUSTA 44 requisições numa conta que bate 429 global, então ela não expira sozinha
+  // e não se perde num F5: fica gravada, e só é refeita quando o usuário pede ou depois de uma
+  // retirada. Vive numa chave PRÓPRIA, fora do config — o `save()` reescreve o config o tempo
+  // todo, e carregar dezenas de KB de apoio junto seria desperdício em cada ciclo de módulo.
+  const APOIOS_KEY = KEY + '_apoios';
+  let _apCache = null, _apLendo = false;
+
+  function apoiosSalvar() {
+    try { localStorage.setItem(APOIOS_KEY, JSON.stringify(_apCache)); }
+    catch (e) { pushLog('Apoios: não consegui guardar a leitura (' + (e.message || e) + ').', 'err', 'apoios'); }
+  }
+  function apoiosCarregar() {
+    try {
+      const s = localStorage.getItem(APOIOS_KEY);
+      if (!s) return;
+      const c = JSON.parse(s);
+      if (c && c.lista && c.unidades) _apCache = c;
+    } catch (e) { /* leitura velha ilegível: só começa vazio */ }
+  }
 
   // As unidades desta tabela, na ordem das colunas. Vem do `<th><img src="...unit_XXX...">`.
   function apoiosUnidadesDe(tabela) {
@@ -8092,7 +8109,7 @@
 
   // Passo 3: inverter. De "origem → destinos" para "destino → origens".
   async function apoiosMontar(forcar, aoAndar) {
-    if (!forcar && _apCache && (Date.now() - _apCacheAt) < APOIOS_TTL_MS) return _apCache;
+    if (!forcar && _apCache) return _apCache;   // sem expiração: quem decide reler e o usuario
     if (_apLendo) throw new Error('já estou lendo os apoios — espere terminar');
     _apLendo = true;
     try {
@@ -8123,7 +8140,7 @@
       lista.sort((a, b) => apoiosSoma(b.total) - apoiosSoma(a.total));
       _apCache = { lista: lista, unidades: Object.keys(unidades), origens: origens.length,
                    falhas: falhas, at: Date.now() };
-      _apCacheAt = Date.now();
+      apoiosSalvar();
       return _apCache;
     } finally { _apLendo = false; }
   }
@@ -8149,6 +8166,29 @@
       + '</span>';
   }
   function apoiosSoma(t) { return Object.keys(t).reduce((a, u) => a + t[u], 0); }
+
+  // Depois de uma retirada CONFIRMADA, tira do cache o que voltou, em vez de reler tudo.
+  // O que sai daqui já foi conferido contra o jogo (a retirada só chega neste ponto se a
+  // releitura bateu); refazer a leitura inteira pra ver o mesmo número custaria 44 requisições
+  // numa conta que bate 429 global.
+  function apoiosPodar(coord, vids, unids) {
+    if (!_apCache) return;
+    const d = _apCache.lista.filter((x) => x.coord === coord)[0];
+    if (!d) return;
+    const alvo = {};
+    vids.forEach((v) => { alvo[v] = 1; });
+    d.origens = d.origens.filter((o) => {
+      if (!alvo[o.vid]) return true;
+      unids.forEach((u) => { delete o.tropas[u]; });
+      return apoiosSoma(o.tropas) > 0;         // origem que zerou sai da lista
+    });
+    d.total = {};
+    d.origens.forEach((o) => Object.keys(o.tropas).forEach((u) => {
+      d.total[u] = (d.total[u] || 0) + o.tropas[u];
+    }));
+    if (!d.origens.length) _apCache.lista = _apCache.lista.filter((x) => x.coord !== coord);
+    apoiosSalvar();
+  }
 
   // Os mesmos chips, mas apagando as unidades que NÃO vão voltar. É a prévia do que o botão vai
   // fazer naquela linha, sem inventar um segundo lugar pra olhar.
@@ -8426,6 +8466,7 @@
       const atendidas = await apoiosRetirarDestino(d.destId, marcadas, sel);
       atendidas.forEach((v) => { jaFeitas[v] = 1; });
       marcadas.forEach((o) => { if (jaFeitas[o.vid]) delete _apSelLinha[o.awayId]; });
+      if (atendidas.length) apoiosPodar(coord, atendidas, sel);
     }
     const sobra = marcadas.filter((o) => !jaFeitas[o.vid]);
     if (!sobra.length) {
@@ -8459,11 +8500,22 @@
       await apoiosRetirarDe(vid, porOrigem[vid]);
       ok += porOrigem[vid].length;
       porOrigem[vid].forEach((pd) => { delete _apSelLinha[pd.awayId]; });
+      apoiosPodar(coord, [vid], sel);
       await sleep(200);
     }
     pushLog('Apoios: mandei voltar ' + fmtN(totalTropa) + ' tropa(s) em ' + ok + ' apoio(s) de '
       + coord + ' — confirmado relendo a praça.', 'ok', 'apoios');
     return ok + (marcadas.length - sobra.length);
+  }
+
+  function apoiosIdade(at) {
+    const min = Math.max(0, Math.round((Date.now() - at) / 60000));
+    if (min < 1) return 'agora';
+    if (min < 60) return 'há ' + min + ' min';
+    const h = Math.round(min / 60);
+    if (h < 24) return 'há ' + h + 'h';
+    const dd = Math.round(h / 24);
+    return 'há ' + dd + (dd > 1 ? ' dias' : ' dia');
   }
 
   function apoiosRender() {
@@ -8495,8 +8547,13 @@
       + '<div><div class="twmgr-ap-big">' + Object.keys(nOrigens).length + '</div>'
         + '<div class="twmgr-ap-lbl">origens</div></div>'
       + '<div style="flex:1"></div>'
-      + '<div style="text-align:right"><div class="twmgr-ap-lbl">lido às</div>'
-        + '<div style="font-size:10px;color:#6f6153">' + new Date(_apCache.at).toLocaleTimeString('pt-BR') + '</div></div>'
+      // Como a leitura não expira mais sozinha, a IDADE dela é o dado que importa: o usuário
+      // precisa saber se está olhando algo de 2 minutos ou de ontem.
+      + '<div style="text-align:right"><div class="twmgr-ap-lbl">lido ' + esc(apoiosIdade(_apCache.at)) + '</div>'
+        + '<div style="font-size:10px;color:#6f6153">'
+        + new Date(_apCache.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit',
+                                                          hour: '2-digit', minute: '2-digit' })
+        + '</div></div>'
       + '</div>';
 
     box.innerHTML = topo + lista.map((d) => {
@@ -8564,6 +8621,8 @@
   }
 
   function bindApoiosHandlers() {
+    apoiosCarregar();                          // a leitura anterior sobrevive ao F5
+    apoiosRender();
     const box = document.getElementById('twmgr-apoios-corpo');
     if (box) {
       box.addEventListener('click', async (e) => {
@@ -8624,7 +8683,7 @@
           go.disabled = true; go.textContent = 'retirando…';
           try {
             await apoiosRetirarSelecao(c);
-            await apoiosLer(true);             // relê: os números têm que refletir a retirada
+            apoiosRender();                    // o cache já foi podado do que voltou
           } catch (err) {
             pushLog('Apoios: ' + (err.message || err), 'err', 'apoios');
             window.alert('Não consegui retirar:\n\n' + (err.message || err));
@@ -10975,7 +11034,7 @@
         modLog('obra') +
       '</div>' +
       '<div id="twmgr-tab-apoios" style="display:none">' +
-        hint('🛡️ O jogo só mostra tropa fora agrupada por <b>origem</b> — "a aldeia 001 tem 1999 lanças fora". Nunca por <b>destino</b>. Esta tela inverte: uma linha por aldeia que você está apoiando, com o total somado; clique pra ver quais aldeias suas mandaram.') +
+        hint('🛡️ O jogo só mostra tropa fora agrupada por <b>origem</b> — "a aldeia 001 tem 1999 lanças fora". Nunca por <b>destino</b>. Esta tela inverte: uma linha por aldeia que você está apoiando, com o total somado; clique pra ver quais aldeias suas mandaram. A leitura <b>fica guardada</b> e só é refeita quando você clica em <b>↻ Ler apoios</b> — ela custa uma requisição por aldeia sua com tropa fora.') +
         sec('Apoios enviados',
           '<div class="twmgr-row">' +
             '<button id="twmgr-apoios-ler" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">↻ Ler apoios</button>' +

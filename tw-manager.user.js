@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.104.0
+// @version      11.105.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.104.0';
+  const VERSION = '11.105.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -10350,6 +10350,19 @@
     return (config.desviar.pending || []).some((p) => p.state === 'waiting' && p.sendAt && p.sendAt <= lim);
   }
 
+  // Espera entre tentativas de cancelamento. Cresce, mas começa curta: com tropa fora de casa,
+  // esperar minutos pra tentar de novo é pior que insistir. Teto de 6 tentativas (~5 min no
+  // total) — depois disso é problema que só a mão resolve, e aí a notificação é o caminho.
+  const DESV_RETRY_MS = [5000, 15000, 30000, 60000, 120000];
+  const DESV_CANCEL_MAX = 6;
+
+  // Dispara a tentativa AGORA, sem esperar o `cancelAt` de novo (ele já passou).
+  function scheduleDesviarCancelAgora(id) {
+    const cur = (config.desviar.pending || []).find((x) => x.id === id);
+    if (!cur || cur.state !== 'scheduled') return;
+    scheduleDesviarCancel(Object.assign({}, cur, { cancelAt: serverNow() }));
+  }
+
   function scheduleDesviarCancel(item) {
     const delay = Math.max(0, item.cancelAt - serverNow());
     desvAgendar(item.id + ':cancel', delay, async () => {
@@ -10357,15 +10370,36 @@
       if (!cur || cur.state !== 'scheduled') return;
       try {
         await cancelCommand(cur.vid, cur.cmdId);   // lança se não conseguir CONFIRMAR
-        cur.state = 'canceled'; cur.err = '';
+        cur.state = 'canceled'; cur.err = ''; cur.cancelTent = 0;
       } catch (e) { cur.state = 'failed'; cur.err = e.message || String(e); }
-      save();
       if (cur.state === 'canceled') {
+        save();
         pushLog('🚨 Desvio OK — tropa voltando (aldeia ' + cur.vid + ', comando ' + cur.cmdId + ').', 'ok', 'desv');
+        desviarRefreshRowStates();
+        return;
+      }
+      // FALHOU. Isto significa tropa FORA DE CASA, que é o pior estado do módulo — e até agora
+      // era o único SEM saída: `failed` não era retentado por ninguém, nem por um F5 (o
+      // desviarResumeAll só ressuscitava `scheduled`). Uma queda de rede de dois segundos
+      // deixava o exército fora até você notar o log.
+      //
+      // Agora retenta com espera crescente. O cancelamento é idempotente do jeito que importa:
+      // `cancelCommand` confirma pelo EFEITO (o comando sumiu da lista), então retentar um
+      // cancelamento que já funcionou devolve sucesso em vez de estragar algo.
+      cur.cancelTent = (cur.cancelTent || 0) + 1;
+      save();
+      const espera = DESV_RETRY_MS[Math.min(cur.cancelTent - 1, DESV_RETRY_MS.length - 1)];
+      if (cur.cancelTent < DESV_CANCEL_MAX) {
+        cur.state = 'scheduled';   // volta pra fila: é o estado que o resume e o timer entendem
+        save();
+        pushLog('🚨 Desvio: o cancelamento da aldeia ' + cur.vid + ' falhou (' + cur.err
+          + '). Tentativa ' + cur.cancelTent + ' de ' + DESV_CANCEL_MAX + ' — repito em '
+          + Math.round(espera / 1000) + 's. A tropa segue FORA.', 'err', 'desv');
+        desvAgendar(cur.id + ':cancel', espera, () => scheduleDesviarCancelAgora(cur.id));
       } else {
-        // Falha aqui = tropa FORA DE CASA. Tem que gritar, não virar uma linha discreta.
-        pushLog('🚨 DESVIO FALHOU — a tropa da aldeia ' + cur.vid + ' NÃO voltou: ' + cur.err
-          + '. Cancele o comando ' + cur.cmdId + ' na mão, agora.', 'err', 'desv');
+        pushLog('🚨 DESVIO FALHOU — a tropa da aldeia ' + cur.vid + ' NÃO voltou depois de '
+          + cur.cancelTent + ' tentativas: ' + cur.err + '. Cancele o comando ' + cur.cmdId
+          + ' na mão, agora.', 'err', 'desv');
         if (config.captcha && config.captcha.enabled) { try { fireCaptchaNotification('desvio-falhou/' + cur.vid, true); } catch (e2) {} }
       }
       desviarRefreshRowStates();
@@ -10654,6 +10688,15 @@
     // 1) tropa já fora: só reagenda a volta
     (config.desviar.pending || []).forEach((item) => {
       if (item.state === 'scheduled') scheduleDesviarCancel(item);
+      // `failed` com tentativas sobrando volta pra fila. Antes ficava aqui pra sempre: o pior
+      // estado do módulo — tropa fora — era o único que um F5 não recuperava. Se o navegador
+      // fechou no meio das retentativas, é exatamente quando mais se precisa que elas voltem.
+      else if (item.state === 'failed' && item.cmdId && (item.cancelTent || 0) < DESV_CANCEL_MAX) {
+        item.state = 'scheduled';
+        pushLog('🚨 Desvio: retomando o cancelamento da aldeia ' + item.vid + ' (tentativa '
+          + ((item.cancelTent || 0) + 1) + ' de ' + DESV_CANCEL_MAX + '). A tropa está FORA.', 'err', 'desv');
+        scheduleDesviarCancel(Object.assign({}, item, { cancelAt: agora }));
+      }
     });
     // 2) saída ainda por vir: reagenda a partir das marcas (que sobrevivem no localStorage)
     const coords = {};

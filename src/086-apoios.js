@@ -91,6 +91,14 @@
     if (!tab) return [];                       // aldeia sem tropa fora: não é erro
     const unidades = apoiosUnidadesDe(tab);
     if (!unidades.length) throw new Error('não consegui ler as unidades do cabeçalho em ' + vid);
+    // Quais colunas estão marcadas. Parece enfeite de interface e NÃO É: é preferência de conta
+    // guardada no servidor, e é ela que libera a retirada (ver apoiosPatchColunas). Guardo o
+    // estado atual pra devolver depois de mexer.
+    const marcadas = [];
+    tab.querySelectorAll('input[name^="checkbox_"]').forEach((c) => {
+      if (c.hasAttribute('checked')) marcadas.push(c.getAttribute('name').slice(9));
+    });
+    _apPref[vid] = marcadas;
     const out = [];
     tab.querySelectorAll('tr').forEach((tr) => {
       const tds = tr.querySelectorAll('td');
@@ -203,23 +211,50 @@
   //          withdraw_unit[<awayId>][<unidade>]=<QUANTIDADE>
   //          h=<csrf>                                   ← no CORPO, não na URL
   //
-  // Três coisas que só apareceram na captura:
+  // MAS ESSE POST SOZINHO NÃO BASTA: ele só aplica as unidades que estiverem na preferência de
+  // coluna gravada no servidor (ver apoiosPatchColunas logo abaixo). Sem isso ele responde HTTP
+  // 200, não reclama, e não move nada.
   //
-  //   1. A QUANTIDADE É LIVRE. O jogo preenche com o total, mas o campo é um número — dá pra
-  //      devolver 300 de 1.688. Eu tinha concluído que não dava, olhando a tela: os campos não
-  //      existem no HTML servido, o JS os cria quando a linha é marcada.
-  //   2. `checkbox_<unidade>=on` e `id_<awayId>=on` NÃO vão no corpo. O checkbox da coluna é só
-  //      atalho de interface, e o da linha nem `name` tem. Foi o que eu mandei na v11.114.0 e o
-  //      servidor ignorou — a retirada não aconteceu.
-  //   3. O jogo emite um campo pra CADA unidade que aquele apoio tem, valendo 0 nas que não
-  //      voltam. Mandamos igual, pra não depender de o servidor tratar campo ausente como zero.
+  // O que a captura ensinou:
   //
-  // A v11.114.0 é o argumento a favor da confirmação por efeito: o POST errado voltou HTTP 200,
-  // e quem disse que não funcionou foi a releitura da praça, não a resposta.
+  //   1. A QUANTIDADE É LIVRE — dá pra devolver 300 de 1.688. Olhando o HTML eu tinha concluído
+  //      que não dava: os campos não existem na página servida, o JS do jogo os cria quando a
+  //      linha é marcada.
+  //   2. `checkbox_<unidade>=on` no corpo não faz nada e `id_<awayId>=on` não existe. Foi o que
+  //      eu mandei na v11.114.0 — o servidor ignorou.
+  //   3. Unidade que NÃO está no corpo fica parada. Só mandamos o que vai voltar.
+  //
+  // Duas versões erradas (v11.114.0 e v11.117.0) responderam HTTP 200. Quem denunciou as duas
+  // foi a releitura da praça — é por isso que a confirmação por efeito não é opcional aqui.
   //
   // Um POST por aldeia de ORIGEM: os awayId pertencem à praça dela.
   const _apSelLinha = {};                      // awayId -> marcado?
   const _apQtd = {};                           // awayId -> {unidade: quanto voltar}
+  const _apPref = {};                          // vid -> colunas marcadas no servidor
+
+  // O GATE. Descoberto interceptando a página: marcar a coluna dispara
+  //
+  //   POST /game.php?village=<vid>&screen=settings&ajaxaction=patch_away_unit_checkboxes
+  //   corpo: away_units_checkboxes={"other":["spear","sword"]} · h=<csrf>
+  //
+  // Isso não é estado de tela: é PREFERÊNCIA DE CONTA gravada no servidor, e a retirada só
+  // aplica as unidades que estiverem nela. Medido: com a preferência em [lanceiro, pesada], um
+  // pedido de 5 espadachins não movia nada, enquanto 1 pesada voltava — mesmo POST, mesma
+  // requisição. Gravando [espadachim] antes, os 5 voltaram na hora.
+  async function apoiosPatchColunas(vid, unids) {
+    const p = new URLSearchParams();
+    p.set('away_units_checkboxes', JSON.stringify({ other: unids }));
+    p.set('h', CSRF);
+    const r = await fetch('/game.php?village=' + vid + '&screen=settings&ajaxaction=patch_away_unit_checkboxes',
+      { method: 'POST', credentials: 'include', cache: 'no-store',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+        body: p.toString() });
+    const t = (await r.text()).trim();
+    if (!r.ok || t.indexOf('true') < 0) {
+      throw new Error('não consegui liberar as colunas ' + unids.join(', ') + ' em ' + vid
+        + ' (o jogo respondeu "' + t.slice(0, 60) + '") — sem isso a retirada é ignorada em silêncio');
+    }
+  }
 
   // Quanto voltar de cada unidade daquele apoio. Sem escolha explícita, volta tudo — é o que
   // "mandar voltar" quer dizer.
@@ -235,6 +270,35 @@
   }
 
   async function apoiosRetirarDe(vid, pedidos) {
+    // 1) liberar as colunas. Só o que vai voltar entra no pedido; mandar unidade com 0 é
+    // inofensivo, mas unidade FORA da preferência é ignorada sem aviso nenhum.
+    const precisa = {};
+    pedidos.forEach((pd) => Object.keys(pd.unidades).forEach((u) => {
+      if (pd.unidades[u] > 0) precisa[u] = 1;
+    }));
+    const querendo = Object.keys(precisa);
+    if (!querendo.length) return 0;
+    const antesPref = _apPref[vid];
+    const uniao = (antesPref || []).slice();
+    querendo.forEach((u) => { if (uniao.indexOf(u) < 0) uniao.push(u); });
+    await apoiosPatchColunas(vid, uniao);
+
+    try {
+      return await apoiosPostRetirada(vid, pedidos);
+    } finally {
+      // devolve a preferência do usuário. É tela dele, não minha — e se eu deixar mexida, a
+      // próxima retirada MANUAL dele vem com colunas que ele não escolheu.
+      if (antesPref && uniao.length !== antesPref.length) {
+        try { await apoiosPatchColunas(vid, antesPref); }
+        catch (e) { pushLog('Apoios: não consegui devolver as colunas de ' + vid + ' ('
+          + (e.message || e) + '). Confira na praça.', 'err', 'apoios'); }
+      }
+      // a releitura da verificação sobrescreve o _apPref com a união temporária
+      if (antesPref) _apPref[vid] = antesPref;
+    }
+  }
+
+  async function apoiosPostRetirada(vid, pedidos) {
     const p = new URLSearchParams();
     p.set('from-table', 'other');
     pedidos.forEach((pd) => {

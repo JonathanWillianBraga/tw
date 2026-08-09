@@ -38,6 +38,20 @@
       modelos: null,          // modelos de tropa do usuário (null = ainda não semeado)
       fechados: {},           // seções recolhidas do painel (ele fica alto demais com tudo aberto)
       snipeFolgaMs: 150,      // quanto DEPOIS do ataque o apoio pousa (margem de segurança)
+      blz: defBlz(),          // blindagem da tribo (pedidos do tópico do fórum)
+    });
+    // ---- Blindagem: estado ----
+    // `reserva` é por ALDEIA e em número absoluto: o que NUNCA sai de casa. Sem isso a divisão
+    // esvazia justamente a aldeia que está segurando a própria linha.
+    const defBlz = () => ({
+      url: '',                // tópico da tribo (fica salvo; a tabela muda, a URL não)
+      pedidos: [],            // [{num, nome, coord, x, y, pede:{spear,sword,heavy}}]
+      entregas: [],           // [{num, autor, at, posEdicao, spear, sword, heavy}] — dos comentários
+      editadoEm: 0,           // quando a tabela foi editada pela última vez (corta as entregas velhas)
+      lidoEm: 0,
+      reserva: { spear: 0, sword: 0, heavy: 0 },
+      plano: {},              // { pedidoNum: { vid: {spear,sword,heavy} } } — o que VOCÊ vai mandar
+      enviados: {},           // { pedidoNum: { vid: at } } — trava anti-reenvio
     });
     const MODELOS_PADRAO = () => ([
       { id: genId(), nome: 'Tudo', amounts: {}, max: UNITS.map((u) => u[0]).filter((u) => u !== 'snob').reduce((o, u) => (o[u] = true, o), {}) },
@@ -86,6 +100,13 @@
         if (c.cmd.suporteOkAt == null) c.cmd.suporteOkAt = 0;
         if (!c.cmd.calib) c.cmd.calib = { biasMs: 0, n: 0 };
         if (!c.cmd.mundo) c.cmd.mundo = { speed: null, unitSpeed: null, unidades: null, at: 0, confiavel: false };
+        if (!c.cmd.blz || typeof c.cmd.blz !== 'object') c.cmd.blz = defBlz();
+        if (typeof c.cmd.blz.url !== 'string') c.cmd.blz.url = '';
+        if (!Array.isArray(c.cmd.blz.pedidos)) c.cmd.blz.pedidos = [];
+        if (!Array.isArray(c.cmd.blz.entregas)) c.cmd.blz.entregas = [];
+        if (!c.cmd.blz.reserva) c.cmd.blz.reserva = { spear: 0, sword: 0, heavy: 0 };
+        if (!c.cmd.blz.plano || typeof c.cmd.blz.plano !== 'object') c.cmd.blz.plano = {};
+        if (!c.cmd.blz.enviados || typeof c.cmd.blz.enviados !== 'object') c.cmd.blz.enviados = {};
         if (!c.cmd.origens) c.cmd.origens = {};
         if (!c.cmd.fonteTropa) c.cmd.fonteTropa = 'casa';
         if (c.cmd.fakeAlvos == null) c.cmd.fakeAlvos = '';
@@ -1134,6 +1155,7 @@
       { id: 'op',      ico: '🎯', rot: 'Operação', hint: 'Um alvo por vez: escolha as aldeias, crie ondas (cada nova entra 100ms depois da anterior), ordene e calibre os horários. Depois passe pro próximo alvo.' },
       { id: 'fake',    ico: '🎭', rot: 'Fake',    hint: 'Vários alvos de uma vez; o alvo único acima é ignorado.' },
       { id: 'massa',   ico: '🚚', rot: 'Apoio massa', hint: 'Apoio das origens marcadas pro(s) alvo(s), disparado AGORA (não agenda). Em cada unidade: número, 50% ou tudo.' },
+      { id: 'blz',     ico: '🛡', rot: 'Blindagem',  hint: 'Lê a tabela de pedidos do tópico da tribo, desconta o que já foi entregue, divide a SUA defesa entre os pedidos e dispara AGORA. No fim monta as linhas pra você colar no fórum.' },
     ];
     function ccTipo() { return (config.cmd && config.cmd.tipo) || 'attack'; }
     function telaAtual() {
@@ -2326,6 +2348,333 @@
         }
       });
       return partes;
+    }
+    // ==================== BLINDAGEM DA TRIBO ====================
+    // Lê o tópico do fórum onde a tribo publica os pedidos de defesa e monta, do lado de cá, a
+    // divisão da SUA defesa entre eles. Três coisas foram medidas no tópico real (br143 #90) e
+    // definem o parser — nenhuma delas é chute:
+    //
+    // 1. AS COLUNAS SÃO ÍCONES, não texto. O cabeçalho é `PEDIDO | ALDEIA | 🛡lanceiro |
+    //    🛡espadachim | ❌ | 🛡cav.pesada | ❌ | 🛡`. As duas colunas ❌ são slots que a tribo não
+    //    usa e valem SEMPRE zero — é de onde saem os dois zeros fixos da linha do fórum. Achar a
+    //    coluna pelo `unit_XXX` da imagem é o que sobrevive a a tribo reordenar a tabela.
+    // 2. `✅` NUMA CÉLULA SIGNIFICA ZERO, não "atendido". O pedido 3 pede 7000 lanceiros e tem ✅
+    //    na coluna de cavalaria: é "não quero cavalaria". Ler isso como "já resolvido" faria o
+    //    módulo pular pedido aberto.
+    // 3. OS COMENTÁRIOS SÃO ENTREGAS. Cada resposta no tópico é uma linha `num/lanc/esp/0/cp/0`
+    //    de quem já mandou. Sem descontá-las o módulo empilha defesa em cima de pedido cheio.
+    //
+    // E o detalhe que obriga a olhar as datas: o post da tabela é REEDITADO e os pedidos são
+    // RENUMERADOS conforme caem. Comentário anterior à última edição pode citar um número que
+    // hoje é outra aldeia — no tópico real havia entrega pro "pedido 14" numa tabela que ia até 8.
+    // Por isso só conta como entregue o que foi postado DEPOIS da edição; o resto fica visível,
+    // marcado, mas fora da conta.
+    const BLZ_UNITS = ['spear', 'sword', 'heavy'];       // as três que a tabela da tribo usa
+    const BLZ_ROT = { spear: 'lanceiro', sword: 'espadachim', heavy: 'cav. pesada' };
+    // Datas do fórum: "hoje às 14:04", "ontem às 23:03", "em 07.08.2026 às 15:16" e a variante
+    // sem ano "em 07.08. às 15:16". Devolve ms, ou 0 quando não reconhece — 0 nunca é tratado
+    // como "recente", então a dúvida sempre cai pro lado seguro.
+    function ccBlzData(txt) {
+      const t = (txt || '').replace(/\s+/g, ' ').trim();
+      const hm = t.match(/(\d{1,2}):(\d{2})/);
+      if (!hm) return 0;
+      const h = +hm[1], mi = +hm[2];
+      const dm = t.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})?/);
+      const d = new Date();
+      if (dm) {
+        d.setFullYear(dm[3] ? +dm[3] : d.getFullYear(), (+dm[2]) - 1, +dm[1]);
+      } else if (/\bontem\b/i.test(t)) {
+        d.setDate(d.getDate() - 1);
+      } else if (!/\bhoje\b/i.test(t)) {
+        return 0;                                        // formato desconhecido: não arrisca
+      }
+      d.setHours(h, mi, 0, 0);
+      return d.getTime();
+    }
+    // Número de uma célula da tabela. Vazio, `✅` ou qualquer coisa sem dígito = 0.
+    function ccBlzNum(td) {
+      if (!td) return 0;
+      const s = (td.textContent || '').replace(/\D/g, '');
+      return s ? parseInt(s, 10) : 0;
+    }
+    // Linha de entrega: `num/lanc/esp/0/cp/0`. Tolera linha curta — no tópico real apareceu
+    // `14/1000/0/0/0` com 5 campos em vez de 6. Posição manda: nunca "compacta" os zeros, senão
+    // um 0 a menos faria a cavalaria virar espadachim.
+    function ccBlzLinha(txt) {
+      const m = (txt || '').trim().match(/^(\d{1,3})((?:\s*\/\s*\d+){2,6})\s*$/);
+      if (!m) return null;
+      // m[2] começa com a barra, então o split deixa um vazio na frente — o slice(1) tira. Sem
+      // ele TUDO anda uma casa e o lanceiro viraria zero.
+      const n = m[2].split('/').slice(1).map((s) => parseInt(s.trim(), 10) || 0);
+      return { num: +m[1], spear: n[0] || 0, sword: n[1] || 0, heavy: n[3] || 0 };
+    }
+    function ccBlzParse(doc) {
+      const posts = [].slice.call(doc.querySelectorAll('div.post'));
+      if (!posts.length) throw new Error('não achei nenhum post — a URL aponta pro tópico certo?');
+      // A tabela mora no PRIMEIRO post que tenha uma com ícone de unidade no cabeçalho. Procurar
+      // por ícone (e não pela posição) aguenta a tribo fixar outro post no topo.
+      let tabela = null, postTabela = null;
+      for (const p of posts) {
+        const t = [].slice.call(p.querySelectorAll('table'))
+          .find((x) => x.querySelector('tr img[src*="unit_"]') && !x.querySelector('table'));
+        if (t) { tabela = t; postTabela = p; break; }
+      }
+      if (!tabela) throw new Error('não achei a tabela de pedidos (nenhuma com ícone de unidade)');
+      const linhas = [].slice.call(tabela.querySelectorAll('tr'));
+      const cab = [].slice.call(linhas[0].children);
+      const col = {};
+      cab.forEach((c, i) => {
+        const im = c.querySelector('img');
+        const u = im && ((im.getAttribute('src') || '').match(/unit_([a-z]+)\./) || [])[1];
+        if (u && BLZ_UNITS.indexOf(u) >= 0 && col[u] == null) col[u] = i;
+      });
+      if (col.spear == null) throw new Error('a tabela não tem coluna de lanceiro');
+      const pedidos = [];
+      linhas.slice(1).forEach((tr) => {
+        const tds = [].slice.call(tr.children);
+        if (tds.length < 2) return;
+        const num = parseInt((tds[0].textContent || '').replace(/\D/g, ''), 10);
+        if (!num) return;
+        const m = (tds[1].textContent || '').replace(/\s+/g, ' ').match(/^(.*?)\((\d{1,3})\|(\d{1,3})\)/);
+        if (!m) return;
+        const pede = {};
+        BLZ_UNITS.forEach((u) => { pede[u] = col[u] != null ? ccBlzNum(tds[col[u]]) : 0; });
+        pedidos.push({ num: num, nome: m[1].trim(), coord: m[2] + '|' + m[3],
+                       x: +m[2], y: +m[3], pede: pede });
+      });
+      // Quando a tabela foi editada pela última vez. Sem rodapé de edição vale a data do post.
+      const rodape = (postTabela.innerText || '').split('\n').filter((l) => /Editado/i.test(l))[0];
+      const cabTab = (postTabela.querySelector('.postheader_left') || {}).innerText || '';
+      const editadoEm = ccBlzData(rodape) || ccBlzData(cabTab);
+      // Entregas: todo post que NÃO é o da tabela, uma linha por pedido atendido.
+      const entregas = [];
+      posts.forEach((p) => {
+        if (p === postTabela) return;
+        const hdr = (p.querySelector('.postheader_left') || {}).innerText || '';
+        const at = ccBlzData(hdr);
+        const autor = (hdr.replace(/\s+/g, ' ').match(/^(.*?)\s+(?:em|hoje|ontem)\b/) || [])[1] || '?';
+        (p.innerText || '').split('\n').forEach((l) => {
+          const e = ccBlzLinha(l);
+          if (!e) return;
+          e.autor = autor.trim(); e.at = at;
+          // A regra combinada: só conta quem postou DEPOIS da última edição da tabela.
+          e.posEdicao = !!(at && editadoEm && at >= editadoEm);
+          entregas.push(e);
+        });
+      });
+      return { pedidos: pedidos, entregas: entregas, editadoEm: editadoEm };
+    }
+    async function ccBlzBuscar() {
+      const b = config.cmd.blz;
+      const url = ((document.getElementById('cc-blz-url') || {}).value || '').trim();
+      if (!url) throw new Error('cole a URL do tópico da tribo');
+      b.url = url;
+      const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      const r = ccBlzParse(doc);
+      b.pedidos = r.pedidos; b.entregas = r.entregas; b.editadoEm = r.editadoEm;
+      b.lidoEm = Date.now();
+      // Pedido que sumiu da tabela leva junto o plano e a trava dele: manter viraria envio pra
+      // um número que hoje é outra aldeia — exatamente o problema da renumeração.
+      const vivos = {}; r.pedidos.forEach((p) => { vivos[p.num] = 1; });
+      Object.keys(b.plano).forEach((k) => { if (!vivos[k]) delete b.plano[k]; });
+      Object.keys(b.enviados).forEach((k) => { if (!vivos[k]) delete b.enviados[k]; });
+      save();
+      return r;
+    }
+    // Quanto ainda falta em cada pedido: o pedido menos o que a tribo já entregou (só as entregas
+    // válidas) menos o que ESTE módulo já mandou nesta rodada.
+    function ccBlzEntregue(num) {
+      const b = config.cmd.blz;
+      const t = { spear: 0, sword: 0, heavy: 0 };
+      b.entregas.forEach((e) => {
+        if (e.num !== num || !e.posEdicao) return;
+        BLZ_UNITS.forEach((u) => { t[u] += e[u] || 0; });
+      });
+      return t;
+    }
+    function ccBlzFalta(p) {
+      const ent = ccBlzEntregue(p.num);
+      const meu = ccBlzMeuTotal(p.num);
+      const f = {};
+      BLZ_UNITS.forEach((u) => { f[u] = Math.max(0, (p.pede[u] || 0) - (ent[u] || 0) - (meu[u] || 0)); });
+      return f;
+    }
+    // O que EU já aloquei pra este pedido (soma do plano em todas as minhas aldeias).
+    function ccBlzMeuTotal(num) {
+      const linha = (config.cmd.blz.plano || {})[num] || {};
+      const t = { spear: 0, sword: 0, heavy: 0 };
+      Object.keys(linha).forEach((vid) => {
+        BLZ_UNITS.forEach((u) => { t[u] += (linha[vid] || {})[u] || 0; });
+      });
+      return t;
+    }
+    // Quanto sobra numa aldeia depois da reserva de casa e do que o plano já comprometeu nela.
+    function ccBlzLivre(v) {
+      const b = config.cmd.blz;
+      const usado = { spear: 0, sword: 0, heavy: 0 };
+      Object.keys(b.plano).forEach((num) => {
+        const q = (b.plano[num] || {})[v.vid]; if (!q) return;
+        BLZ_UNITS.forEach((u) => { usado[u] += q[u] || 0; });
+      });
+      const livre = {};
+      BLZ_UNITS.forEach((u) => {
+        livre[u] = Math.max(0, ((v.avail || {})[u] || 0) - (b.reserva[u] || 0) - usado[u]);
+      });
+      return livre;
+    }
+    // ---- A sugestão ----
+    // Guloso por DISTÂNCIA: percorre todos os pares (aldeia, pedido) do mais perto pro mais longe
+    // e vai preenchendo. Defesa que chega tarde não defende, então proximidade é o critério que
+    // importa — e o guloso por distância dá, pra cada aldeia, o pedido mais perto que ainda
+    // precisa dela. Não mexe no que você já editou à mão: só soma em cima do que falta.
+    function ccBlzSugerir() {
+      const b = config.cmd.blz;
+      const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid] && v.x != null);
+      if (!marcadas.length) return { erro: 'marque as origens na lista de Origens, abaixo' };
+      if (!b.pedidos.length) return { erro: 'busque a tabela do tópico primeiro' };
+      const pares = [];
+      marcadas.forEach((v) => {
+        b.pedidos.forEach((p) => {
+          pares.push({ v: v, p: p, d: Math.sqrt(Math.pow(v.x - p.x, 2) + Math.pow(v.y - p.y, 2)) });
+        });
+      });
+      pares.sort((a, c) => a.d - c.d);
+      let alocado = 0;
+      pares.forEach((par) => {
+        const falta = ccBlzFalta(par.p);
+        const livre = ccBlzLivre(par.v);
+        const q = {};
+        let soma = 0;
+        BLZ_UNITS.forEach((u) => {
+          const n = Math.min(falta[u] || 0, livre[u] || 0);
+          if (n > 0) { q[u] = n; soma += n; }
+        });
+        if (!soma) return;
+        b.plano[par.p.num] = b.plano[par.p.num] || {};
+        const atual = b.plano[par.p.num][par.v.vid] || {};
+        BLZ_UNITS.forEach((u) => { if (q[u]) atual[u] = (atual[u] || 0) + q[u]; });
+        b.plano[par.p.num][par.v.vid] = atual;
+        alocado += soma;
+      });
+      save();
+      return { alocado: alocado };
+    }
+    // O texto do fórum. Uma linha por pedido, agregando todas as MINHAS aldeias — a tribo quer
+    // saber quanto chegou, não de onde saiu. Os dois zeros fixos são as colunas ❌ da tabela.
+    function ccBlzTexto(soEnviados) {
+      const b = config.cmd.blz;
+      const linhas = [];
+      b.pedidos.forEach((p) => {
+        const linha = (b.plano || {})[p.num] || {};
+        const t = { spear: 0, sword: 0, heavy: 0 };
+        Object.keys(linha).forEach((vid) => {
+          if (soEnviados && !((b.enviados[p.num] || {})[vid])) return;
+          BLZ_UNITS.forEach((u) => { t[u] += (linha[vid] || {})[u] || 0; });
+        });
+        if (!(t.spear + t.sword + t.heavy)) return;
+        linhas.push(p.num + '/' + t.spear + '/' + t.sword + '/0/' + t.heavy + '/0');
+      });
+      return linhas.join('\n');
+    }
+    // ---- Envio ----
+    // Grava a trava ANTES de passar pro próximo e resposta ambígua conta como enviada. Apoio que
+    // sai duas vezes esvazia a aldeia de defesa em dobro, e não tem desfazer — na dúvida, o
+    // barato é você conferir na tela de comandos, não o script reenviar.
+    async function ccBlzEnviar() {
+      const b = config.cmd.blz;
+      const msg = document.getElementById('cc-blz-msg');
+      const diz = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c0483a'; } };
+      if (!config.cmd.suporteOkAt) return diz('O apoio ainda não foi verificado neste mundo — deixe a praça aberta alguns segundos e tente de novo.');
+      const tarefas = [];
+      b.pedidos.forEach((p) => {
+        const linha = b.plano[p.num] || {};
+        Object.keys(linha).forEach((vid) => {
+          if ((b.enviados[p.num] || {})[vid]) return;             // já saiu
+          const q = linha[vid] || {};
+          const amounts = {};
+          BLZ_UNITS.forEach((u) => { if (q[u] > 0) amounts[u] = q[u]; });
+          if (!Object.keys(amounts).length) return;
+          const v = CCVILAS.find((z) => String(z.vid) === String(vid));
+          if (!v) return;
+          tarefas.push({ p: p, v: v, amounts: amounts });
+        });
+      });
+      if (!tarefas.length) return diz('Nada pendente pra enviar — sugira a divisão ou preencha à mão.');
+      diz('Enviando ' + tarefas.length + ' apoio(s)… (não feche a praça)', '#6f6153');
+      let ok = 0, falhas = 0;
+      for (const t of tarefas) {
+        const slots = BLZ_UNITS.map((u) => t.amounts[u] || 0).join('/');
+        try {
+          const prep = await cmdPrepare(t.v.vid, t.p.x, t.p.y, t.amounts, 'support');
+          await cmdFire(prep);
+          b.enviados[t.p.num] = b.enviados[t.p.num] || {};
+          b.enviados[t.p.num][t.v.vid] = Date.now(); save();
+          ok++;
+          pushLog('🛡 Blindagem #' + t.p.num + ': ' + (t.v.coord || t.v.vid) + ' → ' + t.p.coord + ' (' + slots + ')', 'ok', 'cmd');
+        } catch (e) {
+          const em = String(e.message || e);
+          if (/^ambiguo:/i.test(em)) {
+            b.enviados[t.p.num] = b.enviados[t.p.num] || {};
+            b.enviados[t.p.num][t.v.vid] = Date.now(); save();
+            pushLog('🛡 Blindagem #' + t.p.num + ' (' + (t.v.coord || t.v.vid) + '): resposta ambígua, pode ter saído. Marquei como enviada — confira nos comandos antes de repetir.', '', 'cmd');
+          } else {
+            falhas++;
+            pushLog('🛡 Blindagem #' + t.p.num + ' (' + (t.v.coord || t.v.vid) + ') FALHOU: ' + em, 'err', 'cmd');
+          }
+        }
+        await sleep(200);
+      }
+      diz(ok + ' apoio(s) enviado(s)' + (falhas ? ' · ' + falhas + ' falha(s)' : '') + '. O texto do fórum está abaixo.',
+          falhas ? '#a2643a' : '#2e7d3a');
+      ccBlzRender();
+    }
+    function ccBlzRender() {
+      const box = document.getElementById('cc-blz-lista'); if (!box) return;
+      const b = config.cmd.blz;
+      const inp = document.getElementById('cc-blz-url');
+      if (inp && !inp.value) inp.value = b.url || '';
+      BLZ_UNITS.forEach((u) => {
+        const el = document.getElementById('cc-blz-res-' + u);
+        if (el && el.value === '') el.value = b.reserva[u] || 0;
+      });
+      if (!b.pedidos.length) {
+        box.innerHTML = '<div style="color:#8a7d6d;font-size:10px;padding:6px;text-align:center">— sem pedidos. Cole a URL do tópico e clique Buscar. —</div>';
+        const t0 = document.getElementById('cc-blz-texto'); if (t0) t0.value = '';
+        return;
+      }
+      const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid] && v.x != null);
+      const velhas = b.entregas.filter((e) => !e.posEdicao).length;
+      let h = '<div style="font-size:9px;color:#8a7d6d;margin-bottom:4px">' +
+        b.pedidos.length + ' pedido(s) · tabela editada ' +
+        (b.editadoEm ? new Date(b.editadoEm).toLocaleString('pt-BR') : '(data não lida)') +
+        (velhas ? ' · <b style="color:#a2643a">' + velhas + ' entrega(s) anteriores à edição ignoradas</b> — a tribo renumera os pedidos' : '') +
+        '</div>';
+      h += '<table style="width:100%;font-size:10px;border-collapse:collapse">' +
+        '<tr style="color:#8a7d6d;text-align:left"><th>#</th><th>aldeia</th><th>pede</th><th>já veio</th><th>falta</th><th>eu mando</th></tr>';
+      b.pedidos.forEach((p) => {
+        const ent = ccBlzEntregue(p.num), falta = ccBlzFalta(p), meu = ccBlzMeuTotal(p.num);
+        const trio = (o) => BLZ_UNITS.map((u) => o[u] || 0).join('/');
+        const zerado = !(falta.spear + falta.sword + falta.heavy);
+        const nMinhas = Object.keys((b.plano[p.num] || {})).length;
+        const nEnv = Object.keys((b.enviados[p.num] || {})).length;
+        h += '<tr style="border-top:1px solid #efe7d8' + (zerado ? ';opacity:.55' : '') + '">' +
+          '<td><b>' + p.num + '</b></td>' +
+          '<td>' + esc(p.nome) + ' <span style="color:#8a7d6d">' + esc(p.coord) + '</span></td>' +
+          '<td style="color:#6f6153">' + trio(p.pede) + '</td>' +
+          '<td style="color:#8a7d6d">' + trio(ent) + '</td>' +
+          '<td style="color:' + (zerado ? '#2e7d3a' : '#a2643a') + '">' + (zerado ? 'completo' : trio(falta)) + '</td>' +
+          '<td><b style="color:#2e7d3a">' + trio(meu) + '</b>' +
+            (nMinhas ? ' <span style="color:#8a7d6d">de ' + nMinhas + ' aldeia(s)' + (nEnv ? ', ' + nEnv + ' já enviada(s)' : '') + '</span>' : '') +
+          '</td></tr>';
+      });
+      h += '</table>' +
+        '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">ordem dos números: ' +
+        BLZ_UNITS.map((u) => BLZ_ROT[u]).join(' / ') + ' · origens marcadas: <b>' + marcadas.length + '</b></div>';
+      box.innerHTML = h;
+      const t = document.getElementById('cc-blz-texto');
+      if (t) t.value = ccBlzTexto(false);
     }
     async function ccMassaEnviar() {
       const msg = document.getElementById('cc-massa-msg');
@@ -3681,8 +4030,34 @@
             '<div style="font-size:9px;color:#8a7d6d;margin:4px 0 2px">Tropas por aldeia — número, <b>50%</b> ou <b>tudo</b>:</div>' +
             '<div id="cc-massa-unidades" style="display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px"></div>' +
             '<button id="cc-massa-enviar" class="twmgr-btn twmgr-go" style="width:100%">🚚 Enviar apoio agora</button>' +
+            '' +
             '<div id="cc-massa-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
             '<div id="cc-massa-rel" style="font-size:10px;margin-top:4px;color:#6f6153;font-family:Consolas,monospace;white-space:pre-wrap;height:200px;min-height:60px;resize:vertical;overflow-y:auto"></div>' +
+          '</div>' +
+          // Blindagem da tribo: aparece só na aba 🛡. Usa as origens marcadas embaixo, igual à massa.
+          '<div id="cc-blz-cfg" style="display:none">' +
+            '<div style="font-size:10px;color:#6f6153;margin:4px 0 2px">Tópico da tribo</div>' +
+            '<div style="display:flex;gap:4px">' +
+              '<input id="cc-blz-url" class="twmgr-inp" style="flex:1;font-size:10px" placeholder="cole aqui a URL do tópico de blindagens">' +
+              '<button id="cc-blz-buscar" class="twmgr-btn twmgr-ghost" style="padding:4px 10px">Buscar</button>' +
+            '</div>' +
+            '<div style="font-size:10px;color:#6f6153;margin:7px 0 2px">Reserva de casa ' +
+              '<span style="color:#8a7d6d;font-weight:400">— o que NUNCA sai, por aldeia</span></div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+              BLZ_UNITS.map((u) => '<label style="display:flex;align-items:center;gap:3px;font-size:10px">' + BLZ_ROT[u] +
+                '<input id="cc-blz-res-' + u + '" class="twmgr-inp" type="number" min="0" style="width:62px;font-size:10px;padding:1px" placeholder="0"></label>').join('') +
+            '</div>' +
+            '<div id="cc-blz-lista" style="margin-top:7px;max-height:240px;overflow-y:auto;background:#fff;border:1px solid #ece4d8;border-radius:6px;padding:5px"></div>' +
+            '<div style="display:flex;gap:4px;margin-top:6px">' +
+              '<button id="cc-blz-sugerir" class="twmgr-btn twmgr-ghost" style="flex:1" title="distribui a defesa das origens marcadas entre os pedidos, do mais perto pro mais longe">✨ Sugerir divisão</button>' +
+              '<button id="cc-blz-limpar" class="twmgr-btn twmgr-ghost" style="padding:4px 10px" title="descarta a divisão sugerida (não desfaz o que já foi enviado)">🧹</button>' +
+            '</div>' +
+            '<button id="cc-blz-enviar" class="twmgr-btn twmgr-go" style="width:100%;margin-top:4px">🛡 Enviar apoio agora</button>' +
+            '<div id="cc-blz-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
+            '<div style="font-size:10px;color:#6f6153;margin:6px 0 2px">Linhas pro fórum ' +
+              '<span style="color:#8a7d6d;font-weight:400">— pedido/lanceiro/espadachim/0/cav.pesada/0</span></div>' +
+            '<textarea id="cc-blz-texto" class="twmgr-inp" readonly style="width:100%;height:70px;font-size:10px;font-family:Consolas,monospace"></textarea>' +
+            '<button id="cc-blz-copiar" class="twmgr-btn twmgr-ghost" style="width:100%;margin-top:3px">📋 Copiar linhas</button>' +
           '</div>' +
         '</div>' +   // fim de #cc-aba-corpo
         // Tropas digitadas AQUI, não nas caixas do jogo. "tudo" = manda o estoque inteiro daquela origem.
@@ -3796,6 +4171,51 @@
       document.getElementById('cc-diag').addEventListener('click', ccDiagnostico);
       // Apoio em massa
       document.getElementById('cc-massa-enviar').addEventListener('click', () => { keepAwake(true); ccMassaEnviar(); });
+      // Blindagem
+      document.getElementById('cc-blz-buscar').addEventListener('click', async () => {
+        const m = document.getElementById('cc-blz-msg');
+        if (m) { m.style.color = '#6f6153'; m.textContent = 'lendo o tópico…'; }
+        try {
+          const r = await ccBlzBuscar();
+          if (m) { m.style.color = '#2e7d3a';
+            m.textContent = r.pedidos.length + ' pedido(s) e ' + r.entregas.length + ' entrega(s) lidos.'; }
+        } catch (e) {
+          if (m) { m.style.color = '#c0483a'; m.textContent = 'não deu: ' + (e.message || e); }
+        }
+        ccBlzRender();
+      });
+      document.getElementById('cc-blz-sugerir').addEventListener('click', () => {
+        const m = document.getElementById('cc-blz-msg');
+        const r = ccBlzSugerir();
+        if (m) {
+          if (r.erro) { m.style.color = '#c0483a'; m.textContent = r.erro; }
+          else if (!r.alocado) { m.style.color = '#a2643a'; m.textContent = 'nada a alocar — ou os pedidos já estão cobertos, ou a reserva de casa consome tudo.'; }
+          else { m.style.color = '#2e7d3a'; m.textContent = r.alocado + ' unidade(s) distribuídas. Confira e clique em Enviar.'; }
+        }
+        ccBlzRender();
+      });
+      document.getElementById('cc-blz-limpar').addEventListener('click', () => {
+        // Só o que NÃO saiu: apagar a marca do enviado reabriria a porta pro reenvio.
+        const b = config.cmd.blz;
+        Object.keys(b.plano).forEach((num) => {
+          Object.keys(b.plano[num]).forEach((vid) => {
+            if (!((b.enviados[num] || {})[vid])) delete b.plano[num][vid];
+          });
+        });
+        save(); ccBlzRender();
+      });
+      document.getElementById('cc-blz-enviar').addEventListener('click', () => { keepAwake(true); ccBlzEnviar(); });
+      document.getElementById('cc-blz-copiar').addEventListener('click', async () => {
+        const t = document.getElementById('cc-blz-texto'), m = document.getElementById('cc-blz-msg');
+        try { await navigator.clipboard.writeText(t.value || ''); if (m) { m.style.color = '#2e7d3a'; m.textContent = 'linhas copiadas.'; } }
+        catch (e) { t.select(); if (m) { m.style.color = '#a2643a'; m.textContent = 'não consegui copiar — o texto está selecionado, use Ctrl+C.'; } }
+      });
+      BLZ_UNITS.forEach((u) => {
+        const el = document.getElementById('cc-blz-res-' + u); if (!el) return;
+        el.addEventListener('change', () => {
+          config.cmd.blz.reserva[u] = Math.max(0, parseInt(el.value, 10) || 0); save();
+        });
+      });
       ccMassaUnidades();
       // ---- Operação ----
       document.getElementById('cc-op-sel').addEventListener('change', (e) => {
@@ -3882,16 +4302,21 @@
         if (fk) fk.style.display = (tipo === 'fake') ? 'block' : 'none';
         // Operação e Apoio em massa têm UI própria: ambas escondem a grade de tropas global.
         // A Operação esconde também a lista de Origens (ela tem a sua, por alvo).
-        const massa = (tipo === 'massa'), op = (tipo === 'op');
+        // A Blindagem se comporta como a massa: tem UI própria, dispara na hora (nada de armar) e
+        // reaproveita a lista de Origens de baixo pra saber de quais aldeias pode tirar defesa.
+        const massa = (tipo === 'massa'), op = (tipo === 'op'), blz = (tipo === 'blz');
         const mcfg = document.getElementById('cc-massa-cfg'); if (mcfg) mcfg.style.display = massa ? 'block' : 'none';
         const ocfg = document.getElementById('cc-op-cfg'); if (ocfg) ocfg.style.display = op ? 'block' : 'none';
-        const tsec = document.getElementById('cc-tropas-sec'); if (tsec) tsec.style.display = (massa || op) ? 'none' : 'block';
+        const bcfg = document.getElementById('cc-blz-cfg'); if (bcfg) bcfg.style.display = blz ? 'block' : 'none';
+        if (blz) ccBlzRender();
+        const tsec = document.getElementById('cc-tropas-sec'); if (tsec) tsec.style.display = (massa || op || blz) ? 'none' : 'block';
         const osec = document.getElementById('cc-origens-sec'); if (osec) osec.style.display = op ? 'none' : 'block';
-        const arow = document.getElementById('cc-armar-row'); if (arow) arow.style.display = massa ? 'none' : 'flex';
+        const arow = document.getElementById('cc-armar-row'); if (arow) arow.style.display = (massa || blz) ? 'none' : 'flex';
         // O campo de alvo único não serve pro fake (tem lista própria) nem pra Operação (o alvo
         // é do bloco). Antes ficavam só apagados e continuavam ali em cima, confundindo — agora
         // somem de vez.
-        const semAlvoGlobal = (tipo === 'fake' || op);
+        // A Blindagem também não usa o alvo único: os alvos são as aldeias da tabela da tribo.
+        const semAlvoGlobal = (tipo === 'fake' || op || blz);
         const rAlvo = document.getElementById('cc-row-alvo');
         if (rAlvo) rAlvo.style.display = semAlvoGlobal ? 'none' : 'flex';
         // Chegada: a Operação tem a dela na etapa 1, então some. Já o Fake NÃO tem campo próprio
@@ -3899,7 +4324,8 @@
         // linha é MOVIDA pra dentro do bloco do Fake e volta pro lugar ao sair dele.
         const rCheg = document.getElementById('cc-row-chegada');
         if (rCheg) {
-          rCheg.style.display = op ? 'none' : 'flex';
+          // Blindagem não marca horário: o apoio sai assim que você manda, sem agendar.
+          rCheg.style.display = (op || blz) ? 'none' : 'flex';
           const destino = document.getElementById((tipo === 'fake') ? 'cc-fake-chegada-slot' : 'cc-chegada-slot');
           if (destino && rCheg.parentElement !== destino) destino.appendChild(rCheg);
         }

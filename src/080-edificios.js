@@ -552,6 +552,18 @@
     const box = document.getElementById('twmgr-bld-plan'); if (!box) return;
     const plan = bldPlanAtual();
     if (!plan.length) { box.innerHTML = '<div style="color:#8a7d6d;text-align:center;padding:10px;font-size:10px">— lista vazia (use o + abaixo pra adicionar) —</div>'; renderBuildSummary(); return; }
+    // População que cada item vai ocupar. O "de onde até onde" importa: o item não custa a
+    // acumulada do nível alvo, e sim o SALTO desde o nível que o modelo já tinha alcançado
+    // naquele prédio antes desta linha — senão "main 5" e depois "main 20" contariam o 5 duas
+    // vezes. Por isso o acompanhamento em `ate`, na ordem da lista.
+    const ate = {};
+    const popItem = plan.map((it) => {
+      if (it.en === false) return 0;
+      const de = ate[it.b] || 0;
+      if (!(it.lvl > de)) return 0;
+      ate[it.b] = it.lvl;
+      return popAcumEdificio(it.b, it.lvl) - popAcumEdificio(it.b, de);
+    });
     box.innerHTML = plan.map((it, i) => {
       const meta = BUILD_META[it.b] || { name: it.b, ico: '?', max: 30 };
       const disabled = it.en === false ? ' twmgr-bld-off' : '';
@@ -561,6 +573,8 @@
         '<span class="twmgr-bld-ico">' + buildingIcon(it.b, meta.ico) + '</span>' +
         '<span class="twmgr-bld-name" title="' + esc(meta.name) + ' (máx ' + meta.max + ')">' + esc(meta.name) + '</span>' +
         '<input type="number" class="twmgr-bld-lvl twmgr-inp" data-i="' + i + '" min="1" max="' + meta.max + '" value="' + it.lvl + '" title="nível alvo">' +
+        '<span style="font-size:9px;color:' + (popItem[i] > 0 ? '#a2643a' : '#c4b9a6') + ';min-width:38px;text-align:right" ' +
+          'title="população da fazenda que este salto ocupa">' + (popItem[i] > 0 ? '🌾' + fmtN(popItem[i]) : '') + '</span>' +
         '<span class="twmgr-bld-up" data-i="' + i + '" title="subir prioridade">▲</span>' +
         '<span class="twmgr-bld-down" data-i="' + i + '" title="descer prioridade">▼</span>' +
         '<span class="twmgr-bld-rm" data-i="' + i + '" title="remover">✕</span>' +
@@ -597,10 +611,20 @@
     if (!plan.length) { box.innerHTML = '<span style="color:#8a7d6d;font-size:10px">— modelo vazio —</span>'; return; }
     const fim = {};
     plan.forEach((it) => { fim[it.b] = Math.max(fim[it.b] || 0, it.lvl); });
+    // Total de população que os prédios vão ocupar com o modelo COMPLETO. É a acumulada do
+    // nível final de cada prédio (não a soma dos itens — o modelo pode passar pelo mesmo
+    // prédio várias vezes). Esse número sai da fazenda antes de sobrar espaço pra tropa, e é
+    // exatamente o que o Recrutar por receita desconta.
+    const totalPop = BUILD_KEYS.reduce((s, b) => s + (fim[b] ? popAcumEdificio(b, fim[b]) : 0), 0);
+    const fz = (function () { const e = document.getElementById('pop_max_label');
+      const n = e ? (parseInt((e.textContent || '').replace(/\D/g, ''), 10) || 0) : 0; return n > 0 ? n : null; })();
     box.innerHTML = BUILD_KEYS.filter((b) => fim[b]).map((b) => {
       const meta = BUILD_META[b];
       return '<span class="twmgr-bld-sumcell" title="' + esc(meta.name) + '">' + buildingIcon(b, meta.ico) + '<b>' + fim[b] + '</b></span>';
-    }).join('');
+    }).join('') +
+      '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">Modelo completo ocupa <b style="color:#a2643a">🌾 ' + fmtN(totalPop) + '</b> de população' +
+        (fz ? ' <span style="color:#a2643a">(' + Math.round(100 * totalPop / fz) + '% da fazenda desta aldeia, de ' + fmtN(fz) + ')</span>' : '') +
+      '</div>';
   }
   // Gatilhos condicionais do modelo — espelham o "Priorize a construção da fazenda em: menos de X%
   // da população disponível" do Gerente de conta, mais o mesmo para o armazém. Ambos furam a ordem

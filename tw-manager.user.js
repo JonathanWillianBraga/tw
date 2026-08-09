@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.109.0
+// @version      11.110.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.109.0';
+  const VERSION = '11.110.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -309,6 +309,11 @@
     // Cunhar DESLIGADO por padrão: gasta recurso sem volta. Quando ligado tem alvo claro —
     // cunha até alguma aldeia perto conseguir fechar um NT de `cunharAte` nobres.
     cunhar: false, cunharAte: 4, cunharMaxAldeias: 3,
+    // Fila paralela: todo alvo é planejado no ciclo, em vez de a fila travar no primeiro que
+    // ainda não tem a lealdade garantida. O pool de nobres já impede uso duplo, e a ordem da
+    // fila segue dando a primeira escolha — muda só que alvo de outra região deixa de esperar
+    // por quem não disputa nobre com ele.
+    paralelo: false,
     // Pós-conquista: joga a aldeia tomada num grupo estático.
     posGrupo: false, posGrupoId: '', posFeitos: {},
     posBandeira: false, posBandeiraTipo: '', posBandeiraNivel: 1,
@@ -5845,6 +5850,60 @@
   //
   // A PRIMEIRA coordenada da linha é o DESTINO ("Ataque a Aldeia de bárbaros (853|450) K48"); a
   // segunda coluna é a origem. Por isso lê a primeira célula, não a linha inteira.
+  // ---- Fonte melhor: a FICHA DO ALVO (info_village) ----
+  // A tela global de comandos tem três defeitos que só somem trocando de fonte:
+  //   1. é a conta inteira (medido: 680 linhas) pra extrair 1 informação por alvo;
+  //   2. mistura retorno com ida, e o filtro por hint casava "Com nobre (retornando)";
+  //   3. — o pior — ela não sabe dizer o que JÁ POUSOU. O jogo simplesmente para de listar.
+  //      Por isso existia o caderno local, que guardava o pousado por até 48h esperando um
+  //      relatório de nobre pra podar. Sem relatório, a entrada envelhecia contando como
+  //      cobertura: alvo sem NENHUM nobre indo aparecia com "2 a caminho" (caso real medido).
+  //
+  // A ficha do alvo resolve os três de uma vez: 85 KB / ~350 ms, lista só o que vai PRA ELE,
+  // separa ida de volta por data-command-type, e traz a ORIGEM na 1ª coluna. Como ela é a
+  // verdade do instante, o que não está lá não está voando — não há o que envelhecer.
+  let _nbVidPorCoord = null;
+  async function nobleVidDoAlvo(coord) {
+    if (!_nbVidPorCoord) {
+      const arr = await getMapVillages(false);
+      _nbVidPorCoord = {};
+      (arr || []).forEach((v) => { _nbVidPorCoord[v.x + '|' + v.y] = v.vid; });
+    }
+    return _nbVidPorCoord[coord] || null;
+  }
+  async function nobleComandosDoAlvo(coord) {
+    const vid = await nobleVidDoAlvo(coord);
+    if (!vid) return null;
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=info_village&id=' + vid, { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const cont = doc.querySelector('#commands_outgoings[data-type="towards_village"]');
+    if (!cont) return [];
+    const agora = Date.now();
+    const out = [];
+    cont.querySelectorAll('tr').forEach((tr) => {
+      const tds = tr.querySelectorAll('td'); if (!tds.length) return;
+      const tipos = tr.querySelectorAll('[data-command-type]');
+      let ehRetorno = false;
+      for (let i = 0; i < tipos.length; i++) if ((tipos[i].getAttribute('data-command-type') || '') === 'return') ehRetorno = true;
+      const temNobre = tr.querySelector('img[src*="/snob"]') ||
+        Array.prototype.some.call(tr.querySelectorAll('[data-icon-hint]'), (e) => {
+          const h = e.getAttribute('data-icon-hint') || '';
+          return /obre/i.test(h) && !/retorn/i.test(h);
+        });
+      if (ehRetorno || !temNobre) return;
+      let chega = 0;
+      for (const td of tds) {
+        if (/\d{1,2}:\d{2}:\d{2}/.test(td.textContent || '')) { chega = desviarParseArriveAt(td.textContent); break; }
+      }
+      // Na ficha do alvo a 1ª coluna é a ORIGEM (o destino é a própria aldeia da ficha).
+      const oTxt = ((tds[0] && tds[0].textContent) || '').replace(/\s+/g, ' ').trim();
+      const om = oTxt.match(/\((\d{1,3})\|(\d{1,3})\)/);
+      out.push({ at: agora, chega: chega || (agora + 3600000), n: 1, doJogo: 1,
+                 origem: om ? (om[1] + '|' + om[2]) : null, origemNome: oTxt.split('(')[0].trim() || oTxt || null });
+    });
+    return out;
+  }
   async function nobleComandosNoJogo() {
     const res = await fetch('/game.php?village=' + CUR_VID
       + '&screen=overview_villages&mode=commands&type=outgoing&page=-1', { credentials: 'include' });
@@ -6636,9 +6695,21 @@
     // O JOGO é a fonte da verdade sobre o que está a caminho. Vem antes de tudo: a fila inteira
     // (exigência, previsão, estado) sai daqui. Se a leitura falhar, segue com o caderno interno
     // e avisa — melhor um plano baseado em dado velho do que nenhum plano.
-    try { nobleSincronizaEmVoo(await nobleComandosNoJogo()); }
-    catch (e) {
-      pushLog('Noblar: não consegui ler os comandos a caminho no jogo (' + (e.message || e)
+    // Uma ficha por alvo ATIVO (resolvido não precisa). É a verdade do instante: o que não está
+    // lá não está voando. Por isso o resultado SUBSTITUI a lista do alvo em vez de somar com o
+    // caderno — era a soma que deixava pousado velho contando como cobertura.
+    try {
+      const ativos = (config.noble.alvos || []).filter((a) => !a.noblada && !a.perdida);
+      config.noble.emVoo = config.noble.emVoo || {};
+      for (const a of ativos) {
+        const lista = await nobleComandosDoAlvo(a.coord);
+        if (lista == null) continue;                       // alvo fora do village.txt: mantém o que tinha
+        if (lista.length) config.noble.emVoo[a.coord] = lista;
+        else delete config.noble.emVoo[a.coord];
+        await sleep(200);
+      }
+    } catch (e) {
+      pushLog('Noblar: não consegui ler as fichas dos alvos (' + (e.message || e)
         + ') — este ciclo usa só o registro interno, que não enxerga envio manual.', '', 'noble');
     }
 
@@ -6769,7 +6840,14 @@
       item.prontoEm = prontoEm;
       // Aldeia propria nao trava nada -- nao ha o que noblar e o alvo so espera ser removido.
       // Sem relatorio nunca lido nao ha previsao: cai no que ainda falta do modelo.
-      if (!r.propria) {
+      // A trava serial existe pra RESERVAR a produção futura de nobres pro alvo da vez — sem
+      // ela, um alvo de trás pegaria o nobre que acabou de sair da Academia e o da frente nunca
+      // fecharia. Mas ela também segura alvo em OUTRA REGIÃO, que não disputa nobre nenhum com
+      // o da frente: o pool `usados` já garante que o mesmo nobre não vai pra dois alvos, e a
+      // ordem da fila já dá a primeira escolha pra quem está na frente.
+      // No modo paralelo todo alvo é planejado e pega o que sobrou — quem não achar nobre diz
+      // "sem nobres", que é informação, em vez de um "Aguardando" que esconde o motivo.
+      if (!r.propria && !config.noble.paralelo) {
         travado = (prevFinal != null) ? (prevFinal > 0) : (r.falta == null || r.falta > 0);
       }
     }
@@ -7330,6 +7408,7 @@
     nobleLerTplEditor();
     if (g('twmgr-nb-int')) c.interval = Math.max(1, parseInt(g('twmgr-nb-int').value, 10) || 15) * 60;
     if (g('twmgr-nb-prod')) c.produzir = g('twmgr-nb-prod').checked;
+    if (g('twmgr-nb-paralelo')) c.paralelo = g('twmgr-nb-paralelo').checked;
     if (g('twmgr-nb-rel')) c.lerRelatorios = g('twmgr-nb-rel').checked;
     if (g('twmgr-nb-lpa')) c.lealdadePorAtk = Math.max(1, Math.min(100, parseInt(g('twmgr-nb-lpa').value, 10) || 25));
     if (g('twmgr-nb-regen')) c.lealdadeRegen = Math.max(0, Math.min(10, parseFloat(g('twmgr-nb-regen').value) || 0));
@@ -9804,6 +9883,9 @@
               '<label class="twmgr-sw"><input id="twmgr-nb-prod" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px"><b>Nunca cunha.</b> Cunhar converte recurso em moeda sem volta, num alvo que pode nem sair — isso fica com você, no modo <b>Cunhar</b> do Mercado.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto pra mais longe, e a que não conseguir agora <b>não interrompe</b> — tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>' +
+            '<div class="twmgr-fld" style="margin-top:9px"><span title="Por padrão a fila é serial: o alvo da vez trava os de trás até a lealdade prevista dele chegar a zero, pra reservar o nobre que ainda vai sair da Academia. Ligado, todo alvo é planejado no mesmo ciclo e pega o que sobrou — a ordem da fila segue dando a primeira escolha. Útil quando os alvos estão em regiões diferentes e não disputam os mesmos nobres.">Planejar todos os alvos <span style="color:#8a7d6d">(não travar a fila)</span></span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-paralelo" type="checkbox"><i></i></label></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Desligado, alvo de outra região fica em <b>Aguardando</b> mesmo tendo nobre perto dele. Ligado, ele é planejado — e se não achar nobre, diz <b>sem nobres</b> em vez de esconder o motivo.</div>' +
           '</div>' +
         '</div>' +
         '</div>' +
@@ -10182,8 +10264,9 @@
 
 
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
+    document.getElementById('twmgr-nb-paralelo').checked = !!config.noble.paralelo;
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
-     'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen',
+     'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen', 'twmgr-nb-paralelo',
      'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid',
      'twmgr-nb-posband'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);

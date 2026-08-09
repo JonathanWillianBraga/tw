@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.109.0
+// @version      11.110.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.109.0';
+  const VERSION = '11.110.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -309,6 +309,11 @@
     // Cunhar DESLIGADO por padrão: gasta recurso sem volta. Quando ligado tem alvo claro —
     // cunha até alguma aldeia perto conseguir fechar um NT de `cunharAte` nobres.
     cunhar: false, cunharAte: 4, cunharMaxAldeias: 3,
+    // Fila paralela: todo alvo é planejado no ciclo, em vez de a fila travar no primeiro que
+    // ainda não tem a lealdade garantida. O pool de nobres já impede uso duplo, e a ordem da
+    // fila segue dando a primeira escolha — muda só que alvo de outra região deixa de esperar
+    // por quem não disputa nobre com ele.
+    paralelo: false,
     // Pós-conquista: joga a aldeia tomada num grupo estático.
     posGrupo: false, posGrupoId: '', posFeitos: {},
     posBandeira: false, posBandeiraTipo: '', posBandeiraNivel: 1,

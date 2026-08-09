@@ -747,6 +747,9 @@
               '<label class="twmgr-sw"><input id="twmgr-nb-prod" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px"><b>Nunca cunha.</b> Cunhar converte recurso em moeda sem volta, num alvo que pode nem sair — isso fica com você, no modo <b>Cunhar</b> do Mercado.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Vai da aldeia mais perto pra mais longe, e a que não conseguir agora <b>não interrompe</b> — tenta a próxima. O nobre formado entra na fila da Academia, então só aparece no plano do ciclo seguinte.</div>' +
+            '<div class="twmgr-fld" style="margin-top:9px"><span title="Por padrão a fila é serial: o alvo da vez trava os de trás até a lealdade prevista dele chegar a zero, pra reservar o nobre que ainda vai sair da Academia. Ligado, todo alvo é planejado no mesmo ciclo e pega o que sobrou — a ordem da fila segue dando a primeira escolha. Útil quando os alvos estão em regiões diferentes e não disputam os mesmos nobres.">Planejar todos os alvos <span style="color:#8a7d6d">(não travar a fila)</span></span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-paralelo" type="checkbox"><i></i></label></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Desligado, alvo de outra região fica em <b>Aguardando</b> mesmo tendo nobre perto dele. Ligado, ele é planejado — e se não achar nobre, diz <b>sem nobres</b> em vez de esconder o motivo.</div>' +
           '</div>' +
         '</div>' +
         '</div>' +
@@ -1125,8 +1128,9 @@
 
 
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
+    document.getElementById('twmgr-nb-paralelo').checked = !!config.noble.paralelo;
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
-     'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen',
+     'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen', 'twmgr-nb-paralelo',
      'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid',
      'twmgr-nb-posband'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);

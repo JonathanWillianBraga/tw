@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.131.0
+// @version      11.132.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.131.0';
+  const VERSION = '11.132.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -15333,6 +15333,13 @@
       return t;
     }
     // Quanto sobra numa aldeia depois da reserva de casa e do que o plano já comprometeu nela.
+    //
+    // Usa `v.casa` DE PROPÓSITO, e não `v.avail`. O `avail` segue o botão global de fonte de
+    // tropa lá embaixo: em "todas as minhas tropas" ele vale casa + o que está fora apoiando +
+    // o que está voltando. Isso faz sentido pra AGENDAR ataque, que sai daqui a horas e pode
+    // esperar a tropa chegar — mas a blindagem dispara AGORA. Contando o que não está na aldeia,
+    // a divisão prometia defesa que não existe e o envio saía menor (ou falhava) sem explicação.
+    // Aqui só vale o que está em casa neste instante, independente daquele botão.
     function ccBlzLivre(v) {
       const b = config.cmd.blz;
       const usado = { spear: 0, sword: 0, heavy: 0 };
@@ -15340,9 +15347,10 @@
         const q = (b.plano[num] || {})[v.vid]; if (!q) return;
         BLZ_UNITS.forEach((u) => { usado[u] += q[u] || 0; });
       });
+      const casa = v.casa || v.avail || {};
       const livre = {};
       BLZ_UNITS.forEach((u) => {
-        livre[u] = Math.max(0, ((v.avail || {})[u] || 0) - (b.reserva[u] || 0) - usado[u]);
+        livre[u] = Math.max(0, (casa[u] || 0) - (b.reserva[u] || 0) - usado[u]);
       });
       return livre;
     }
@@ -15778,8 +15786,12 @@
         // Estoque por unidade. Mostra o número em uso e, entre parênteses, o que está fora/voltando —
         // assim dá pra ver a diferença sem precisar alternar a fonte.
         const listaU = ccUnidadesDaAba();
+        // Na Blindagem a lista mostra o que está EM CASA, ignorando o botão de fonte — é
+        // exatamente o estoque que a divisão usa (ver ccBlzLivre). Mostrar um número aqui e
+        // dividir por outro deixava a conta sem bater na tela.
+        const estoque = (ccTipo() === 'blz') ? (v.casa || v.avail || {}) : (v.avail || {});
         const tropas = listaU.map((u) => {
-          const q = (v.avail && v.avail[u]) || 0;
+          const q = estoque[u] || 0;
           const foraT = ((v.fora && v.fora[u]) || 0) + ((v.transito && v.transito[u]) || 0);
           if (!q && !foraT) return '';
           const rot = rotUn[u] || u;
@@ -16907,6 +16919,7 @@
             '</div>' +
             '<div style="font-size:10px;color:#6f6153;margin:7px 0 2px">Reserva de casa ' +
               '<span style="color:#8a7d6d;font-weight:400">— o que NUNCA sai, por aldeia</span></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-bottom:3px">A divisão conta só a tropa que está <b>na aldeia agora</b> — apoio sai na hora, tropa voltando não dá pra mandar.</div>' +
             '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
               BLZ_UNITS.map((u) => '<label title="' + BLZ_ROT[u] + '" style="display:flex;align-items:center;gap:3px;font-size:10px">' +
                 unitIcon(u, BLZ_ROT[u]) +

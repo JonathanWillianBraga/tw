@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.112.0
+// @version      11.113.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.112.0';
+  const VERSION = '11.113.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5811,21 +5811,47 @@
     _nbSnobCache = out; _nbSnobAt = Date.now();
     return out;
   }
+  // Velocidade do nobre, do próprio mundo (min por campo). O limite do modelo é em HORAS, então
+  // mostrar distância em campos não responde "cabe no limite?" — medido na conta: 26,9 campos
+  // são 15,7 h, contra um limite de 10 h. Parecia perto e estava fora.
+  // Conferido contra o servidor: nobre = 35,00 min/campo cravado, batendo com get_unit_info.
+  let _nbVelCache = null;
+  async function nobleVelNobre() {
+    if (_nbVelCache != null) return _nbVelCache;
+    try {
+      const [u, c] = await Promise.all([
+        fetch('/interface.php?func=get_unit_info', { credentials: 'include' }).then((r) => r.text()),
+        fetch('/interface.php?func=get_config', { credentials: 'include' }).then((r) => r.text()),
+      ]);
+      const du = new DOMParser().parseFromString(u, 'text/xml');
+      const dc = new DOMParser().parseFromString(c, 'text/xml');
+      const g = (d, sel) => { const e = d.querySelector(sel); return e ? parseFloat(e.textContent.trim()) : NaN; };
+      const vel = g(du, 'snob speed');
+      const ws = g(dc, 'speed') || 1, us = g(dc, 'unit_speed') || 1;
+      if (!isNaN(vel) && vel > 0) _nbVelCache = vel / (ws * us);
+    } catch (e) { /* fica no padrão abaixo */ }
+    if (_nbVelCache == null) _nbVelCache = 35;   // padrão do TW; só vale se /interface.php falhar
+    return _nbVelCache;
+  }
   // Quem PODERIA noblar o alvo: toda aldeia sua com nobre em casa, ordenada por distância.
   // É a resposta pra "por que esse alvo não anda" — a caixa antes só mostrava quem já ia,
   // e num alvo em "Aguardando" (que nem chega a ser planejado) isso era sempre vazio.
   async function nobleCandidatos(alvo) {
-    const [todas, snob] = await Promise.all([getAllVillagesCached(), nobleSnobPorAldeia()]);
+    const [todas, snob, vel] = await Promise.all([getAllVillagesCached(), nobleSnobPorAldeia(), nobleVelNobre()]);
+    const tpl0 = nobleTplsDe(alvo)[0];
+    const limite = (tpl0 && tpl0.t && tpl0.t.maxHoras != null) ? tpl0.t.maxHoras : null;
     const out = [];
     (todas || []).forEach((v) => {
       const m = (v.coord || '').match(/(\d+)\|(\d+)/); if (!m) return;
       if (+m[1] === alvo.x && +m[2] === alvo.y) return;      // a própria aldeia do alvo não é origem
       const n = snob[String(v.vid)] || 0;
       if (!n) return;                                        // sem nobre em casa não é candidata
+      const d = fieldDist(+m[1], +m[2], alvo.x, alvo.y);
+      const horas = (d * vel) / 60;
       out.push({ vid: v.vid, nome: v.name || v.coord, coord: v.coord, nobres: n,
-                 d: fieldDist(+m[1], +m[2], alvo.x, alvo.y) });
+                 d: d, horas: horas, dentro: (limite == null) || (horas <= limite) });
     });
-    out.sort((a, b) => a.d - b.d);
+    out.sort((a, b) => a.horas - b.horas);
     return out;
   }
   // Qual alvo está com a caixa "quem vai noblar" aberta (um por vez — abrir vários empurraria a
@@ -5875,18 +5901,23 @@
       envios.forEach((e) => { usados[String(e.vid)] = 1; });
       const tpl0 = nobleTplsDe(a)[0];
       const tplH = (tpl0 && tpl0.t && tpl0.t.maxHoras != null) ? tpl0.t.maxHoras : null;
+      // Ordenado por TEMPO, não por distância — é o tempo que decide se cabe no limite.
+      const dentro = _nbCand.filter((c) => c.dentro), fora = _nbCand.filter((c) => !c.dentro);
       html += '<table style="width:100%;font-size:10px;border-collapse:collapse">' +
-        '<tr style="color:#8a7340"><td>aldeia</td><td style="width:64px">dist.</td><td style="width:54px">nobres</td><td style="width:96px"></td></tr>' +
-        _nbCand.slice(0, 12).map((c) => '<tr>' +
+        '<tr style="color:#8a7340"><td>aldeia</td><td style="width:74px">viagem</td><td style="width:58px">dist.</td><td style="width:48px">nobres</td><td style="width:88px"></td></tr>' +
+        _nbCand.slice(0, 12).map((c) => '<tr' + (c.dentro ? '' : ' style="opacity:.5"') + '>' +
           '<td>' + esc(c.nome) + ' <span style="color:#8a7340">' + esc(c.coord) + '</span></td>' +
-          '<td>' + c.d.toFixed(1) + ' campos</td>' +
+          '<td><b style="color:' + (c.dentro ? '#3f8f52' : '#a8564a') + '">' + fmtDur(Math.round(c.horas * 3600)) + '</b></td>' +
+          '<td style="color:#8a7340">' + c.d.toFixed(1) + '</td>' +
           '<td><b style="color:#3f8f52">' + c.nobres + '</b></td>' +
-          '<td style="color:#8b5426">' + (usados[String(c.vid)] ? 'vai mandar' : '') + '</td></tr>').join('') +
+          '<td style="color:#8b5426">' + (usados[String(c.vid)] ? 'vai mandar' : (c.dentro ? '' : '<span style="color:#a8564a">fora do limite</span>')) + '</td></tr>').join('') +
         '</table>' +
         (_nbCand.length > 12 ? '<div style="color:#8a7340">…e mais ' + (_nbCand.length - 12) + ' aldeia(s)</div>' : '') +
-        '<div style="color:#8a7340;margin-top:3px">Total: <b>' + _nbCand.reduce((s, c) => s + c.nobres, 0) +
-          '</b> nobre(s) em ' + _nbCand.length + ' aldeia(s)' + (tplH != null ? ', e o modelo corta a viagem em ' + tplH + ' h' : '') +
-          '. A distância é em campos: quem passa do limite de horas é descartado no planejamento.</div>';
+        '<div style="color:#8a7340;margin-top:3px">' +
+          '<b style="color:' + (dentro.length ? '#3f8f52' : '#a8564a') + '">' + dentro.reduce((s, c) => s + c.nobres, 0) +
+          ' nobre(s) dentro do limite</b>' + (tplH != null ? ' de ' + tplH + ' h' : '') +
+          (fora.length ? ' · ' + fora.reduce((s, c) => s + c.nobres, 0) + ' fora (aldeia longe demais)' : '') +
+          '. Viagem calculada pela velocidade do nobre neste mundo.</div>';
     }
     return '<tr><td colspan="8" style="background:#fbf7ee;border-top:none;font-size:10px;padding:6px 10px">' +
       '<div style="color:#6f6153;margin-bottom:3px">Quem nobla <b>' + esc(a.coord) + '</b></div>' + html + '</td></tr>';

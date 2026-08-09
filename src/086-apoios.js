@@ -218,7 +218,7 @@
         + '<span class="twmgr-ap-nome"><b>' + esc(d.nome || d.coord) + '</b>'
         + '<span class="twmgr-ap-coord">' + esc(d.coord) + '</span>'
         + '<div class="twmgr-ap-dono">' + (d.dono ? esc(d.dono) : '<i>bárbara</i>')
-        + ' · ' + d.origens.length + ' origem' + (d.origens.length > 1 ? 'ns' : '') + '</div>'
+        + ' · ' + d.origens.length + (d.origens.length > 1 ? ' origens' : ' origem') + '</div>'
         + '</span>'
         + apoiosLinhaTropas(d.total, unidades)
         + '</div>';

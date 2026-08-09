@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.113.1
+// @version      11.113.2
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.113.1';
+  const VERSION = '11.113.2';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -7970,7 +7970,7 @@
         + '<span class="twmgr-ap-nome"><b>' + esc(d.nome || d.coord) + '</b>'
         + '<span class="twmgr-ap-coord">' + esc(d.coord) + '</span>'
         + '<div class="twmgr-ap-dono">' + (d.dono ? esc(d.dono) : '<i>bárbara</i>')
-        + ' · ' + d.origens.length + ' origem' + (d.origens.length > 1 ? 'ns' : '') + '</div>'
+        + ' · ' + d.origens.length + (d.origens.length > 1 ? ' origens' : ' origem') + '</div>'
         + '</span>'
         + apoiosLinhaTropas(d.total, unidades)
         + '</div>';

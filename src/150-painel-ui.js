@@ -253,6 +253,12 @@
       ".twmgr-pq-up,.twmgr-pq-down,.twmgr-pq-rm{cursor:pointer;text-align:center;font-size:11px;color:#a2643a;opacity:.75}",
       ".twmgr-pq-up:hover,.twmgr-pq-down:hover{opacity:1}",
       ".twmgr-pq-rm{color:#c0483a}.twmgr-pq-rm:hover{opacity:1}",
+      ".twmgr-ap-dest{display:grid;grid-template-columns:14px 1fr auto 74px;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px solid rgba(0,0,0,.07);cursor:pointer;font-size:11px;color:#463b30}",
+      ".twmgr-ap-dest:hover{background:rgba(255,255,255,.45)}",
+      ".twmgr-ap-seta{color:#8a7340;font-size:10px}",
+      ".twmgr-ap-orig{display:grid;grid-template-columns:1fr auto 74px;align-items:center;gap:6px;padding:3px 6px 3px 26px;background:rgba(0,0,0,.035);border-bottom:1px solid rgba(0,0,0,.05);font-size:10px;color:#5a4b3a}",
+      ".twmgr-ap-tropas{white-space:nowrap;text-align:right}",
+      ".twmgr-ap-qtd{text-align:right;color:#6f6153;font-size:10px}",
       ".twmgr-bld-item{display:grid;grid-template-columns:22px 16px 18px 1fr 44px 18px 18px 18px;align-items:center;gap:4px;padding:3px 5px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:#463b30}",
       ".twmgr-bld-item:last-child{border-bottom:none}",
       ".twmgr-bld-item.twmgr-bld-off{opacity:.42;filter:grayscale(.6)}",
@@ -268,7 +274,7 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'paladin', 'etiqueta', 'obra', 'log'].forEach((n) => {
+    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'paladin', 'etiqueta', 'obra', 'apoios', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -331,7 +337,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + tabBtn('apoios', '🛡️', 'Apoios') + '</div>' +
       // Telas de modelo: overlay DENTRO do painel, nao aba nova. Ficam fora do #twmgr-body pra
       // cobrir o painel inteiro (inclusive a barra de abas) enquanto abertas -- e uma tela cheia
       // de edicao, entao trocar de aba no meio nao faz sentido.
@@ -825,6 +831,17 @@
         sec('Aguardando recurso', '<div id="twmgr-ob-demand"></div>') +
         modLog('obra') +
       '</div>' +
+      '<div id="twmgr-tab-apoios" style="display:none">' +
+        hint('🛡️ O jogo só mostra tropa fora agrupada por <b>origem</b> — "a aldeia 001 tem 1999 lanças fora". Nunca por <b>destino</b>. Esta tela inverte: uma linha por aldeia que você está apoiando, com o total somado; clique pra ver quais aldeias suas mandaram.') +
+        sec('Apoios enviados',
+          '<div class="twmgr-row">' +
+            '<button id="twmgr-apoios-ler" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">↻ Ler apoios</button>' +
+            '<span id="twmgr-apoios-status" style="flex:1;font-size:10px;color:#8a7d6d;margin-left:8px"></span>' +
+          '</div>' +
+          '<div id="twmgr-apoios-corpo" style="margin-top:7px"></div>' +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">A leitura custa <b>uma requisição por aldeia com tropa fora</b> — por isso é sob demanda, e o resultado fica em cache por 5 minutos. As unidades saem do cabeçalho da tabela do jogo, então vale em qualquer mundo (o 143 tem 10, o 141 tem 12).</div>') +
+        modLog('apoios') +
+      '</div>' +
       '<div id="twmgr-tab-log" style="display:none">' +
       '<div class="twmgr-hint">🤖 Alerta de CAPTCHA: avisa (navegador + ntfy) quando a tela de verificação aparece. O bot-check só surge num F5 — por isso o <b>Auto-F5 AFK</b>: se você ficar X min sem mexer, recarrega a página pra forçar a verificação a aparecer e te chamar.</div>' +
       '<label class="twmgr-check"><input id="twmgr-cap-en" type="checkbox"> Detectar CAPTCHA</label>' +
@@ -1124,6 +1141,7 @@
 
     fillNobleGrupos();
     bindNoblePosHandlers();
+    bindApoiosHandlers();
     renderNoblePos();
 
 

@@ -176,6 +176,89 @@
   }
   function apoiosSoma(t) { return Object.keys(t).reduce((a, u) => a + t[u], 0); }
 
+  // ── Retirar apoio ───────────────────────────────────────────────────────────
+  // O QUE O JOGO OFERECE, conferido na tela ao vivo (não deduzido):
+  //
+  //   POST /game.php?village=<origem>&screen=place&action=withdraw_selected_unit_counts
+  //        &mode=units&h=<csrf>
+  //   corpo: from-table=other · checkbox_<unidade>=on (quais TIPOS voltam)
+  //                            · id_<awayId>=on       (quais APOIOS)
+  //
+  // A seleção é por TIPO DE UNIDADE, não por quantidade: marcar "lança" devolve TODAS as
+  // lanças daquele apoio. Procurei campo de quantidade na `#units_away` e na info_village do
+  // destino e não existe — o `data-unit-count` da célula não vira input. A granularidade fina
+  // sai de escolher QUAIS apoios, já que cada um tem composição própria.
+  //
+  // Um POST por aldeia de ORIGEM: os awayId pertencem à praça dela.
+  const _apSelLinha = {};                      // awayId -> marcado?
+  const _apSelUnid = {};                       // coord destino -> {unidade: marcada?}
+
+  function apoiosUnidSel(coord, unidades) {
+    // Sem escolha explícita, volta tudo — é o que "mandar voltar" quer dizer.
+    const m = _apSelUnid[coord];
+    if (!m) return unidades.slice();
+    const ks = unidades.filter((u) => m[u]);
+    return ks.length ? ks : [];
+  }
+
+  async function apoiosRetirarDe(vid, awayIds, unids) {
+    const p = new URLSearchParams();
+    p.set('from-table', 'other');
+    unids.forEach((u) => p.set('checkbox_' + u, 'on'));
+    awayIds.forEach((id) => p.set('id_' + id, 'on'));
+    const r = await fetch('/game.php?village=' + vid
+      + '&screen=place&action=withdraw_selected_unit_counts&mode=units&h=' + CSRF,
+      { method: 'POST', credentials: 'include', cache: 'no-store',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p.toString() });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao pedir a retirada em ' + vid);
+
+    // CONFIRMAÇÃO POR EFEITO. O TW responde 200 com página de erro, então `r.ok` não prova
+    // nada — foi exatamente assim que o Desviar reportou sucesso com o exército parado.
+    // Relê a praça e exige que cada unidade pedida esteja zerada naquele apoio.
+    await sleep(700);
+    const depois = await apoiosDetalhe(vid);
+    const porId = {};
+    depois.forEach((it) => { if (it.awayId) porId[it.awayId] = it.tropas; });
+    const teimosos = [];
+    awayIds.forEach((id) => {
+      const t = porId[id];
+      if (!t) return;                          // apoio sumiu da lista: voltou inteiro
+      unids.forEach((u) => { if ((t[u] || 0) > 0) teimosos.push(id + '/' + u); });
+    });
+    if (teimosos.length) {
+      throw new Error('a praça de ' + vid + ' ainda mostra ' + teimosos.length
+        + ' item(ns) parado(s) depois do pedido — a retirada NÃO foi aceita');
+    }
+    return awayIds.length;
+  }
+
+  async function apoiosRetirarSelecao(coord) {
+    const d = _apCache && _apCache.lista.filter((x) => x.coord === coord)[0];
+    if (!d) throw new Error('destino ' + coord + ' não está na leitura atual');
+    const unids = apoiosUnidSel(coord, Object.keys(d.total));
+    if (!unids.length) throw new Error('nenhuma unidade marcada — nada a retirar');
+    // Agrupa por aldeia de origem: um POST por praça.
+    const porOrigem = {};
+    d.origens.forEach((o) => {
+      if (!_apSelLinha[o.awayId]) return;
+      if (!o.awayId) throw new Error('não li o id do apoio vindo de ' + (o.nome || o.coord)
+        + ' — sem ele eu não sei o que estou mandando voltar');
+      (porOrigem[o.vid] || (porOrigem[o.vid] = [])).push(o.awayId);
+    });
+    const vids = Object.keys(porOrigem);
+    if (!vids.length) throw new Error('nenhum apoio marcado');
+    let ok = 0;
+    for (const vid of vids) {
+      await apoiosRetirarDe(vid, porOrigem[vid], unids);
+      ok += porOrigem[vid].length;
+      porOrigem[vid].forEach((id) => { delete _apSelLinha[id]; });
+      await sleep(200);
+    }
+    pushLog('Apoios: mandei voltar ' + ok + ' apoio(s) de ' + coord
+      + ' (' + unids.map(unitPt).join(', ') + ') — confirmado relendo a praça.', 'ok', 'apoios');
+    return ok;
+  }
+
   function apoiosRender() {
     const box = document.getElementById('twmgr-apoios-corpo');
     if (!box) return;
@@ -225,12 +308,31 @@
       if (!aberto) return '<div class="twmgr-ap-cartao">' + cab + '</div>';
       const filhos = d.origens.map((o) =>
         '<div class="twmgr-ap-orig">'
-        + '<span>' + esc(o.nome || o.coord)
+        + '<span><input type="checkbox" class="twmgr-ap-cb" data-away="' + esc(o.awayId || '')
+        + '" data-coord="' + esc(d.coord) + '"' + (_apSelLinha[o.awayId] ? ' checked' : '')
+        + (o.awayId ? '' : ' disabled title="não li o id deste apoio"') + '> '
+        + esc(o.nome || o.coord)
         + '<span class="twmgr-ap-coord">' + esc(o.coord) + '</span>'
         + (o.dist ? '<span class="twmgr-ap-dist">' + esc(o.dist) + '</span>' : '') + '</span>'
         + apoiosLinhaTropas(o.tropas, unidades)
         + '</div>').join('');
-      return '<div class="twmgr-ap-cartao on">' + cab + filhos + '</div>';
+      // A barra de ação: quais TIPOS voltam (padrão: todos) e o botão. Só aparece expandido,
+      // pra não haver botão de mover tropa a um clique de distância numa lista fechada.
+      const uDest = Object.keys(d.total);
+      const sel = apoiosUnidSel(d.coord, uDest);
+      const marcadas = d.origens.filter((o) => _apSelLinha[o.awayId]).length;
+      const acoes = '<div class="twmgr-ap-acoes" data-coord="' + esc(d.coord) + '">'
+        + '<span class="twmgr-ap-lbl">voltar</span>'
+        + uDest.map((u) => '<span class="twmgr-ap-u' + (sel.indexOf(u) >= 0 ? ' on' : '')
+            + '" data-coord="' + esc(d.coord) + '" data-unid="' + esc(u) + '" title="'
+            + esc(unitPt(u)) + '">' + apoiosIcone(u) + '</span>').join('')
+        + '<span style="flex:1"></span>'
+        + '<button class="twmgr-ap-todos" data-coord="' + esc(d.coord) + '">'
+        + (marcadas === d.origens.length ? 'desmarcar' : 'marcar todas') + '</button>'
+        + '<button class="twmgr-ap-go" data-coord="' + esc(d.coord) + '"'
+        + (marcadas ? '' : ' disabled') + '>↩ retirar (' + marcadas + ')</button>'
+        + '</div>';
+      return '<div class="twmgr-ap-cartao on">' + cab + filhos + acoes + '</div>';
     }).join('')
       + (falhas ? '<div style="font-size:9px;color:#b03030;text-align:right;margin-top:5px">'
         + falhas + ' aldeia(s) não puderam ser lidas — os totais estão incompletos</div>' : '');
@@ -255,8 +357,66 @@
   function bindApoiosHandlers() {
     const box = document.getElementById('twmgr-apoios-corpo');
     if (box) {
-      box.addEventListener('click', (e) => {
-        const alvo = e.target.closest ? e.target.closest('.twmgr-ap-dest') : null;
+      box.addEventListener('click', async (e) => {
+        const t = e.target;
+        if (!t.closest) return;
+
+        // 1. marcar/desmarcar um apoio
+        const cb = t.closest('.twmgr-ap-cb');
+        if (cb) {
+          const id = cb.getAttribute('data-away');
+          if (id) { if (cb.checked) _apSelLinha[id] = 1; else delete _apSelLinha[id]; }
+          apoiosRender();
+          return;
+        }
+        // 2. ligar/desligar um tipo de unidade
+        const un = t.closest('.twmgr-ap-u');
+        if (un) {
+          const c = un.getAttribute('data-coord'), u = un.getAttribute('data-unid');
+          const d = _apCache.lista.filter((x) => x.coord === c)[0];
+          const m = _apSelUnid[c] || (_apSelUnid[c] = (() => {
+            const o = {}; Object.keys(d.total).forEach((k) => { o[k] = 1; }); return o;
+          })());
+          if (m[u]) delete m[u]; else m[u] = 1;
+          apoiosRender();
+          return;
+        }
+        // 3. marcar/desmarcar todas as origens do destino
+        const todos = t.closest('.twmgr-ap-todos');
+        if (todos) {
+          const c = todos.getAttribute('data-coord');
+          const d = _apCache.lista.filter((x) => x.coord === c)[0];
+          const cheio = d.origens.every((o) => _apSelLinha[o.awayId]);
+          d.origens.forEach((o) => {
+            if (!o.awayId) return;
+            if (cheio) delete _apSelLinha[o.awayId]; else _apSelLinha[o.awayId] = 1;
+          });
+          apoiosRender();
+          return;
+        }
+        // 4. retirar
+        const go = t.closest('.twmgr-ap-go');
+        if (go) {
+          const c = go.getAttribute('data-coord');
+          const d = _apCache.lista.filter((x) => x.coord === c)[0];
+          const unids = apoiosUnidSel(c, Object.keys(d.total));
+          const n = d.origens.filter((o) => _apSelLinha[o.awayId]).length;
+          if (!window.confirm('Mandar voltar ' + n + ' apoio(s) de ' + (d.nome || c) + ' (' + c + ')?\n\n'
+              + 'Unidades: ' + (unids.length ? unids.map(unitPt).join(', ') : 'NENHUMA')
+              + '\n\nO jogo devolve TODAS as unidades desses tipos nos apoios marcados.')) return;
+          go.disabled = true; go.textContent = 'retirando…';
+          try {
+            await apoiosRetirarSelecao(c);
+            await apoiosLer(true);             // relê: os números têm que refletir a retirada
+          } catch (err) {
+            pushLog('Apoios: ' + (err.message || err), 'err', 'apoios');
+            window.alert('Não consegui retirar:\n\n' + (err.message || err));
+            apoiosRender();
+          }
+          return;
+        }
+        // 5. abrir/fechar o destino
+        const alvo = t.closest('.twmgr-ap-dest');
         if (!alvo) return;
         const c = alvo.getAttribute('data-coord');
         _apAberto[c] = !_apAberto[c];

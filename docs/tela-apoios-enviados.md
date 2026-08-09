@@ -141,7 +141,32 @@ E **LANÇAR** quando a leitura falhar, em vez de devolver "não achei". Foi exat
 defeito do Desviar: `comandoAindaExiste` devolvia "sumiu" sempre — a tela consultada era
 stateful e a regex procurava links montados por JavaScript. Todo cancelamento virava sucesso.
 
+## O parcial: por TIPO, não por quantidade — conferido ao vivo
+
+Inspecionei a `#units_away` no br143 em vez de deduzir. O formulário é:
+
+    POST /game.php?village=<origem>&screen=place&action=withdraw_selected_unit_counts
+         &mode=units&h=<csrf>
+    corpo: from-table=other
+           checkbox_<unidade>=on     ← quais TIPOS voltam (checkbox no <th> da coluna)
+           id_<awayId>=on            ← quais APOIOS (checkbox .troop-request-selector da linha)
+
+Duas coisas importantes:
+
+1. **Não existe campo de quantidade.** Apesar do nome da ação (`..._unit_counts`), não há
+   `input[type=text|number]` em lugar nenhum da tabela, e a célula da unidade — que tem um
+   `data-unit-count="130"` promissor — **não vira input** ao clicar nem ao dar duplo clique
+   (testado). A `info_village` do destino também não oferece retirada.
+   Marcar "lança" devolve TODAS as lanças daquele apoio.
+2. **O checkbox da linha não tem `name`.** Só `class="troop-request-selector"` e
+   `data-away-id`. Quem monta `id_<awayId>=on` é o JS do jogo — por isso montamos o corpo à
+   mão em vez de serializar o formulário.
+
+A granularidade fina sai de escolher **quais apoios**, já que cada um tem composição própria.
+
 ## Aberto
 
 - se dá pra reduzir as 44 requisições
 - o `td[1]` é distância ou tempo? o valor "162.4" parece campos, mas confirmar antes de exibir
+- o servidor aceitaria um `unit_count_<u>=N`? o nome da ação sugere que sim, mas chutar campo
+  em requisição que MOVE TROPA não se faz — só com captura de um envio real do jogo

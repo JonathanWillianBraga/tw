@@ -888,43 +888,63 @@
     return true;
   }
 
-  // Roda depois da varredura de relatórios: alvo com lealdade <= 0 foi conquistado, e a aldeia
-  // agora é minha (aparece no getAllVillages). `posFeitos` impede repetir — sem ele, cada
-  // releitura do relatório antigo re-adicionaria a aldeia ao grupo.
+  // Grava a conquista num histórico próprio. Chamado no INSTANTE em que a aldeia aparece na
+  // minha lista — que é o único momento em que ainda dá pra saber o que ela custou (os voos são
+  // apagados logo em seguida) e qual bandeira/grupo aquele alvo tinha configurado (o alvo sai da
+  // fila 30 min depois, e aí `noblePosDoAlvo` já cairia no padrão global).
+  function nobleRegistrarConquista(a, todas) {
+    const lista = config.noble.conquistadas || (config.noble.conquistadas = []);
+    if (lista.some((c) => c.coord === a.coord)) return;
+    const v = (todas || []).find((x) => (x.coord || '') === a.coord) || {};
+    const cfg = noblePosDoAlvo(a.coord);
+    const origens = [];
+    (nobleVoos(a.coord) || []).forEach((e) => {
+      const n = e.origemNome || e.origem || '?';
+      const j = origens.find((o) => o.nome === n);
+      if (j) j.n++; else origens.push({ nome: n, n: 1 });
+    });
+    lista.unshift({ coord: a.coord, nome: v.name || a.coord, vid: v.vid || null,
+                    at: Date.now(), nobres: (nobleVoos(a.coord) || []).length, origens: origens,
+                    gid: cfg.gid, bandTipo: cfg.bandTipo, bandNivel: cfg.bandNivel });
+    config.noble.conquistadas = lista.slice(0, 100);
+  }
+  // Aplica grupo e bandeira numa aldeia já conquistada. Usada pelo automático E pelo botão
+  // manual — um caminho só, pra os dois não divergirem.
+  //
+  // `forcar` = veio do clique. Aí ignora os interruptores globais: se o usuário apertou o botão,
+  // a intenção é essa, não a de um checkbox de configuração.
+  async function nobleAplicarPos(c, v, forcar) {
+    const feito = [];
+    if ((forcar || config.noble.posGrupo) && c.gid) {
+      try { await nobleAddGrupo(v.vid, c.gid); feito.push('grupo'); }
+      catch (e) { pushLog('Noblar: não consegui pôr ' + c.coord + ' no grupo (' + (e.message || e) + ').', 'err', 'noble'); }
+      await sleep(400);
+    }
+    if ((forcar || config.noble.posBandeira) && c.bandTipo) {
+      try { await nobleEquiparBandeira(v.vid, c.bandTipo, c.bandNivel || 1); feito.push('bandeira'); }
+      catch (e) { pushLog('Noblar: não consegui equipar bandeira em ' + c.coord + ' (' + (e.message || e) + ').', 'err', 'noble'); }
+      await sleep(400);
+    }
+    // Só marca como feito se ALGO deu certo — senão uma falha de rede aposentaria a aldeia
+    // pra sempre e ela nunca entraria no grupo.
+    if (feito.length) {
+      config.noble.posFeitos[c.coord] = Date.now();
+      pushLog('Noblar: ' + c.coord + ' — ' + feito.join(' + ') + ' aplicado(s).', 'ok', 'noble');
+    }
+    return feito;
+  }
+  // Passada automática. Antes ela varria `relatorios` atrás de lealdade <= 0, o que criava um
+  // buraco: quem detecta a conquista de verdade é a lista de aldeias (nobleMinhaAldeia), e esse
+  // caminho não passava por aqui. Alvo sem relatório lido — ou com "Ler relatórios" desligado,
+  // que desligava o bloco inteiro — nunca recebia bandeira nem grupo. Agora a fonte é o
+  // histórico, que é escrito pelo mesmo detector que marca `noblada`.
   async function noblePosConquista(todas) {
     if (!config.noble.posGrupo && !config.noble.posBandeira) return;
-    const rel = config.noble.relatorios || {};
-    for (const coord of Object.keys(rel)) {
-      if (rel[coord].lealdade == null || rel[coord].lealdade > 0) continue;
-      if (config.noble.posFeitos[coord]) continue;
-      const v = (todas || []).find((x) => (x.coord || '') === coord);
+    for (const c of (config.noble.conquistadas || [])) {
+      if (config.noble.posFeitos[c.coord]) continue;
+      const v = (todas || []).find((x) => (x.coord || '') === c.coord);
       if (!v) continue;                 // ainda não entrou na lista de aldeias; tenta no próximo ciclo
-      const alvoCfg = noblePosDoAlvo(coord);
-      const feito = [];
-      if (config.noble.posGrupo && alvoCfg.gid) {
-        try {
-          await nobleAddGrupo(v.vid, alvoCfg.gid);
-          feito.push('grupo');
-        } catch (e) {
-          pushLog('Noblar: não consegui pôr ' + coord + ' no grupo (' + (e.message || e) + ').', 'err', 'noble');
-        }
-        await sleep(400);
-      }
-      if (config.noble.posBandeira && alvoCfg.bandTipo) {
-        try {
-          await nobleEquiparBandeira(v.vid, alvoCfg.bandTipo, alvoCfg.bandNivel || 1);
-          feito.push('bandeira');
-        } catch (e) {
-          pushLog('Noblar: não consegui equipar bandeira em ' + coord + ' (' + (e.message || e) + ').', 'err', 'noble');
-        }
-        await sleep(400);
-      }
-      // Só marca como feito se ALGO deu certo — senão uma falha de rede aposentaria a aldeia
-      // pra sempre e ela nunca entraria no grupo.
-      if (feito.length) {
-        config.noble.posFeitos[coord] = Date.now();
-        pushLog('Noblar: ' + coord + ' conquistada — ' + feito.join(' + ') + ' aplicado(s).', 'ok', 'noble');
-      }
+      await nobleAplicarPos(c, v, false);
     }
     save();
   }
@@ -1418,9 +1438,6 @@
     if (config.noble.lerRelatorios !== false) {
       try { await nobleVarrerRelatorios(alvos); }
       catch (e) { pushLog('Noblar (relatórios): ' + (e.message || e), '', 'noble'); }
-      // Depende do que a varredura acabou de ler, entao vem logo em seguida.
-      try { await noblePosConquista(todas); }
-      catch (e) { pushLog('Noblar (pós-conquista): ' + (e.message || e), 'err', 'noble'); }
     }
 
     // O JOGO é a fonte da verdade sobre o que está a caminho. Vem antes de tudo: a fila inteira
@@ -1453,6 +1470,8 @@
     (config.noble.alvos || []).forEach((a) => {
       if (!a.noblada && nobleMinhaAldeia(a.coord, todas)) {
         a.noblada = Date.now();
+        // ANTES do delete: o registro puxa os voos pra saber quantos nobres a conquista custou.
+        nobleRegistrarConquista(a, todas);
         delete config.noble.emVoo[a.coord];
         pushLog('Noblar: ' + a.coord + ' CONQUISTADA — sai da fila.', 'ok', 'noble');
       }
@@ -1468,6 +1487,13 @@
       const fim = a.noblada || a.perdida;
       return !fim || (Date.now() - fim) < RESOLVIDO_TTL;
     });
+
+    // Só AQUI, depois da detecção: o registro da conquista acabou de ser escrito logo acima, e é
+    // dele que o pós-conquista se alimenta. Rodando antes, a bandeira só sairia no ciclo seguinte.
+    // Fora do "Ler relatórios" de propósito — quem desligava aquilo ficava sem bandeira e sem
+    // grupo, sem nenhum aviso, porque o pós-conquista morava dentro daquele bloco.
+    try { await noblePosConquista(todas); }
+    catch (e) { pushLog('Noblar (pós-conquista): ' + (e.message || e), 'err', 'noble'); }
 
     const cacheTropa = {};
     // Pool global: quanto de cada aldeia os alvos ANTERIORES desta rodada ja levaram. E o que
@@ -1845,6 +1871,9 @@
       _nbBandeiras = [];
       nobleLerBandeiras(true).then(() => { renderNoblePos(); nobleRenderBandPadrao(); }).catch(() => {});
     }
+    // Antes do early-return abaixo: o histórico existe mesmo com a fila vazia — aliás, é
+    // justamente aí que ele importa.
+    renderNobleConquistadas();
     const alvos = config.noble.alvos || [];
     if (!alvos.length) {
       box.innerHTML = '<div style="color:#8a7340;text-align:center;padding:10px;font-size:10px">— nenhum alvo na lista —</div>';
@@ -1871,6 +1900,57 @@
             + (herdaB ? '<div class="sub">padrão</div>' : '') + '</td>' +
           '<td>' + estado + '</td></tr>';
       }).join('') + '</tbody></table>';
+  }
+  // Tabela do HISTÓRICO. Separada da de cima de propósito: aquela é sobre alvos que ainda vão
+  // cair (pré-configuração), esta é sobre aldeias que já são suas. Antes esta não existia, e a
+  // aldeia conquistada sumia da tela 30 min depois levando junto a única forma de pôr bandeira.
+  function renderNobleConquistadas() {
+    const box = document.getElementById('twmgr-nb-conqlista'); if (!box) return;
+    const lista = config.noble.conquistadas || [];
+    if (!lista.length) {
+      box.innerHTML = '<div style="color:#8a7340;text-align:center;padding:8px;font-size:10px">'
+        + '— nenhuma conquista registrada ainda. A partir de agora cada aldeia tomada entra aqui. —</div>';
+      return;
+    }
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-nb-tab"><thead><tr>' +
+      '<th>Aldeia</th><th style="width:78px">quando</th><th style="width:52px" title="nobres que este módulo mandou pra ela">custo</th>' +
+      '<th style="width:88px">Grupo</th><th style="width:74px">Bandeira</th><th style="width:92px"></th></tr></thead><tbody>' +
+      lista.map((c, i) => {
+        const feito = config.noble.posFeitos[c.coord];
+        const g = _nbGrupos.find((x) => String(x.id) === String(c.gid));
+        const dias = Math.floor((Date.now() - c.at) / 86400000);
+        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
+          '<td>' + (c.vid ? '<a href="/game.php?village=' + esc(String(c.vid)) + '&screen=overview" target="_blank" style="color:#5c4423"><b>'
+              + esc(c.nome) + '</b></a>' : '<b>' + esc(c.nome) + '</b>') +
+            ' <span style="color:#8a7340">' + esc(c.coord) + '</span></td>' +
+          '<td style="color:#8a7340">' + new Date(c.at).toLocaleDateString('pt-BR')
+            + (dias > 0 ? ' <span title="' + dias + ' dia(s) atrás">(' + dias + 'd)</span>' : '') + '</td>' +
+          '<td title="' + esc((c.origens || []).map((o) => o.n + '× ' + o.nome).join(', ') || 'origem não registrada') + '">'
+            + (c.nobres ? '<b>' + c.nobres + '</b>👑' : '<span style="color:#8a7340">—</span>') + '</td>' +
+          '<td style="color:#6f6153">' + esc(g ? (g.name || g.id) : (c.gid ? String(c.gid) : '—')) + '</td>' +
+          '<td>' + (c.bandTipo ? esc(String(c.bandTipo)) + ' nv' + (c.bandNivel || 1) : '<span style="color:#8a7340">—</span>') + '</td>' +
+          '<td>' + (feito
+            ? '<span style="color:#3f8f52" title="aplicado em ' + new Date(feito).toLocaleString('pt-BR') + '">✔ aplicado</span>'
+            : '<button class="twmgr-btn twmgr-ghost twmgr-nb-posgo" data-coord="' + esc(c.coord) + '" style="padding:2px 7px;font-size:10px">aplicar agora</button>')
+          + '</td></tr>';
+      }).join('') + '</tbody></table>';
+    box.querySelectorAll('.twmgr-nb-posgo').forEach((b) => b.addEventListener('click', async () => {
+      const coord = b.getAttribute('data-coord');
+      const c = (config.noble.conquistadas || []).find((x) => x.coord === coord); if (!c) return;
+      if (!c.gid && !c.bandTipo) { alert('Essa aldeia não tem grupo nem bandeira definidos — o alvo caiu antes de você configurar.'); return; }
+      b.disabled = true; b.textContent = 'aplicando…';
+      try {
+        const todas = await getAllVillagesCached(true);
+        const v = (todas || []).find((x) => (x.coord || '') === coord);
+        if (!v) throw new Error('não achei essa aldeia na sua lista');
+        const feito = await nobleAplicarPos(c, v, true);   // forçado: o clique é a intenção
+        if (!feito.length) throw new Error('nada foi aplicado — veja o log');
+        save();
+      } catch (e) {
+        alert('Não deu: ' + (e.message || e));
+      }
+      renderNobleConquistadas();
+    }));
   }
   // Botão da célula. Um traço cinza não parecia clicável — o usuário achou que estava quebrado.
   // Agora tem cara de botão: borda tracejada e a palavra "escolher" quando está vazio, borda

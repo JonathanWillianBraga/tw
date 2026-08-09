@@ -824,7 +824,10 @@
             '<div id="twmgr-nb-poslista" class="twmgr-bld-vils"></div>' +
             '<div id="twmgr-nb-flagpick" style="display:none;margin-top:6px;background:#fdfaf4;border:1px solid #e8dfcc;border-radius:8px;padding:7px"></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Cada alvo pode ter o seu. Linha marcada como <b>padrão</b> herda o que está ali em cima — mexer nela desliga a herança <b>só daquele alvo</b>, sem afetar os outros.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Clique na bandeira da linha pra escolher — a grade mostra <b>só as que a conta tem</b>, com o efeito de cada uma.</div>') +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Clique na bandeira da linha pra escolher — a grade mostra <b>só as que a conta tem</b>, com o efeito de cada uma.</div>' +
+            '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:9px 0 3px">Conquistadas</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-bottom:4px">Aldeias que você tomou, com o que cada uma custou. Elas <b>não somem</b> da lista — se o automático não pegou (ou você configurou depois), use <b>aplicar agora</b>.</div>' +
+            '<div id="twmgr-nb-conqlista" class="twmgr-bld-vils"></div>') +
         '</div>' +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +

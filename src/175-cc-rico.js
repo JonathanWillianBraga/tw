@@ -50,6 +50,10 @@
       editadoEm: 0,           // quando a tabela foi editada pela última vez (corta as entregas velhas)
       lidoEm: 0,
       reserva: { spear: 0, sword: 0, heavy: 0 },
+      // Quanto cada aldeia entrega no TOTAL da rodada. Vazio = tudo o que ela tem. Aceita número
+      // ("50"), porcentagem do estoque atual ("50%") ou "tudo" — mesma sintaxe do Apoio massa.
+      porAldeia: { spear: '', sword: '', heavy: '' },
+      alvosSel: {},           // { pedidoNum: true } — pedidos escolhidos; vazio = todos
       plano: {},              // { pedidoNum: { vid: {spear,sword,heavy} } } — o que VOCÊ vai mandar
       enviados: {},           // { pedidoNum: { vid: at } } — trava anti-reenvio
     });
@@ -105,6 +109,8 @@
         if (!Array.isArray(c.cmd.blz.pedidos)) c.cmd.blz.pedidos = [];
         if (!Array.isArray(c.cmd.blz.entregas)) c.cmd.blz.entregas = [];
         if (!c.cmd.blz.reserva) c.cmd.blz.reserva = { spear: 0, sword: 0, heavy: 0 };
+        if (!c.cmd.blz.porAldeia) c.cmd.blz.porAldeia = { spear: '', sword: '', heavy: '' };
+        if (!c.cmd.blz.alvosSel || typeof c.cmd.blz.alvosSel !== 'object') c.cmd.blz.alvosSel = {};
         if (!c.cmd.blz.plano || typeof c.cmd.blz.plano !== 'object') c.cmd.blz.plano = {};
         if (!c.cmd.blz.enviados || typeof c.cmd.blz.enviados !== 'object') c.cmd.blz.enviados = {};
         if (!c.cmd.origens) c.cmd.origens = {};
@@ -2543,6 +2549,48 @@
       });
       return livre;
     }
+    // Orçamento de UMA aldeia pra rodada inteira: o teto que o usuário definiu em "por aldeia",
+    // limitado ao que ela realmente tem livre. Campo vazio = sem teto, entra o disponível todo
+    // (que é como era antes desta opção existir).
+    //
+    // A porcentagem é do ESTOQUE ATUAL da aldeia, não do que sobrou depois da reserva — "50%"
+    // quer dizer metade do que se vê na lista de origens, que é o número que o usuário está
+    // olhando. O corte pela reserva vem depois, no min() com o livre.
+    function ccBlzOrcamento(v) {
+      const b = config.cmd.blz, spec = b.porAldeia || {}, livre = ccBlzLivre(v);
+      const estoque = v.avail || {};
+      // O que o plano JÁ tirou desta aldeia. O teto é da rodada inteira, então precisa descontar
+      // isso — senão ele se renovaria a cada passada e "50 lanceiros" viraria 50 por passada.
+      const usado = { spear: 0, sword: 0, heavy: 0 };
+      Object.keys(b.plano || {}).forEach((num) => {
+        const q = (b.plano[num] || {})[v.vid]; if (!q) return;
+        BLZ_UNITS.forEach((u) => { usado[u] += q[u] || 0; });
+      });
+      const out = {};
+      BLZ_UNITS.forEach((u) => {
+        const raw = String(spec[u] == null ? '' : spec[u]).trim().toLowerCase();
+        let teto = Infinity;
+        if (raw && !/^(tudo|todas|todos|all|max|\*)$/.test(raw)) {
+          if (/%$/.test(raw)) {
+            const p = parseFloat(raw.replace(',', '.'));
+            teto = (p > 0) ? Math.floor(((estoque[u] || 0) * p) / 100) : 0;
+          } else {
+            const q = parseInt(raw.replace(/\D/g, ''), 10);
+            teto = (q > 0) ? q : 0;
+          }
+        }
+        const resta = (teto === Infinity) ? Infinity : Math.max(0, teto - usado[u]);
+        out[u] = Math.max(0, Math.min(resta, livre[u] || 0));
+      });
+      return out;
+    }
+    // Pedidos que entram na divisão. Nenhum marcado = todos (senão o primeiro uso da tela, com a
+    // seleção vazia, não distribuiria nada e pareceria quebrado).
+    function ccBlzPedidosAtivos() {
+      const b = config.cmd.blz, sel = b.alvosSel || {};
+      const marcados = (b.pedidos || []).filter((p) => sel[p.num]);
+      return marcados.length ? marcados : (b.pedidos || []);
+    }
     // ---- A sugestão ----
     // Guloso por DISTÂNCIA: percorre todos os pares (aldeia, pedido) do mais perto pro mais longe
     // e vai preenchendo. Defesa que chega tarde não defende, então proximidade é o critério que
@@ -2567,21 +2615,29 @@
       // entre TODOS os pedidos, na proporção do que cada um ainda precisa: pedido que falta o
       // dobro recebe o dobro. As proporções são calculadas UMA vez, sobre a foto inicial, senão
       // cada alocação mexeria no denominador e a divisão deixaria de ser proporcional.
+      const ativos = ccBlzPedidosAtivos();
+      if (!ativos.length) return { erro: 'nenhum pedido selecionado' };
       const falta0 = {}; const totalFalta = { spear: 0, sword: 0, heavy: 0 };
-      b.pedidos.forEach((p) => {
+      ativos.forEach((p) => {
         falta0[p.num] = ccBlzFalta(p);
         BLZ_UNITS.forEach((u) => { totalFalta[u] += falta0[p.num][u] || 0; });
       });
       marcadas.forEach((v) => {
-        const livre0 = ccBlzLivre(v);
-        b.pedidos.forEach((p) => {
+        // `orc0` é o teto DA RODADA pra esta aldeia (o "por aldeia"); `usadoV` é o que ela já
+        // cedeu nesta passada. Sem esse par, o teto valeria por pedido em vez de por aldeia — uma
+        // aldeia com "50 lanceiros" mandaria 50 pra cada um dos 8 pedidos.
+        const orc0 = ccBlzOrcamento(v);
+        const usadoV = { spear: 0, sword: 0, heavy: 0 };
+        ativos.forEach((p) => {
           const q = {}; let soma = 0;
           const livreAgora = ccBlzLivre(v);        // desce a cada alocação desta mesma aldeia
           BLZ_UNITS.forEach((u) => {
             if (!totalFalta[u]) return;
-            const cota = Math.floor((livre0[u] || 0) * (falta0[p.num][u] || 0) / totalFalta[u]);
-            const n = Math.min(cota, ccBlzFalta(p)[u] || 0, livreAgora[u] || 0);
-            if (n > 0) { q[u] = n; soma += n; }
+            const cota = Math.floor((orc0[u] || 0) * (falta0[p.num][u] || 0) / totalFalta[u]);
+            // O `ccBlzFalta` aqui é o TETO DO PEDIDO: nunca sai mais do que ainda falta nele.
+            const n = Math.min(cota, ccBlzFalta(p)[u] || 0, livreAgora[u] || 0,
+                               Math.max(0, (orc0[u] || 0) - usadoV[u]));
+            if (n > 0) { q[u] = n; soma += n; usadoV[u] += n; }
           });
           if (!soma) return;
           por({ v: v, p: p, q: q }); alocado += soma;
@@ -2591,13 +2647,16 @@
       // O piso da divisão e os pedidos que ficaram menores que a cota deixam resto. Ele vai pelo
       // guloso de distância — aqui concentrar não é problema, é o que sobrou.
       const pares = [];
-      marcadas.forEach((v) => b.pedidos.forEach((p) => pares.push({ v: v, p: p, d: dist(v, p) })));
+      marcadas.forEach((v) => ativos.forEach((p) => pares.push({ v: v, p: p, d: dist(v, p) })));
       pares.sort((a, c) => a.d - c.d);
       pares.forEach((par) => {
         const falta = ccBlzFalta(par.p), livre = ccBlzLivre(par.v);
+        // O teto "por aldeia" vale aqui também: ccBlzOrcamento já desconta o que o plano
+        // comprometeu (via ccBlzLivre), então o que sobra dele é o resto do orçamento.
+        const orc = ccBlzOrcamento(par.v);
         const q = {}; let soma = 0;
         BLZ_UNITS.forEach((u) => {
-          const n = Math.min(falta[u] || 0, livre[u] || 0);
+          const n = Math.min(falta[u] || 0, livre[u] || 0, orc[u] || 0);
           if (n > 0) { q[u] = n; soma += n; }
         });
         if (!soma) return;
@@ -2688,6 +2747,8 @@
       BLZ_UNITS.forEach((u) => {
         const el = document.getElementById('cc-blz-res-' + u);
         if (el && el.value === '') el.value = b.reserva[u] || 0;
+        const pa = document.getElementById('cc-blz-pa-' + u);
+        if (pa && pa.value === '') pa.value = (b.porAldeia || {})[u] || '';
       });
       if (!b.pedidos.length) {
         box.innerHTML = '<div style="color:#8a7d6d;font-size:10px;padding:6px;text-align:center">— sem pedidos. Cole a URL do tópico e clique Buscar. —</div>';
@@ -2701,37 +2762,54 @@
         (b.editadoEm ? new Date(b.editadoEm).toLocaleString('pt-BR') : '(data não lida)') +
         (velhas ? ' · <b style="color:#a2643a">' + velhas + ' entrega(s) anteriores à edição ignoradas</b> — a tribo renumera os pedidos' : '') +
         '</div>';
-      // Cabeçalho com os ícones das unidades: cada número da coluna fica embaixo do bicho certo,
-      // em vez de o usuário ter que decorar que a ordem é lanceiro/espadachim/cavalaria.
-      const cabU = BLZ_UNITS.map((u) => unitIcon(u, BLZ_ROT[u])).join(' ');
+      // Duas colunas de números e só. "pede" e "já veio" viraram tooltip da linha: eles explicam
+      // de onde o "falta" saiu, mas não são o que se olha pra decidir — o que decide é quanto
+      // ainda falta e quanto eu estou mandando. A marca escolhe quem entra na divisão.
+      const sel = b.alvosSel || {};
+      const nSel = b.pedidos.filter((p) => sel[p.num]).length;
+      const trio = (o) => BLZ_UNITS.map((u) => (o[u] || 0) > 0
+        ? unitIcon(u, BLZ_ROT[u]) + fmtN(o[u]) : '').filter(Boolean).join(' ') || '—';
       h += '<table style="width:100%;font-size:10px;border-collapse:collapse">' +
-        '<tr style="color:#8a7d6d;text-align:left"><th>#</th><th>aldeia</th>' +
-        '<th title="o que a tribo pediu">pede ' + cabU + '</th>' +
-        '<th title="entregas validas dos comentarios">já veio</th>' +
-        '<th>falta</th><th title="o que VOCE vai mandar">eu mando</th></tr>';
+        '<tr style="color:#8a7d6d;text-align:left">' +
+        '<th style="width:16px"><input type="checkbox" id="cc-blz-todos" title="marcar/desmarcar todos"' + (nSel === b.pedidos.length ? ' checked' : '') + '></th>' +
+        '<th style="width:16px">#</th><th>aldeia</th>' +
+        '<th style="width:34%">falta</th><th style="width:34%">eu mando</th></tr>';
       b.pedidos.forEach((p) => {
         const ent = ccBlzEntregue(p.num), falta = ccBlzFalta(p), meu = ccBlzMeuTotal(p.num);
-        // Cada número com o ícone colado: a coluna some do lado do bicho errado quando um valor
-        // é zero e a leitura por posição quebra.
-        const trio = (o) => BLZ_UNITS.map((u) => unitIcon(u, BLZ_ROT[u]) + (o[u] || 0)).join(' ');
         const zerado = !(falta.spear + falta.sword + falta.heavy);
         const nMinhas = Object.keys((b.plano[p.num] || {})).length;
         const nEnv = Object.keys((b.enviados[p.num] || {})).length;
-        h += '<tr style="border-top:1px solid #efe7d8' + (zerado ? ';opacity:.55' : '') + '">' +
+        const marcado = nSel ? !!sel[p.num] : true;
+        const tip = 'pedido: ' + BLZ_UNITS.map((u) => (p.pede[u] || 0) + ' ' + BLZ_ROT[u]).join(', ')
+          + '\njá entregue pela tribo: ' + BLZ_UNITS.map((u) => (ent[u] || 0)).join('/');
+        h += '<tr style="border-top:1px solid #efe7d8' + (zerado ? ';opacity:.5' : '') + '" title="' + esc(tip) + '">' +
+          '<td><input type="checkbox" class="cc-blz-sel" data-num="' + p.num + '"' + (marcado ? ' checked' : '') + '></td>' +
           '<td><b>' + p.num + '</b></td>' +
-          '<td>' + esc(p.nome) + ' <span style="color:#8a7d6d">' + esc(p.coord) + '</span></td>' +
-          '<td style="color:#6f6153">' + trio(p.pede) + '</td>' +
-          '<td style="color:#8a7d6d">' + trio(ent) + '</td>' +
+          '<td style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + esc(p.nome) +
+            ' <span style="color:#8a7d6d">' + esc(p.coord) + '</span></td>' +
           '<td style="color:' + (zerado ? '#2e7d3a' : '#a2643a') + '">' + (zerado ? 'completo' : trio(falta)) + '</td>' +
           '<td><b style="color:#2e7d3a">' + trio(meu) + '</b>' +
-            (nMinhas ? ' <span style="color:#8a7d6d">de ' + nMinhas + ' aldeia(s)' + (nEnv ? ', ' + nEnv + ' já enviada(s)' : '') + '</span>' : '') +
+            (nMinhas ? '<div style="color:#8a7d6d">' + nMinhas + ' aldeia(s)' + (nEnv ? ' · ' + nEnv + ' enviada(s)' : '') + '</div>' : '') +
           '</td></tr>';
       });
       // A ordem não precisa mais ser explicada: cada número vem com o ícone da unidade colado.
       h += '</table>' +
         '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">origens marcadas: <b>' + marcadas.length + '</b>' +
-        (marcadas.length ? '' : ' — marque as aldeias na lista de Origens, abaixo') + '</div>';
+        (marcadas.length ? '' : ' — marque as aldeias na lista de Origens, abaixo') +
+        ' · pedidos na divisão: <b>' + (nSel || b.pedidos.length) + '</b>' + (nSel ? '' : ' (nenhum marcado = todos)') +
+        '</div>';
       box.innerHTML = h;
+      box.querySelectorAll('.cc-blz-sel').forEach((el) => el.addEventListener('change', () => {
+        const n = el.getAttribute('data-num');
+        if (el.checked) b.alvosSel[n] = true; else delete b.alvosSel[n];
+        save(); ccBlzRender();
+      }));
+      const todos = document.getElementById('cc-blz-todos');
+      if (todos) todos.addEventListener('change', () => {
+        b.alvosSel = {};
+        if (todos.checked) b.pedidos.forEach((p) => { b.alvosSel[p.num] = true; });
+        save(); ccBlzRender();
+      });
       const t = document.getElementById('cc-blz-texto');
       if (t) t.value = ccBlzTexto(false);
     }
@@ -4127,6 +4205,14 @@
                 unitIcon(u, BLZ_ROT[u]) +
                 '<input id="cc-blz-res-' + u + '" class="twmgr-inp" type="number" min="0" style="width:62px;font-size:10px;padding:1px" placeholder="0"></label>').join('') +
             '</div>' +
+            '<div style="font-size:10px;color:#6f6153;margin:7px 0 2px">Cada aldeia entrega no máximo ' +
+              '<span style="color:#8a7d6d;font-weight:400">— número, <b>50%</b> do estoque, ou vazio pra tudo</span></div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+              BLZ_UNITS.map((u) => '<label title="' + BLZ_ROT[u] + '" style="display:flex;align-items:center;gap:3px;font-size:10px">' +
+                unitIcon(u, BLZ_ROT[u]) +
+                '<input id="cc-blz-pa-' + u + '" class="twmgr-inp" style="width:62px;font-size:10px;padding:1px" placeholder="tudo"></label>').join('') +
+            '</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:2px">É o teto da RODADA por aldeia, repartido entre os pedidos marcados — não é por pedido.</div>' +
             '<div id="cc-blz-lista" style="margin-top:7px;max-height:240px;overflow-y:auto;background:#fff;border:1px solid #ece4d8;border-radius:6px;padding:5px"></div>' +
             '<div style="display:flex;gap:4px;margin-top:6px">' +
               '<button id="cc-blz-sugerir" class="twmgr-btn twmgr-ghost" style="flex:1" title="distribui a defesa das origens marcadas entre os pedidos, do mais perto pro mais longe">✨ Sugerir divisão</button>' +
@@ -4293,9 +4379,13 @@
         catch (e) { t.select(); if (m) { m.style.color = '#a2643a'; m.textContent = 'não consegui copiar — o texto está selecionado, use Ctrl+C.'; } }
       });
       BLZ_UNITS.forEach((u) => {
-        const el = document.getElementById('cc-blz-res-' + u); if (!el) return;
-        el.addEventListener('change', () => {
+        const el = document.getElementById('cc-blz-res-' + u);
+        if (el) el.addEventListener('change', () => {
           config.cmd.blz.reserva[u] = Math.max(0, parseInt(el.value, 10) || 0); save();
+        });
+        const pa = document.getElementById('cc-blz-pa-' + u);
+        if (pa) pa.addEventListener('change', () => {
+          config.cmd.blz.porAldeia[u] = (pa.value || '').trim(); save();
         });
       });
       ccMassaUnidades();

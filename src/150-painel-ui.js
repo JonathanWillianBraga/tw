@@ -453,7 +453,7 @@
           subBtn('farm', '🐎', 'Saque') +
           subBtn('wall', '🐏', 'Muralha') +
           subBtn('map', '🗺️', 'Mapa') +
-          subBtn('fichas', '🎯', 'Fichas') +
+          subBtn('fichas', '🎯', 'Notas') +
         '</div>' +
         '<div id="twmgr-sub-farm">' +
         '<div id="twmgr-farm-prog" class="twmgr-hint">Saque parado.</div>' +
@@ -551,7 +551,7 @@
         '</div>' +
         '<div id="twmgr-sub-fichas" style="display:none">' +
         hint('🎯 Aldeia <b>ofensiva recruta bárbaro</b>; <b>defensiva recruta lanceiro, espadachim e cavalaria pesada</b>. Ninguém mistura — então basta VER a unidade, a quantidade não importa. Quando um ataque seu mata 1/3 dos defensores o jogo <b>revela a defesa</b>, e até um fake que morreu entrega o tipo da aldeia. As fichas <b>se acumulam</b>: relatório o jogo apaga, ficha não.') +
-        sec('Fichas de alvo',
+        sec('Notas de alvo',
           '<div class="twmgr-row">' +
             '<button id="twmgr-fichas-ler" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">↻ Ler relatórios</button>' +
             '<span class="twmgr-lbl" style="margin-left:8px">páginas</span>' +

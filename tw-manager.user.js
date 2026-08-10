@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.145.0
+// @version      11.145.1
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.145.0';
+  const VERSION = '11.145.1';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -11304,7 +11304,7 @@
           subBtn('farm', '🐎', 'Saque') +
           subBtn('wall', '🐏', 'Muralha') +
           subBtn('map', '🗺️', 'Mapa') +
-          subBtn('fichas', '🎯', 'Fichas') +
+          subBtn('fichas', '🎯', 'Notas') +
         '</div>' +
         '<div id="twmgr-sub-farm">' +
         '<div id="twmgr-farm-prog" class="twmgr-hint">Saque parado.</div>' +
@@ -11402,7 +11402,7 @@
         '</div>' +
         '<div id="twmgr-sub-fichas" style="display:none">' +
         hint('🎯 Aldeia <b>ofensiva recruta bárbaro</b>; <b>defensiva recruta lanceiro, espadachim e cavalaria pesada</b>. Ninguém mistura — então basta VER a unidade, a quantidade não importa. Quando um ataque seu mata 1/3 dos defensores o jogo <b>revela a defesa</b>, e até um fake que morreu entrega o tipo da aldeia. As fichas <b>se acumulam</b>: relatório o jogo apaga, ficha não.') +
-        sec('Fichas de alvo',
+        sec('Notas de alvo',
           '<div class="twmgr-row">' +
             '<button id="twmgr-fichas-ler" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">↻ Ler relatórios</button>' +
             '<span class="twmgr-lbl" style="margin-left:8px">páginas</span>' +

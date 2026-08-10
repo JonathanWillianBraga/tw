@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.146.0
+// @version      11.147.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.146.0';
+  const VERSION = '11.147.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -9281,12 +9281,41 @@
 
   // O link abre a FICHA da aldeia (pedido do usuário: melhor que o mapa). Só dá pra montar com
   // o id que veio do relatório; sem ele, cai no mapa pela coordenada em vez de dar link morto.
+  // Sempre a FICHA da aldeia. A ancora `#x;y` e o que faz o jogo centralizar o mapa
+  // embutido na aldeia certa.
   function alvosLink(v) {
     const xy = v.coord.split('|');
-    // A ancora `#x;y` e o que faz o jogo centralizar o mapa embutido na aldeia certa.
-    if (v.vid) return '/game.php?village=' + CUR_VID + '&screen=info_village&id=' + v.vid
+    return '/game.php?village=' + CUR_VID + '&screen=info_village&id=' + v.vid
       + '#' + xy[0] + ';' + xy[1];
-    return '/game.php?village=' + CUR_VID + '&screen=map&x=' + xy[0] + '&y=' + xy[1];
+  }
+
+  // Ficha gravada pela v11.144 nao tem o id da aldeia — o campo nem existia — e sem ele nao
+  // da pra montar o link do info_village. O village.txt que o modulo Mapa ja baixa resolve
+  // coordenada -> id de graca, entao a ficha velha nao precisa esperar um relatorio novo.
+  let _alvIdsVoo = null;
+  async function alvosPreencherIds() {
+    const base = alvosBase();
+    const faltam = Object.keys(base.aldeias).filter((c) => !base.aldeias[c].vid);
+    if (!faltam.length || _alvIdsVoo) return;
+    _alvIdsVoo = (async () => {
+      try {
+        const mapa = await getMapVillages();
+        const porCoord = {};
+        mapa.forEach((v) => { porCoord[v.x + '|' + v.y] = v; });
+        let ok = 0;
+        faltam.forEach((c) => {
+          const m = porCoord[c];
+          if (!m) return;
+          base.aldeias[c].vid = m.vid;
+          if (!base.aldeias[c].nome && m.name) base.aldeias[c].nome = m.name;
+          ok++;
+        });
+        if (ok) { alvosSalvar(); alvosRender(); }
+      } catch (e) {
+        pushLog('Notas: nao consegui resolver o id de ' + faltam.length
+          + ' aldeia(s) pelo mapa (' + (e.message || e) + ').', 'err', 'fichas');
+      } finally { _alvIdsVoo = null; }
+    })();
   }
 
   function alvosRender() {
@@ -9356,8 +9385,9 @@
             + '<div class="twmgr-ap-dono">' + (us.length
                 ? esc(us.map((u) => fmtN(v.visto[u]) + ' ' + unitPt(u)).join(' · '))
                 : '<i>nada revelado em ' + v.n + ' relatório(s)</i>') + '</div></span>'
-          + '<a class="twmgr-alv-ir" href="' + alvosLink(v)
+          + (v.vid ? '<a class="twmgr-alv-ir" href="' + alvosLink(v)
             + '" target="_blank" title="abrir a ficha da aldeia">↗</a>'
+            : '<span class="twmgr-alv-ir" style="opacity:.35" title="ainda sem o id da aldeia">↗</span>')
           + '</div>';
       }).join('');
       return '<div class="twmgr-ap-cartao on">' + cab + filhos + '</div>';
@@ -9372,6 +9402,7 @@
       const r = await alvosVarrer(paginas, (n, coord) => diz('lendo relatório ' + n + ' — ' + coord));
       diz('');
       alvosRender();
+      alvosPreencherIds();
       pushLog('Fichas: ' + r.lidos + ' relatório(s) lidos, ' + r.revelados + ' revelaram a defesa · '
         + r.novas + ' aldeia(s) nova(s), ' + r.mudaram + ' mudaram de classificação. '
         + 'O arquivo tem ' + Object.keys(alvosBase().aldeias).length + ' aldeia(s).', 'ok', 'fichas');
@@ -9385,6 +9416,7 @@
   function bindAlvosHandlers() {
     alvosCarregar();
     alvosRender();
+    alvosPreencherIds();
     const box = document.getElementById('twmgr-fichas-corpo');
     if (box) {
       box.addEventListener('click', (e) => {

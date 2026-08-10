@@ -333,7 +333,7 @@
   // duplicar a função daria duas cópias pra manter em sincronia.
   const SUBS = { farm: ['farm', 'wall', 'map', 'fichas'], noble: ['alvos', 'cunhar', 'pos'],
                  recruit: ['rcmodelos', 'rcstatus'], build: ['bldmodelos', 'bldstatus'],
-                 market: ['cunhagem', 'equilibrio', 'solidario'] };
+                 market: ['cunhagem', 'equilibrio', 'solidario', 'pacotes'] };
   function showSub(mod, name) {
     (SUBS[mod] || []).forEach((n) => {
       const c = document.getElementById('twmgr-sub-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
@@ -608,6 +608,7 @@
           subBtn('cunhagem', '💰', 'Cunhagem', 'market') +
           subBtn('equilibrio', '⚖️', 'Equilíbrio', 'market') +
           subBtn('solidario', '🤝', 'Solidário', 'market') +
+          subBtn('pacotes', '📦', 'Pacotes', 'market') +
         '</div>' +
         '<div id="twmgr-sub-cunhagem">' +
         sec('💰 Cunhagem',
@@ -663,6 +664,15 @@
             '<div class="twmgr-row"><span class="twmgr-lbl">Distância máx. (campos)</span><input id="twmgr-mk-sdist" class="twmgr-inp" type="number" min="1" step="0.5" value="20" style="width:56px"></div>' +
             '<div class="twmgr-actions"><button id="twmgr-mk-solidario-start" class="twmgr-btn twmgr-go">▶ Enviar</button><button id="twmgr-mk-solidario-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
             '<div id="twmgr-mk-solidario-status" class="twmgr-cstatus"></div>') +
+        '</div>' +
+        '<div id="twmgr-sub-pacotes" style="display:none">' +
+        sec('📦 Pacotes de recurso',
+            '<div style="font-size:10px;color:#8a7d6d;margin-bottom:5px">O pacote enche <b>todas</b> as aldeias com uma % do <b>armazém de cada uma</b>. A tabela mostra quantas <b>estourariam</b> (recurso passando do teto) e quanto seria <b>jogado fora</b> — é o que decide se vale usar o pacote agora ou esvaziar antes.</div>' +
+            '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">' +
+              '<button id="twmgr-mk-pac-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">↻ Calcular</button>' +
+              '<span id="twmgr-mk-pac-quando" style="font-size:9px;color:#8a7d6d;flex:1"></span>' +
+            '</div>' +
+            '<div id="twmgr-mk-pacotes"></div>') +
         '</div>' +
         sec('Ritmo (compartilhado pelos modos ligados)', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-mk-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         modLog('market') +
@@ -1101,6 +1111,8 @@
     });
     document.getElementById('twmgr-mk-eq-diag').addEventListener('click', equilibrioDiagnostico);
     equilibrioRenderSaude();   // mostra o diagnóstico salvo da última vez, sem esperar um novo
+    document.getElementById('twmgr-mk-pac-go').addEventListener('click', calcularPacotesUI);
+    renderPacotes();           // só desenha o estado atual; a leitura é sob clique
 
     document.getElementById('twmgr-bld-max').value = config.build.maxQueue || 5;
     document.getElementById('twmgr-bld-int').value = Math.round((config.build.interval || 600) / 60);

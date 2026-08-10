@@ -621,3 +621,99 @@
   }
   function marketStop(modeKey) { readMarketCfg(); config.market.modes[modeKey].running = false; save(); clearTimeout(marketTimers[modeKey]); setMarketStatus(modeKey, false); pushLog('Mercado (' + MARKET_MODE_LABEL[modeKey] + ') parado.', '', 'market'); }
 
+
+  // ==================== PACOTES DE RECURSO ====================
+  // O pacote do jogo enche TODAS as aldeias com uma porcentagem do armazém DE CADA UMA. Como o
+  // armazém varia por aldeia, o mesmo pacote pode ser perfeito numa e puro desperdício em outra —
+  // e não dá pra saber isso de cabeça com 30 aldeias. Aqui a conta é feita pras oito opções de
+  // uma vez, pra decidir na hora da cunhagem se vale usar agora ou esvaziar antes.
+  //
+  // Uma requisição só: a tela de Produção traz recursos E armazém de todas as aldeias. O caminho
+  // por aldeia (getMarketState) custaria uma requisição cada — 30+ numa conta média.
+  const PACOTES_PCT = [1, 2, 5, 10, 15, 20, 25, 30];
+  async function lerRecursosTodasAldeias() {
+    const res = await fetch('/game.php?village=' + CUR_VID
+      + '&screen=overview_villages&mode=prod&page=-1', { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const tb = doc.querySelector('#production_table') || doc.querySelector('table.overview_table');
+    if (!tb) throw new Error('não achei a tabela de produção');
+    const num = (s) => parseInt(String(s).replace(/\D/g, ''), 10) || 0;
+    const out = [];
+    tb.querySelectorAll('tr').forEach((tr) => {
+      if (!tr.querySelector('.quickedit-vn[data-id]')) return;
+      const w = tr.querySelector('.res.wood'), s = tr.querySelector('.res.stone'), i = tr.querySelector('.res.iron');
+      if (!w || !s || !i) return;
+      // O armazém é a célula seguinte à dos recursos. Pegar por posição fixa quebraria em mundo
+      // com colunas a mais; ancorar no próprio bloco de recursos aguenta a variação.
+      const tdRes = w.closest('td');
+      const cap = tdRes && tdRes.nextElementSibling ? num(tdRes.nextElementSibling.textContent) : 0;
+      if (!cap) return;
+      const lbl = tr.querySelector('.quickedit-label');
+      const nome = ((lbl && lbl.textContent) || '').replace(/\s+/g, ' ').trim();
+      out.push({ nome: nome.replace(/\s*\(\d{1,3}\|\d{1,3}\).*$/, '').trim() || nome,
+                 coord: (nome.match(/\d{1,3}\|\d{1,3}/) || [''])[0],
+                 cap: cap, wood: num(w.textContent), stone: num(s.textContent), iron: num(i.textContent) });
+    });
+    if (!out.length) throw new Error('nenhuma aldeia lida');
+    return out;
+  }
+  // Conta, por pacote: quantas aldeias estouram, quanto se perde e qual é o maior pacote que
+  // ainda não desperdiça nada. "Estoura" = algum dos três recursos passa do armazém.
+  function calcularPacotes(vilas) {
+    return PACOTES_PCT.map((p) => {
+      let lotam = 0, perda = 0, cheias = [];
+      vilas.forEach((v) => {
+        const add = Math.floor(v.cap * p / 100);
+        let estourou = false, perdaV = 0;
+        ['wood', 'stone', 'iron'].forEach((k) => {
+          const novo = (v[k] || 0) + add;
+          if (novo > v.cap) { estourou = true; perdaV += novo - v.cap; }
+        });
+        if (estourou) { lotam++; perda += perdaV; cheias.push({ nome: v.nome, coord: v.coord, perda: perdaV }); }
+      });
+      cheias.sort((a, b) => b.perda - a.perda);
+      return { pct: p, lotam: lotam, perda: perda, cheias: cheias };
+    });
+  }
+  let _pacCache = null, _pacAt = 0, _pacCarregando = false, _pacErr = null;
+  async function calcularPacotesUI() {
+    if (_pacCarregando) return;
+    _pacCarregando = true; _pacErr = null; renderPacotes();
+    try {
+      const vilas = await lerRecursosTodasAldeias();
+      _pacCache = { linhas: calcularPacotes(vilas), n: vilas.length };
+      _pacAt = Date.now();
+    } catch (e) { _pacErr = 'não deu pra ler: ' + (e.message || e); }
+    _pacCarregando = false; renderPacotes();
+  }
+  function renderPacotes() {
+    const box = document.getElementById('twmgr-mk-pacotes'); if (!box) return;
+    const q = document.getElementById('twmgr-mk-pac-quando');
+    if (q) q.textContent = _pacAt ? ('lido às ' + new Date(_pacAt).toLocaleTimeString('pt-BR')) : '';
+    if (_pacCarregando) { box.innerHTML = '<span class="twmgr-lbl">lendo as aldeias…</span>'; return; }
+    if (_pacErr) { box.innerHTML = '<span style="color:#b03030;font-size:10px">' + esc(_pacErr) + '</span>'; return; }
+    if (!_pacCache) { box.innerHTML = '<span class="twmgr-lbl">Clique em <b>Calcular</b>.</span>'; return; }
+    const L = _pacCache.linhas;
+    // O maior pacote que ainda não desperdiça nada — é a resposta que se procura na prática.
+    const seguro = L.filter((x) => !x.lotam).map((x) => x.pct).pop();
+    box.innerHTML =
+      '<div style="font-size:10px;margin-bottom:5px;color:' + (seguro ? '#2e7d3a' : '#a2643a') + '">' +
+        (seguro ? 'Maior pacote sem desperdício: <b>' + seguro + '%</b>'
+                : 'Até o menor pacote (1%) já estoura alguma aldeia.') +
+        ' <span style="color:#8a7d6d">· ' + _pacCache.n + ' aldeias</span></div>' +
+      '<table class="twmgr-bld-tab" style="width:100%"><thead><tr>' +
+        '<th style="width:52px">pacote</th><th style="width:78px">estouram</th>' +
+        '<th style="width:96px">desperdício</th><th>onde sobra mais</th></tr></thead><tbody>' +
+      L.map((x, i) => '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
+        '<td><b>' + x.pct + '%</b></td>' +
+        '<td style="color:' + (x.lotam ? '#a2643a' : '#2e7d3a') + '">' +
+          (x.lotam ? x.lotam + ' aldeia(s)' : '<b>nenhuma</b>') + '</td>' +
+        '<td style="color:' + (x.perda ? '#b03030' : '#8a7d6d') + '">' + (x.perda ? fmtN(x.perda) : '—') + '</td>' +
+        '<td style="color:#6f6153">' + (x.cheias.length
+          ? esc(x.cheias.slice(0, 3).map((c) => c.nome + ' (' + fmtN(c.perda) + ')').join(', '))
+            + (x.cheias.length > 3 ? ' <span style="color:#8a7d6d">+' + (x.cheias.length - 3) + '</span>' : '')
+          : '—') + '</td></tr>').join('') +
+      '</tbody></table>' +
+      '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">"Estoura" = algum dos três recursos passa do armazém daquela aldeia. O desperdício é a soma do que passaria, somando os três recursos.</div>';
+  }

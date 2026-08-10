@@ -122,8 +122,16 @@
     const d = doc.querySelector('#attack_info_def');
     const out = { dono: '', vid: null };
     if (!d) return out;
-    const m = (d.innerText || '').replace(/\s+/g, ' ').match(/Defensor:\s*(.+?)\s+Destino:/);
-    if (m) out.dono = m[1].trim();
+    // O nome sai do LINK do jogador, nao do texto: `textContent` junta tudo numa linha so
+    // (inclusive a tabela de tropas logo abaixo) e um nome com espaco ou acento vira loteria
+    // de regex. A frase "Defensor: X Destino:" fica como reserva, pro caso de o link faltar.
+    const pl = Array.prototype.slice.call(d.querySelectorAll('a'))
+      .filter((x) => /screen=info_player/.test(x.getAttribute('href') || ''))[0];
+    if (pl) out.dono = (pl.textContent || '').trim();
+    if (!out.dono) {
+      const m = (d.textContent || '').replace(/\s+/g, ' ').match(/Defensor:\s*(.+?)\s+Destino:/);
+      if (m) out.dono = m[1].trim();
+    }
     const a = Array.prototype.slice.call(d.querySelectorAll('a'))
       .map((x) => x.getAttribute('href') || '').filter((h) => /screen=info_village/.test(h))[0];
     const mv = a && a.match(/[?&]id=(\d+)/);
@@ -218,6 +226,7 @@
 
   // ── Tela: agrupada por JOGADOR ──────────────────────────────────────────────
   const _alvAberto = {};                     // dono -> expandido?
+  let _alvFiltro = '';                       // '' = tudo | ataque | defesa | misto | ?
   const ALV_COR = { ataque: '#b03030', defesa: '#2e6b8a', misto: '#8b5426', '?': '#8a7d6d' };
 
   function alvosPorJogador() {
@@ -225,6 +234,9 @@
     const p = {};
     Object.keys(base.aldeias).forEach((c) => {
       const v = base.aldeias[c];
+      // O filtro esconde a ALDEIA; jogador que ficou sem nenhuma some junto, senao a lista
+      // enche de cabecalho vazio.
+      if (_alvFiltro && (v.tipo || '?') !== _alvFiltro) return;
       const k = v.dono || '(dono desconhecido)';
       const g = p[k] || (p[k] = { dono: k, aldeias: [], cont: { ataque: 0, defesa: 0, misto: 0, '?': 0 } });
       g.aldeias.push(v);
@@ -241,8 +253,10 @@
   // O link abre a FICHA da aldeia (pedido do usuário: melhor que o mapa). Só dá pra montar com
   // o id que veio do relatório; sem ele, cai no mapa pela coordenada em vez de dar link morto.
   function alvosLink(v) {
-    if (v.vid) return '/game.php?village=' + CUR_VID + '&screen=info_village&id=' + v.vid;
     const xy = v.coord.split('|');
+    // A ancora `#x;y` e o que faz o jogo centralizar o mapa embutido na aldeia certa.
+    if (v.vid) return '/game.php?village=' + CUR_VID + '&screen=info_village&id=' + v.vid
+      + '#' + xy[0] + ';' + xy[1];
     return '/game.php?village=' + CUR_VID + '&screen=map&x=' + xy[0] + '&y=' + xy[1];
   }
 
@@ -278,7 +292,19 @@
             : '—') + '</div></div>'
       + '</div>';
 
-    box.innerHTML = topo + grupos.map((g) => {
+    const bt = (id, rot, cor) => '<span class="twmgr-alv-f" data-f="' + id + '"'
+      + (_alvFiltro === id ? ' style="background:' + (cor || '#a2643a') + ';color:#fff;border-color:transparent"' : '')
+      + '>' + rot + '</span>';
+    const filtros = '<div class="twmgr-alv-filtros">' + bt('', 'todos') + bt('ataque', 'ataque', ALV_COR.ataque)
+      + bt('defesa', 'defesa', ALV_COR.defesa) + bt('misto', 'misto', ALV_COR.misto)
+      + bt('?', 'sem pista', ALV_COR['?']) + '</div>';
+
+    if (!grupos.length) {
+      box.innerHTML = topo + filtros + '<div style="padding:12px;text-align:center;color:#8a7340">'
+        + 'Nenhuma aldeia nesse filtro.</div>';
+      return;
+    }
+    box.innerHTML = topo + filtros + grupos.map((g) => {
       const aberto = !!_alvAberto[g.dono];
       const barras = ['ataque', 'defesa', 'misto', '?'].filter((t) => g.cont[t] > 0)
         .map((t) => '<span class="twmgr-alv-tag" style="background:' + ALV_COR[t] + '">'
@@ -333,6 +359,8 @@
     const box = document.getElementById('twmgr-fichas-corpo');
     if (box) {
       box.addEventListener('click', (e) => {
+        const f = e.target.closest && e.target.closest('.twmgr-alv-f');
+        if (f) { _alvFiltro = f.getAttribute('data-f') || ''; alvosRender(); return; }
         const j = e.target.closest && e.target.closest('.twmgr-alv-jog');
         if (!j) return;
         const d = j.getAttribute('data-dono');

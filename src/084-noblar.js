@@ -702,10 +702,21 @@
   //
   // `ateMs` e o instante que interessa: agora, ou a chegada do nobre que eu mandaria neste ciclo.
   // Devolve null quando nunca houve relatorio com lealdade (so ataque com nobre traz o campo).
+  // SEM RELATÓRIO, ASSUME 100. É a premissa que o módulo já declara na tela — os alvos estão
+  // vazios, e aldeia que nunca foi noblada está em 100. Antes isto devolvia `null`, e o motor
+  // caía num caminho paralelo que usava o `nobres` do modelo. Dois caminhos de decisão pro mesmo
+  // número, e o segundo não passava pela projeção: com o modelo em 1, um único nobre no ar já
+  // fazia o alvo virar "coberto" e travava ali até um relatório chegar — que era o caso real do
+  // 434|577 e do 434|592.
+  //
+  // Assumir 100 AQUI, e não lá, é o que importa: entrando como leitura inicial, o valor passa
+  // pela mesma projeção de sempre (ordena as chegadas, desconta 25 de cada, regenera entre elas),
+  // então o desconto do que já está voando continua valendo. Alvo virgem com 1 nobre no ar pede
+  // 3, não 4.
   function nobleLealdadeEm(coord, ateMs) {
     const r = (config.noble.relatorios || {})[coord];
-    const t0 = nobleLealdadeAt(r);
-    if (!r || r.lealdade == null || !t0) return null;
+    const lido = !!(r && r.lealdade != null && nobleLealdadeAt(r));
+    const t0 = lido ? nobleLealdadeAt(r) : Date.now();
     const regen = config.noble.lealdadeRegen || 0;
     const queda = config.noble.lealdadePorAtk || 25;
     const fim = ateMs || Date.now();
@@ -713,7 +724,7 @@
       .map((e) => ({ at: e.chega || e.at, n: e.n || 1 }))
       .filter((e) => e.at <= fim)
       .sort((a, b) => a.at - b.at);
-    let t = t0, v = r.lealdade;
+    let t = t0, v = lido ? r.lealdade : 100;
     for (const e of chegadas) {
       v = Math.min(100, v + Math.max(0, (e.at - t) / 3600000) * regen);
       v -= e.n * queda;
@@ -736,18 +747,21 @@
     return nobleLealdadeEm(coord, chegadas.length ? Math.max.apply(null, chegadas) : Date.now());
   }
 
-  // Quantos comandos ainda faltam. Sai da lealdade PREVISTA, nao de "atual menos o que voa":
-  // subtrair os voos no fim ignorava a regeneracao ENTRE as chegadas e mandava de menos.
-  // Sem relatorio nenhum cai no `nobres` do modelo -- unico palpite honesto, e ai sim descontando
-  // o que ja esta no ar, senao cada ciclo mandaria mais um lote inteiro.
+  // Quantos comandos ainda faltam. Sai SEMPRE da lealdade PREVISTA -- nao de "atual menos o que
+  // voa", porque subtrair os voos no fim ignorava a regeneracao ENTRE as chegadas e mandava de
+  // menos. Como `nobleLealdadeEm` agora assume 100 quando nao ha relatorio, o caminho e um so:
+  // alvo virgem da ceil(100/25) = 4 pela mesma formula, em vez de sair de um numero avulso.
+  //
+  // O `nobres` do modelo virou TETO, nao meta. Serve pra voce limitar o gasto num alvo especifico
+  // ("nao quero mais que 2 nobres nessa"); nunca faz mandar MAIS do que a lealdade pede.
   function noblePrecisaDe(alvo, tpl, durSec) {
     const prev = nobleLealdadePrevista(alvo.coord, durSec != null ? durSec : alvo.ultDur);
     const voando = nobleEmVoo(alvo.coord);
-    const base = (prev == null)
-      ? Math.max(0, (tpl.nobres || NOBLE_POR_CONQUISTA) - voando)
-      : Math.max(0, Math.ceil(prev / (config.noble.lealdadePorAtk || 25)));
+    const calc = (prev == null) ? 0 : Math.max(0, Math.ceil(prev / (config.noble.lealdadePorAtk || 25)));
+    const teto = Math.max(1, tpl.nobres || NOBLE_POR_CONQUISTA);
+    const base = Math.min(calc, Math.max(0, teto - voando));
     return { precisa: base, lealdade: nobleLealdadeAgora(alvo.coord), prevista: prev,
-             voando: voando, bruto: base };
+             voando: voando, bruto: calc };
   }
 
   // ===== Estado do alvo =====

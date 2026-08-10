@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.142.0
+// @version      11.143.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.142.0';
+  const VERSION = '11.143.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -6317,12 +6317,35 @@
   // Versão SÍNCRONA pro render (o mapa já foi carregado pelo ciclo; se ainda não, devolve null
   // e a célula cai no texto simples em vez de segurar o desenho da tabela).
   function nobleInfoAlvo(coord) { return _nbVidPorCoord ? (_nbVidPorCoord[coord] || null) : null; }
+  // Até quando vale extrapolar regeneração em cima de uma medição sem nenhuma evidência nova.
+  // 12h é folgado pro caso normal (o relatório chega em minutos) e curto o bastante pra impedir o
+  // absurdo do 484|571, onde 21h de regeneração transformaram 66 em "87" com o alvo em 19.
+  const NB_MEDICAO_H = 12;
+  // Relatórios que a ficha de cada alvo listou no último ciclo. Preenchido por
+  // nobleComandosDoAlvo, consumido por nobleLerRelatorioDoAlvo.
+  const _nbRelsPorAlvo = {};
   async function nobleComandosDoAlvo(coord) {
     const vid = await nobleVidDoAlvo(coord);
     if (!vid) return null;
     const res = await fetch('/game.php?village=' + CUR_VID + '&screen=info_village&id=' + vid, { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    // A MESMA página traz a lista de relatórios DAQUELE alvo, do mais novo pro mais velho. É de
+    // graça (o fetch já aconteceu) e resolve um buraco sério: a varredura global lê UMA página de
+    // screen=report e não pagina — `&from=` é ignorado neste mundo, medido. Se o relatório não
+    // estiver naquela página, ele nunca é lido. Caso real (484|571, br143): existiam QUATRO
+    // relatórios do alvo e o módulo só tinha o primeiro, de 21h antes; ele extrapolava
+    // regeneração em cima de 66 e dizia 87, quando a última medição real era 19.
+    const rels = [];
+    doc.querySelectorAll('a[href*="view="]').forEach((a) => {
+      const id = ((a.getAttribute('href') || '').match(/view=(\d+)/) || [])[1];
+      if (!id || rels.some((r) => r.id === id)) return;
+      const tr = a.closest ? a.closest('tr') : null;
+      const tds = tr ? tr.querySelectorAll('td') : [];
+      const quando = tds.length ? parseReportDate(tds[tds.length - 1].textContent) : null;
+      rels.push({ id: id, at: quando });
+    });
+    _nbRelsPorAlvo[coord] = rels;   // por coordenada: dois alvos no mesmo ciclo não se atropelam
     const cont = doc.querySelector('#commands_outgoings[data-type="towards_village"]');
     if (!cont) return [];
     const agora = Date.now();
@@ -6451,14 +6474,30 @@
       .map((e) => ({ at: e.chega || e.at, n: e.n || 1 }))
       .filter((e) => e.at <= fim)
       .sort((a, b) => a.at - b.at);
+    // TRAVA DE VALIDADE. Se algum nobre JÁ POUSOU depois da medição e não apareceu relatório
+    // dele, a leitura é comprovadamente velha: aquele nobre derrubou lealdade que ninguém contou.
+    // Continuar somando regeneração em cima dela inventa um alvo mais inteiro do que ele está, e
+    // o módulo manda nobre a mais — foi exatamente o que aconteceu no 484|571 (medição de 21h
+    // antes virou "87" quando o real era 19). Aqui a regeneração para no último pouso conhecido:
+    // erra pra baixo, que custa um ciclo de espera em vez de nobres jogados fora.
+    // O corte: a regeneração só é extrapolada até `tetoRegen`. Ele é o último pouso conhecido
+    // depois da medição — ou, se não houver nenhum, a medição mais NB_MEDICAO_H horas. Passado
+    // disso o número seria invenção.
+    const agoraMs = Date.now();
+    const ultimoPouso = nobleVoos(coord).reduce((mx, e) => {
+      const c = e.chega || e.at;
+      return (c <= agoraMs && c > t0 && c > mx) ? c : mx;
+    }, 0);
+    const tetoRegen = lido ? (ultimoPouso || (t0 + NB_MEDICAO_H * 3600000)) : Infinity;
+    const regenEntre = (de, ate) => Math.max(0, (Math.min(ate, tetoRegen) - de) / 3600000) * regen;
     let t = t0, v = lido ? r.lealdade : 100;
     for (const e of chegadas) {
-      v = Math.min(100, v + Math.max(0, (e.at - t) / 3600000) * regen);
+      v = Math.min(100, v + regenEntre(t, e.at));
       v -= e.n * queda;
       t = e.at;
       if (v <= 0) return v;      // caiu aqui: dali pra frente a aldeia e minha, nao ha mais regen
     }
-    return Math.min(100, v + Math.max(0, (fim - t) / 3600000) * regen);
+    return Math.min(100, v + regenEntre(t, fim));
   }
 
   // O numero que o motor usa pra decidir: a lealdade no instante em que o nobre que eu mandaria
@@ -7009,6 +7048,16 @@
       config.noble.vistos[r.id] = 1;
       lidos++;
       await sleep(300);
+      nobleGravaRelatorio(r.coord, r.id, r.at, info);
+    }
+    // `vistos` guarda id de relatÃ³rio pra sempre; poda os mais antigos pra nÃ£o inchar o storage.
+    return noblePodaVistos(lidos);
+  }
+  // Gravação do relatório num alvo. Extraída pra ser um caminho só: a varredura global e a
+  // leitura pela ficha do alvo escrevem exatamente igual. Devolve true se gravou.
+  function nobleGravaRelatorio(coord, id, at, info) {
+    {
+      const r = { coord: coord, id: id, at: at };
       const ant = config.noble.relatorios[r.coord];
       // SÃ³ sobrescreve com relatÃ³rio MAIS NOVO â€” a lista vem ordenada, mas nÃ£o custa garantir.
       // `>=`, nao `>`. A lista de relatorios so tem precisao de MINUTO, entao um NT inteiro (4
@@ -7017,7 +7066,7 @@
       // ultimo a escrever era o PRIMEIRO ataque do lote -- e a lealdade gravada era a de antes
       // dos outros tres. O modulo achava o alvo bem mais inteiro do que estava e mandava nobre
       // a mais. No empate quem vale e o primeiro lido, que e o mais novo.
-      if (ant && ant.at && r.at && ant.at >= r.at) continue;
+      if (ant && ant.at && r.at && ant.at >= r.at) return false;
       // Dono diferente do que estava = alguem CONQUISTOU o alvo. Se nao fui eu (o tick confere
       // na lista de aldeias antes de olhar isto aqui), a premissa "aldeia vazia" morreu junto:
       // agora ela tem dono ativo e tropa. O alvo sai da fila com alerta em vez de seguir sendo
@@ -7049,8 +7098,37 @@
         pushLog('Noblar: ' + r.coord + ' â€” lealdade ' + info.de + ' â†’ ' + info.lealdade
           + (info.lealdade <= 0 ? ' (CONQUISTADA)' : '') + '.', 'ok', 'noble');
       }
+      return true;
     }
-    // `vistos` guarda id de relatÃ³rio pra sempre; poda os mais antigos pra nÃ£o inchar o storage.
+  }
+  // Lê o relatório mais novo DA FICHA DO ALVO. Ideia do usuário, e resolve na raiz o buraco da
+  // varredura global: aquela lê uma página só de screen=report e o `&from=` é ignorado neste
+  // mundo (medido: as 8 primeiras "páginas" devolvem os mesmos 13 ids), então relatório que caiu
+  // fora daquela janela nunca era lido. A ficha do alvo lista os relatórios DELE, do mais novo
+  // pro mais velho, e o módulo já baixa essa página todo ciclo pra contar os comandos — custo
+  // zero de requisição.
+  //
+  // Lê só até achar um que já tinha sido gravado: os de baixo são mais velhos e não mudam nada.
+  async function nobleLerRelatorioDoAlvo(coord) {
+    const rels = _nbRelsPorAlvo[coord] || [];
+    if (!rels.length) return 0;
+    const ant = (config.noble.relatorios || {})[coord];
+    let lidos = 0;
+    for (const r of rels.slice(0, 6)) {
+      if (ant && ant.at && r.at && r.at <= ant.at) break;   // daqui pra baixo é tudo mais velho
+      if (config.noble.vistos[r.id]) continue;
+      let info;
+      try { info = await nobleLerRelatorio(r.id); }
+      catch (e) { continue; }
+      config.noble.vistos[r.id] = 1;
+      lidos++;
+      nobleGravaRelatorio(coord, r.id, r.at, info);
+      await sleep(300);
+    }
+    if (lidos) { noblePodaVistos(lidos); save(); }
+    return lidos;
+  }
+  function noblePodaVistos(lidos) {
     const ids = Object.keys(config.noble.vistos);
     if (ids.length > 400) ids.sort().slice(0, ids.length - 400).forEach((k) => { delete config.noble.vistos[k]; });
     return lidos;
@@ -7195,6 +7273,13 @@
         if (lista == null) continue;                       // alvo fora do village.txt: mantém o que tinha
         if (lista.length) config.noble.emVoo[a.coord] = lista;
         else delete config.noble.emVoo[a.coord];
+        // A ficha que acabou de ser baixada também lista os relatórios DESTE alvo. Ler daqui é o
+        // que garante lealdade fresca: a varredura global não alcança relatório fora da primeira
+        // página, e era isso que deixava a medição 21h atrasada.
+        if (config.noble.lerRelatorios !== false) {
+          try { await nobleLerRelatorioDoAlvo(a.coord); }
+          catch (e) { pushLog('Noblar: relatório pela ficha de ' + a.coord + ' falhou (' + (e.message || e) + ').', '', 'noble'); }
+        }
         await sleep(200);
       }
     } catch (e) {

@@ -51,11 +51,19 @@
   // Quando a lealdade foi MEDIDA. Relatorio antigo (anterior ao campo) cai no `at`, que era o
   // comportamento de antes.
   function nobleLealdadeAt(r) { return (r && (r.lealdadeAt || r.at)) || 0; }
-  function nobleLealdadeAgora(coord) {
+  // Houve MEDIÇÃO de lealdade? Separa o 100 lido de um relatório do 100 presumido — o motor trata
+  // os dois igual (ver nobleLealdadeEm), mas a tela não pode, senão vira promessa que não temos.
+  function nobleLealdadeLida(coord) {
     const r = (config.noble.relatorios || {})[coord];
-    const t = nobleLealdadeAt(r);
-    if (!r || r.lealdade == null || !t) return null;
-    const h = Math.max(0, (Date.now() - t) / 3600000);
+    return !!(r && r.lealdade != null && nobleLealdadeAt(r));
+  }
+  // Devolve 100 sem relatório, pela mesma premissa do cálculo: alvo nunca noblado está em 100.
+  // Antes devolvia null e a coluna "Atual" mostrava "?" mesmo depois de o motor já estar
+  // decidindo com 100 — a tela contradizia a conta.
+  function nobleLealdadeAgora(coord) {
+    if (!nobleLealdadeLida(coord)) return 100;
+    const r = config.noble.relatorios[coord];
+    const h = Math.max(0, (Date.now() - nobleLealdadeAt(r)) / 3600000);
     return Math.min(100, r.lealdade + h * (config.noble.lealdadeRegen || 0));
   }
 
@@ -1761,12 +1769,17 @@
   }
   // Celula de lealdade (atual ou prevista). `?` quando nunca houve relatorio de nobre -- e o
   // unico jeito de saber lealdade no jogo, entao fingir 100 seria mentira.
-  function nobleLealdadeCel(v, dica) {
+  // `presumida` = não veio de relatório. Sai em itálico e com til, pra não passar por medição:
+  // é a premissa do módulo (alvo vazio, lealdade 100), não um número que alguém leu.
+  function nobleLealdadeCel(v, dica, presumida) {
     if (v == null) {
       return '<span style="color:#8a7340" title="lealdade só aparece em relatório de ataque com nobre">?</span>';
     }
     const n = Math.round(v);
     const cor = n <= 0 ? '#3f8f52' : n <= 35 ? '#b5651d' : '#8a7340';
+    if (presumida) {
+      return '<i style="color:#8a7340;font-weight:600" title="' + esc(dica || '') + '">~' + n + '</i>';
+    }
     return '<b style="color:' + cor + '" title="' + esc(dica || '') + '">' + n + '</b>';
   }
   // Idade do relatório em texto curto, pra dica de ferramenta (sem HTML, que o title não aceita).
@@ -1838,11 +1851,15 @@
           + (rel.dono ? esc(rel.dono) : (mv && mv.name ? '' : '—')) + '</div>';
         const atual = nobleLealdadeAgora(a.coord);
         const prev = (p.prevista !== undefined) ? p.prevista : nobleLealdadePrevista(a.coord, a.ultDur);
-        const dicaAtual = rel.lealdade != null
-          ? 'medida ' + nobleQuandoTxt(nobleLealdadeAt(rel)) + ': caiu de ' + rel.de + ' para ' + rel.lealdade : '';
-        const dicaPrev = a.ultDur != null
-          ? 'projetada pra daqui a ' + fmtDur(a.ultDur) + ', que é a viagem do próximo nobre'
-          : 'sem viagem medida ainda — projetada só até a última chegada marcada';
+        const lida = nobleLealdadeLida(a.coord);
+        const dicaAtual = lida
+          ? 'medida ' + nobleQuandoTxt(nobleLealdadeAt(rel)) + ': caiu de ' + rel.de + ' para ' + rel.lealdade
+          : 'PRESUMIDA. Sem relatório de ataque com nobre, o módulo assume 100 — aldeia nunca noblada está cheia.'
+            + ' O primeiro relatório substitui este número.';
+        const dicaPrev = (lida ? '' : 'Partindo de 100 presumido. ')
+          + (a.ultDur != null
+            ? 'Projetada pra daqui a ' + fmtDur(a.ultDur) + ', que é a viagem do próximo nobre.'
+            : 'Sem viagem medida ainda — projetada só até a última chegada marcada.');
         const voando = nobleEmVoo(a.coord);
         const detVoo = nobleEmVooDetalhe(a.coord);
         // Número clicável: abre a caixa com QUEM está mandando / vai mandar. O tooltip já
@@ -1868,9 +1885,9 @@
           + (p.pronto ? '<div class="sub"><a class="twmgr-nb-fire" data-coord="' + esc(a.coord) + '">Enviar agora</a></div>' : '');
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '"' + (fim ? ' style="opacity:.6"' : '') + '>' +
           '<td>' + filaCel + '</td><td>' + alvoCel + '</td><td>' + sel + '</td>' +
-          '<td>' + nobleLealdadeCel(atual, dicaAtual) + '</td>' +
+          '<td>' + nobleLealdadeCel(atual, dicaAtual, !lida) + '</td>' +
           '<td>' + atksCel + '</td>' +
-          '<td>' + nobleLealdadeCel(prev, dicaPrev) + '</td>' +
+          '<td>' + nobleLealdadeCel(prev, dicaPrev, !lida) + '</td>' +
           '<td>' + estado + '</td>' +
           '<td><a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '" title="tirar da fila">✕</a></td></tr>' +
           (_nbQuemAberto === a.coord ? nobleLinhaQuem(a, p) : '');

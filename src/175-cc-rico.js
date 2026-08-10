@@ -50,10 +50,9 @@
       editadoEm: 0,           // quando a tabela foi editada pela última vez (corta as entregas velhas)
       lidoEm: 0,
       reserva: { spear: 0, sword: 0, heavy: 0 },
-      // Quanto cada aldeia entrega no TOTAL da rodada. Vazio = tudo o que ela tem. Aceita número
-      // ("50"), porcentagem do estoque atual ("50%") ou "tudo" — mesma sintaxe do Apoio massa.
+      // Quanto cada aldeia entrega no TOTAL da rodada, por unidade. Número absoluto; vazio = tudo.
       porAldeia: { spear: '', sword: '', heavy: '' },
-      alvosSel: {},           // { pedidoNum: true } — pedidos escolhidos; vazio = todos
+      alvosSel: {},           // { pedidoNum: true } — seleção EXPLÍCITA, semeada com todos na busca
       plano: {},              // { pedidoNum: { vid: {spear,sword,heavy} } } — o que VOCÊ vai mandar
       enviados: {},           // { pedidoNum: { vid: at } } — trava anti-reenvio
     });
@@ -2495,6 +2494,11 @@
       const vivos = {}; r.pedidos.forEach((p) => { vivos[p.num] = 1; });
       Object.keys(b.plano).forEach((k) => { if (!vivos[k]) delete b.plano[k]; });
       Object.keys(b.enviados).forEach((k) => { if (!vivos[k]) delete b.enviados[k]; });
+      // Pedido que sumiu sai da seleção; pedido NOVO entra marcado, pra a tabela recém-buscada
+      // já vir pronta pra dividir em vez de exigir 8 cliques antes de qualquer coisa acontecer.
+      b.alvosSel = b.alvosSel || {};
+      Object.keys(b.alvosSel).forEach((k) => { if (!vivos[k]) delete b.alvosSel[k]; });
+      r.pedidos.forEach((p) => { if (b.alvosSel[p.num] === undefined) b.alvosSel[p.num] = true; });
       save();
       return r;
     }
@@ -2553,12 +2557,11 @@
     // limitado ao que ela realmente tem livre. Campo vazio = sem teto, entra o disponível todo
     // (que é como era antes desta opção existir).
     //
-    // A porcentagem é do ESTOQUE ATUAL da aldeia, não do que sobrou depois da reserva — "50%"
-    // quer dizer metade do que se vê na lista de origens, que é o número que o usuário está
-    // olhando. O corte pela reserva vem depois, no min() com o livre.
+    // SÓ NÚMERO ABSOLUTO. A porcentagem existiu na v11.138.0 e saiu: com a fonte de tropa e a
+    // reserva no meio, "50%" tinha três bases plausíveis (estoque, livre, ou o que falta) e o
+    // resultado não batia com o que o usuário esperava. Número resolve o mesmo caso sem ambiguidade.
     function ccBlzOrcamento(v) {
       const b = config.cmd.blz, spec = b.porAldeia || {}, livre = ccBlzLivre(v);
-      const estoque = v.avail || {};
       // O que o plano JÁ tirou desta aldeia. O teto é da rodada inteira, então precisa descontar
       // isso — senão ele se renovaria a cada passada e "50 lanceiros" viraria 50 por passada.
       const usado = { spear: 0, sword: 0, heavy: 0 };
@@ -2568,17 +2571,8 @@
       });
       const out = {};
       BLZ_UNITS.forEach((u) => {
-        const raw = String(spec[u] == null ? '' : spec[u]).trim().toLowerCase();
-        let teto = Infinity;
-        if (raw && !/^(tudo|todas|todos|all|max|\*)$/.test(raw)) {
-          if (/%$/.test(raw)) {
-            const p = parseFloat(raw.replace(',', '.'));
-            teto = (p > 0) ? Math.floor(((estoque[u] || 0) * p) / 100) : 0;
-          } else {
-            const q = parseInt(raw.replace(/\D/g, ''), 10);
-            teto = (q > 0) ? q : 0;
-          }
-        }
+        const q = parseInt(String(spec[u] == null ? '' : spec[u]).replace(/\D/g, ''), 10);
+        const teto = (q > 0) ? q : Infinity;   // vazio, zero ou lixo = sem teto
         const resta = (teto === Infinity) ? Infinity : Math.max(0, teto - usado[u]);
         out[u] = Math.max(0, Math.min(resta, livre[u] || 0));
       });
@@ -2588,8 +2582,7 @@
     // seleção vazia, não distribuiria nada e pareceria quebrado).
     function ccBlzPedidosAtivos() {
       const b = config.cmd.blz, sel = b.alvosSel || {};
-      const marcados = (b.pedidos || []).filter((p) => sel[p.num]);
-      return marcados.length ? marcados : (b.pedidos || []);
+      return (b.pedidos || []).filter((p) => sel[p.num]);
     }
     // ---- A sugestão ----
     // Guloso por DISTÂNCIA: percorre todos os pares (aldeia, pedido) do mais perto pro mais longe
@@ -2765,7 +2758,15 @@
       // Duas colunas de números e só. "pede" e "já veio" viraram tooltip da linha: eles explicam
       // de onde o "falta" saiu, mas não são o que se olha pra decidir — o que decide é quanto
       // ainda falta e quanto eu estou mandando. A marca escolhe quem entra na divisão.
-      const sel = b.alvosSel || {};
+      // A seleção é EXPLÍCITA. Antes valia "nenhum marcado = todos", e o resultado era que
+      // desmarcar a última voltava a marcar todas — clicar não mudava nada na tela. Agora a
+      // lista nasce com tudo marcado (semeada na busca e aqui, pra quem já tinha tabela) e o
+      // que está gravado é a verdade.
+      const sel = b.alvosSel || (b.alvosSel = {});
+      if (!Object.keys(sel).length && b.pedidos.length) {
+        b.pedidos.forEach((p) => { sel[p.num] = true; });
+        save();
+      }
       const nSel = b.pedidos.filter((p) => sel[p.num]).length;
       const trio = (o) => BLZ_UNITS.map((u) => (o[u] || 0) > 0
         ? unitIcon(u, BLZ_ROT[u]) + fmtN(o[u]) : '').filter(Boolean).join(' ') || '—';
@@ -2779,7 +2780,7 @@
         const zerado = !(falta.spear + falta.sword + falta.heavy);
         const nMinhas = Object.keys((b.plano[p.num] || {})).length;
         const nEnv = Object.keys((b.enviados[p.num] || {})).length;
-        const marcado = nSel ? !!sel[p.num] : true;
+        const marcado = !!sel[p.num];
         const tip = 'pedido: ' + BLZ_UNITS.map((u) => (p.pede[u] || 0) + ' ' + BLZ_ROT[u]).join(', ')
           + '\njá entregue pela tribo: ' + BLZ_UNITS.map((u) => (ent[u] || 0)).join('/');
         h += '<tr style="border-top:1px solid #efe7d8' + (zerado ? ';opacity:.5' : '') + '" title="' + esc(tip) + '">' +
@@ -2796,18 +2797,19 @@
       h += '</table>' +
         '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">origens marcadas: <b>' + marcadas.length + '</b>' +
         (marcadas.length ? '' : ' — marque as aldeias na lista de Origens, abaixo') +
-        ' · pedidos na divisão: <b>' + (nSel || b.pedidos.length) + '</b>' + (nSel ? '' : ' (nenhum marcado = todos)') +
-        '</div>';
+        ' · pedidos na divisão: <b style="color:' + (nSel ? '#2e7d3a' : '#a2643a') + '">' + nSel + '</b>' +
+        (nSel ? '' : ' — marque ao menos um') + '</div>';
       box.innerHTML = h;
+      // Grava `false` em vez de apagar a chave. Com `delete`, desmarcar o ÚLTIMO pedido esvaziava
+      // o objeto e a semeadura logo acima remarcava todos de novo — o mesmo defeito de antes,
+      // só que na borda. Chave presente com `false` é "desmarcado de propósito".
       box.querySelectorAll('.cc-blz-sel').forEach((el) => el.addEventListener('change', () => {
-        const n = el.getAttribute('data-num');
-        if (el.checked) b.alvosSel[n] = true; else delete b.alvosSel[n];
+        b.alvosSel[el.getAttribute('data-num')] = !!el.checked;
         save(); ccBlzRender();
       }));
       const todos = document.getElementById('cc-blz-todos');
       if (todos) todos.addEventListener('change', () => {
-        b.alvosSel = {};
-        if (todos.checked) b.pedidos.forEach((p) => { b.alvosSel[p.num] = true; });
+        b.pedidos.forEach((p) => { b.alvosSel[p.num] = !!todos.checked; });
         save(); ccBlzRender();
       });
       const t = document.getElementById('cc-blz-texto');
@@ -4206,17 +4208,17 @@
                 '<input id="cc-blz-res-' + u + '" class="twmgr-inp" type="number" min="0" style="width:62px;font-size:10px;padding:1px" placeholder="0"></label>').join('') +
             '</div>' +
             '<div style="font-size:10px;color:#6f6153;margin:7px 0 2px">Cada aldeia entrega no máximo ' +
-              '<span style="color:#8a7d6d;font-weight:400">— número, <b>50%</b> do estoque, ou vazio pra tudo</span></div>' +
+              '<span style="color:#8a7d6d;font-weight:400">— deixe vazio pra não limitar</span></div>' +
             '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
               BLZ_UNITS.map((u) => '<label title="' + BLZ_ROT[u] + '" style="display:flex;align-items:center;gap:3px;font-size:10px">' +
                 unitIcon(u, BLZ_ROT[u]) +
-                '<input id="cc-blz-pa-' + u + '" class="twmgr-inp" style="width:62px;font-size:10px;padding:1px" placeholder="tudo"></label>').join('') +
+                '<input id="cc-blz-pa-' + u + '" class="twmgr-inp" type="number" min="0" style="width:62px;font-size:10px;padding:1px" placeholder="tudo"></label>').join('') +
             '</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:2px">É o teto da RODADA por aldeia, repartido entre os pedidos marcados — não é por pedido.</div>' +
             '<div id="cc-blz-lista" style="margin-top:7px;max-height:240px;overflow-y:auto;background:#fff;border:1px solid #ece4d8;border-radius:6px;padding:5px"></div>' +
             '<div style="display:flex;gap:4px;margin-top:6px">' +
               '<button id="cc-blz-sugerir" class="twmgr-btn twmgr-ghost" style="flex:1" title="distribui a defesa das origens marcadas entre os pedidos, do mais perto pro mais longe">✨ Sugerir divisão</button>' +
-              '<button id="cc-blz-limpar" class="twmgr-btn twmgr-ghost" style="padding:4px 10px" title="descarta a divisão sugerida (não desfaz o que já foi enviado)">🧹</button>' +
+              '<button id="cc-blz-limpar" class="twmgr-btn twmgr-ghost" style="padding:4px 10px" title="zera a divisão e as linhas do fórum, pra começar uma rodada nova. Não cancela o apoio que já saiu — isso só no jogo.">🧹</button>' +
             '</div>' +
             '<button id="cc-blz-enviar" class="twmgr-btn twmgr-go" style="width:100%;margin-top:4px">🛡 Enviar apoio agora</button>' +
             '<div id="cc-blz-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
@@ -4363,14 +4365,20 @@
         ccBlzRender();
       });
       document.getElementById('cc-blz-limpar').addEventListener('click', () => {
-        // Só o que NÃO saiu: apagar a marca do enviado reabriria a porta pro reenvio.
+        // Antes isto preservava as linhas JÁ ENVIADAS no plano, pra não perder o registro. Só que
+        // o texto do fórum é montado a partir do plano — então limpar não limpava a caixa de
+        // texto, que era o que se queria limpar. Agora zera a rodada inteira: plano e marcas de
+        // enviado juntos. Zerar as duas é seguro (sem plano não há o que reenviar); zerar só as
+        // marcas é que reabriria a porta pro envio dobrado.
         const b = config.cmd.blz;
-        Object.keys(b.plano).forEach((num) => {
-          Object.keys(b.plano[num]).forEach((vid) => {
-            if (!((b.enviados[num] || {})[vid])) delete b.plano[num][vid];
-          });
-        });
+        let jaSaiu = 0;
+        Object.keys(b.enviados).forEach((n) => { jaSaiu += Object.keys(b.enviados[n] || {}).length; });
+        if (jaSaiu && !confirm('Isto apaga a divisão E as linhas do fórum de ' + jaSaiu
+            + ' apoio(s) que JÁ SAÍRAM. Copie as linhas antes se ainda não postou.\n\nLimpar mesmo assim?')) return;
+        b.plano = {}; b.enviados = {};
         save(); ccBlzRender();
+        const m = document.getElementById('cc-blz-msg');
+        if (m) { m.style.color = '#6f6153'; m.textContent = 'divisão limpa — pode sugerir de novo.'; }
       });
       document.getElementById('cc-blz-enviar').addEventListener('click', () => { keepAwake(true); ccBlzEnviar(); });
       document.getElementById('cc-blz-copiar').addEventListener('click', async () => {

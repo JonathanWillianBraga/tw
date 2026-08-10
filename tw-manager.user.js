@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.149.0
+// @version      11.150.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.149.0';
+  const VERSION = '11.150.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -4441,7 +4441,11 @@
     const out = [];
     tb.querySelectorAll('tr').forEach((tr) => {
       if (!tr.querySelector('.quickedit-vn[data-id]')) return;
-      const w = tr.querySelector('.res.wood'), s = tr.querySelector('.res.stone'), i = tr.querySelector('.res.iron');
+      // `span.wood` e não `.res.wood`: quando o recurso passa de 90% do armazém o jogo TROCA a
+      // classe `res` por `warn_90` (e por `warn` no topo). Filtrar por `.res` pulava justamente
+      // as aldeias quase cheias — as únicas que interessam aqui. Deu o pior tipo de erro: a tela
+      // dizia "5% não estoura nada" com uma aldeia a 98,9% de madeira fora da conta.
+      const w = tr.querySelector('span.wood'), s = tr.querySelector('span.stone'), i = tr.querySelector('span.iron');
       if (!w || !s || !i) return;
       // O armazém é a célula seguinte à dos recursos. Pegar por posição fixa quebraria em mundo
       // com colunas a mais; ancorar no próprio bloco de recursos aguenta a variação.

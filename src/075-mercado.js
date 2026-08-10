@@ -642,7 +642,11 @@
     const out = [];
     tb.querySelectorAll('tr').forEach((tr) => {
       if (!tr.querySelector('.quickedit-vn[data-id]')) return;
-      const w = tr.querySelector('.res.wood'), s = tr.querySelector('.res.stone'), i = tr.querySelector('.res.iron');
+      // `span.wood` e não `.res.wood`: quando o recurso passa de 90% do armazém o jogo TROCA a
+      // classe `res` por `warn_90` (e por `warn` no topo). Filtrar por `.res` pulava justamente
+      // as aldeias quase cheias — as únicas que interessam aqui. Deu o pior tipo de erro: a tela
+      // dizia "5% não estoura nada" com uma aldeia a 98,9% de madeira fora da conta.
+      const w = tr.querySelector('span.wood'), s = tr.querySelector('span.stone'), i = tr.querySelector('span.iron');
       if (!w || !s || !i) return;
       // O armazém é a célula seguinte à dos recursos. Pegar por posição fixa quebraria em mundo
       // com colunas a mais; ancorar no próprio bloco de recursos aguenta a variação.

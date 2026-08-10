@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.128.0
+// @version      11.143.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.128.0';
+  const VERSION = '11.143.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -323,6 +323,11 @@
     // Pós-conquista: joga a aldeia tomada num grupo estático.
     posGrupo: false, posGrupoId: '', posFeitos: {},
     posBandeira: false, posBandeiraTipo: '', posBandeiraNivel: 1,
+    // Histórico de conquistas. Existe por um motivo prático: o alvo conquistado some da fila
+    // 30 min depois, e com ele sumia a linha do Pós-conquista — não havia mais como pôr bandeira
+    // ou grupo numa aldeia tomada de manhã. Guarda também o que a conquista CUSTOU (nobres e de
+    // quais aldeias saíram), que hoje se perdia inteiro.
+    conquistadas: [],   // [{coord, nome, vid, at, nobres, origens:[{nome,n}], gid, bandTipo, bandNivel}]
 
     emVoo: {},        // { [coord]: [{at, chega, n}] } — comandos meus que ainda não pousaram
 
@@ -681,6 +686,25 @@
       if (c.noble.maxHoras != null) c.noble.templates.padrao.maxHoras = c.noble.maxHoras;
       if (c.noble.soNT != null) c.noble.templates.padrao.soNT = !!c.noble.soNT;
     }
+    // MIGRAÇÃO ÚNICA (v11.140.0). `nobres` mudou de significado: era a META quando não havia
+    // relatório de lealdade, virou TETO do total por alvo. Quem tinha 1 ali queria "chuta 1 nobre
+    // enquanto eu não sei a lealdade"; com a semântica nova, esse 1 vira um limite duro e o alvo
+    // trava em "coberto" com um único nobre no ar — o oposto do que a pessoa configurou. Sobe
+    // pro padrão 4 uma vez só, e avisa. Quem quiser um teto menor mexe de novo, agora sabendo
+    // que é teto.
+    if (!c.noble.tetoMigrado) {
+      c.noble.tetoMigrado = 1;
+      Object.keys(c.noble.templates || {}).forEach((id) => {
+        const t = c.noble.templates[id];
+        const n = t && parseInt(t.nobres, 10);
+        if (t && n > 0 && n < 4) {
+          t.nobres = 4;
+          try { pushLog('Noblar: modelo "' + (t.name || id) + '" tinha ' + n + ' em "Comandos por alvo".'
+            + ' Esse campo virou TETO (a quantidade agora sai da lealdade), então subi pra 4 —'
+            + ' com ' + n + ' ele travaria o alvo. Ajuste se quiser um teto menor.', '', 'noble'); } catch (e) {}
+        }
+      });
+    }
     Object.keys(c.noble.templates).forEach((id) => {
       const t = c.noble.templates[id];
       if (!t || typeof t !== 'object') { delete c.noble.templates[id]; return; }
@@ -729,6 +753,7 @@
     if (c.noble.posGrupo == null) c.noble.posGrupo = false;
     if (c.noble.posGrupoId == null) c.noble.posGrupoId = '';
     if (!c.noble.posFeitos || typeof c.noble.posFeitos !== 'object') c.noble.posFeitos = {};
+    if (!Array.isArray(c.noble.conquistadas)) c.noble.conquistadas = [];
     if (c.noble.posBandeira == null) c.noble.posBandeira = false;
     if (c.noble.posBandeiraTipo == null) c.noble.posBandeiraTipo = '';
     c.noble.posBandeiraNivel = Math.max(1, Math.min(10, parseInt(c.noble.posBandeiraNivel, 10) || 1));
@@ -5762,11 +5787,19 @@
   // Quando a lealdade foi MEDIDA. Relatorio antigo (anterior ao campo) cai no `at`, que era o
   // comportamento de antes.
   function nobleLealdadeAt(r) { return (r && (r.lealdadeAt || r.at)) || 0; }
-  function nobleLealdadeAgora(coord) {
+  // Houve MEDIÇÃO de lealdade? Separa o 100 lido de um relatório do 100 presumido — o motor trata
+  // os dois igual (ver nobleLealdadeEm), mas a tela não pode, senão vira promessa que não temos.
+  function nobleLealdadeLida(coord) {
     const r = (config.noble.relatorios || {})[coord];
-    const t = nobleLealdadeAt(r);
-    if (!r || r.lealdade == null || !t) return null;
-    const h = Math.max(0, (Date.now() - t) / 3600000);
+    return !!(r && r.lealdade != null && nobleLealdadeAt(r));
+  }
+  // Devolve 100 sem relatório, pela mesma premissa do cálculo: alvo nunca noblado está em 100.
+  // Antes devolvia null e a coluna "Atual" mostrava "?" mesmo depois de o motor já estar
+  // decidindo com 100 — a tela contradizia a conta.
+  function nobleLealdadeAgora(coord) {
+    if (!nobleLealdadeLida(coord)) return 100;
+    const r = config.noble.relatorios[coord];
+    const h = Math.max(0, (Date.now() - nobleLealdadeAt(r)) / 3600000);
     return Math.min(100, r.lealdade + h * (config.noble.lealdadeRegen || 0));
   }
 
@@ -6002,6 +6035,148 @@
              d: comEscolta.reduce((s, c) => s + c.nobres, 0) + ' nobre(s) em ' + comEscolta.length
                 + ' aldeia(s) alcançam e fecham a escolta. Se ainda assim não sai, veja o log do módulo.' };
   }
+  // ===== Nobres parados: quais aldeias têm nobre que não vai sair =====
+  // O card já dizia "N nobres parados", mas número sem endereço não dá pra agir: o que se quer
+  // saber é QUAL aldeia e POR QUE aquele nobre não decola. É o mesmo conjunto de causas do
+  // diagnóstico por alvo, só que olhado do outro lado — da ORIGEM, não do destino. Aqui a
+  // pergunta não é "por que este alvo não anda", e sim "por que este nobre está encostado".
+  //
+  // Nobre comprometido no plano do ciclo NÃO conta como parado: ele tem destino, só não decolou
+  // ainda. Sem esse desconto a tela acusaria de ocioso justamente o nobre que vai sair agora.
+  async function nobleOciosos() {
+    const [todas, snob, vel] = await Promise.all([
+      getAllVillagesCached(), nobleSnobPorAldeia(true), nobleVelNobre(),
+    ]);
+    const alvos = (config.noble.alvos || []).filter((a) => !a.noblada && !a.perdida);
+    const plano = config.noble.plano || [];
+    const estadoDe = {};
+    plano.forEach((p) => { estadoDe[p.coord] = p.estado; });
+    const comprometidos = {};
+    plano.forEach((p) => (p.envios || []).forEach((e) => {
+      const k = String(e.vid);
+      comprometidos[k] = (comprometidos[k] || 0) + (e.qtd || 1);
+    }));
+    // Cada alvo carrega o SEU modelo (limite de horas e escolta podem diferir por alvo), então o
+    // alcance é avaliado par a par, não contra um limite global.
+    const alvosPrep = alvos.map((a) => {
+      const tp = nobleTplsDe(a)[0];
+      const t = (tp && tp.t) || {};
+      return { a: a, esc: t.escolta || {}, lim: (t.maxHoras != null) ? t.maxHoras : null };
+    });
+    const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+    const out = [];
+    (todas || []).forEach((v) => {
+      const m = (v.coord || '').match(/(\d+)\|(\d+)/); if (!m) return;
+      const tropa = snob[String(v.vid)] || {};
+      const livres = Math.max(0, (tropa.snob || 0) - (comprometidos[String(v.vid)] || 0));
+      if (!livres) return;                                    // sem nobre sobrando: nada a relatar
+      const dist = alvosPrep.map((p) => {
+        const h = (fieldDist(+m[1], +m[2], p.a.x, p.a.y) * vel) / 60;
+        return { p: p, horas: h, dentro: (p.lim == null) || (h <= p.lim) };
+      }).sort((a, b) => a.horas - b.horas);
+      const item = { vid: v.vid, nome: v.name || v.coord, coord: v.coord, nobres: livres };
+      if (!dist.length) {
+        item.cor = '#8a7340'; item.motivo = 'sem alvo na fila';
+        item.det = 'A fila de alvos está vazia — não há pra onde mandar.';
+        out.push(item); return;
+      }
+      const dentro = dist.filter((d) => d.dentro);
+      if (!dentro.length) {
+        const p0 = dist[0];
+        item.cor = '#a8564a'; item.motivo = 'nenhum alvo no alcance';
+        item.det = 'O alvo mais perto é ' + esc(p0.p.a.coord) + ', a ' + fmtDur(Math.round(p0.horas * 3600))
+          + (p0.p.lim != null ? ' — o modelo dele para em ' + p0.p.lim + ' h' : '') + '.';
+        out.push(item); return;
+      }
+      // Alcança alguém. Então ou falta escolta, ou o alvo já está resolvido, ou é a fila segurando.
+      const comEsc = dentro.filter((d) => Object.keys(d.p.esc).every((u) => (tropa[u] || 0) >= (+d.p.esc[u] || 0)));
+      if (!comEsc.length) {
+        const d0 = dentro[0];
+        const falta = Object.keys(d0.p.esc).filter((u) => (tropa[u] || 0) < (+d0.p.esc[u] || 0))
+          .map((u) => (rot[u] || u) + ' ' + (tropa[u] || 0) + '/' + d0.p.esc[u]);
+        item.cor = '#a8564a'; item.motivo = 'falta escolta';
+        item.det = 'Alcança ' + esc(d0.p.a.coord) + ' em ' + fmtDur(Math.round(d0.horas * 3600))
+          + ', mas não fecha a composição: ' + falta.join(', ') + '.';
+        out.push(item); return;
+      }
+      // Alvo com nobre já a caminho o bastante não precisa deste — é reserva, não desperdício.
+      const abertos = comEsc.filter((d) => {
+        const e = estadoDe[d.p.a.coord];
+        return e !== 'enviados' && e !== 'garantida' && e !== 'noblada';
+      });
+      if (!abertos.length) {
+        const d0 = comEsc[0];
+        item.cor = '#3f8f52'; item.motivo = 'reserva';
+        item.det = 'Os alvos no alcance (o mais perto é ' + esc(d0.p.a.coord)
+          + ') já têm nobre suficiente a caminho. Este fica de reserva.';
+        out.push(item); return;
+      }
+      const d0 = abertos[0];
+      const est = estadoDe[d0.p.a.coord];
+      if (est === 'aguardando') {
+        item.cor = '#a07a42'; item.motivo = 'preso pela fila serial';
+        item.det = 'Alcança ' + esc(d0.p.a.coord) + ' em ' + fmtDur(Math.round(d0.horas * 3600))
+          + ' e tem a escolta, mas esse alvo espera a vez. Ligue "Planejar todos os alvos" pra este nobre sair.';
+      } else {
+        item.cor = '#a07a42'; item.motivo = 'deve sair no próximo ciclo';
+        item.det = 'Alcança ' + esc(d0.p.a.coord) + ' em ' + fmtDur(Math.round(d0.horas * 3600))
+          + ' e fecha a escolta. Se não sair, o teto de comandos por ciclo pode estar cheio.';
+      }
+      out.push(item);
+    });
+    out.sort((a, b) => b.nobres - a.nobres);
+    return out;
+  }
+  // Estado de tela da lista de ociosos (não vai pro config: é uma leitura, não uma configuração).
+  let _nbOcio = null, _nbOcioAt = 0, _nbOcioErr = null, _nbOcioCarregando = false;
+  function renderNobleOciosos() {
+    const box = document.getElementById('twmgr-nb-ocio'); if (!box) return;
+    if (_nbOcioCarregando) { box.innerHTML = '<span class="twmgr-lbl">lendo as aldeias…</span>'; return; }
+    if (_nbOcioErr) { box.innerHTML = '<span style="color:#b03030;font-size:10px">' + esc(_nbOcioErr) + '</span>'; return; }
+    if (!_nbOcio) {
+      box.innerHTML = '<span class="twmgr-lbl">Ainda não conferido nesta sessão — abre sozinho ao entrar na aba.</span>';
+      return;
+    }
+    if (!_nbOcio.length) {
+      box.innerHTML = '<span style="color:#3f8f52;font-size:10px">Nenhum nobre parado — todos estão a caminho ou já comprometidos no plano.</span>';
+      return;
+    }
+    const total = _nbOcio.reduce((s, o) => s + o.nobres, 0);
+    box.innerHTML = '<table style="width:100%;font-size:10px;border-collapse:collapse">' +
+      '<tr style="color:#8a7340"><td>aldeia</td><td style="width:42px">nobres</td><td style="width:130px">motivo</td><td>detalhe</td></tr>' +
+      _nbOcio.map((o) => '<tr style="border-top:1px solid #efe7d8">' +
+        '<td style="padding:2px 0"><a href="/game.php?village=' + esc(String(o.vid)) + '&screen=snob" target="_blank" style="color:#5c4423">' +
+          esc(o.nome) + '</a> <span style="color:#8a7340">' + esc(o.coord) + '</span></td>' +
+        '<td><b style="color:#8b5426">' + o.nobres + '</b></td>' +
+        '<td style="color:' + o.cor + '">' + esc(o.motivo) + '</td>' +
+        '<td style="color:#6f6153">' + o.det + '</td></tr>').join('') +
+      '</table>' +
+      '<div style="color:#8a7340;font-size:9px;margin-top:3px"><b>' + total + ' nobre(s)</b> parados em '
+        + _nbOcio.length + ' aldeia(s). Lido às ' + new Date(_nbOcioAt).toLocaleTimeString('pt-BR')
+        + '. O nome da aldeia leva direto à Academia dela.</div>';
+  }
+  async function nobleConferirOciosos() {
+    if (_nbOcioCarregando) return;                  // dois cliques seguidos não viram dois fetches
+    _nbOcioCarregando = true; _nbOcioErr = null; renderNobleOciosos();
+    try {
+      _nbOcio = await nobleOciosos();
+      _nbOcioAt = Date.now();
+    } catch (e) {
+      _nbOcioErr = 'não deu pra ler: ' + (e.message || e);
+    }
+    _nbOcioCarregando = false;
+    renderNobleOciosos();
+  }
+  // Conferência automática. O prazo é generoso de propósito: o que muda essa tabela é nobre
+  // ficando pronto (2h37 na Academia), nobre decolando ou escolta sendo recrutada — nada disso
+  // acontece de minuto em minuto, e cada leitura é uma requisição. Dispara em dois momentos, os
+  // dois "de graça": no fim do ciclo do módulo e ao abrir a aba. Botão manual atropela o prazo.
+  const NB_OCIO_TTL = 30 * 60 * 1000;
+  function nobleOciososAuto() {
+    if (_nbOcioCarregando) return;
+    if (_nbOcio && (Date.now() - _nbOcioAt) < NB_OCIO_TTL) { renderNobleOciosos(); return; }
+    nobleConferirOciosos();
+  }
   // Qual alvo está com a caixa "quem vai noblar" aberta (um por vez — abrir vários empurraria a
   // fila pra fora da tela). Só de tela, não vai pro config.
   let _nbQuemAberto = null, _nbCand = null, _nbCandCoord = null;
@@ -6106,14 +6281,22 @@
     if (d.pousados) p.push(d.pousados + ' pousado(s), sem relatório');
     return p.join(' + ') || '0 a caminho';
   }
+  // "Pousado" era definido só por `doJogo`: entrada que a ficha do alvo não lista, pousou. Só que
+  // o nobre que ACABOU DE SAIR também não está lá — ele é uma entrada local (`doJogo` falso) e a
+  // ficha do alvo só é relida no ciclo seguinte. Resultado: os 2 nobres que a Pandora despachou
+  // agora apareciam como "2 pousados" antes mesmo de decolar.
+  //
+  // A hora de chegada decide primeiro, e ela existe nos dois casos (nobleRegistraEnvio grava
+  // `chega` no envio). Só depois de a chegada passar é que a ausência na ficha vira prova de que
+  // pousou — antes disso é só o jogo ainda não ter sido consultado.
   function nobleEmVooDetalhe(coord) {
     const lista = nobleVoos(coord);
     const agora = Date.now();
     let voando = 0, pousados = 0;
     lista.forEach((e) => {
       const n = e.n || 1;
-      if (e.doJogo && (e.chega || 0) > agora) voando += n;
-      else if (e.doJogo) voando += n;          // veio do jogo: está na lista de comandos, logo não pousou
+      if ((e.chega || 0) > agora) voando += n;   // ainda não chegou: está no ar, venha de onde vier
+      else if (e.doJogo) voando += n;            // já devia ter chegado, mas o jogo ainda lista
       else pousados += n;
     });
     return { voando: voando, pousados: pousados, total: voando + pousados };
@@ -6271,10 +6454,21 @@
   //
   // `ateMs` e o instante que interessa: agora, ou a chegada do nobre que eu mandaria neste ciclo.
   // Devolve null quando nunca houve relatorio com lealdade (so ataque com nobre traz o campo).
+  // SEM RELATÓRIO, ASSUME 100. É a premissa que o módulo já declara na tela — os alvos estão
+  // vazios, e aldeia que nunca foi noblada está em 100. Antes isto devolvia `null`, e o motor
+  // caía num caminho paralelo que usava o `nobres` do modelo. Dois caminhos de decisão pro mesmo
+  // número, e o segundo não passava pela projeção: com o modelo em 1, um único nobre no ar já
+  // fazia o alvo virar "coberto" e travava ali até um relatório chegar — que era o caso real do
+  // 434|577 e do 434|592.
+  //
+  // Assumir 100 AQUI, e não lá, é o que importa: entrando como leitura inicial, o valor passa
+  // pela mesma projeção de sempre (ordena as chegadas, desconta 25 de cada, regenera entre elas),
+  // então o desconto do que já está voando continua valendo. Alvo virgem com 1 nobre no ar pede
+  // 3, não 4.
   function nobleLealdadeEm(coord, ateMs) {
     const r = (config.noble.relatorios || {})[coord];
-    const t0 = nobleLealdadeAt(r);
-    if (!r || r.lealdade == null || !t0) return null;
+    const lido = !!(r && r.lealdade != null && nobleLealdadeAt(r));
+    const t0 = lido ? nobleLealdadeAt(r) : Date.now();
     const regen = config.noble.lealdadeRegen || 0;
     const queda = config.noble.lealdadePorAtk || 25;
     const fim = ateMs || Date.now();
@@ -6282,7 +6476,7 @@
       .map((e) => ({ at: e.chega || e.at, n: e.n || 1 }))
       .filter((e) => e.at <= fim)
       .sort((a, b) => a.at - b.at);
-    let t = t0, v = r.lealdade;
+    let t = t0, v = lido ? r.lealdade : 100;
     for (const e of chegadas) {
       v = Math.min(100, v + Math.max(0, (e.at - t) / 3600000) * regen);
       v -= e.n * queda;
@@ -6305,18 +6499,21 @@
     return nobleLealdadeEm(coord, chegadas.length ? Math.max.apply(null, chegadas) : Date.now());
   }
 
-  // Quantos comandos ainda faltam. Sai da lealdade PREVISTA, nao de "atual menos o que voa":
-  // subtrair os voos no fim ignorava a regeneracao ENTRE as chegadas e mandava de menos.
-  // Sem relatorio nenhum cai no `nobres` do modelo -- unico palpite honesto, e ai sim descontando
-  // o que ja esta no ar, senao cada ciclo mandaria mais um lote inteiro.
+  // Quantos comandos ainda faltam. Sai SEMPRE da lealdade PREVISTA -- nao de "atual menos o que
+  // voa", porque subtrair os voos no fim ignorava a regeneracao ENTRE as chegadas e mandava de
+  // menos. Como `nobleLealdadeEm` agora assume 100 quando nao ha relatorio, o caminho e um so:
+  // alvo virgem da ceil(100/25) = 4 pela mesma formula, em vez de sair de um numero avulso.
+  //
+  // O `nobres` do modelo virou TETO, nao meta. Serve pra voce limitar o gasto num alvo especifico
+  // ("nao quero mais que 2 nobres nessa"); nunca faz mandar MAIS do que a lealdade pede.
   function noblePrecisaDe(alvo, tpl, durSec) {
     const prev = nobleLealdadePrevista(alvo.coord, durSec != null ? durSec : alvo.ultDur);
     const voando = nobleEmVoo(alvo.coord);
-    const base = (prev == null)
-      ? Math.max(0, (tpl.nobres || NOBLE_POR_CONQUISTA) - voando)
-      : Math.max(0, Math.ceil(prev / (config.noble.lealdadePorAtk || 25)));
+    const calc = (prev == null) ? 0 : Math.max(0, Math.ceil(prev / (config.noble.lealdadePorAtk || 25)));
+    const teto = Math.max(1, tpl.nobres || NOBLE_POR_CONQUISTA);
+    const base = Math.min(calc, Math.max(0, teto - voando));
     return { precisa: base, lealdade: nobleLealdadeAgora(alvo.coord), prevista: prev,
-             voando: voando, bruto: base };
+             voando: voando, bruto: calc };
   }
 
   // ===== Estado do alvo =====
@@ -6457,43 +6654,63 @@
     return true;
   }
 
-  // Roda depois da varredura de relatórios: alvo com lealdade <= 0 foi conquistado, e a aldeia
-  // agora é minha (aparece no getAllVillages). `posFeitos` impede repetir — sem ele, cada
-  // releitura do relatório antigo re-adicionaria a aldeia ao grupo.
+  // Grava a conquista num histórico próprio. Chamado no INSTANTE em que a aldeia aparece na
+  // minha lista — que é o único momento em que ainda dá pra saber o que ela custou (os voos são
+  // apagados logo em seguida) e qual bandeira/grupo aquele alvo tinha configurado (o alvo sai da
+  // fila 30 min depois, e aí `noblePosDoAlvo` já cairia no padrão global).
+  function nobleRegistrarConquista(a, todas) {
+    const lista = config.noble.conquistadas || (config.noble.conquistadas = []);
+    if (lista.some((c) => c.coord === a.coord)) return;
+    const v = (todas || []).find((x) => (x.coord || '') === a.coord) || {};
+    const cfg = noblePosDoAlvo(a.coord);
+    const origens = [];
+    (nobleVoos(a.coord) || []).forEach((e) => {
+      const n = e.origemNome || e.origem || '?';
+      const j = origens.find((o) => o.nome === n);
+      if (j) j.n++; else origens.push({ nome: n, n: 1 });
+    });
+    lista.unshift({ coord: a.coord, nome: v.name || a.coord, vid: v.vid || null,
+                    at: Date.now(), nobres: (nobleVoos(a.coord) || []).length, origens: origens,
+                    gid: cfg.gid, bandTipo: cfg.bandTipo, bandNivel: cfg.bandNivel });
+    config.noble.conquistadas = lista.slice(0, 100);
+  }
+  // Aplica grupo e bandeira numa aldeia já conquistada. Usada pelo automático E pelo botão
+  // manual — um caminho só, pra os dois não divergirem.
+  //
+  // `forcar` = veio do clique. Aí ignora os interruptores globais: se o usuário apertou o botão,
+  // a intenção é essa, não a de um checkbox de configuração.
+  async function nobleAplicarPos(c, v, forcar) {
+    const feito = [];
+    if ((forcar || config.noble.posGrupo) && c.gid) {
+      try { await nobleAddGrupo(v.vid, c.gid); feito.push('grupo'); }
+      catch (e) { pushLog('Noblar: não consegui pôr ' + c.coord + ' no grupo (' + (e.message || e) + ').', 'err', 'noble'); }
+      await sleep(400);
+    }
+    if ((forcar || config.noble.posBandeira) && c.bandTipo) {
+      try { await nobleEquiparBandeira(v.vid, c.bandTipo, c.bandNivel || 1); feito.push('bandeira'); }
+      catch (e) { pushLog('Noblar: não consegui equipar bandeira em ' + c.coord + ' (' + (e.message || e) + ').', 'err', 'noble'); }
+      await sleep(400);
+    }
+    // Só marca como feito se ALGO deu certo — senão uma falha de rede aposentaria a aldeia
+    // pra sempre e ela nunca entraria no grupo.
+    if (feito.length) {
+      config.noble.posFeitos[c.coord] = Date.now();
+      pushLog('Noblar: ' + c.coord + ' — ' + feito.join(' + ') + ' aplicado(s).', 'ok', 'noble');
+    }
+    return feito;
+  }
+  // Passada automática. Antes ela varria `relatorios` atrás de lealdade <= 0, o que criava um
+  // buraco: quem detecta a conquista de verdade é a lista de aldeias (nobleMinhaAldeia), e esse
+  // caminho não passava por aqui. Alvo sem relatório lido — ou com "Ler relatórios" desligado,
+  // que desligava o bloco inteiro — nunca recebia bandeira nem grupo. Agora a fonte é o
+  // histórico, que é escrito pelo mesmo detector que marca `noblada`.
   async function noblePosConquista(todas) {
     if (!config.noble.posGrupo && !config.noble.posBandeira) return;
-    const rel = config.noble.relatorios || {};
-    for (const coord of Object.keys(rel)) {
-      if (rel[coord].lealdade == null || rel[coord].lealdade > 0) continue;
-      if (config.noble.posFeitos[coord]) continue;
-      const v = (todas || []).find((x) => (x.coord || '') === coord);
+    for (const c of (config.noble.conquistadas || [])) {
+      if (config.noble.posFeitos[c.coord]) continue;
+      const v = (todas || []).find((x) => (x.coord || '') === c.coord);
       if (!v) continue;                 // ainda não entrou na lista de aldeias; tenta no próximo ciclo
-      const alvoCfg = noblePosDoAlvo(coord);
-      const feito = [];
-      if (config.noble.posGrupo && alvoCfg.gid) {
-        try {
-          await nobleAddGrupo(v.vid, alvoCfg.gid);
-          feito.push('grupo');
-        } catch (e) {
-          pushLog('Noblar: não consegui pôr ' + coord + ' no grupo (' + (e.message || e) + ').', 'err', 'noble');
-        }
-        await sleep(400);
-      }
-      if (config.noble.posBandeira && alvoCfg.bandTipo) {
-        try {
-          await nobleEquiparBandeira(v.vid, alvoCfg.bandTipo, alvoCfg.bandNivel || 1);
-          feito.push('bandeira');
-        } catch (e) {
-          pushLog('Noblar: não consegui equipar bandeira em ' + coord + ' (' + (e.message || e) + ').', 'err', 'noble');
-        }
-        await sleep(400);
-      }
-      // Só marca como feito se ALGO deu certo — senão uma falha de rede aposentaria a aldeia
-      // pra sempre e ela nunca entraria no grupo.
-      if (feito.length) {
-        config.noble.posFeitos[coord] = Date.now();
-        pushLog('Noblar: ' + coord + ' conquistada — ' + feito.join(' + ') + ' aplicado(s).', 'ok', 'noble');
-      }
+      await nobleAplicarPos(c, v, false);
     }
     save();
   }
@@ -6987,9 +7204,6 @@
     if (config.noble.lerRelatorios !== false) {
       try { await nobleVarrerRelatorios(alvos); }
       catch (e) { pushLog('Noblar (relatórios): ' + (e.message || e), '', 'noble'); }
-      // Depende do que a varredura acabou de ler, entao vem logo em seguida.
-      try { await noblePosConquista(todas); }
-      catch (e) { pushLog('Noblar (pós-conquista): ' + (e.message || e), 'err', 'noble'); }
     }
 
     // O JOGO é a fonte da verdade sobre o que está a caminho. Vem antes de tudo: a fila inteira
@@ -7022,6 +7236,8 @@
     (config.noble.alvos || []).forEach((a) => {
       if (!a.noblada && nobleMinhaAldeia(a.coord, todas)) {
         a.noblada = Date.now();
+        // ANTES do delete: o registro puxa os voos pra saber quantos nobres a conquista custou.
+        nobleRegistrarConquista(a, todas);
         delete config.noble.emVoo[a.coord];
         pushLog('Noblar: ' + a.coord + ' CONQUISTADA — sai da fila.', 'ok', 'noble');
       }
@@ -7037,6 +7253,13 @@
       const fim = a.noblada || a.perdida;
       return !fim || (Date.now() - fim) < RESOLVIDO_TTL;
     });
+
+    // Só AQUI, depois da detecção: o registro da conquista acabou de ser escrito logo acima, e é
+    // dele que o pós-conquista se alimenta. Rodando antes, a bandeira só sairia no ciclo seguinte.
+    // Fora do "Ler relatórios" de propósito — quem desligava aquilo ficava sem bandeira e sem
+    // grupo, sem nenhum aviso, porque o pós-conquista morava dentro daquele bloco.
+    try { await noblePosConquista(todas); }
+    catch (e) { pushLog('Noblar (pós-conquista): ' + (e.message || e), 'err', 'noble'); }
 
     const cacheTropa = {};
     // Pool global: quanto de cada aldeia os alvos ANTERIORES desta rodada ja levaram. E o que
@@ -7176,6 +7399,9 @@
     save();
     renderNoblePlano();
     refreshCards('noble');
+    // Depois do plano, não antes: o `usados` deste ciclo já está aplicado, então o nobre que
+    // acabou de decolar não aparece como parado. Respeita o prazo — não é uma leitura por ciclo.
+    nobleOciososAuto();
     const daVez = (config.noble.alvos || []).filter((a) => !a.noblada && !a.perdida)[0];
     pushLog('Noblar: fila de ' + naFila + ' aldeia(s)'
       + (daVez ? ' — a vez é de ' + daVez.coord : '')
@@ -7279,12 +7505,17 @@
   }
   // Celula de lealdade (atual ou prevista). `?` quando nunca houve relatorio de nobre -- e o
   // unico jeito de saber lealdade no jogo, entao fingir 100 seria mentira.
-  function nobleLealdadeCel(v, dica) {
+  // `presumida` = não veio de relatório. Sai em itálico e com til, pra não passar por medição:
+  // é a premissa do módulo (alvo vazio, lealdade 100), não um número que alguém leu.
+  function nobleLealdadeCel(v, dica, presumida) {
     if (v == null) {
       return '<span style="color:#8a7340" title="lealdade só aparece em relatório de ataque com nobre">?</span>';
     }
     const n = Math.round(v);
     const cor = n <= 0 ? '#3f8f52' : n <= 35 ? '#b5651d' : '#8a7340';
+    if (presumida) {
+      return '<i style="color:#8a7340;font-weight:600" title="' + esc(dica || '') + '">~' + n + '</i>';
+    }
     return '<b style="color:' + cor + '" title="' + esc(dica || '') + '">' + n + '</b>';
   }
   // Idade do relatório em texto curto, pra dica de ferramenta (sem HTML, que o title não aceita).
@@ -7356,11 +7587,15 @@
           + (rel.dono ? esc(rel.dono) : (mv && mv.name ? '' : '—')) + '</div>';
         const atual = nobleLealdadeAgora(a.coord);
         const prev = (p.prevista !== undefined) ? p.prevista : nobleLealdadePrevista(a.coord, a.ultDur);
-        const dicaAtual = rel.lealdade != null
-          ? 'medida ' + nobleQuandoTxt(nobleLealdadeAt(rel)) + ': caiu de ' + rel.de + ' para ' + rel.lealdade : '';
-        const dicaPrev = a.ultDur != null
-          ? 'projetada pra daqui a ' + fmtDur(a.ultDur) + ', que é a viagem do próximo nobre'
-          : 'sem viagem medida ainda — projetada só até a última chegada marcada';
+        const lida = nobleLealdadeLida(a.coord);
+        const dicaAtual = lida
+          ? 'medida ' + nobleQuandoTxt(nobleLealdadeAt(rel)) + ': caiu de ' + rel.de + ' para ' + rel.lealdade
+          : 'PRESUMIDA. Sem relatório de ataque com nobre, o módulo assume 100 — aldeia nunca noblada está cheia.'
+            + ' O primeiro relatório substitui este número.';
+        const dicaPrev = (lida ? '' : 'Partindo de 100 presumido. ')
+          + (a.ultDur != null
+            ? 'Projetada pra daqui a ' + fmtDur(a.ultDur) + ', que é a viagem do próximo nobre.'
+            : 'Sem viagem medida ainda — projetada só até a última chegada marcada.');
         const voando = nobleEmVoo(a.coord);
         const detVoo = nobleEmVooDetalhe(a.coord);
         // Número clicável: abre a caixa com QUEM está mandando / vai mandar. O tooltip já
@@ -7386,9 +7621,9 @@
           + (p.pronto ? '<div class="sub"><a class="twmgr-nb-fire" data-coord="' + esc(a.coord) + '">Enviar agora</a></div>' : '');
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '"' + (fim ? ' style="opacity:.6"' : '') + '>' +
           '<td>' + filaCel + '</td><td>' + alvoCel + '</td><td>' + sel + '</td>' +
-          '<td>' + nobleLealdadeCel(atual, dicaAtual) + '</td>' +
+          '<td>' + nobleLealdadeCel(atual, dicaAtual, !lida) + '</td>' +
           '<td>' + atksCel + '</td>' +
-          '<td>' + nobleLealdadeCel(prev, dicaPrev) + '</td>' +
+          '<td>' + nobleLealdadeCel(prev, dicaPrev, !lida) + '</td>' +
           '<td>' + estado + '</td>' +
           '<td><a class="twmgr-nb-rm" data-coord="' + esc(a.coord) + '" title="tirar da fila">✕</a></td></tr>' +
           (_nbQuemAberto === a.coord ? nobleLinhaQuem(a, p) : '');
@@ -7411,6 +7646,9 @@
       _nbBandeiras = [];
       nobleLerBandeiras(true).then(() => { renderNoblePos(); nobleRenderBandPadrao(); }).catch(() => {});
     }
+    // Antes do early-return abaixo: o histórico existe mesmo com a fila vazia — aliás, é
+    // justamente aí que ele importa.
+    renderNobleConquistadas();
     const alvos = config.noble.alvos || [];
     if (!alvos.length) {
       box.innerHTML = '<div style="color:#8a7340;text-align:center;padding:10px;font-size:10px">— nenhum alvo na lista —</div>';
@@ -7437,6 +7675,57 @@
             + (herdaB ? '<div class="sub">padrão</div>' : '') + '</td>' +
           '<td>' + estado + '</td></tr>';
       }).join('') + '</tbody></table>';
+  }
+  // Tabela do HISTÓRICO. Separada da de cima de propósito: aquela é sobre alvos que ainda vão
+  // cair (pré-configuração), esta é sobre aldeias que já são suas. Antes esta não existia, e a
+  // aldeia conquistada sumia da tela 30 min depois levando junto a única forma de pôr bandeira.
+  function renderNobleConquistadas() {
+    const box = document.getElementById('twmgr-nb-conqlista'); if (!box) return;
+    const lista = config.noble.conquistadas || [];
+    if (!lista.length) {
+      box.innerHTML = '<div style="color:#8a7340;text-align:center;padding:8px;font-size:10px">'
+        + '— nenhuma conquista registrada ainda. A partir de agora cada aldeia tomada entra aqui. —</div>';
+      return;
+    }
+    box.innerHTML = '<table class="twmgr-bld-tab twmgr-nb-tab"><thead><tr>' +
+      '<th>Aldeia</th><th style="width:78px">quando</th><th style="width:52px" title="nobres que este módulo mandou pra ela">custo</th>' +
+      '<th style="width:88px">Grupo</th><th style="width:74px">Bandeira</th><th style="width:92px"></th></tr></thead><tbody>' +
+      lista.map((c, i) => {
+        const feito = config.noble.posFeitos[c.coord];
+        const g = _nbGrupos.find((x) => String(x.id) === String(c.gid));
+        const dias = Math.floor((Date.now() - c.at) / 86400000);
+        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
+          '<td>' + (c.vid ? '<a href="/game.php?village=' + esc(String(c.vid)) + '&screen=overview" target="_blank" style="color:#5c4423"><b>'
+              + esc(c.nome) + '</b></a>' : '<b>' + esc(c.nome) + '</b>') +
+            ' <span style="color:#8a7340">' + esc(c.coord) + '</span></td>' +
+          '<td style="color:#8a7340">' + new Date(c.at).toLocaleDateString('pt-BR')
+            + (dias > 0 ? ' <span title="' + dias + ' dia(s) atrás">(' + dias + 'd)</span>' : '') + '</td>' +
+          '<td title="' + esc((c.origens || []).map((o) => o.n + '× ' + o.nome).join(', ') || 'origem não registrada') + '">'
+            + (c.nobres ? '<b>' + c.nobres + '</b>👑' : '<span style="color:#8a7340">—</span>') + '</td>' +
+          '<td style="color:#6f6153">' + esc(g ? (g.name || g.id) : (c.gid ? String(c.gid) : '—')) + '</td>' +
+          '<td>' + (c.bandTipo ? esc(String(c.bandTipo)) + ' nv' + (c.bandNivel || 1) : '<span style="color:#8a7340">—</span>') + '</td>' +
+          '<td>' + (feito
+            ? '<span style="color:#3f8f52" title="aplicado em ' + new Date(feito).toLocaleString('pt-BR') + '">✔ aplicado</span>'
+            : '<button class="twmgr-btn twmgr-ghost twmgr-nb-posgo" data-coord="' + esc(c.coord) + '" style="padding:2px 7px;font-size:10px">aplicar agora</button>')
+          + '</td></tr>';
+      }).join('') + '</tbody></table>';
+    box.querySelectorAll('.twmgr-nb-posgo').forEach((b) => b.addEventListener('click', async () => {
+      const coord = b.getAttribute('data-coord');
+      const c = (config.noble.conquistadas || []).find((x) => x.coord === coord); if (!c) return;
+      if (!c.gid && !c.bandTipo) { alert('Essa aldeia não tem grupo nem bandeira definidos — o alvo caiu antes de você configurar.'); return; }
+      b.disabled = true; b.textContent = 'aplicando…';
+      try {
+        const todas = await getAllVillagesCached(true);
+        const v = (todas || []).find((x) => (x.coord || '') === coord);
+        if (!v) throw new Error('não achei essa aldeia na sua lista');
+        const feito = await nobleAplicarPos(c, v, true);   // forçado: o clique é a intenção
+        if (!feito.length) throw new Error('nada foi aplicado — veja o log');
+        save();
+      } catch (e) {
+        alert('Não deu: ' + (e.message || e));
+      }
+      renderNobleConquistadas();
+    }));
   }
   // Botão da célula. Um traço cinza não parecia clicável — o usuário achou que estava quebrado.
   // Agora tem cara de botão: borda tracejada e a palavra "escolher" quando está vazio, borda
@@ -10519,6 +10808,10 @@
     // Status) precisa refazer a conta quando a aba aparece — senão o ajuste só acontecia por
     // acidente, na primeira vez que o usuário reordenava a tabela.
     if (name === 'recruit') aoAparecer();
+    // A tabela de nobres parados não vale nada velha. Com o módulo parado o ciclo não roda pra
+    // atualizá-la, então abrir a aba também conta como um momento de conferir — mas só se a
+    // leitura já passou do prazo, senão trocar de aba viraria uma requisição por clique.
+    if (name === 'noble' && typeof nobleOciososAuto === 'function') nobleOciososAuto();
   }
   // Rotinas que só funcionam com o elemento visível. Chamado por showTab e showSub.
   function aoAparecer() {
@@ -10947,6 +11240,12 @@
           '</div>' +
           '<div id="twmgr-nb-lista" class="twmgr-bld-vils" style="margin-top:6px"></div>' +
           '<div id="twmgr-nb-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>') +
+        sec('Nobres parados',
+          '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">' +
+            '<button id="twmgr-nb-ocio-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px" title="força a releitura agora, sem esperar o próximo check">↻ Conferir agora</button>' +
+            '<span style="font-size:9px;color:#8a7d6d;flex:1">Aldeias suas com nobre em casa que <b>não vai sair</b> — e o motivo de cada uma. Confere sozinho a cada <b>30 min</b>; nobre já escalado no plano do ciclo não entra aqui.</span>' +
+          '</div>' +
+          '<div id="twmgr-nb-ocio"></div>') +
         sec('Modelos de envio',
           '<div id="twmgr-nb-chips" class="twmgr-chips"></div>' +
           '<div class="twmgr-card2">' +
@@ -10958,7 +11257,7 @@
               '<button id="twmgr-nb-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:4px 7px" title="apagar modelo">🗑</button>' +
             '</div>' +
             '<div class="twmgr-cols" style="margin-bottom:0">' +
-              '<div class="twmgr-fld"><span title="Cada comando leva exatamente 1 nobre — a lealdade cai uma vez por ataque">Comandos por alvo <span style="color:#8a7d6d">(1 nobre cada)</span></span><input id="twmgr-nb-nob" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
+              '<div class="twmgr-fld"><span title="TETO, não meta. A quantidade sai da lealdade: alvo sem relatório é tratado como 100, o que dá 4 comandos (100 ÷ 25). Este campo só impede passar disso — útil pra limitar o gasto num alvo. Cada comando leva exatamente 1 nobre.">Teto de comandos por alvo <span style="color:#8a7d6d">(1 nobre cada)</span></span><input id="twmgr-nb-nob" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
               '<div class="twmgr-fld"><span>Viagem máx. (h)</span><input id="twmgr-nb-horas" class="twmgr-inp" type="number" min="1" max="72" value="6"></div>' +
             '</div>' +
             '<div class="twmgr-fld" style="margin-top:8px"><span title="NT = todos os nobres saindo da MESMA aldeia">Só enviar NT <span style="color:#8a7d6d">(todos da mesma aldeia)</span></span>' +
@@ -11028,7 +11327,10 @@
             '<div id="twmgr-nb-poslista" class="twmgr-bld-vils"></div>' +
             '<div id="twmgr-nb-flagpick" style="display:none;margin-top:6px;background:#fdfaf4;border:1px solid #e8dfcc;border-radius:8px;padding:7px"></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Cada alvo pode ter o seu. Linha marcada como <b>padrão</b> herda o que está ali em cima — mexer nela desliga a herança <b>só daquele alvo</b>, sem afetar os outros.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Clique na bandeira da linha pra escolher — a grade mostra <b>só as que a conta tem</b>, com o efeito de cada uma.</div>') +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Clique na bandeira da linha pra escolher — a grade mostra <b>só as que a conta tem</b>, com o efeito de cada uma.</div>' +
+            '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:9px 0 3px">Conquistadas</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-bottom:4px">Aldeias que você tomou, com o que cada uma custou. Elas <b>não somem</b> da lista — se o automático não pegou (ou você configurou depois), use <b>aplicar agora</b>.</div>' +
+            '<div id="twmgr-nb-conqlista" class="twmgr-bld-vils"></div>') +
         '</div>' +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
@@ -11404,6 +11706,8 @@
     renderNoblePlano();
     document.getElementById('twmgr-nb-start').addEventListener('click', nobleStart);
     document.getElementById('twmgr-nb-stop').addEventListener('click', nobleStop);
+    document.getElementById('twmgr-nb-ocio-go').addEventListener('click', nobleConferirOciosos);
+    renderNobleOciosos();   // só desenha o estado atual; quem dispara a leitura é showTab
     setNobleStatus(config.noble.running);
 
     document.getElementById('twmgr-pq-start').addEventListener('click', researchStart);
@@ -12717,6 +13021,23 @@
       modelos: null,          // modelos de tropa do usuário (null = ainda não semeado)
       fechados: {},           // seções recolhidas do painel (ele fica alto demais com tudo aberto)
       snipeFolgaMs: 150,      // quanto DEPOIS do ataque o apoio pousa (margem de segurança)
+      blz: defBlz(),          // blindagem da tribo (pedidos do tópico do fórum)
+    });
+    // ---- Blindagem: estado ----
+    // `reserva` é por ALDEIA e em número absoluto: o que NUNCA sai de casa. Sem isso a divisão
+    // esvazia justamente a aldeia que está segurando a própria linha.
+    const defBlz = () => ({
+      url: '',                // tópico da tribo (fica salvo; a tabela muda, a URL não)
+      pedidos: [],            // [{num, nome, coord, x, y, pede:{spear,sword,heavy}}]
+      entregas: [],           // [{num, autor, at, posEdicao, spear, sword, heavy}] — dos comentários
+      editadoEm: 0,           // quando a tabela foi editada pela última vez (corta as entregas velhas)
+      lidoEm: 0,
+      reserva: { spear: 0, sword: 0, heavy: 0 },
+      // Quanto cada aldeia entrega no TOTAL da rodada, por unidade. Número absoluto; vazio = tudo.
+      porAldeia: { spear: '', sword: '', heavy: '' },
+      alvosSel: {},           // { pedidoNum: true } — seleção EXPLÍCITA, semeada com todos na busca
+      plano: {},              // { pedidoNum: { vid: {spear,sword,heavy} } } — o que VOCÊ vai mandar
+      enviados: {},           // { pedidoNum: { vid: at } } — trava anti-reenvio
     });
     const MODELOS_PADRAO = () => ([
       { id: genId(), nome: 'Tudo', amounts: {}, max: UNITS.map((u) => u[0]).filter((u) => u !== 'snob').reduce((o, u) => (o[u] = true, o), {}) },
@@ -12765,6 +13086,15 @@
         if (c.cmd.suporteOkAt == null) c.cmd.suporteOkAt = 0;
         if (!c.cmd.calib) c.cmd.calib = { biasMs: 0, n: 0 };
         if (!c.cmd.mundo) c.cmd.mundo = { speed: null, unitSpeed: null, unidades: null, at: 0, confiavel: false };
+        if (!c.cmd.blz || typeof c.cmd.blz !== 'object') c.cmd.blz = defBlz();
+        if (typeof c.cmd.blz.url !== 'string') c.cmd.blz.url = '';
+        if (!Array.isArray(c.cmd.blz.pedidos)) c.cmd.blz.pedidos = [];
+        if (!Array.isArray(c.cmd.blz.entregas)) c.cmd.blz.entregas = [];
+        if (!c.cmd.blz.reserva) c.cmd.blz.reserva = { spear: 0, sword: 0, heavy: 0 };
+        if (!c.cmd.blz.porAldeia) c.cmd.blz.porAldeia = { spear: '', sword: '', heavy: '' };
+        if (!c.cmd.blz.alvosSel || typeof c.cmd.blz.alvosSel !== 'object') c.cmd.blz.alvosSel = {};
+        if (!c.cmd.blz.plano || typeof c.cmd.blz.plano !== 'object') c.cmd.blz.plano = {};
+        if (!c.cmd.blz.enviados || typeof c.cmd.blz.enviados !== 'object') c.cmd.blz.enviados = {};
         if (!c.cmd.origens) c.cmd.origens = {};
         if (!c.cmd.fonteTropa) c.cmd.fonteTropa = 'casa';
         if (c.cmd.fakeAlvos == null) c.cmd.fakeAlvos = '';
@@ -13813,6 +14143,7 @@
       { id: 'op',      ico: '🎯', rot: 'Operação', hint: 'Um alvo por vez: escolha as aldeias, crie ondas (cada nova entra 100ms depois da anterior), ordene e calibre os horários. Depois passe pro próximo alvo.' },
       { id: 'fake',    ico: '🎭', rot: 'Fake',    hint: 'Vários alvos de uma vez; o alvo único acima é ignorado.' },
       { id: 'massa',   ico: '🚚', rot: 'Apoio massa', hint: 'Apoio das origens marcadas pro(s) alvo(s), disparado AGORA (não agenda). Em cada unidade: número, 50% ou tudo.' },
+      { id: 'blz',     ico: '🛡', rot: 'Blindagem',  hint: 'Lê a tabela de pedidos do tópico da tribo, desconta o que já foi entregue, divide a SUA defesa entre os pedidos e dispara AGORA. No fim monta as linhas pra você colar no fórum.' },
     ];
     function ccTipo() { return (config.cmd && config.cmd.tipo) || 'attack'; }
     function telaAtual() {
@@ -15006,6 +15337,467 @@
       });
       return partes;
     }
+    // ==================== BLINDAGEM DA TRIBO ====================
+    // Lê o tópico do fórum onde a tribo publica os pedidos de defesa e monta, do lado de cá, a
+    // divisão da SUA defesa entre eles. Três coisas foram medidas no tópico real (br143 #90) e
+    // definem o parser — nenhuma delas é chute:
+    //
+    // 1. AS COLUNAS SÃO ÍCONES, não texto. O cabeçalho é `PEDIDO | ALDEIA | 🛡lanceiro |
+    //    🛡espadachim | ❌ | 🛡cav.pesada | ❌ | 🛡`. As duas colunas ❌ são slots que a tribo não
+    //    usa e valem SEMPRE zero — é de onde saem os dois zeros fixos da linha do fórum. Achar a
+    //    coluna pelo `unit_XXX` da imagem é o que sobrevive a a tribo reordenar a tabela.
+    // 2. `✅` NUMA CÉLULA SIGNIFICA ZERO, não "atendido". O pedido 3 pede 7000 lanceiros e tem ✅
+    //    na coluna de cavalaria: é "não quero cavalaria". Ler isso como "já resolvido" faria o
+    //    módulo pular pedido aberto.
+    // 3. OS COMENTÁRIOS SÃO ENTREGAS. Cada resposta no tópico é uma linha `num/lanc/esp/0/cp/0`
+    //    de quem já mandou. Sem descontá-las o módulo empilha defesa em cima de pedido cheio.
+    //
+    // E o detalhe que obriga a olhar as datas: o post da tabela é REEDITADO e os pedidos são
+    // RENUMERADOS conforme caem. Comentário anterior à última edição pode citar um número que
+    // hoje é outra aldeia — no tópico real havia entrega pro "pedido 14" numa tabela que ia até 8.
+    // Por isso só conta como entregue o que foi postado DEPOIS da edição; o resto fica visível,
+    // marcado, mas fora da conta.
+    const BLZ_UNITS = ['spear', 'sword', 'heavy'];       // as três que a tabela da tribo usa
+    const BLZ_ROT = { spear: 'lanceiro', sword: 'espadachim', heavy: 'cav. pesada' };
+    // Tropa que faz sentido MANDAR DE APOIO. Vale SÓ na aba Blindagem — Apoio e Apoio massa
+    // seguem mostrando as unidades todas do mundo, porque são abas de uso geral e filtrar ali
+    // esconderia tropa que o usuário manda de propósito.
+    const CC_UNIDADES_DEF = ['spear', 'sword', 'archer', 'heavy', 'catapult', 'knight'];
+    function ccUnidadesDaAba() {
+      const todas = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
+      if (ccTipo() !== 'blz') return todas;
+      return todas.filter((u) => CC_UNIDADES_DEF.indexOf(u) >= 0);
+    }
+    // Datas do fórum: "hoje às 14:04", "ontem às 23:03", "em 07.08.2026 às 15:16" e a variante
+    // sem ano "em 07.08. às 15:16". Devolve ms, ou 0 quando não reconhece — 0 nunca é tratado
+    // como "recente", então a dúvida sempre cai pro lado seguro.
+    function ccBlzData(txt) {
+      const t = (txt || '').replace(/\s+/g, ' ').trim();
+      const hm = t.match(/(\d{1,2}):(\d{2})/);
+      if (!hm) return 0;
+      const h = +hm[1], mi = +hm[2];
+      const dm = t.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})?/);
+      const d = new Date();
+      if (dm) {
+        d.setFullYear(dm[3] ? +dm[3] : d.getFullYear(), (+dm[2]) - 1, +dm[1]);
+      } else if (/\bontem\b/i.test(t)) {
+        d.setDate(d.getDate() - 1);
+      } else if (!/\bhoje\b/i.test(t)) {
+        return 0;                                        // formato desconhecido: não arrisca
+      }
+      d.setHours(h, mi, 0, 0);
+      return d.getTime();
+    }
+    // Número de uma célula da tabela. Vazio, `✅` ou qualquer coisa sem dígito = 0.
+    function ccBlzNum(td) {
+      if (!td) return 0;
+      const s = (td.textContent || '').replace(/\D/g, '');
+      return s ? parseInt(s, 10) : 0;
+    }
+    // Linha de entrega: `num/lanc/esp/0/cp/0`. Tolera linha curta — no tópico real apareceu
+    // `14/1000/0/0/0` com 5 campos em vez de 6. Posição manda: nunca "compacta" os zeros, senão
+    // um 0 a menos faria a cavalaria virar espadachim.
+    function ccBlzLinha(txt) {
+      const m = (txt || '').trim().match(/^(\d{1,3})((?:\s*\/\s*\d+){2,6})\s*$/);
+      if (!m) return null;
+      // m[2] começa com a barra, então o split deixa um vazio na frente — o slice(1) tira. Sem
+      // ele TUDO anda uma casa e o lanceiro viraria zero.
+      const n = m[2].split('/').slice(1).map((s) => parseInt(s.trim(), 10) || 0);
+      return { num: +m[1], spear: n[0] || 0, sword: n[1] || 0, heavy: n[3] || 0 };
+    }
+    function ccBlzParse(doc) {
+      const posts = [].slice.call(doc.querySelectorAll('div.post'));
+      if (!posts.length) throw new Error('não achei nenhum post — a URL aponta pro tópico certo?');
+      // A tabela mora no PRIMEIRO post que tenha uma com ícone de unidade no cabeçalho. Procurar
+      // por ícone (e não pela posição) aguenta a tribo fixar outro post no topo.
+      let tabela = null, postTabela = null;
+      for (const p of posts) {
+        const t = [].slice.call(p.querySelectorAll('table'))
+          .find((x) => x.querySelector('tr img[src*="unit_"]') && !x.querySelector('table'));
+        if (t) { tabela = t; postTabela = p; break; }
+      }
+      if (!tabela) throw new Error('não achei a tabela de pedidos (nenhuma com ícone de unidade)');
+      const linhas = [].slice.call(tabela.querySelectorAll('tr'));
+      const cab = [].slice.call(linhas[0].children);
+      const col = {};
+      cab.forEach((c, i) => {
+        const im = c.querySelector('img');
+        const u = im && ((im.getAttribute('src') || '').match(/unit_([a-z]+)\./) || [])[1];
+        if (u && BLZ_UNITS.indexOf(u) >= 0 && col[u] == null) col[u] = i;
+      });
+      if (col.spear == null) throw new Error('a tabela não tem coluna de lanceiro');
+      const pedidos = [];
+      linhas.slice(1).forEach((tr) => {
+        const tds = [].slice.call(tr.children);
+        if (tds.length < 2) return;
+        const num = parseInt((tds[0].textContent || '').replace(/\D/g, ''), 10);
+        if (!num) return;
+        const m = (tds[1].textContent || '').replace(/\s+/g, ' ').match(/^(.*?)\((\d{1,3})\|(\d{1,3})\)/);
+        if (!m) return;
+        const pede = {};
+        BLZ_UNITS.forEach((u) => { pede[u] = col[u] != null ? ccBlzNum(tds[col[u]]) : 0; });
+        pedidos.push({ num: num, nome: m[1].trim(), coord: m[2] + '|' + m[3],
+                       x: +m[2], y: +m[3], pede: pede });
+      });
+      // Quando a tabela foi editada pela última vez. Sem rodapé de edição vale a data do post.
+      const rodape = (postTabela.innerText || '').split('\n').filter((l) => /Editado/i.test(l))[0];
+      const cabTab = (postTabela.querySelector('.postheader_left') || {}).innerText || '';
+      const editadoEm = ccBlzData(rodape) || ccBlzData(cabTab);
+      // Entregas: todo post que NÃO é o da tabela, uma linha por pedido atendido.
+      const entregas = [];
+      posts.forEach((p) => {
+        if (p === postTabela) return;
+        const hdr = (p.querySelector('.postheader_left') || {}).innerText || '';
+        const at = ccBlzData(hdr);
+        const autor = (hdr.replace(/\s+/g, ' ').match(/^(.*?)\s+(?:em|hoje|ontem)\b/) || [])[1] || '?';
+        (p.innerText || '').split('\n').forEach((l) => {
+          const e = ccBlzLinha(l);
+          if (!e) return;
+          e.autor = autor.trim(); e.at = at;
+          // A regra combinada: só conta quem postou DEPOIS da última edição da tabela.
+          e.posEdicao = !!(at && editadoEm && at >= editadoEm);
+          entregas.push(e);
+        });
+      });
+      return { pedidos: pedidos, entregas: entregas, editadoEm: editadoEm };
+    }
+    async function ccBlzBuscar() {
+      const b = config.cmd.blz;
+      const url = ((document.getElementById('cc-blz-url') || {}).value || '').trim();
+      if (!url) throw new Error('cole a URL do tópico da tribo');
+      b.url = url;
+      const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      const r = ccBlzParse(doc);
+      b.pedidos = r.pedidos; b.entregas = r.entregas; b.editadoEm = r.editadoEm;
+      b.lidoEm = Date.now();
+      // Pedido que sumiu da tabela leva junto o plano e a trava dele: manter viraria envio pra
+      // um número que hoje é outra aldeia — exatamente o problema da renumeração.
+      const vivos = {}; r.pedidos.forEach((p) => { vivos[p.num] = 1; });
+      Object.keys(b.plano).forEach((k) => { if (!vivos[k]) delete b.plano[k]; });
+      Object.keys(b.enviados).forEach((k) => { if (!vivos[k]) delete b.enviados[k]; });
+      // Pedido que sumiu sai da seleção; pedido NOVO entra marcado, pra a tabela recém-buscada
+      // já vir pronta pra dividir em vez de exigir 8 cliques antes de qualquer coisa acontecer.
+      b.alvosSel = b.alvosSel || {};
+      Object.keys(b.alvosSel).forEach((k) => { if (!vivos[k]) delete b.alvosSel[k]; });
+      r.pedidos.forEach((p) => { if (b.alvosSel[p.num] === undefined) b.alvosSel[p.num] = true; });
+      save();
+      return r;
+    }
+    // Quanto ainda falta em cada pedido: o pedido menos o que a tribo já entregou (só as entregas
+    // válidas) menos o que ESTE módulo já mandou nesta rodada.
+    function ccBlzEntregue(num) {
+      const b = config.cmd.blz;
+      const t = { spear: 0, sword: 0, heavy: 0 };
+      b.entregas.forEach((e) => {
+        if (e.num !== num || !e.posEdicao) return;
+        BLZ_UNITS.forEach((u) => { t[u] += e[u] || 0; });
+      });
+      return t;
+    }
+    function ccBlzFalta(p) {
+      const ent = ccBlzEntregue(p.num);
+      const meu = ccBlzMeuTotal(p.num);
+      const f = {};
+      BLZ_UNITS.forEach((u) => { f[u] = Math.max(0, (p.pede[u] || 0) - (ent[u] || 0) - (meu[u] || 0)); });
+      return f;
+    }
+    // O que EU já aloquei pra este pedido (soma do plano em todas as minhas aldeias).
+    function ccBlzMeuTotal(num) {
+      const linha = (config.cmd.blz.plano || {})[num] || {};
+      const t = { spear: 0, sword: 0, heavy: 0 };
+      Object.keys(linha).forEach((vid) => {
+        BLZ_UNITS.forEach((u) => { t[u] += (linha[vid] || {})[u] || 0; });
+      });
+      return t;
+    }
+    // Quanto sobra numa aldeia depois da reserva de casa e do que o plano já comprometeu nela.
+    //
+    // O estoque vem de `v.avail`, que SEGUE o seletor de fonte da lista de Origens: com "na
+    // aldeia agora" é só o que está parado aqui; com "suas próprias" entra também o que está
+    // fora apoiando e o que está voltando. Quem manda é a escolha do usuário.
+    //
+    // Vale saber o que cada uma significa na hora de enviar: em "suas próprias" a divisão conta
+    // tropa que ainda não chegou, então o envio daquela linha vai sair menor (ou falhar) até ela
+    // pousar em casa. É útil pra montar o plano agora e disparar quando a tropa voltar; não é
+    // útil pra mandar tudo de uma vez.
+    function ccBlzLivre(v) {
+      const b = config.cmd.blz;
+      const usado = { spear: 0, sword: 0, heavy: 0 };
+      Object.keys(b.plano).forEach((num) => {
+        const q = (b.plano[num] || {})[v.vid]; if (!q) return;
+        BLZ_UNITS.forEach((u) => { usado[u] += q[u] || 0; });
+      });
+      const estoque = v.avail || {};
+      const livre = {};
+      BLZ_UNITS.forEach((u) => {
+        livre[u] = Math.max(0, (estoque[u] || 0) - (b.reserva[u] || 0) - usado[u]);
+      });
+      return livre;
+    }
+    // Orçamento de UMA aldeia pra rodada inteira: o teto que o usuário definiu em "por aldeia",
+    // limitado ao que ela realmente tem livre. Campo vazio = sem teto, entra o disponível todo
+    // (que é como era antes desta opção existir).
+    //
+    // SÓ NÚMERO ABSOLUTO. A porcentagem existiu na v11.138.0 e saiu: com a fonte de tropa e a
+    // reserva no meio, "50%" tinha três bases plausíveis (estoque, livre, ou o que falta) e o
+    // resultado não batia com o que o usuário esperava. Número resolve o mesmo caso sem ambiguidade.
+    function ccBlzOrcamento(v) {
+      const b = config.cmd.blz, spec = b.porAldeia || {}, livre = ccBlzLivre(v);
+      // O que o plano JÁ tirou desta aldeia. O teto é da rodada inteira, então precisa descontar
+      // isso — senão ele se renovaria a cada passada e "50 lanceiros" viraria 50 por passada.
+      const usado = { spear: 0, sword: 0, heavy: 0 };
+      Object.keys(b.plano || {}).forEach((num) => {
+        const q = (b.plano[num] || {})[v.vid]; if (!q) return;
+        BLZ_UNITS.forEach((u) => { usado[u] += q[u] || 0; });
+      });
+      const out = {};
+      BLZ_UNITS.forEach((u) => {
+        const q = parseInt(String(spec[u] == null ? '' : spec[u]).replace(/\D/g, ''), 10);
+        const teto = (q > 0) ? q : Infinity;   // vazio, zero ou lixo = sem teto
+        const resta = (teto === Infinity) ? Infinity : Math.max(0, teto - usado[u]);
+        out[u] = Math.max(0, Math.min(resta, livre[u] || 0));
+      });
+      return out;
+    }
+    // Pedidos que entram na divisão. Nenhum marcado = todos (senão o primeiro uso da tela, com a
+    // seleção vazia, não distribuiria nada e pareceria quebrado).
+    function ccBlzPedidosAtivos() {
+      const b = config.cmd.blz, sel = b.alvosSel || {};
+      return (b.pedidos || []).filter((p) => sel[p.num]);
+    }
+    // ---- A sugestão ----
+    // Guloso por DISTÂNCIA: percorre todos os pares (aldeia, pedido) do mais perto pro mais longe
+    // e vai preenchendo. Defesa que chega tarde não defende, então proximidade é o critério que
+    // importa — e o guloso por distância dá, pra cada aldeia, o pedido mais perto que ainda
+    // precisa dela. Não mexe no que você já editou à mão: só soma em cima do que falta.
+    function ccBlzSugerir() {
+      const b = config.cmd.blz;
+      const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid] && v.x != null);
+      if (!marcadas.length) return { erro: 'marque as origens na lista de Origens, abaixo' };
+      if (!b.pedidos.length) return { erro: 'busque a tabela do tópico primeiro' };
+      const dist = (v, p) => Math.sqrt(Math.pow(v.x - p.x, 2) + Math.pow(v.y - p.y, 2));
+      const por = (par) => {
+        b.plano[par.p.num] = b.plano[par.p.num] || {};
+        const atual = b.plano[par.p.num][par.v.vid] || {};
+        BLZ_UNITS.forEach((u) => { if (par.q[u]) atual[u] = (atual[u] || 0) + par.q[u]; });
+        b.plano[par.p.num][par.v.vid] = atual;
+      };
+      let alocado = 0;
+      // ---- Passada 1: PROPORCIONAL ----
+      // O guloso puro (só distância) despejava a aldeia inteira no pedido mais perto e deixava os
+      // outros zerados — a tribo recebia tudo num lugar só. Aqui cada aldeia reparte o que tem
+      // entre TODOS os pedidos, na proporção do que cada um ainda precisa: pedido que falta o
+      // dobro recebe o dobro. As proporções são calculadas UMA vez, sobre a foto inicial, senão
+      // cada alocação mexeria no denominador e a divisão deixaria de ser proporcional.
+      const ativos = ccBlzPedidosAtivos();
+      if (!ativos.length) return { erro: 'nenhum pedido selecionado' };
+      const falta0 = {}; const totalFalta = { spear: 0, sword: 0, heavy: 0 };
+      ativos.forEach((p) => {
+        falta0[p.num] = ccBlzFalta(p);
+        BLZ_UNITS.forEach((u) => { totalFalta[u] += falta0[p.num][u] || 0; });
+      });
+      marcadas.forEach((v) => {
+        // `orc0` é o teto DA RODADA pra esta aldeia (o "por aldeia"); `usadoV` é o que ela já
+        // cedeu nesta passada. Sem esse par, o teto valeria por pedido em vez de por aldeia — uma
+        // aldeia com "50 lanceiros" mandaria 50 pra cada um dos 8 pedidos.
+        const orc0 = ccBlzOrcamento(v);
+        const usadoV = { spear: 0, sword: 0, heavy: 0 };
+        ativos.forEach((p) => {
+          const q = {}; let soma = 0;
+          const livreAgora = ccBlzLivre(v);        // desce a cada alocação desta mesma aldeia
+          BLZ_UNITS.forEach((u) => {
+            if (!totalFalta[u]) return;
+            const cota = Math.floor((orc0[u] || 0) * (falta0[p.num][u] || 0) / totalFalta[u]);
+            // O `ccBlzFalta` aqui é o TETO DO PEDIDO: nunca sai mais do que ainda falta nele.
+            const n = Math.min(cota, ccBlzFalta(p)[u] || 0, livreAgora[u] || 0,
+                               Math.max(0, (orc0[u] || 0) - usadoV[u]));
+            if (n > 0) { q[u] = n; soma += n; usadoV[u] += n; }
+          });
+          if (!soma) return;
+          por({ v: v, p: p, q: q }); alocado += soma;
+        });
+      });
+      // ---- Passada 2: SOBRA ----
+      // O piso da divisão e os pedidos que ficaram menores que a cota deixam resto. Ele vai pelo
+      // guloso de distância — aqui concentrar não é problema, é o que sobrou.
+      const pares = [];
+      marcadas.forEach((v) => ativos.forEach((p) => pares.push({ v: v, p: p, d: dist(v, p) })));
+      pares.sort((a, c) => a.d - c.d);
+      pares.forEach((par) => {
+        const falta = ccBlzFalta(par.p), livre = ccBlzLivre(par.v);
+        // O teto "por aldeia" vale aqui também: ccBlzOrcamento já desconta o que o plano
+        // comprometeu (via ccBlzLivre), então o que sobra dele é o resto do orçamento.
+        const orc = ccBlzOrcamento(par.v);
+        const q = {}; let soma = 0;
+        BLZ_UNITS.forEach((u) => {
+          const n = Math.min(falta[u] || 0, livre[u] || 0, orc[u] || 0);
+          if (n > 0) { q[u] = n; soma += n; }
+        });
+        if (!soma) return;
+        par.q = q; por(par); alocado += soma;
+      });
+      save();
+      // Espalhar tem um preço: cada par (aldeia, pedido) vira UM comando de apoio. Com muitas
+      // origens marcadas isso vira dezenas de envios, e é melhor você saber disso antes de clicar
+      // em Enviar do que descobrir no meio.
+      let envios = 0;
+      Object.keys(b.plano).forEach((n) => { envios += Object.keys(b.plano[n] || {}).length; });
+      return { alocado: alocado, envios: envios };
+    }
+    // O texto do fórum. Uma linha por pedido, agregando todas as MINHAS aldeias — a tribo quer
+    // saber quanto chegou, não de onde saiu. Os dois zeros fixos são as colunas ❌ da tabela.
+    function ccBlzTexto(soEnviados) {
+      const b = config.cmd.blz;
+      const linhas = [];
+      b.pedidos.forEach((p) => {
+        const linha = (b.plano || {})[p.num] || {};
+        const t = { spear: 0, sword: 0, heavy: 0 };
+        Object.keys(linha).forEach((vid) => {
+          if (soEnviados && !((b.enviados[p.num] || {})[vid])) return;
+          BLZ_UNITS.forEach((u) => { t[u] += (linha[vid] || {})[u] || 0; });
+        });
+        if (!(t.spear + t.sword + t.heavy)) return;
+        linhas.push(p.num + '/' + t.spear + '/' + t.sword + '/0/' + t.heavy + '/0');
+      });
+      return linhas.join('\n');
+    }
+    // ---- Envio ----
+    // Grava a trava ANTES de passar pro próximo e resposta ambígua conta como enviada. Apoio que
+    // sai duas vezes esvazia a aldeia de defesa em dobro, e não tem desfazer — na dúvida, o
+    // barato é você conferir na tela de comandos, não o script reenviar.
+    async function ccBlzEnviar() {
+      const b = config.cmd.blz;
+      const msg = document.getElementById('cc-blz-msg');
+      const diz = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c0483a'; } };
+      if (!config.cmd.suporteOkAt) return diz('O apoio ainda não foi verificado neste mundo — deixe a praça aberta alguns segundos e tente de novo.');
+      const tarefas = [];
+      b.pedidos.forEach((p) => {
+        const linha = b.plano[p.num] || {};
+        Object.keys(linha).forEach((vid) => {
+          if ((b.enviados[p.num] || {})[vid]) return;             // já saiu
+          const q = linha[vid] || {};
+          const amounts = {};
+          BLZ_UNITS.forEach((u) => { if (q[u] > 0) amounts[u] = q[u]; });
+          if (!Object.keys(amounts).length) return;
+          const v = CCVILAS.find((z) => String(z.vid) === String(vid));
+          if (!v) return;
+          tarefas.push({ p: p, v: v, amounts: amounts });
+        });
+      });
+      if (!tarefas.length) return diz('Nada pendente pra enviar — sugira a divisão ou preencha à mão.');
+      diz('Enviando ' + tarefas.length + ' apoio(s)… (não feche a praça)', '#6f6153');
+      let ok = 0, falhas = 0;
+      for (const t of tarefas) {
+        const slots = BLZ_UNITS.map((u) => t.amounts[u] || 0).join('/');
+        try {
+          const prep = await cmdPrepare(t.v.vid, t.p.x, t.p.y, t.amounts, 'support');
+          await cmdFire(prep);
+          b.enviados[t.p.num] = b.enviados[t.p.num] || {};
+          b.enviados[t.p.num][t.v.vid] = Date.now(); save();
+          ok++;
+          pushLog('🛡 Blindagem #' + t.p.num + ': ' + (t.v.coord || t.v.vid) + ' → ' + t.p.coord + ' (' + slots + ')', 'ok', 'cmd');
+        } catch (e) {
+          const em = String(e.message || e);
+          if (/^ambiguo:/i.test(em)) {
+            b.enviados[t.p.num] = b.enviados[t.p.num] || {};
+            b.enviados[t.p.num][t.v.vid] = Date.now(); save();
+            pushLog('🛡 Blindagem #' + t.p.num + ' (' + (t.v.coord || t.v.vid) + '): resposta ambígua, pode ter saído. Marquei como enviada — confira nos comandos antes de repetir.', '', 'cmd');
+          } else {
+            falhas++;
+            pushLog('🛡 Blindagem #' + t.p.num + ' (' + (t.v.coord || t.v.vid) + ') FALHOU: ' + em, 'err', 'cmd');
+          }
+        }
+        await sleep(200);
+      }
+      diz(ok + ' apoio(s) enviado(s)' + (falhas ? ' · ' + falhas + ' falha(s)' : '') + '. O texto do fórum está abaixo.',
+          falhas ? '#a2643a' : '#2e7d3a');
+      ccBlzRender();
+    }
+    function ccBlzRender() {
+      const box = document.getElementById('cc-blz-lista'); if (!box) return;
+      const b = config.cmd.blz;
+      const inp = document.getElementById('cc-blz-url');
+      if (inp && !inp.value) inp.value = b.url || '';
+      BLZ_UNITS.forEach((u) => {
+        const el = document.getElementById('cc-blz-res-' + u);
+        if (el && el.value === '') el.value = b.reserva[u] || 0;
+        const pa = document.getElementById('cc-blz-pa-' + u);
+        if (pa && pa.value === '') pa.value = (b.porAldeia || {})[u] || '';
+      });
+      if (!b.pedidos.length) {
+        box.innerHTML = '<div style="color:#8a7d6d;font-size:10px;padding:6px;text-align:center">— sem pedidos. Cole a URL do tópico e clique Buscar. —</div>';
+        const t0 = document.getElementById('cc-blz-texto'); if (t0) t0.value = '';
+        return;
+      }
+      const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid] && v.x != null);
+      const velhas = b.entregas.filter((e) => !e.posEdicao).length;
+      let h = '<div style="font-size:9px;color:#8a7d6d;margin-bottom:4px">' +
+        b.pedidos.length + ' pedido(s) · tabela editada ' +
+        (b.editadoEm ? new Date(b.editadoEm).toLocaleString('pt-BR') : '(data não lida)') +
+        (velhas ? ' · <b style="color:#a2643a">' + velhas + ' entrega(s) anteriores à edição ignoradas</b> — a tribo renumera os pedidos' : '') +
+        '</div>';
+      // Duas colunas de números e só. "pede" e "já veio" viraram tooltip da linha: eles explicam
+      // de onde o "falta" saiu, mas não são o que se olha pra decidir — o que decide é quanto
+      // ainda falta e quanto eu estou mandando. A marca escolhe quem entra na divisão.
+      // A seleção é EXPLÍCITA. Antes valia "nenhum marcado = todos", e o resultado era que
+      // desmarcar a última voltava a marcar todas — clicar não mudava nada na tela. Agora a
+      // lista nasce com tudo marcado (semeada na busca e aqui, pra quem já tinha tabela) e o
+      // que está gravado é a verdade.
+      const sel = b.alvosSel || (b.alvosSel = {});
+      if (!Object.keys(sel).length && b.pedidos.length) {
+        b.pedidos.forEach((p) => { sel[p.num] = true; });
+        save();
+      }
+      const nSel = b.pedidos.filter((p) => sel[p.num]).length;
+      const trio = (o) => BLZ_UNITS.map((u) => (o[u] || 0) > 0
+        ? unitIcon(u, BLZ_ROT[u]) + fmtN(o[u]) : '').filter(Boolean).join(' ') || '—';
+      h += '<table style="width:100%;font-size:10px;border-collapse:collapse">' +
+        '<tr style="color:#8a7d6d;text-align:left">' +
+        '<th style="width:16px"><input type="checkbox" id="cc-blz-todos" title="marcar/desmarcar todos"' + (nSel === b.pedidos.length ? ' checked' : '') + '></th>' +
+        '<th style="width:16px">#</th><th>aldeia</th>' +
+        '<th style="width:34%">falta</th><th style="width:34%">eu mando</th></tr>';
+      b.pedidos.forEach((p) => {
+        const ent = ccBlzEntregue(p.num), falta = ccBlzFalta(p), meu = ccBlzMeuTotal(p.num);
+        const zerado = !(falta.spear + falta.sword + falta.heavy);
+        const nMinhas = Object.keys((b.plano[p.num] || {})).length;
+        const nEnv = Object.keys((b.enviados[p.num] || {})).length;
+        const marcado = !!sel[p.num];
+        const tip = 'pedido: ' + BLZ_UNITS.map((u) => (p.pede[u] || 0) + ' ' + BLZ_ROT[u]).join(', ')
+          + '\njá entregue pela tribo: ' + BLZ_UNITS.map((u) => (ent[u] || 0)).join('/');
+        h += '<tr style="border-top:1px solid #efe7d8' + (zerado ? ';opacity:.5' : '') + '" title="' + esc(tip) + '">' +
+          '<td><input type="checkbox" class="cc-blz-sel" data-num="' + p.num + '"' + (marcado ? ' checked' : '') + '></td>' +
+          '<td><b>' + p.num + '</b></td>' +
+          '<td style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + esc(p.nome) +
+            ' <span style="color:#8a7d6d">' + esc(p.coord) + '</span></td>' +
+          '<td style="color:' + (zerado ? '#2e7d3a' : '#a2643a') + '">' + (zerado ? 'completo' : trio(falta)) + '</td>' +
+          '<td><b style="color:#2e7d3a">' + trio(meu) + '</b>' +
+            (nMinhas ? '<div style="color:#8a7d6d">' + nMinhas + ' aldeia(s)' + (nEnv ? ' · ' + nEnv + ' enviada(s)' : '') + '</div>' : '') +
+          '</td></tr>';
+      });
+      // A ordem não precisa mais ser explicada: cada número vem com o ícone da unidade colado.
+      h += '</table>' +
+        '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">origens marcadas: <b>' + marcadas.length + '</b>' +
+        (marcadas.length ? '' : ' — marque as aldeias na lista de Origens, abaixo') +
+        ' · pedidos na divisão: <b style="color:' + (nSel ? '#2e7d3a' : '#a2643a') + '">' + nSel + '</b>' +
+        (nSel ? '' : ' — marque ao menos um') + '</div>';
+      box.innerHTML = h;
+      // Grava `false` em vez de apagar a chave. Com `delete`, desmarcar o ÚLTIMO pedido esvaziava
+      // o objeto e a semeadura logo acima remarcava todos de novo — o mesmo defeito de antes,
+      // só que na borda. Chave presente com `false` é "desmarcado de propósito".
+      box.querySelectorAll('.cc-blz-sel').forEach((el) => el.addEventListener('change', () => {
+        b.alvosSel[el.getAttribute('data-num')] = !!el.checked;
+        save(); ccBlzRender();
+      }));
+      const todos = document.getElementById('cc-blz-todos');
+      if (todos) todos.addEventListener('change', () => {
+        b.pedidos.forEach((p) => { b.alvosSel[p.num] = !!todos.checked; });
+        save(); ccBlzRender();
+      });
+      const t = document.getElementById('cc-blz-texto');
+      if (t) t.value = ccBlzTexto(false);
+    }
     async function ccMassaEnviar() {
       const msg = document.getElementById('cc-massa-msg');
       const rel = document.getElementById('cc-massa-rel');
@@ -15234,6 +16026,7 @@
       linhas.sort((a, b) => (a.d == null ? 1e9 : a.d) - (b.d == null ? 1e9 : b.d));
 
       const rotUn = {}; UNITS.forEach(([u, n]) => { rotUn[u] = n; });
+      const listaUnid = ccUnidadesDaAba();   // fora do laço: a soma lá embaixo usa a mesma lista
       cont.innerHTML = linhas.map((L) => {
         const v = L.v, on = !!sel[v.vid];
         const ov = ccOrigOverrideGet(v.vid);
@@ -15245,19 +16038,20 @@
         else { sit = ''; cor = '#8a7d6d'; }
         // Estoque por unidade. Mostra o número em uso e, entre parênteses, o que está fora/voltando —
         // assim dá pra ver a diferença sem precisar alternar a fonte.
-        const listaU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
-        const tropas = listaU.map((u) => {
+        const tropas = listaUnid.map((u) => {
           const q = (v.avail && v.avail[u]) || 0;
           const foraT = ((v.fora && v.fora[u]) || 0) + ((v.transito && v.transito[u]) || 0);
           if (!q && !foraT) return '';
           const rot = rotUn[u] || u;
           const pedida = (comp.amounts[u] != null) || comp.max[u];
           const falta = comp.amounts[u] != null && q < comp.amounts[u];
-          const extra = (foraT && (config.cmd.fonteTropa || 'casa') === 'casa')
-            ? '<span style="color:#1f6fb2">+' + fmtN(foraT) + '</span>' : '';
+          // "na aldeia agora" mostra SÓ o que está na aldeia agora. O "+N" azul do que estava
+          // voltando fazia o número parecer maior do que é e confundia na hora de dividir —
+          // quem quer contar o que volta troca a fonte pra "total". A informação não some:
+          // continua no title, ao passar o mouse.
           return '<span title="' + esc(rot) + (foraT ? ' · ' + fmtN(foraT) + ' fora/voltando' : '') +
                  '" style="color:' + (falta ? '#c0483a' : pedida ? '#a2643a' : '#584526') + '">' +
-                 unitIcon(u, rot) + fmtN(q) + extra + '</span>';
+                 unitIcon(u, rot) + fmtN(q) + '</span>';
         }).filter(Boolean).join(' ');
         return '<label style="display:block;padding:3px 5px;border-bottom:1px solid rgba(0,0,0,.07);cursor:pointer">' +
           '<span style="display:grid;grid-template-columns:18px 128px 40px 58px 40px 1fr;gap:6px;align-items:center;font-size:10px">' +
@@ -15322,6 +16116,23 @@
         av.innerHTML = !temComp ? '<span style="color:#8a7d6d">digite as tropas pra ver os tempos</span>'
           : ('unidade mais lenta: ' + txtLenta + ' · mundo ' + (m.speed || 1) + '×/' + (m.unitSpeed || 1) + '×' +
              (m.confiavel ? '' : ' · <span style="color:#a2643a">velocidades de reserva (o servidor confirma no preparo)</span>'));
+      }
+      // Soma das tropas das origens MARCADAS. Sem ela, saber quanto tem no total significava
+      // somar linha a linha na mão — e é justamente esse número que decide se dá pra atender a
+      // tabela da tribo. Segue a fonte de tropa escolhida e as unidades da aba, igual às linhas.
+      const soma = document.getElementById('cc-origens-soma');
+      if (soma) {
+        const marcadas = linhas.filter((L) => sel[L.v.vid]);
+        const tot = {};
+        marcadas.forEach((L) => {
+          listaUnid.forEach((u) => { tot[u] = (tot[u] || 0) + (((L.v.avail || {})[u]) || 0); });
+        });
+        const partes = listaUnid.filter((u) => tot[u] > 0)
+          .map((u) => '<span title="' + esc(rotUn[u] || u) + '">' + unitIcon(u, rotUn[u] || u) + '<b>' + fmtN(tot[u]) + '</b></span>');
+        soma.innerHTML = !marcadas.length
+          ? '<span style="color:#8a7d6d">nenhuma origem marcada</span>'
+          : ('<b>' + marcadas.length + '</b> origem(ns) marcada(s): ' +
+             (partes.length ? partes.join(' &nbsp;') : '<span style="color:#8a7d6d">sem tropa</span>'));
       }
       ccResumo();
     }
@@ -16360,8 +17171,44 @@
             '<div style="font-size:9px;color:#8a7d6d;margin:4px 0 2px">Tropas por aldeia — número, <b>50%</b> ou <b>tudo</b>:</div>' +
             '<div id="cc-massa-unidades" style="display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px"></div>' +
             '<button id="cc-massa-enviar" class="twmgr-btn twmgr-go" style="width:100%">🚚 Enviar apoio agora</button>' +
+            '' +
             '<div id="cc-massa-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
             '<div id="cc-massa-rel" style="font-size:10px;margin-top:4px;color:#6f6153;font-family:Consolas,monospace;white-space:pre-wrap;height:200px;min-height:60px;resize:vertical;overflow-y:auto"></div>' +
+          '</div>' +
+          // Blindagem da tribo: aparece só na aba 🛡. Usa as origens marcadas embaixo, igual à massa.
+          '<div id="cc-blz-cfg" style="display:none">' +
+            '<div style="font-size:10px;color:#6f6153;margin:4px 0 2px">Tópico da tribo</div>' +
+            '<div style="display:flex;gap:4px">' +
+              '<input id="cc-blz-url" class="twmgr-inp" style="flex:1;font-size:10px" placeholder="cole aqui a URL do tópico de blindagens">' +
+              '<button id="cc-blz-buscar" class="twmgr-btn twmgr-ghost" style="padding:4px 10px">Buscar</button>' +
+            '</div>' +
+            '<div style="font-size:10px;color:#6f6153;margin:7px 0 2px">Reserva de casa ' +
+              '<span style="color:#8a7d6d;font-weight:400">— o que NUNCA sai, por aldeia</span></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-bottom:3px">A divisão usa a <b>fonte de tropa</b> escolhida na lista de Origens, abaixo. Em <b>"suas próprias"</b> ela conta o que está fora e voltando — esse pedaço só sai depois que a tropa pousar em casa.</div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+              BLZ_UNITS.map((u) => '<label title="' + BLZ_ROT[u] + '" style="display:flex;align-items:center;gap:3px;font-size:10px">' +
+                unitIcon(u, BLZ_ROT[u]) +
+                '<input id="cc-blz-res-' + u + '" class="twmgr-inp" type="number" min="0" style="width:62px;font-size:10px;padding:1px" placeholder="0"></label>').join('') +
+            '</div>' +
+            '<div style="font-size:10px;color:#6f6153;margin:7px 0 2px">Cada aldeia entrega no máximo ' +
+              '<span style="color:#8a7d6d;font-weight:400">— deixe vazio pra não limitar</span></div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+              BLZ_UNITS.map((u) => '<label title="' + BLZ_ROT[u] + '" style="display:flex;align-items:center;gap:3px;font-size:10px">' +
+                unitIcon(u, BLZ_ROT[u]) +
+                '<input id="cc-blz-pa-' + u + '" class="twmgr-inp" type="number" min="0" style="width:62px;font-size:10px;padding:1px" placeholder="tudo"></label>').join('') +
+            '</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:2px">É o teto da RODADA por aldeia, repartido entre os pedidos marcados — não é por pedido.</div>' +
+            '<div id="cc-blz-lista" style="margin-top:7px;max-height:240px;overflow-y:auto;background:#fff;border:1px solid #ece4d8;border-radius:6px;padding:5px"></div>' +
+            '<div style="display:flex;gap:4px;margin-top:6px">' +
+              '<button id="cc-blz-sugerir" class="twmgr-btn twmgr-ghost" style="flex:1" title="distribui a defesa das origens marcadas entre os pedidos, do mais perto pro mais longe">✨ Sugerir divisão</button>' +
+              '<button id="cc-blz-limpar" class="twmgr-btn twmgr-ghost" style="padding:4px 10px" title="zera a divisão e as linhas do fórum, pra começar uma rodada nova. Não cancela o apoio que já saiu — isso só no jogo.">🧹</button>' +
+            '</div>' +
+            '<button id="cc-blz-enviar" class="twmgr-btn twmgr-go" style="width:100%;margin-top:4px">🛡 Enviar apoio agora</button>' +
+            '<div id="cc-blz-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
+            '<div style="font-size:10px;color:#6f6153;margin:6px 0 2px">Linhas pro fórum ' +
+              '<span style="color:#8a7d6d;font-weight:400">— pedido/lanceiro/espadachim/0/cav.pesada/0</span></div>' +
+            '<textarea id="cc-blz-texto" class="twmgr-inp" readonly style="width:100%;height:70px;font-size:10px;font-family:Consolas,monospace"></textarea>' +
+            '<button id="cc-blz-copiar" class="twmgr-btn twmgr-ghost" style="width:100%;margin-top:3px">📋 Copiar linhas</button>' +
           '</div>' +
         '</div>' +   // fim de #cc-aba-corpo
         // Tropas digitadas AQUI, não nas caixas do jogo. "tudo" = manda o estoque inteiro daquela origem.
@@ -16407,6 +17254,7 @@
           '<div style="display:grid;grid-template-columns:18px 128px 40px 58px 40px 1fr;gap:6px;font-size:9px;color:#8a7d6d;padding:0 5px 2px">' +
             '<span></span><span>aldeia</span><span>dist.</span><span>viagem</span><span>mais lenta</span><span>saída</span></div>' +
           '<div id="cc-origens" style="height:240px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px"></div>' +
+          '<div id="cc-origens-soma" style="font-size:10px;color:#6f6153;margin-top:3px"></div>' +
           '<div id="cc-resumo" style="font-size:10px;color:#6f6153;margin-top:3px"></div>' +
           '</div>' +
         '</div>' +
@@ -16475,6 +17323,62 @@
       document.getElementById('cc-diag').addEventListener('click', ccDiagnostico);
       // Apoio em massa
       document.getElementById('cc-massa-enviar').addEventListener('click', () => { keepAwake(true); ccMassaEnviar(); });
+      // Blindagem
+      document.getElementById('cc-blz-buscar').addEventListener('click', async () => {
+        const m = document.getElementById('cc-blz-msg');
+        if (m) { m.style.color = '#6f6153'; m.textContent = 'lendo o tópico…'; }
+        try {
+          const r = await ccBlzBuscar();
+          if (m) { m.style.color = '#2e7d3a';
+            m.textContent = r.pedidos.length + ' pedido(s) e ' + r.entregas.length + ' entrega(s) lidos.'; }
+        } catch (e) {
+          if (m) { m.style.color = '#c0483a'; m.textContent = 'não deu: ' + (e.message || e); }
+        }
+        ccBlzRender();
+      });
+      document.getElementById('cc-blz-sugerir').addEventListener('click', () => {
+        const m = document.getElementById('cc-blz-msg');
+        const r = ccBlzSugerir();
+        if (m) {
+          if (r.erro) { m.style.color = '#c0483a'; m.textContent = r.erro; }
+          else if (!r.alocado) { m.style.color = '#a2643a'; m.textContent = 'nada a alocar — ou os pedidos já estão cobertos, ou a reserva de casa consome tudo.'; }
+          else { m.style.color = '#2e7d3a';
+            m.textContent = fmtN(r.alocado) + ' unidade(s) distribuídas em ' + r.envios + ' envio(s). Confira e clique em Enviar.'; }
+        }
+        ccBlzRender();
+      });
+      document.getElementById('cc-blz-limpar').addEventListener('click', () => {
+        // Antes isto preservava as linhas JÁ ENVIADAS no plano, pra não perder o registro. Só que
+        // o texto do fórum é montado a partir do plano — então limpar não limpava a caixa de
+        // texto, que era o que se queria limpar. Agora zera a rodada inteira: plano e marcas de
+        // enviado juntos. Zerar as duas é seguro (sem plano não há o que reenviar); zerar só as
+        // marcas é que reabriria a porta pro envio dobrado.
+        const b = config.cmd.blz;
+        let jaSaiu = 0;
+        Object.keys(b.enviados).forEach((n) => { jaSaiu += Object.keys(b.enviados[n] || {}).length; });
+        if (jaSaiu && !confirm('Isto apaga a divisão E as linhas do fórum de ' + jaSaiu
+            + ' apoio(s) que JÁ SAÍRAM. Copie as linhas antes se ainda não postou.\n\nLimpar mesmo assim?')) return;
+        b.plano = {}; b.enviados = {};
+        save(); ccBlzRender();
+        const m = document.getElementById('cc-blz-msg');
+        if (m) { m.style.color = '#6f6153'; m.textContent = 'divisão limpa — pode sugerir de novo.'; }
+      });
+      document.getElementById('cc-blz-enviar').addEventListener('click', () => { keepAwake(true); ccBlzEnviar(); });
+      document.getElementById('cc-blz-copiar').addEventListener('click', async () => {
+        const t = document.getElementById('cc-blz-texto'), m = document.getElementById('cc-blz-msg');
+        try { await navigator.clipboard.writeText(t.value || ''); if (m) { m.style.color = '#2e7d3a'; m.textContent = 'linhas copiadas.'; } }
+        catch (e) { t.select(); if (m) { m.style.color = '#a2643a'; m.textContent = 'não consegui copiar — o texto está selecionado, use Ctrl+C.'; } }
+      });
+      BLZ_UNITS.forEach((u) => {
+        const el = document.getElementById('cc-blz-res-' + u);
+        if (el) el.addEventListener('change', () => {
+          config.cmd.blz.reserva[u] = Math.max(0, parseInt(el.value, 10) || 0); save();
+        });
+        const pa = document.getElementById('cc-blz-pa-' + u);
+        if (pa) pa.addEventListener('change', () => {
+          config.cmd.blz.porAldeia[u] = (pa.value || '').trim(); save();
+        });
+      });
       ccMassaUnidades();
       // ---- Operação ----
       document.getElementById('cc-op-sel').addEventListener('change', (e) => {
@@ -16561,16 +17465,21 @@
         if (fk) fk.style.display = (tipo === 'fake') ? 'block' : 'none';
         // Operação e Apoio em massa têm UI própria: ambas escondem a grade de tropas global.
         // A Operação esconde também a lista de Origens (ela tem a sua, por alvo).
-        const massa = (tipo === 'massa'), op = (tipo === 'op');
+        // A Blindagem se comporta como a massa: tem UI própria, dispara na hora (nada de armar) e
+        // reaproveita a lista de Origens de baixo pra saber de quais aldeias pode tirar defesa.
+        const massa = (tipo === 'massa'), op = (tipo === 'op'), blz = (tipo === 'blz');
         const mcfg = document.getElementById('cc-massa-cfg'); if (mcfg) mcfg.style.display = massa ? 'block' : 'none';
         const ocfg = document.getElementById('cc-op-cfg'); if (ocfg) ocfg.style.display = op ? 'block' : 'none';
-        const tsec = document.getElementById('cc-tropas-sec'); if (tsec) tsec.style.display = (massa || op) ? 'none' : 'block';
+        const bcfg = document.getElementById('cc-blz-cfg'); if (bcfg) bcfg.style.display = blz ? 'block' : 'none';
+        if (blz) ccBlzRender();
+        const tsec = document.getElementById('cc-tropas-sec'); if (tsec) tsec.style.display = (massa || op || blz) ? 'none' : 'block';
         const osec = document.getElementById('cc-origens-sec'); if (osec) osec.style.display = op ? 'none' : 'block';
-        const arow = document.getElementById('cc-armar-row'); if (arow) arow.style.display = massa ? 'none' : 'flex';
+        const arow = document.getElementById('cc-armar-row'); if (arow) arow.style.display = (massa || blz) ? 'none' : 'flex';
         // O campo de alvo único não serve pro fake (tem lista própria) nem pra Operação (o alvo
         // é do bloco). Antes ficavam só apagados e continuavam ali em cima, confundindo — agora
         // somem de vez.
-        const semAlvoGlobal = (tipo === 'fake' || op);
+        // A Blindagem também não usa o alvo único: os alvos são as aldeias da tabela da tribo.
+        const semAlvoGlobal = (tipo === 'fake' || op || blz);
         const rAlvo = document.getElementById('cc-row-alvo');
         if (rAlvo) rAlvo.style.display = semAlvoGlobal ? 'none' : 'flex';
         // Chegada: a Operação tem a dela na etapa 1, então some. Já o Fake NÃO tem campo próprio
@@ -16578,7 +17487,8 @@
         // linha é MOVIDA pra dentro do bloco do Fake e volta pro lugar ao sair dele.
         const rCheg = document.getElementById('cc-row-chegada');
         if (rCheg) {
-          rCheg.style.display = op ? 'none' : 'flex';
+          // Blindagem não marca horário: o apoio sai assim que você manda, sem agendar.
+          rCheg.style.display = (op || blz) ? 'none' : 'flex';
           const destino = document.getElementById((tipo === 'fake') ? 'cc-fake-chegada-slot' : 'cc-chegada-slot');
           if (destino && rCheg.parentElement !== destino) destino.appendChild(rCheg);
         }

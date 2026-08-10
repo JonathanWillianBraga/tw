@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.128.0
+// @version      11.143.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.128.0';
+  const VERSION = '11.143.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -323,6 +323,11 @@
     // Pós-conquista: joga a aldeia tomada num grupo estático.
     posGrupo: false, posGrupoId: '', posFeitos: {},
     posBandeira: false, posBandeiraTipo: '', posBandeiraNivel: 1,
+    // Histórico de conquistas. Existe por um motivo prático: o alvo conquistado some da fila
+    // 30 min depois, e com ele sumia a linha do Pós-conquista — não havia mais como pôr bandeira
+    // ou grupo numa aldeia tomada de manhã. Guarda também o que a conquista CUSTOU (nobres e de
+    // quais aldeias saíram), que hoje se perdia inteiro.
+    conquistadas: [],   // [{coord, nome, vid, at, nobres, origens:[{nome,n}], gid, bandTipo, bandNivel}]
 
     emVoo: {},        // { [coord]: [{at, chega, n}] } — comandos meus que ainda não pousaram
 
@@ -681,6 +686,25 @@
       if (c.noble.maxHoras != null) c.noble.templates.padrao.maxHoras = c.noble.maxHoras;
       if (c.noble.soNT != null) c.noble.templates.padrao.soNT = !!c.noble.soNT;
     }
+    // MIGRAÇÃO ÚNICA (v11.140.0). `nobres` mudou de significado: era a META quando não havia
+    // relatório de lealdade, virou TETO do total por alvo. Quem tinha 1 ali queria "chuta 1 nobre
+    // enquanto eu não sei a lealdade"; com a semântica nova, esse 1 vira um limite duro e o alvo
+    // trava em "coberto" com um único nobre no ar — o oposto do que a pessoa configurou. Sobe
+    // pro padrão 4 uma vez só, e avisa. Quem quiser um teto menor mexe de novo, agora sabendo
+    // que é teto.
+    if (!c.noble.tetoMigrado) {
+      c.noble.tetoMigrado = 1;
+      Object.keys(c.noble.templates || {}).forEach((id) => {
+        const t = c.noble.templates[id];
+        const n = t && parseInt(t.nobres, 10);
+        if (t && n > 0 && n < 4) {
+          t.nobres = 4;
+          try { pushLog('Noblar: modelo "' + (t.name || id) + '" tinha ' + n + ' em "Comandos por alvo".'
+            + ' Esse campo virou TETO (a quantidade agora sai da lealdade), então subi pra 4 —'
+            + ' com ' + n + ' ele travaria o alvo. Ajuste se quiser um teto menor.', '', 'noble'); } catch (e) {}
+        }
+      });
+    }
     Object.keys(c.noble.templates).forEach((id) => {
       const t = c.noble.templates[id];
       if (!t || typeof t !== 'object') { delete c.noble.templates[id]; return; }
@@ -729,6 +753,7 @@
     if (c.noble.posGrupo == null) c.noble.posGrupo = false;
     if (c.noble.posGrupoId == null) c.noble.posGrupoId = '';
     if (!c.noble.posFeitos || typeof c.noble.posFeitos !== 'object') c.noble.posFeitos = {};
+    if (!Array.isArray(c.noble.conquistadas)) c.noble.conquistadas = [];
     if (c.noble.posBandeira == null) c.noble.posBandeira = false;
     if (c.noble.posBandeiraTipo == null) c.noble.posBandeiraTipo = '';
     c.noble.posBandeiraNivel = Math.max(1, Math.min(10, parseInt(c.noble.posBandeiraNivel, 10) || 1));

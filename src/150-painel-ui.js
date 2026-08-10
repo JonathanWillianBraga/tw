@@ -305,6 +305,10 @@
     // Status) precisa refazer a conta quando a aba aparece — senão o ajuste só acontecia por
     // acidente, na primeira vez que o usuário reordenava a tabela.
     if (name === 'recruit') aoAparecer();
+    // A tabela de nobres parados não vale nada velha. Com o módulo parado o ciclo não roda pra
+    // atualizá-la, então abrir a aba também conta como um momento de conferir — mas só se a
+    // leitura já passou do prazo, senão trocar de aba viraria uma requisição por clique.
+    if (name === 'noble' && typeof nobleOciososAuto === 'function') nobleOciososAuto();
   }
   // Rotinas que só funcionam com o elemento visível. Chamado por showTab e showSub.
   function aoAparecer() {
@@ -733,6 +737,12 @@
           '</div>' +
           '<div id="twmgr-nb-lista" class="twmgr-bld-vils" style="margin-top:6px"></div>' +
           '<div id="twmgr-nb-info" style="font-size:9px;color:#8a7d6d;text-align:right;margin-top:2px"></div>') +
+        sec('Nobres parados',
+          '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">' +
+            '<button id="twmgr-nb-ocio-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px" title="força a releitura agora, sem esperar o próximo check">↻ Conferir agora</button>' +
+            '<span style="font-size:9px;color:#8a7d6d;flex:1">Aldeias suas com nobre em casa que <b>não vai sair</b> — e o motivo de cada uma. Confere sozinho a cada <b>30 min</b>; nobre já escalado no plano do ciclo não entra aqui.</span>' +
+          '</div>' +
+          '<div id="twmgr-nb-ocio"></div>') +
         sec('Modelos de envio',
           '<div id="twmgr-nb-chips" class="twmgr-chips"></div>' +
           '<div class="twmgr-card2">' +
@@ -744,7 +754,7 @@
               '<button id="twmgr-nb-tpl-del" class="twmgr-btn twmgr-ghost" style="padding:4px 7px" title="apagar modelo">🗑</button>' +
             '</div>' +
             '<div class="twmgr-cols" style="margin-bottom:0">' +
-              '<div class="twmgr-fld"><span title="Cada comando leva exatamente 1 nobre — a lealdade cai uma vez por ataque">Comandos por alvo <span style="color:#8a7d6d">(1 nobre cada)</span></span><input id="twmgr-nb-nob" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
+              '<div class="twmgr-fld"><span title="TETO, não meta. A quantidade sai da lealdade: alvo sem relatório é tratado como 100, o que dá 4 comandos (100 ÷ 25). Este campo só impede passar disso — útil pra limitar o gasto num alvo. Cada comando leva exatamente 1 nobre.">Teto de comandos por alvo <span style="color:#8a7d6d">(1 nobre cada)</span></span><input id="twmgr-nb-nob" class="twmgr-inp" type="number" min="1" max="8" value="4"></div>' +
               '<div class="twmgr-fld"><span>Viagem máx. (h)</span><input id="twmgr-nb-horas" class="twmgr-inp" type="number" min="1" max="72" value="6"></div>' +
             '</div>' +
             '<div class="twmgr-fld" style="margin-top:8px"><span title="NT = todos os nobres saindo da MESMA aldeia">Só enviar NT <span style="color:#8a7d6d">(todos da mesma aldeia)</span></span>' +
@@ -814,7 +824,10 @@
             '<div id="twmgr-nb-poslista" class="twmgr-bld-vils"></div>' +
             '<div id="twmgr-nb-flagpick" style="display:none;margin-top:6px;background:#fdfaf4;border:1px solid #e8dfcc;border-radius:8px;padding:7px"></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Cada alvo pode ter o seu. Linha marcada como <b>padrão</b> herda o que está ali em cima — mexer nela desliga a herança <b>só daquele alvo</b>, sem afetar os outros.</div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Clique na bandeira da linha pra escolher — a grade mostra <b>só as que a conta tem</b>, com o efeito de cada uma.</div>') +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Clique na bandeira da linha pra escolher — a grade mostra <b>só as que a conta tem</b>, com o efeito de cada uma.</div>' +
+            '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:9px 0 3px">Conquistadas</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-bottom:4px">Aldeias que você tomou, com o que cada uma custou. Elas <b>não somem</b> da lista — se o automático não pegou (ou você configurou depois), use <b>aplicar agora</b>.</div>' +
+            '<div id="twmgr-nb-conqlista" class="twmgr-bld-vils"></div>') +
         '</div>' +
         '<div class="twmgr-actions"><button id="twmgr-nb-start" class="twmgr-btn twmgr-go">▶ Planejar</button><button id="twmgr-nb-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-nb-status" class="twmgr-cstatus"></div>' +
@@ -1190,6 +1203,8 @@
     renderNoblePlano();
     document.getElementById('twmgr-nb-start').addEventListener('click', nobleStart);
     document.getElementById('twmgr-nb-stop').addEventListener('click', nobleStop);
+    document.getElementById('twmgr-nb-ocio-go').addEventListener('click', nobleConferirOciosos);
+    renderNobleOciosos();   // só desenha o estado atual; quem dispara a leitura é showTab
     setNobleStatus(config.noble.running);
 
     document.getElementById('twmgr-pq-start').addEventListener('click', researchStart);

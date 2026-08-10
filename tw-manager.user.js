@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.127.0
+// @version      11.128.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.127.0';
+  const VERSION = '11.128.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -1743,6 +1743,15 @@
       v.options.filter((o) => o.state === 'running' && o.endMs).forEach((o) => runningEnds.push(o.endMs));
       let freeOpts = v.options.filter((o) => o.state === 'free');
       if (!freeOpts.length) continue;
+      // SÓ DESPACHA COM A ALDEIA INTEIRA EM CASA. A premissa do módulo é que as coletas
+      // TERMINEM JUNTAS: como a duração cresce com (carga × loot_factor), carga proporcional a
+      // 1/loot_factor dá o mesmo tempo em todas. Mas isso só vale se elas saírem JUNTAS.
+      //
+      // Antes o repartia entre as opções LIVRES. Quando uma vagava sozinha, ela levava a tropa
+      // inteira. Medido na conta do usuário: aldeia com as opções 1, 2 e 3 voltando em 0,4h e a
+      // 4 sozinha com 36.500 de carga, voltando em 20,9h — e o desequilíbrio se realimentava,
+      // porque a próxima a vagar sozinha levava tudo de novo.
+      if (v.options.some((o) => o.state === 'running')) continue;
       // Tempo máximo (modo guerra): só manda pros níveis cuja duração REAL (lida da tela) cabe no teto.
       // Se não der pra confirmar a duração de um nível (erro de rede ou HTML inesperado), NÃO manda pra
       // ele — por segurança, prefere não coletar a arriscar tropa fora de casa por tempo desconhecido.
@@ -1757,15 +1766,31 @@
       const avail = {}; let totalUnits = 0;
       selUnits.forEach((u) => { const n = v.avail[u] || 0; if (n > 0) { avail[u] = n; totalUnits += n; } });
       if (!freeOpts.length || totalUnits === 0) continue;
-      const weights = freeOpts.map((o) => 1 / (LOOT_FACTOR[o.id] || 0.1));
-      const alloc = freeOpts.map(() => ({}));
-      Object.entries(avail).forEach(([u, n]) => { distribute(n, weights).forEach((c, i) => { if (c > 0) alloc[i][u] = c; }); });
-      for (let i = 0; i < freeOpts.length; i++) {
+      // Uma opção que fica abaixo do mínimo de população não pode ser enviada. Em vez de
+      // simplesmente pular (o que deixava aquela fatia da tropa em casa E desbalanceava o
+      // resto), tira a opção da conta e reparte TUDO de novo entre as que sobraram: os tempos
+      // continuam iguais entre elas. Quem cai primeiro é sempre a de maior loot_factor, que é a
+      // que recebe a menor fatia, então o laço converge.
+      let usar = freeOpts.slice(), alloc = [];
+      const popDe = (a) => Object.entries(a).reduce((s, [u, c]) => s + c * (POP[u] || 1), 0);
+      while (usar.length) {
+        const weights = usar.map((o) => 1 / (LOOT_FACTOR[o.id] || 0.1));
+        alloc = usar.map(() => ({}));
+        Object.entries(avail).forEach(([u, n]) => { distribute(n, weights).forEach((c, i) => { if (c > 0) alloc[i][u] = c; }); });
+        const ruim = alloc.findIndex((a) => popDe(a) < MIN_POP);
+        if (ruim < 0) break;
+        usar.splice(ruim, 1);
+      }
+      if (!usar.length) continue;
+      if (usar.length < freeOpts.length) {
+        pushLog('Coleta em ' + v.name + ': tropa insuficiente pra abastecer as ' + freeOpts.length
+          + ' coletas — repartida entre ' + usar.length + ' (níveis ' + usar.map((o) => o.id).join(', ') + ').', '', 'scav');
+      }
+      for (let i = 0; i < usar.length; i++) {
         const a = alloc[i];
-        const pop = Object.entries(a).reduce((s, [u, c]) => s + c * (POP[u] || 1), 0);
         const carry = Math.floor(Object.entries(a).reduce((s, [u, c]) => s + c * (CARRY[u] || 0), 0) * (v.carryFactor || 1));
-        if (pop < MIN_POP || carry <= 0) continue;
-        reqs.push({ vid: v.vid, name: v.name, optionId: freeOpts[i].id, units: a, carry: carry });
+        if (carry <= 0) continue;
+        reqs.push({ vid: v.vid, name: v.name, optionId: usar[i].id, units: a, carry: carry });
       }
     }
     let sent = false;
@@ -10608,7 +10633,7 @@
       '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
-        hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
+        hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas para que as coletas <b>terminem juntas</b> (carga proporcional a 1/loot factor) e reenvia no retorno. Só despacha quando <b>todas</b> as coletas da aldeia estão em casa — mandar numa que vagou sozinha faria ela levar a tropa inteira.') +
         cardsDiv('scav') +
         sec('Tropas na coleta', '<div class="twmgr-units">' + SCAV_UNITS.map(([u, n]) => '<label><input id="twmgr-su-' + u + '" type="checkbox"> ' + unitIcon(u, n) + ' ' + n + '</label>').join('') + '</div>') +
         sec('Desbloqueio automático',
@@ -16950,6 +16975,9 @@
         const avail = {}; let totalUnits = 0;
         selUnits.forEach((u) => { const n = v.avail[u] || 0; if (n > 0) { avail[u] = n; totalUnits += n; } });
         if (!freeOpts.length || totalUnits === 0) continue;
+        // Mesma correção do motor principal: as coletas só terminam juntas se saírem juntas.
+        // Repartir entre as opções LIVRES fazia a que vagava sozinha levar a tropa inteira.
+        if (v.options.some((o) => o.state === 'running')) continue;
         const weights = freeOpts.map((o) => 1 / (LOOT_FACTOR[o.id] || 0.1));
         const alloc = freeOpts.map(() => ({}));
         Object.entries(avail).forEach(([u, n]) => { distribute(n, weights).forEach((c, i) => { if (c > 0) alloc[i][u] = c; }); });

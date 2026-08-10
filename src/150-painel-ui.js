@@ -419,7 +419,7 @@
       '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
-        hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
+        hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas para que as coletas <b>terminem juntas</b> (carga proporcional a 1/loot factor) e reenvia no retorno. Só despacha quando <b>todas</b> as coletas da aldeia estão em casa — mandar numa que vagou sozinha faria ela levar a tropa inteira.') +
         cardsDiv('scav') +
         sec('Tropas na coleta', '<div class="twmgr-units">' + SCAV_UNITS.map(([u, n]) => '<label><input id="twmgr-su-' + u + '" type="checkbox"> ' + unitIcon(u, n) + ' ' + n + '</label>').join('') + '</div>') +
         sec('Desbloqueio automático',

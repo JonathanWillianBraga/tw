@@ -4296,6 +4296,9 @@
         const avail = {}; let totalUnits = 0;
         selUnits.forEach((u) => { const n = v.avail[u] || 0; if (n > 0) { avail[u] = n; totalUnits += n; } });
         if (!freeOpts.length || totalUnits === 0) continue;
+        // Mesma correção do motor principal: as coletas só terminam juntas se saírem juntas.
+        // Repartir entre as opções LIVRES fazia a que vagava sozinha levar a tropa inteira.
+        if (v.options.some((o) => o.state === 'running')) continue;
         const weights = freeOpts.map((o) => 1 / (LOOT_FACTOR[o.id] || 0.1));
         const alloc = freeOpts.map(() => ({}));
         Object.entries(avail).forEach(([u, n]) => { distribute(n, weights).forEach((c, i) => { if (c > 0) alloc[i][u] = c; }); });

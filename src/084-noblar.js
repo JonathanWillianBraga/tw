@@ -537,14 +537,22 @@
     if (d.pousados) p.push(d.pousados + ' pousado(s), sem relatório');
     return p.join(' + ') || '0 a caminho';
   }
+  // "Pousado" era definido só por `doJogo`: entrada que a ficha do alvo não lista, pousou. Só que
+  // o nobre que ACABOU DE SAIR também não está lá — ele é uma entrada local (`doJogo` falso) e a
+  // ficha do alvo só é relida no ciclo seguinte. Resultado: os 2 nobres que a Pandora despachou
+  // agora apareciam como "2 pousados" antes mesmo de decolar.
+  //
+  // A hora de chegada decide primeiro, e ela existe nos dois casos (nobleRegistraEnvio grava
+  // `chega` no envio). Só depois de a chegada passar é que a ausência na ficha vira prova de que
+  // pousou — antes disso é só o jogo ainda não ter sido consultado.
   function nobleEmVooDetalhe(coord) {
     const lista = nobleVoos(coord);
     const agora = Date.now();
     let voando = 0, pousados = 0;
     lista.forEach((e) => {
       const n = e.n || 1;
-      if (e.doJogo && (e.chega || 0) > agora) voando += n;
-      else if (e.doJogo) voando += n;          // veio do jogo: está na lista de comandos, logo não pousou
+      if ((e.chega || 0) > agora) voando += n;   // ainda não chegou: está no ar, venha de onde vier
+      else if (e.doJogo) voando += n;            // já devia ter chegado, mas o jogo ainda lista
       else pousados += n;
     });
     return { voando: voando, pousados: pousados, total: voando + pousados };

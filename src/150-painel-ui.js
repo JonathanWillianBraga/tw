@@ -273,6 +273,10 @@
       ".twmgr-ap-orig{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:center;gap:9px;padding:5px 10px 5px 24px;background:#faf7f0;border-top:1px dashed #e8dfcc;font-size:10px;color:#6f6153;position:relative}",
       ".twmgr-ap-orig:before{content:\"\";position:absolute;left:13px;top:0;bottom:0;width:1px;background:#e8dfcc}",
       ".twmgr-ap-dist{font-size:9px;color:#8a7d6d;margin-left:5px}",
+      ".twmgr-alv-linha{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px 10px}",
+      ".twmgr-alv-tag{color:#fff;font-size:9px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:9px;white-space:nowrap}",
+      ".twmgr-alv-ir{color:#a2643a;text-decoration:none;font-size:13px;padding:0 3px}",
+      ".twmgr-alv-ir:hover{color:#8b5426}",
       ".twmgr-ap-cb{vertical-align:-1px;margin-right:3px}",
       ".twmgr-ap-acoes{display:flex;align-items:center;gap:4px;padding:6px 10px;background:#f4eee2;border-top:1px solid #e8dfcc}",
       ".twmgr-ap-u{display:inline-flex;padding:2px;border:1px solid transparent;border-radius:4px;cursor:pointer;opacity:.32;filter:grayscale(1)}",
@@ -321,7 +325,7 @@
   const FARM_SUB_KEY = 'twMgr_farmSub';
   // Sub-abas por módulo. Era só do Saque; virou genérico quando o Noblar também passou a ter —
   // duplicar a função daria duas cópias pra manter em sincronia.
-  const SUBS = { farm: ['farm', 'wall', 'map'], noble: ['alvos', 'cunhar', 'pos'],
+  const SUBS = { farm: ['farm', 'wall', 'map', 'fichas'], noble: ['alvos', 'cunhar', 'pos'],
                  recruit: ['rcmodelos', 'rcstatus'], build: ['bldmodelos', 'bldstatus'],
                  market: ['cunhagem', 'equilibrio', 'solidario'] };
   function showSub(mod, name) {
@@ -446,6 +450,7 @@
           subBtn('farm', '🐎', 'Saque') +
           subBtn('wall', '🐏', 'Muralha') +
           subBtn('map', '🗺️', 'Mapa') +
+          subBtn('fichas', '🎯', 'Fichas') +
         '</div>' +
         '<div id="twmgr-sub-farm">' +
         '<div id="twmgr-farm-prog" class="twmgr-hint">Saque parado.</div>' +
@@ -540,6 +545,19 @@
           '<div class="twmgr-actions"><button id="twmgr-lk-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-lk-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
           '<div id="twmgr-lk-status" class="twmgr-cstatus"></div>' +
           modLog('lock')) +
+        '</div>' +
+        '<div id="twmgr-sub-fichas" style="display:none">' +
+        hint('🎯 Aldeia <b>ofensiva recruta bárbaro</b>; <b>defensiva recruta espadachim</b>. Ninguém mistura — então basta VER a unidade, a quantidade não importa. Quando um ataque seu mata 1/3 dos defensores o jogo <b>revela a defesa</b>, e até um fake que morreu entrega o tipo da aldeia. Esta tela lê seus relatórios de ataque (os de saque ficam de fora) e ficha cada aldeia de jogador.') +
+        sec('Fichas de alvo',
+          '<div class="twmgr-row">' +
+            '<button id="twmgr-fichas-ler" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">↻ Ler relatórios</button>' +
+            '<span class="twmgr-lbl" style="margin-left:8px">páginas</span>' +
+            '<input id="twmgr-fichas-pags" class="twmgr-inp" type="number" min="1" max="10" value="2" style="width:52px">' +
+            '<span id="twmgr-fichas-status" style="flex:1;font-size:10px;color:#8a7d6d;margin-left:8px"></span>' +
+          '</div>' +
+          '<div class="twmgr-hint" style="margin:4px 0 0">Cada página são ~100 relatórios, e cada um custa uma requisição. O filtro da tela de Relatórios é mexido durante a leitura e devolvido no fim.</div>' +
+          '<div id="twmgr-fichas-corpo" style="margin-top:8px"></div>' +
+          modLog('fichas')) +
         '</div>' +
       '</div>' +
       '<div id="twmgr-tab-recruit" style="display:none">' +
@@ -1187,6 +1205,7 @@
     fillNobleGrupos();
     bindNoblePosHandlers();
     bindApoiosHandlers();
+    bindAlvosHandlers();
     renderNoblePos();
 
 

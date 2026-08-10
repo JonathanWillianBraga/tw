@@ -274,6 +274,9 @@
       ".twmgr-ap-orig:before{content:\"\";position:absolute;left:13px;top:0;bottom:0;width:1px;background:#e8dfcc}",
       ".twmgr-ap-dist{font-size:9px;color:#8a7d6d;margin-left:5px}",
       ".twmgr-alv-linha{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px 10px}",
+      ".twmgr-alv-linha{border-top:1px dashed #e8dfcc;background:#faf7f0}",
+      ".twmgr-alv-jog{display:grid;grid-template-columns:12px minmax(0,1fr) minmax(0,auto);align-items:center;gap:9px;padding:7px 10px;cursor:pointer}",
+      ".twmgr-alv-jog:hover{background:#f6f1e8}",
       ".twmgr-alv-tag{color:#fff;font-size:9px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:9px;white-space:nowrap}",
       ".twmgr-alv-ir{color:#a2643a;text-decoration:none;font-size:13px;padding:0 3px}",
       ".twmgr-alv-ir:hover{color:#8b5426}",
@@ -547,7 +550,7 @@
           modLog('lock')) +
         '</div>' +
         '<div id="twmgr-sub-fichas" style="display:none">' +
-        hint('🎯 Aldeia <b>ofensiva recruta bárbaro</b>; <b>defensiva recruta espadachim</b>. Ninguém mistura — então basta VER a unidade, a quantidade não importa. Quando um ataque seu mata 1/3 dos defensores o jogo <b>revela a defesa</b>, e até um fake que morreu entrega o tipo da aldeia. Esta tela lê seus relatórios de ataque (os de saque ficam de fora) e ficha cada aldeia de jogador.') +
+        hint('🎯 Aldeia <b>ofensiva recruta bárbaro</b>; <b>defensiva recruta lanceiro, espadachim e cavalaria pesada</b>. Ninguém mistura — então basta VER a unidade, a quantidade não importa. Quando um ataque seu mata 1/3 dos defensores o jogo <b>revela a defesa</b>, e até um fake que morreu entrega o tipo da aldeia. As fichas <b>se acumulam</b>: relatório o jogo apaga, ficha não.') +
         sec('Fichas de alvo',
           '<div class="twmgr-row">' +
             '<button id="twmgr-fichas-ler" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">↻ Ler relatórios</button>' +

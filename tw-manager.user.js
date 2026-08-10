@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.143.0
+// @version      11.148.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.143.0';
+  const VERSION = '11.148.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -1768,6 +1768,15 @@
       v.options.filter((o) => o.state === 'running' && o.endMs).forEach((o) => runningEnds.push(o.endMs));
       let freeOpts = v.options.filter((o) => o.state === 'free');
       if (!freeOpts.length) continue;
+      // SÓ DESPACHA COM A ALDEIA INTEIRA EM CASA. A premissa do módulo é que as coletas
+      // TERMINEM JUNTAS: como a duração cresce com (carga × loot_factor), carga proporcional a
+      // 1/loot_factor dá o mesmo tempo em todas. Mas isso só vale se elas saírem JUNTAS.
+      //
+      // Antes o repartia entre as opções LIVRES. Quando uma vagava sozinha, ela levava a tropa
+      // inteira. Medido na conta do usuário: aldeia com as opções 1, 2 e 3 voltando em 0,4h e a
+      // 4 sozinha com 36.500 de carga, voltando em 20,9h — e o desequilíbrio se realimentava,
+      // porque a próxima a vagar sozinha levava tudo de novo.
+      if (v.options.some((o) => o.state === 'running')) continue;
       // Tempo máximo (modo guerra): só manda pros níveis cuja duração REAL (lida da tela) cabe no teto.
       // Se não der pra confirmar a duração de um nível (erro de rede ou HTML inesperado), NÃO manda pra
       // ele — por segurança, prefere não coletar a arriscar tropa fora de casa por tempo desconhecido.
@@ -1782,15 +1791,31 @@
       const avail = {}; let totalUnits = 0;
       selUnits.forEach((u) => { const n = v.avail[u] || 0; if (n > 0) { avail[u] = n; totalUnits += n; } });
       if (!freeOpts.length || totalUnits === 0) continue;
-      const weights = freeOpts.map((o) => 1 / (LOOT_FACTOR[o.id] || 0.1));
-      const alloc = freeOpts.map(() => ({}));
-      Object.entries(avail).forEach(([u, n]) => { distribute(n, weights).forEach((c, i) => { if (c > 0) alloc[i][u] = c; }); });
-      for (let i = 0; i < freeOpts.length; i++) {
+      // Uma opção que fica abaixo do mínimo de população não pode ser enviada. Em vez de
+      // simplesmente pular (o que deixava aquela fatia da tropa em casa E desbalanceava o
+      // resto), tira a opção da conta e reparte TUDO de novo entre as que sobraram: os tempos
+      // continuam iguais entre elas. Quem cai primeiro é sempre a de maior loot_factor, que é a
+      // que recebe a menor fatia, então o laço converge.
+      let usar = freeOpts.slice(), alloc = [];
+      const popDe = (a) => Object.entries(a).reduce((s, [u, c]) => s + c * (POP[u] || 1), 0);
+      while (usar.length) {
+        const weights = usar.map((o) => 1 / (LOOT_FACTOR[o.id] || 0.1));
+        alloc = usar.map(() => ({}));
+        Object.entries(avail).forEach(([u, n]) => { distribute(n, weights).forEach((c, i) => { if (c > 0) alloc[i][u] = c; }); });
+        const ruim = alloc.findIndex((a) => popDe(a) < MIN_POP);
+        if (ruim < 0) break;
+        usar.splice(ruim, 1);
+      }
+      if (!usar.length) continue;
+      if (usar.length < freeOpts.length) {
+        pushLog('Coleta em ' + v.name + ': tropa insuficiente pra abastecer as ' + freeOpts.length
+          + ' coletas — repartida entre ' + usar.length + ' (níveis ' + usar.map((o) => o.id).join(', ') + ').', '', 'scav');
+      }
+      for (let i = 0; i < usar.length; i++) {
         const a = alloc[i];
-        const pop = Object.entries(a).reduce((s, [u, c]) => s + c * (POP[u] || 1), 0);
         const carry = Math.floor(Object.entries(a).reduce((s, [u, c]) => s + c * (CARRY[u] || 0), 0) * (v.carryFactor || 1));
-        if (pop < MIN_POP || carry <= 0) continue;
-        reqs.push({ vid: v.vid, name: v.name, optionId: freeOpts[i].id, units: a, carry: carry });
+        if (carry <= 0) continue;
+        reqs.push({ vid: v.vid, name: v.name, optionId: usar[i].id, units: a, carry: carry });
       }
     }
     let sent = false;
@@ -9087,6 +9112,414 @@
     const b = document.getElementById('twmgr-apoios-ler');
     if (b) b.addEventListener('click', () => apoiosLer(true));
   }
+  // ==================== FICHAS DE ALVO (aldeia de ATAQUE ou de DEFESA) ====================
+  // Regra do usuário, e ela é o coração do módulo: no TW cada aldeia tem vocação. Bárbaro só
+  // sai de aldeia OFENSIVA; lanceiro, espadachim e cavalaria pesada só saem de DEFENSIVA.
+  // Ninguém mistura. Então basta VER a unidade — a quantidade não importa.
+  //
+  // Isso muda o custo do problema: não é preciso explorar nem saber o total de tropa. Quando um
+  // ataque mata pelo menos 1/3 dos defensores, o jogo REVELA a composição da defesa, e um fake
+  // que morreu já entrega o tipo da aldeia.
+  //
+  // DE ONDE VEM A LISTA. A tela de relatórios tem um filtro DO SERVIDOR:
+  //
+  //   POST screen=report&mode=attack&action=set_filter_icon
+  //   corpo: filter_attack_type[8]=8 · [16]=16 · [32]=32 · filter_icon_operator=AND · h=<csrf>
+  //
+  // O tipo 1 é "ataque de saque". Excluindo ele sobram só os ataques de verdade. Sem isso não
+  // dá: nos 200 relatórios mais recentes desta conta, ZERO eram de jogador — os de bárbara
+  // afogam a lista.
+  //
+  // O valor de cada campo é o PRÓPRIO NÚMERO (`[8]=8`, não `on`) e o operador é `AND` maiúsculo.
+  // Descobri isso capturando o formulário; a versão que eu deduzi não pegava e o filtro
+  // continuava vazio sem reclamar.
+  //
+  // O filtro é PREFERÊNCIA DE CONTA: mexe na tela de relatórios do usuário. Guardamos o estado
+  // anterior e devolvemos no fim.
+  //
+  // ⚠ O ARQUIVO É O PRODUTO, NÃO A VARREDURA. O jogo APAGA relatório com o tempo. Uma ficha
+  // nunca é substituída por uma leitura nova: a varredura só ACRESCENTA. Aldeia que sumiu dos
+  // relatórios continua fichada com o que já se sabia, e só muda quando um relatório NOVO
+  // contar algo diferente.
+
+  const ALVOS_KEY = KEY + '_alvos';
+  const ALVOS_TIPOS = [8, 16, 32];           // pequeno, médio, grande — tudo menos saque (1)
+  // Vocação por unidade. Explorador, milícia, paladino e nobre NÃO classificam: explorador toda
+  // aldeia tem, milícia é convocação temporária de qualquer uma, e paladino/nobre não dizem
+  // nada sobre o que ela recruta. Sem esse corte, 526 exploradores decidiriam a ficha.
+  const ALVOS_DEF = ['spear', 'sword', 'heavy', 'archer'];
+  const ALVOS_ATK = ['axe', 'light', 'marcher', 'ram', 'catapult'];
+
+  let _alvCache = null, _alvLendo = false;
+
+  function alvosSalvar() {
+    try { localStorage.setItem(ALVOS_KEY, JSON.stringify(_alvCache)); }
+    catch (e) { pushLog('Fichas: não consegui guardar o arquivo (' + (e.message || e) + ').', 'err', 'fichas'); }
+  }
+  function alvosCarregar() {
+    try {
+      const s = localStorage.getItem(ALVOS_KEY);
+      if (!s) return;
+      const c = JSON.parse(s);
+      if (!c) return;
+      // Formato antigo (v11.144): guardava uma lista e era substituída a cada leitura.
+      if (c.lista && !c.aldeias) {
+        const m = {};
+        c.lista.forEach((v) => { m[v.coord] = v; });
+        _alvCache = { aldeias: m, at: c.at || Date.now(), lidos: c.lidos || 0, revelados: c.revelados || 0 };
+        return;
+      }
+      if (c.aldeias) _alvCache = c;
+    } catch (e) { /* arquivo ilegível: começa vazio em vez de derrubar a aba */ }
+  }
+  function alvosBase() {
+    if (!_alvCache) _alvCache = { aldeias: {}, at: 0, lidos: 0, revelados: 0 };
+    if (!_alvCache.aldeias) _alvCache.aldeias = {};
+    return _alvCache;
+  }
+
+  // ── O filtro do servidor ────────────────────────────────────────────────────
+  async function alvosFiltro(tipos) {
+    const p = new URLSearchParams();
+    tipos.forEach((t) => p.append('filter_attack_type[' + t + ']', String(t)));
+    p.append('filter_icon_operator', 'AND');
+    p.append('h', CSRF);
+    const r = await fetch('/game.php?village=' + CUR_VID + '&screen=report&mode=attack&action=set_filter_icon',
+      { method: 'POST', credentials: 'include', cache: 'no-store',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p.toString() });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao ajustar o filtro de relatórios');
+    return new DOMParser().parseFromString(await r.text(), 'text/html');
+  }
+
+  // Quais tipos estão marcados AGORA, pra devolver depois. Se eu não devolver, a tela de
+  // relatórios do usuário fica filtrada por algo que ele não escolheu.
+  function alvosFiltroAtual(doc) {
+    const out = [];
+    doc.querySelectorAll('input[name^="filter_attack_type"]').forEach((c) => {
+      if (c.hasAttribute('checked')) {
+        const m = (c.getAttribute('name') || '').match(/\[(\d+)\]/);
+        if (m) out.push(parseInt(m[1], 10));
+      }
+    });
+    return out;
+  }
+
+  // ── Leitura do relatório ────────────────────────────────────────────────────
+  // A tabela `#attack_info_def_units` usa TD no cabeçalho, não TH — procurar `th img` devolvia
+  // zero unidade. As unidades saem dos ícones da primeira linha, e os números da segunda,
+  // pulando a célula do rótulo ("Quantidade:"). Nunca por posição fixa: o conjunto muda por
+  // mundo (aqui vêm 11, com milícia).
+  function alvosLerDefesa(doc) {
+    const t = doc.querySelector('#attack_info_def_units');
+    if (!t) return null;                     // "Nenhuma informação sobre as tropas inimigas"
+    const rs = t.querySelectorAll('tr');
+    if (rs.length < 2) return null;
+    const uni = [];
+    rs[0].querySelectorAll('img').forEach((i) => {
+      const m = (i.getAttribute('src') || '').match(/unit_([a-z]+)/);
+      if (m) uni.push(m[1]);
+    });
+    if (!uni.length) return null;
+    const tds = Array.prototype.slice.call(rs[1].querySelectorAll('td')).slice(1);
+    if (tds.length < uni.length) return null;
+    const tropa = {};
+    for (let i = 0; i < uni.length; i++) {
+      const n = parseInt((tds[i].textContent || '').replace(/\D/g, ''), 10) || 0;
+      if (n > 0) tropa[uni[i]] = n;
+    }
+    return tropa;
+  }
+
+  // Dono e id da aldeia saem do mesmo relatório, de graça: "Defensor: X  Destino: Y (a|b)".
+  // O id é o que faz o link da lista abrir a FICHA da aldeia em vez do mapa.
+  function alvosLerDono(doc) {
+    const d = doc.querySelector('#attack_info_def');
+    const out = { dono: '', vid: null };
+    if (!d) return out;
+    // O nome sai do LINK do jogador, nao do texto: `textContent` junta tudo numa linha so
+    // (inclusive a tabela de tropas logo abaixo) e um nome com espaco ou acento vira loteria
+    // de regex. A frase "Defensor: X Destino:" fica como reserva, pro caso de o link faltar.
+    const pl = Array.prototype.slice.call(d.querySelectorAll('a'))
+      .filter((x) => /screen=info_player/.test(x.getAttribute('href') || ''))[0];
+    if (pl) out.dono = (pl.textContent || '').trim();
+    if (!out.dono) {
+      const m = (d.textContent || '').replace(/\s+/g, ' ').match(/Defensor:\s*(.+?)\s+Destino:/);
+      if (m) out.dono = m[1].trim();
+    }
+    const a = Array.prototype.slice.call(d.querySelectorAll('a'))
+      .map((x) => x.getAttribute('href') || '').filter((h) => /screen=info_village/.test(h))[0];
+    const mv = a && a.match(/[?&]id=(\d+)/);
+    if (mv) out.vid = mv[1];
+    return out;
+  }
+
+  // A REGRA. Bárbaro (e o resto da tropa de campo ofensiva) = aldeia de ataque; lanceiro,
+  // espadachim e cavalaria pesada = aldeia de defesa. As duas famílias juntas quase sempre
+  // significam apoio de fora parado ali, então vira "misto" em vez de escolher uma.
+  function alvosClassificar(v) {
+    let atk = 0, def = 0;
+    ALVOS_ATK.forEach((u) => { atk += v[u] || 0; });
+    ALVOS_DEF.forEach((u) => { def += v[u] || 0; });
+    if (atk > 0 && def > 0) return 'misto';
+    if (atk > 0) return 'ataque';
+    if (def > 0) return 'defesa';
+    return '?';
+  }
+
+  // ── A varredura ─────────────────────────────────────────────────────────────
+  async function alvosVarrer(paginas, aoAndar) {
+    if (_alvLendo) throw new Error('já estou lendo os relatórios — espere terminar');
+    _alvLendo = true;
+    let anterior = null;
+    const base = alvosBase();
+    try {
+      const doc0 = await alvosFiltro(ALVOS_TIPOS);
+      anterior = alvosFiltroAtual(doc0);
+      let lidos = 0, revelados = 0, novas = 0, mudaram = 0;
+      for (let pg = 0; pg < Math.max(1, paginas); pg++) {
+        const r = await fetch('/game.php?village=' + CUR_VID + '&screen=report&mode=attack&page=' + pg,
+          { credentials: 'include', cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status + ' ao listar os relatórios');
+        const d = new DOMParser().parseFromString(await r.text(), 'text/html');
+        const tab = d.querySelector('#report_list');
+        if (!tab) throw new Error('não achei a lista de relatórios — a tela do jogo mudou?');
+        const linhas = Array.prototype.slice.call(tab.querySelectorAll('tr'))
+          .filter((tr) => tr.querySelector('a[href*="view="]'))
+          .filter((tr) => !/Aldeia de b/i.test(tr.innerText));   // bárbara não tem dono pra fichar
+        if (!linhas.length) break;                                // acabaram as páginas
+        for (const tr of linhas) {
+          // Leitura sob demanda, não laço de fundo: só o bot-check interrompe.
+          if (captchaBlocked()) throw new Error('bot-check na tela — varredura interrompida');
+          const a = tr.querySelector('a[href*="view="]');
+          const id = new URLSearchParams((a.getAttribute('href') || '').split('?')[1] || '').get('view');
+          const txt = (tr.innerText || '').replace(/\s+/g, ' ').trim();
+          const m = txt.match(/atacou\s+(.*?)\s*\((\d{2,3})\|(\d{2,3})\)/);
+          if (!id || !m) continue;
+          const coord = m[2] + '|' + m[3];
+          lidos++;
+          if (aoAndar) aoAndar(lidos, coord);
+          const dd = new DOMParser().parseFromString(
+            await (await fetch('/game.php?village=' + CUR_VID + '&screen=report&view=' + id,
+              { credentials: 'include', cache: 'no-store' })).text(), 'text/html');
+          const quem = alvosLerDono(dd);
+          const tropa = alvosLerDefesa(dd);
+
+          // ACRESCENTA na ficha que já existe — nunca substitui.
+          let e = base.aldeias[coord];
+          if (!e) { novas++; e = base.aldeias[coord] = { coord: coord, nome: m[1].trim(), dono: '',
+                                                        vid: null, visto: {}, quando: 0, n: 0 }; }
+          if (m[1].trim()) e.nome = m[1].trim();
+          if (quem.dono) e.dono = quem.dono;
+          if (quem.vid) e.vid = quem.vid;
+          e.n = (e.n || 0) + 1;
+          if (tropa) {
+            revelados++;
+            const antes = e.tipo;
+            // Máximo já visto de cada unidade: relatórios diferentes pegam a aldeia em momentos
+            // diferentes, e o que interessa é o que ela chegou a ter.
+            Object.keys(tropa).forEach((u) => { e.visto[u] = Math.max(e.visto[u] || 0, tropa[u]); });
+            e.quando = Date.now();
+            e.tipo = alvosClassificar(e.visto);
+            if (antes && antes !== '?' && antes !== e.tipo) mudaram++;
+          }
+          if (!e.tipo) e.tipo = alvosClassificar(e.visto);
+          await sleep(180);                  // o 429 desta conta é GLOBAL
+        }
+      }
+      base.at = Date.now(); base.lidos = lidos; base.revelados = revelados;
+      alvosSalvar();
+      return { lidos: lidos, revelados: revelados, novas: novas, mudaram: mudaram };
+    } finally {
+      _alvLendo = false;
+      // devolve o filtro do usuário — é a tela DELE
+      try { if (anterior) await alvosFiltro(anterior); }
+      catch (e) { pushLog('Fichas: não consegui devolver o filtro da tela de relatórios ('
+        + (e.message || e) + '). Confira em Relatórios → Filtros.', 'err', 'fichas'); }
+    }
+  }
+
+  // ── Tela: agrupada por JOGADOR ──────────────────────────────────────────────
+  const _alvAberto = {};                     // dono -> expandido?
+  let _alvFiltro = '';                       // '' = tudo | ataque | defesa | misto | ?
+  const ALV_COR = { ataque: '#b03030', defesa: '#2e6b8a', misto: '#8b5426', '?': '#8a7d6d' };
+
+  function alvosPorJogador() {
+    const base = alvosBase();
+    const p = {};
+    Object.keys(base.aldeias).forEach((c) => {
+      const v = base.aldeias[c];
+      // O filtro esconde a ALDEIA; jogador que ficou sem nenhuma some junto, senao a lista
+      // enche de cabecalho vazio.
+      if (_alvFiltro && (v.tipo || '?') !== _alvFiltro) return;
+      const k = v.dono || '(dono desconhecido)';
+      const g = p[k] || (p[k] = { dono: k, aldeias: [], cont: { ataque: 0, defesa: 0, misto: 0, '?': 0 } });
+      g.aldeias.push(v);
+      g.cont[v.tipo || '?']++;
+    });
+    const lista = Object.keys(p).map((k) => p[k]);
+    // Quem tem mais aldeia de ataque primeiro: é de quem você precisa se defender, e é onde
+    // estão os alvos que valem nuke.
+    lista.sort((a, b) => (b.cont.ataque - a.cont.ataque) || (b.aldeias.length - a.aldeias.length));
+    lista.forEach((g) => g.aldeias.sort((x, y) => x.coord.localeCompare(y.coord)));
+    return lista;
+  }
+
+  // O link abre a FICHA da aldeia (pedido do usuário: melhor que o mapa). Só dá pra montar com
+  // o id que veio do relatório; sem ele, cai no mapa pela coordenada em vez de dar link morto.
+  // Sempre a FICHA da aldeia. A ancora `#x;y` e o que faz o jogo centralizar o mapa
+  // embutido na aldeia certa.
+  function alvosLink(v) {
+    const xy = v.coord.split('|');
+    return '/game.php?village=' + CUR_VID + '&screen=info_village&id=' + v.vid
+      + '#' + xy[0] + ';' + xy[1];
+  }
+
+  // Ficha gravada pela v11.144 nao tem o id da aldeia — o campo nem existia — e sem ele nao
+  // da pra montar o link do info_village. O village.txt que o modulo Mapa ja baixa resolve
+  // coordenada -> id de graca, entao a ficha velha nao precisa esperar um relatorio novo.
+  let _alvIdsVoo = null;
+  async function alvosPreencherIds() {
+    const base = alvosBase();
+    const faltam = Object.keys(base.aldeias).filter((c) => !base.aldeias[c].vid);
+    if (!faltam.length || _alvIdsVoo) return;
+    _alvIdsVoo = (async () => {
+      try {
+        const mapa = await getMapVillages();
+        const porCoord = {};
+        mapa.forEach((v) => { porCoord[v.x + '|' + v.y] = v; });
+        let ok = 0;
+        faltam.forEach((c) => {
+          const m = porCoord[c];
+          if (!m) return;
+          base.aldeias[c].vid = m.vid;
+          if (!base.aldeias[c].nome && m.name) base.aldeias[c].nome = m.name;
+          ok++;
+        });
+        if (ok) { alvosSalvar(); alvosRender(); }
+      } catch (e) {
+        pushLog('Notas: nao consegui resolver o id de ' + faltam.length
+          + ' aldeia(s) pelo mapa (' + (e.message || e) + ').', 'err', 'fichas');
+      } finally { _alvIdsVoo = null; }
+    })();
+  }
+
+  function alvosRender() {
+    const box = document.getElementById('twmgr-fichas-corpo');
+    if (!box) return;
+    const base = alvosBase();
+    const total = Object.keys(base.aldeias).length;
+    if (!total) {
+      box.innerHTML = '<div style="padding:14px;text-align:center;color:#8a7340">'
+        + 'Clique em <b>↻ Ler relatórios</b> pra montar as fichas.</div>';
+      return;
+    }
+    const geral = { ataque: 0, defesa: 0, misto: 0, '?': 0 };
+    Object.keys(base.aldeias).forEach((c) => { geral[base.aldeias[c].tipo || '?']++; });
+    const grupos = alvosPorJogador();
+
+    const topo = '<div class="twmgr-ap-topo">'
+      + '<div><div class="twmgr-ap-big" style="color:#b03030">' + geral.ataque + '</div>'
+        + '<div class="twmgr-ap-lbl">ataque</div></div>'
+      + '<div><div class="twmgr-ap-big" style="color:#2e6b8a">' + geral.defesa + '</div>'
+        + '<div class="twmgr-ap-lbl">defesa</div></div>'
+      + '<div><div class="twmgr-ap-big">' + geral.misto + '</div>'
+        + '<div class="twmgr-ap-lbl">misto</div></div>'
+      + '<div><div class="twmgr-ap-big" style="color:#8a7d6d">' + geral['?'] + '</div>'
+        + '<div class="twmgr-ap-lbl">sem pista</div></div>'
+      + '<div style="flex:1"></div>'
+      + '<div style="text-align:right"><div class="twmgr-ap-lbl">' + grupos.length + ' jogador(es) · '
+        + total + ' aldeia(s)</div>'
+        + '<div style="font-size:10px;color:#6f6153">' + (base.at
+            ? new Date(base.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit',
+                                                          hour: '2-digit', minute: '2-digit' })
+            : '—') + '</div></div>'
+      + '</div>';
+
+    const bt = (id, rot, cor) => '<span class="twmgr-alv-f" data-f="' + id + '"'
+      + (_alvFiltro === id ? ' style="background:' + (cor || '#a2643a') + ';color:#fff;border-color:transparent"' : '')
+      + '>' + rot + '</span>';
+    const filtros = '<div class="twmgr-alv-filtros">' + bt('', 'todos') + bt('ataque', 'ataque', ALV_COR.ataque)
+      + bt('defesa', 'defesa', ALV_COR.defesa) + bt('misto', 'misto', ALV_COR.misto)
+      + bt('?', 'sem pista', ALV_COR['?']) + '</div>';
+
+    if (!grupos.length) {
+      box.innerHTML = topo + filtros + '<div style="padding:12px;text-align:center;color:#8a7340">'
+        + 'Nenhuma aldeia nesse filtro.</div>';
+      return;
+    }
+    box.innerHTML = topo + filtros + grupos.map((g) => {
+      const aberto = !!_alvAberto[g.dono];
+      const barras = ['ataque', 'defesa', 'misto', '?'].filter((t) => g.cont[t] > 0)
+        .map((t) => '<span class="twmgr-alv-tag" style="background:' + ALV_COR[t] + '">'
+          + g.cont[t] + ' ' + esc(t === '?' ? '—' : t) + '</span>').join(' ');
+      const cab = '<div class="twmgr-alv-jog" data-dono="' + esc(g.dono) + '">'
+        + '<span class="twmgr-ap-seta">' + (aberto ? '▼' : '▶') + '</span>'
+        + '<span class="twmgr-ap-nome"><b>' + esc(g.dono) + '</b>'
+        + '<div class="twmgr-ap-dono">' + g.aldeias.length + ' aldeia'
+          + (g.aldeias.length > 1 ? 's' : '') + ' fichada' + (g.aldeias.length > 1 ? 's' : '') + '</div></span>'
+        + '<span style="display:flex;gap:3px;flex-wrap:wrap;justify-content:flex-end">' + barras + '</span>'
+        + '</div>';
+      if (!aberto) return '<div class="twmgr-ap-cartao">' + cab + '</div>';
+      const filhos = g.aldeias.map((v) => {
+        const us = Object.keys(v.visto);
+        return '<div class="twmgr-alv-linha">'
+          + '<span class="twmgr-alv-tag" style="background:' + ALV_COR[v.tipo || '?'] + '">'
+            + esc((v.tipo === '?' || !v.tipo) ? '—' : v.tipo.toUpperCase()) + '</span>'
+          + '<span class="twmgr-ap-nome">' + esc(v.nome || v.coord)
+            + '<span class="twmgr-ap-coord">' + esc(v.coord) + '</span>'
+            + '<div class="twmgr-ap-dono">' + (us.length
+                ? esc(us.map((u) => fmtN(v.visto[u]) + ' ' + unitPt(u)).join(' · '))
+                : '<i>nada revelado em ' + v.n + ' relatório(s)</i>') + '</div></span>'
+          + (v.vid ? '<a class="twmgr-alv-ir" href="' + alvosLink(v)
+            + '" target="_blank" title="abrir a ficha da aldeia">↗</a>'
+            : '<span class="twmgr-alv-ir" style="opacity:.35" title="ainda sem o id da aldeia">↗</span>')
+          + '</div>';
+      }).join('');
+      return '<div class="twmgr-ap-cartao on">' + cab + filhos + '</div>';
+    }).join('');
+  }
+
+  async function alvosLer(paginas) {
+    const st = document.getElementById('twmgr-fichas-status');
+    const diz = (t) => { if (st) st.textContent = t; };
+    try {
+      diz('ligando o filtro de relatórios…');
+      const r = await alvosVarrer(paginas, (n, coord) => diz('lendo relatório ' + n + ' — ' + coord));
+      diz('');
+      alvosRender();
+      alvosPreencherIds();
+      pushLog('Fichas: ' + r.lidos + ' relatório(s) lidos, ' + r.revelados + ' revelaram a defesa · '
+        + r.novas + ' aldeia(s) nova(s), ' + r.mudaram + ' mudaram de classificação. '
+        + 'O arquivo tem ' + Object.keys(alvosBase().aldeias).length + ' aldeia(s).', 'ok', 'fichas');
+    } catch (e) {
+      diz('');
+      pushLog('Fichas: ' + (e.message || e), 'err', 'fichas');
+      alvosRender();                          // o que já entrou no arquivo continua na tela
+    }
+  }
+
+  function bindAlvosHandlers() {
+    alvosCarregar();
+    alvosRender();
+    alvosPreencherIds();
+    const box = document.getElementById('twmgr-fichas-corpo');
+    if (box) {
+      box.addEventListener('click', (e) => {
+        const f = e.target.closest && e.target.closest('.twmgr-alv-f');
+        if (f) { _alvFiltro = f.getAttribute('data-f') || ''; alvosRender(); return; }
+        const j = e.target.closest && e.target.closest('.twmgr-alv-jog');
+        if (!j) return;
+        const d = j.getAttribute('data-dono');
+        _alvAberto[d] = !_alvAberto[d];
+        alvosRender();
+      });
+    }
+    const b = document.getElementById('twmgr-fichas-ler');
+    if (b) b.addEventListener('click', () => {
+      const n = parseInt((document.getElementById('twmgr-fichas-pags') || {}).value, 10) || 2;
+      alvosLer(Math.max(1, Math.min(10, n)));
+    });
+  }
   // ==================== ASSISTENTE DE SAQUE: TEMPLATE B ====================
   // Descobre o template_id do B (e as unidades) direto do am_farm; envia via o endpoint
   // oficial do assistente pra manter o alvo listado com relatório fresco.
@@ -10836,6 +11269,16 @@
       ".twmgr-ap-orig{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:center;gap:9px;padding:5px 10px 5px 24px;background:#faf7f0;border-top:1px dashed #e8dfcc;font-size:10px;color:#6f6153;position:relative}",
       ".twmgr-ap-orig:before{content:\"\";position:absolute;left:13px;top:0;bottom:0;width:1px;background:#e8dfcc}",
       ".twmgr-ap-dist{font-size:9px;color:#8a7d6d;margin-left:5px}",
+      ".twmgr-alv-linha{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px 10px}",
+      ".twmgr-alv-linha{border-top:1px dashed #e8dfcc;background:#faf7f0}",
+      ".twmgr-alv-jog{display:grid;grid-template-columns:12px minmax(0,1fr) minmax(0,auto);align-items:center;gap:9px;padding:7px 10px;cursor:pointer}",
+      ".twmgr-alv-jog:hover{background:#f6f1e8}",
+      ".twmgr-alv-filtros{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:7px}",
+      ".twmgr-alv-f{font-size:10px;padding:2px 9px;border:1px solid #ddd2c0;border-radius:10px;background:#fffdf8;color:#6f6153;cursor:pointer}",
+      ".twmgr-alv-f:hover{background:#f6ecdd}",
+      ".twmgr-alv-tag{color:#fff;font-size:9px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:9px;white-space:nowrap}",
+      ".twmgr-alv-ir{color:#a2643a;text-decoration:none;font-size:13px;padding:0 3px}",
+      ".twmgr-alv-ir:hover{color:#8b5426}",
       ".twmgr-ap-cb{vertical-align:-1px;margin-right:3px}",
       ".twmgr-ap-acoes{display:flex;align-items:center;gap:4px;padding:6px 10px;background:#f4eee2;border-top:1px solid #e8dfcc}",
       ".twmgr-ap-u{display:inline-flex;padding:2px;border:1px solid transparent;border-radius:4px;cursor:pointer;opacity:.32;filter:grayscale(1)}",
@@ -10884,7 +11327,7 @@
   const FARM_SUB_KEY = 'twMgr_farmSub';
   // Sub-abas por módulo. Era só do Saque; virou genérico quando o Noblar também passou a ter —
   // duplicar a função daria duas cópias pra manter em sincronia.
-  const SUBS = { farm: ['farm', 'wall', 'map'], noble: ['alvos', 'cunhar', 'pos'],
+  const SUBS = { farm: ['farm', 'wall', 'map', 'fichas'], noble: ['alvos', 'cunhar', 'pos'],
                  recruit: ['rcmodelos', 'rcstatus'], build: ['bldmodelos', 'bldstatus'],
                  market: ['cunhagem', 'equilibrio', 'solidario'] };
   function showSub(mod, name) {
@@ -10986,7 +11429,7 @@
       '</div>' +
       '<div id="twmgr-body">' +
       '<div id="twmgr-tab-scav" style="display:none">' +
-        hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas nas opções livres e reenvia no retorno.') +
+        hint('Coleta em <b>todas as aldeias</b>: reparte as tropas marcadas para que as coletas <b>terminem juntas</b> (carga proporcional a 1/loot factor) e reenvia no retorno. Só despacha quando <b>todas</b> as coletas da aldeia estão em casa — mandar numa que vagou sozinha faria ela levar a tropa inteira.') +
         cardsDiv('scav') +
         sec('Tropas na coleta', '<div class="twmgr-units">' + SCAV_UNITS.map(([u, n]) => '<label><input id="twmgr-su-' + u + '" type="checkbox"> ' + unitIcon(u, n) + ' ' + n + '</label>').join('') + '</div>') +
         sec('Desbloqueio automático',
@@ -11009,6 +11452,7 @@
           subBtn('farm', '🐎', 'Saque') +
           subBtn('wall', '🐏', 'Muralha') +
           subBtn('map', '🗺️', 'Mapa') +
+          subBtn('fichas', '🎯', 'Notas') +
         '</div>' +
         '<div id="twmgr-sub-farm">' +
         '<div id="twmgr-farm-prog" class="twmgr-hint">Saque parado.</div>' +
@@ -11103,6 +11547,19 @@
           '<div class="twmgr-actions"><button id="twmgr-lk-start" class="twmgr-btn twmgr-go">▶ Iniciar</button><button id="twmgr-lk-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
           '<div id="twmgr-lk-status" class="twmgr-cstatus"></div>' +
           modLog('lock')) +
+        '</div>' +
+        '<div id="twmgr-sub-fichas" style="display:none">' +
+        hint('🎯 Aldeia <b>ofensiva recruta bárbaro</b>; <b>defensiva recruta lanceiro, espadachim e cavalaria pesada</b>. Ninguém mistura — então basta VER a unidade, a quantidade não importa. Quando um ataque seu mata 1/3 dos defensores o jogo <b>revela a defesa</b>, e até um fake que morreu entrega o tipo da aldeia. As fichas <b>se acumulam</b>: relatório o jogo apaga, ficha não.') +
+        sec('Notas de alvo',
+          '<div class="twmgr-row">' +
+            '<button id="twmgr-fichas-ler" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">↻ Ler relatórios</button>' +
+            '<span class="twmgr-lbl" style="margin-left:8px">páginas</span>' +
+            '<input id="twmgr-fichas-pags" class="twmgr-inp" type="number" min="1" max="10" value="2" style="width:52px">' +
+            '<span id="twmgr-fichas-status" style="flex:1;font-size:10px;color:#8a7d6d;margin-left:8px"></span>' +
+          '</div>' +
+          '<div class="twmgr-hint" style="margin:4px 0 0">Cada página são ~100 relatórios, e cada um custa uma requisição. O filtro da tela de Relatórios é mexido durante a leitura e devolvido no fim.</div>' +
+          '<div id="twmgr-fichas-corpo" style="margin-top:8px"></div>' +
+          modLog('fichas')) +
         '</div>' +
       '</div>' +
       '<div id="twmgr-tab-recruit" style="display:none">' +
@@ -11750,6 +12207,7 @@
     fillNobleGrupos();
     bindNoblePosHandlers();
     bindApoiosHandlers();
+    bindAlvosHandlers();
     renderNoblePos();
 
 
@@ -17945,6 +18403,9 @@
         const avail = {}; let totalUnits = 0;
         selUnits.forEach((u) => { const n = v.avail[u] || 0; if (n > 0) { avail[u] = n; totalUnits += n; } });
         if (!freeOpts.length || totalUnits === 0) continue;
+        // Mesma correção do motor principal: as coletas só terminam juntas se saírem juntas.
+        // Repartir entre as opções LIVRES fazia a que vagava sozinha levar a tropa inteira.
+        if (v.options.some((o) => o.state === 'running')) continue;
         const weights = freeOpts.map((o) => 1 / (LOOT_FACTOR[o.id] || 0.1));
         const alloc = freeOpts.map(() => ({}));
         Object.entries(avail).forEach(([u, n]) => { distribute(n, weights).forEach((c, i) => { if (c > 0) alloc[i][u] = c; }); });

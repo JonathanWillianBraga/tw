@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.158.0
+// @version      11.159.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.158.0';
+  const VERSION = '11.159.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -6492,15 +6492,13 @@
     const a = nbTrailLer(); return coord ? a.filter((l) => l.coord === coord) : a;
   }; } catch (e) {}
 
-  // ===== Gasto por alvo (o teto do modelo) =====
-  // O `nobres` do modelo é TETO DE GASTO, não de simultâneos — é o que o comentário do
-  // noblePrecisaDe sempre disse ("não quero mais que 2 nobres nessa"). Mas a conta era
-  // `teto - nobleEmVoo()`, e `nobleEmVoo` só enxerga o que está NO AR neste instante: assim que
-  // o comando pousa ele some da ficha do alvo, o contador zera e o orçamento se renova sozinho.
+  // ===== Quanto este alvo já consumiu =====
+  // INFORMAÇÃO, não trava. Quem decide se manda nobre é a simulação da linha do tempo
+  // (nobleCai/nobleQuantosFaltam); este número serve pra tela, pro log e pra denunciar alvo
+  // problemático — passou de 5 sem cair, alguma premissa está errada.
   //
-  // Foi assim que o 432|588 (teto 4) levou SEIS nobres: 3 pousaram, a lista esvaziou, o ciclo
-  // seguinte achou que cabiam 4 de novo e mandou mais 3 — os dois últimos chegando depois da
-  // conquista, ou seja, auto-ataque.
+  // Chegou a ser usado como teto de gasto, e era errado: alvo que regenerou a lealdade toda de
+  // volta merece ser atacado de novo, e travar por histórico fazia a aldeia empacar pra sempre.
   //
   // A conta tem DUAS metades, as duas lidas da mesma página da ficha do alvo (que o ciclo já
   // baixa — custo zero):
@@ -6516,8 +6514,9 @@
   // sai de lá e vira relatório. Por isso somar as duas não conta ninguém duas vezes, e a conta
   // se auto-corrige — não depende de bookkeeping nosso acumulado dar certo.
   //
-  // Medido no 432|588 (que estourou): 4 relatórios com nobre + 3 comandos no ar = 7 nobres num
-  // alvo de teto 4. A versão anterior desta função só via os 3 do ar.
+  // Medido no 432|588 (o caso que originou tudo isto): 4 relatórios com nobre + 3 comandos no ar
+  // = 7 nobres no mesmo alvo. Era esse o "absurdo" — e o que evita repetir não é limite nenhum,
+  // é a simulação enxergar os 3 que já estavam voando.
   function nobleGasto(alvo) {
     if (!alvo) return 0;
     return Object.keys(alvo.relsNobre || {}).length + nobleEmVoo(alvo.coord);
@@ -6701,7 +6700,11 @@
   // pela mesma projeção de sempre (ordena as chegadas, desconta 25 de cada, regenera entre elas),
   // então o desconto do que já está voando continua valendo. Alvo virgem com 1 nobre no ar pede
   // 3, não 4.
-  function nobleLealdadeEm(coord, ateMs) {
+  //
+  // `extras` são chegadas HIPOTÉTICAS — os comandos que o plano está cogitando mandar. É o que
+  // permite perguntar "e se eu mandasse mais um daqui?" sem mandar: a resposta sai da mesma
+  // simulação que já vale pros comandos reais, em vez de uma divisão por 25 feita à parte.
+  function nobleLealdadeEm(coord, ateMs, extras) {
     const r = (config.noble.relatorios || {})[coord];
     const lido = !!(r && r.lealdade != null && nobleLealdadeAt(r));
     const t0 = lido ? nobleLealdadeAt(r) : Date.now();
@@ -6710,6 +6713,7 @@
     const fim = ateMs || Date.now();
     const chegadas = nobleVoos(coord)
       .map((e) => ({ at: e.chega || e.at, n: e.n || 1 }))
+      .concat((extras || []).map((ms) => ({ at: ms, n: 1 })))
       .filter((e) => e.at <= fim)
       .sort((a, b) => a.at - b.at);
     // TRAVA DE VALIDADE. Se algum nobre JÁ POUSOU depois da medição e não apareceu relatório
@@ -6751,33 +6755,59 @@
     return nobleLealdadeEm(coord, chegadas.length ? Math.max.apply(null, chegadas) : Date.now());
   }
 
-  // Quantos comandos ainda faltam. Sai SEMPRE da lealdade PREVISTA -- nao de "atual menos o que
-  // voa", porque subtrair os voos no fim ignorava a regeneracao ENTRE as chegadas e mandava de
-  // menos. Como `nobleLealdadeEm` agora assume 100 quando nao ha relatorio, o caminho e um so:
-  // alvo virgem da ceil(100/25) = 4 pela mesma formula, em vez de sair de um numero avulso.
+  // ===== A pergunta que importa: CAI? =====
+  // Toda a decisão do módulo se resume a isto — com o que já está no ar (mais o que o plano
+  // cogita mandar), a lealdade chega a zero em ALGUM ponto da linha do tempo?
   //
-  // O `nobres` do modelo virou TETO, nao meta. Serve pra voce limitar o gasto num alvo especifico
-  // ("nao quero mais que 2 nobres nessa"); nunca faz mandar MAIS do que a lealdade pede.
+  // Isto substitui o `ceil(lealdade / 25)` que existia antes. A divisão tratava os comandos como
+  // se caíssem todos juntos e ignorava tudo que pousa depois do primeiro; a simulação percorre as
+  // chegadas em ordem, regenera entre elas e responde a pergunta certa. É por isso que o
+  // 432|588 pedia "mais 1" com três nobres já a caminho: a divisão não os enxergava.
+  function nobleCai(coord, extras) {
+    const todas = nobleVoos(coord).map((e) => e.chega || e.at).concat(extras || []);
+    if (!todas.length) return false;                 // nada marcado: não cai sozinho
+    const v = nobleLealdadeEm(coord, Math.max.apply(null, todas), extras);
+    return v != null && v <= 0;
+  }
+  // Quantos comandos A MAIS seriam precisos, contando o que já está no ar. Acrescenta uma chegada
+  // por vez e pergunta se caiu — nunca chuta um número fechado.
+  //
+  // Todas as hipóteses entram na MESMA chegada (a viagem medida da origem mais perto), então não
+  // há regeneração entre elas e o laço sempre termina; o teto de 20 é só cinto de segurança pra
+  // config absurda (regeneração maior que a queda por ataque).
+  function nobleQuantosFaltam(coord, durSec) {
+    const chegaMs = Date.now() + ((durSec != null ? durSec : 0) * 1000);
+    const extras = [];
+    while (extras.length < 20 && !nobleCai(coord, extras)) extras.push(chegaMs);
+    return extras.length;
+  }
+
+  // Quantos comandos mandar AGORA. Duas perguntas, nesta ordem:
+  //
+  //   1. CAI com o que já está no ar?  -> não manda nada. Mandar mais aqui é nobre jogado fora e,
+  //      pior, comando chegando depois da conquista: auto-ataque na própria aldeia.
+  //   2. Se não cai, quantos faltam?   -> simulação, não divisão (ver nobleQuantosFaltam).
+  //
+  // O `nobres` do modelo NÃO é meta nem teto de gasto na vida do alvo: é LIMITE DE RITMO — quantos
+  // comandos podem estar comprometidos ao mesmo tempo (no ar + os deste plano). É a rede de
+  // segurança contra o absurdo que originou tudo isto (7-8 nobres no ar no mesmo alvo), e não trava
+  // a conquista: se a linha do tempo pedir mais do que o limite, o excedente sai nos ciclos
+  // seguintes, à medida que os primeiros pousam e a lealdade medida confirma o estrago.
+  //
+  // O histórico de gasto (nobleGasto) NÃO entra nesta conta — ele é informação, não trava. Alvo que
+  // regenerou tudo de volta merece ser atacado de novo; quem decide isso é a simulação.
   function noblePrecisaDe(alvo, tpl, durSec) {
     const dur = (durSec != null) ? durSec : alvo.ultDur;
     const prev = nobleLealdadePrevista(alvo.coord, dur);
     const voando = nobleEmVoo(alvo.coord);
-    const gasto = nobleGasto(alvo);
-    const calc = (prev == null) ? 0 : Math.max(0, Math.ceil(prev / (config.noble.lealdadePorAtk || 25)));
-    const teto = Math.max(1, tpl.nobres || NOBLE_POR_CONQUISTA);
-    // ORÇAMENTO = teto menos o que JÁ FOI GASTO neste alvo. Era `teto - voando`, e voando zera
-    // quando o comando pousa — o orçamento se renovava sozinho. Ver nobleContabilizaGasto.
-    const orcamento = Math.max(0, teto - gasto);
-    // COBERTURA. `prev` para na chegada do MEU próximo nobre, então ela é cega pra comando que
-    // pousa DEPOIS dele: com 3 nobres chegando 19:04, 20:11 e 21:29 e o meu previsto pra 18:59,
-    // nenhum dos três entrava na conta e o alvo ainda pedia "mais 1". Aqui a linha do tempo vai
-    // até a última chegada marcada — se a lealdade zera em QUALQUER ponto dela, o que já está no
-    // ar resolve e mandar mais é nobre jogado fora (e auto-ataque depois da conquista).
-    const prevTudo = nobleLealdadeAteUltimoVoo(alvo.coord, dur);
-    const coberto = (prevTudo != null && prevTudo <= 0);
-    const base = coberto ? 0 : Math.min(calc, orcamento);
+    const coberto = nobleCai(alvo.coord, []);
+    const calc = coberto ? 0 : nobleQuantosFaltam(alvo.coord, dur);
+    const limite = Math.max(1, tpl.nobres || NOBLE_POR_CONQUISTA);
+    const folga = Math.max(0, limite - voando);
+    const base = Math.min(calc, folga);
     return { precisa: base, lealdade: nobleLealdadeAgora(alvo.coord), prevista: prev,
-             prevTudo: prevTudo, coberto: coberto, teto: teto, gasto: gasto, orcamento: orcamento,
+             prevTudo: nobleLealdadeAteUltimoVoo(alvo.coord, dur),
+             coberto: coberto, limite: limite, folga: folga, gasto: nobleGasto(alvo),
              voando: voando, bruto: calc };
   }
 
@@ -7134,29 +7164,28 @@
       medida: Math.round(need.lealdade), lida: nobleLealdadeLida(alvo.coord),
       prevista: need.prevista == null ? null : Math.round(need.prevista),
       prevTudo: need.prevTudo == null ? null : Math.round(need.prevTudo),
-      voando: need.voando, gasto: need.gasto, teto: need.teto, orcamento: need.orcamento,
+      voando: need.voando, gasto: need.gasto, limite: need.limite, folga: need.folga,
       pousados: Object.keys(alvo.relsNobre || {}).length,
       pedeLealdade: need.bruto, precisa: precisa, coberto: need.coberto,
       ultDur: alvo.ultDur, tpl: op.id,
     });
     if (precisa <= 0) {
-      // Três motivos BEM diferentes de não mandar, e antes todos viravam a mesma frase. O do meio
-      // é o que estava faltando: o teto de gasto do modelo, que agora conta pousado também.
-      const motivo = need.orcamento <= 0
-        ? ('teto do modelo: já gastei ' + need.gasto + ' de ' + need.teto + ' nobre(s) neste alvo')
-        : need.coberto
-          ? ('coberto: ' + nobleTxtVoo(alvo.coord) + ' — lealdade prevista '
-             + Math.round(need.prevTudo) + ' na última chegada')
+      // Dois motivos BEM diferentes de não mandar, e antes viravam a mesma frase.
+      const motivo = need.coberto
+        ? ('já cai com o que está no ar: ' + nobleTxtVoo(alvo.coord))
+        : need.folga <= 0
+          ? ('segurando o ritmo: ' + need.voando + ' no ar, limite ' + need.limite
+             + ' — faltam ' + need.bruto + ', sai quando os primeiros pousarem')
           : 'lealdade zerada';
-      if (need.orcamento <= 0) {
-        pushLog('Noblar: ' + alvo.coord + ' — TETO do modelo "' + (tpl.name || op.id) + '" atingido ('
-          + need.gasto + '/' + need.teto + ' nobres). Não sai mais nada daqui; aumente o teto do'
-          + ' modelo se quiser insistir.', 'err', 'noble');
+      if (!need.coberto && need.folga <= 0) {
+        pushLog('Noblar: ' + alvo.coord + ' — segurando: já tem ' + need.voando + ' nobre(s) no ar'
+          + ' (limite de ritmo do modelo "' + (tpl.name || op.id) + '" é ' + need.limite + ').'
+          + ' A linha do tempo ainda pede ' + need.bruto + '; o resto sai conforme estes pousarem.', '', 'noble');
       }
-      return { pronto: false, envios: [], falta: 0, dentroDoLimite: noAlcance, tpl: tpl,
-               tplId: op.id, tplNome: tpl.name, coberto: true,
+      return { pronto: false, envios: [], falta: need.bruto, dentroDoLimite: noAlcance, tpl: tpl,
+               tplId: op.id, tplNome: tpl.name, coberto: need.coberto,
                lealdade: need.lealdade, prevista: need.prevista, prevTudo: need.prevTudo,
-               voando: need.voando, gasto: need.gasto, teto: need.teto, orcamento: need.orcamento,
+               voando: need.voando, gasto: need.gasto, limite: need.limite, folga: need.folga,
                motivo: motivo };
     }
 
@@ -7177,9 +7206,14 @@
     }
 
     const envios = [];
+    // As chegadas que ESTE plano acrescentaria. Cada comando novo entra aqui e a linha do tempo é
+    // refeita — é o que garante que o plano para no comando que derruba a lealdade, em vez de
+    // encher até um número decidido antes de conhecer as viagens reais.
+    const planejadas = [];
     let faltam = precisa;
     for (const o of candidatos) {
       if (faltam <= 0) break;
+      if (nobleCai(alvo.coord, planejadas)) break;    // o que já está no plano resolve
 
       // Quantos COMANDOS esta aldeia arma. Se nem um sai com escolta completa, ainda mandamos o
       // nobre com o que houver -- a regra "envio parcial vale" vale pra escolta tambem.
@@ -7219,24 +7253,35 @@
         pushLog('Noblar: ' + o.nome + ' → ' + alvo.coord + ' — escolta incompleta (' + curta.join(', ') + ').', '', 'noble');
       }
       // UM ENVIO = UM COMANDO. E o que garante 1 nobre por ataque.
+      //
+      // Um de cada vez, reperguntando à linha do tempo: a viagem REAL desta origem só é conhecida
+      // aqui (o fakePrepare acabou de medir), então é aqui que dá pra saber se este comando já
+      // fecha a conta. Parar no comando certo é a diferença entre 4 nobres e 7 — o de sobra não
+      // só é desperdício, ele chega DEPOIS da conquista e vira ataque na própria aldeia.
+      const chegaMs = Date.now() + dur * 1000;
       for (let k = 0; k < cmds; k++) {
+        if (nobleCai(alvo.coord, planejadas)) break;
+        planejadas.push(chegaMs);
         envios.push({ vid: o.vid, nome: o.nome, coord: o.coord, qtd: 1,
                       unidades: unidades, durSec: dur, d: o.d });
+        faltam--;
       }
-      faltam -= cmds;
     }
 
+    // Ainda falta alguém? A conta é da SIMULAÇÃO, não de `precisa - enviados`: com as viagens
+    // reais na mão, o número pode ter mudado (origem longe devolve mais regeneração).
+    const restam = nobleCai(alvo.coord, planejadas) ? 0 : Math.max(0, faltam);
     // Parcial VALE: com 1 nobre no alcance, manda 1. O alvo so fica sem disparo quando nao ha
     // nenhum. `falta` continua sendo informacao pro usuario, nao mais uma trava.
-    const levando = precisa - faltam;
+    const levando = envios.length;
     return {
       pronto: envios.length > 0,
-      envios: envios, falta: Math.max(0, faltam), levando: levando, precisa: precisa,
+      envios: envios, falta: restam, levando: levando, precisa: precisa,
       lealdade: need.lealdade, prevista: need.prevista, prevTudo: need.prevTudo,
-      voando: need.voando, gasto: need.gasto, teto: need.teto, orcamento: need.orcamento,
+      voando: need.voando, gasto: need.gasto, limite: need.limite, folga: need.folga,
       dentroDoLimite: noAlcance, tpl: tpl, tplId: op.id, tplNome: tpl.name,
-      motivo: faltam > 0
-        ? ('parcial: ' + levando + ' de ' + precisa + ' nobre(s)')
+      motivo: restam > 0
+        ? ('parcial: ' + levando + ' agora, ainda faltam ' + restam)
         : null,
     };
   }
@@ -7654,7 +7699,7 @@
                    envios: r.envios, falta: r.falta, levando: r.levando, precisa: r.precisa,
                    tplId: r.tplId, tplNome: r.tplNome, propria: r.propria, coberto: r.coberto,
                    lealdade: r.lealdade, prevista: r.prevista, prevTudo: r.prevTudo,
-                   gasto: r.gasto, teto: r.teto, orcamento: r.orcamento,
+                   gasto: r.gasto, limite: r.limite, folga: r.folga,
                    voando: r.voando, motivo: r.motivo });
       const item = plano[plano.length - 1];
       if (r.pronto) prontos++;
@@ -7799,12 +7844,12 @@
         nbTrail(item.coord, 'envio', {
           origem: e.nome, origemCoord: e.coord, durSec: e.durSec,
           chegaEm: new Date(Date.now() + (e.durSec || 0) * 1000).toLocaleString('pt-BR'),
-          gastoAntes: item.gasto, teto: item.teto, precisa: item.precisa, marca: (marca || '').trim(),
+          gastoAntes: item.gasto, limite: item.limite, precisa: item.precisa, marca: (marca || '').trim(),
         });
         pushLog('Noblar' + marca + ': ' + e.nome + ' → ' + item.coord + ' — 1 nobre enviado, chega em '
           + fmtDur(e.durSec) + ' (' + new Date(Date.now() + (e.durSec || 0) * 1000).toLocaleTimeString('pt-BR')
-          + '). Gasto no alvo antes deste: ' + (item.gasto != null ? item.gasto : '?')
-          + '/' + (item.teto != null ? item.teto : '?') + '.', 'ok', 'noble');
+          + '). No ar neste alvo antes deste: ' + (item.voando != null ? item.voando : '?')
+          + ' · já gastos aqui: ' + (item.gasto != null ? item.gasto : '?') + '.', 'ok', 'noble');
       } catch (err) {
         pushLog('Noblar' + marca + ': ' + e.nome + ' → ' + item.coord + ' FALHOU: ' + (err.message || err), 'err', 'noble');
         nbTrail(item.coord, 'envio-falhou', { origem: e.nome, erro: String(err.message || err) });
@@ -7916,7 +7961,7 @@
       '<th style="width:34px" title="Ordem na fila — uma aldeia é noblada por vez">Fila</th>' +
       '<th>Alvo</th><th>Modelo</th>' +
       '<th style="width:36px" title="Lealdade de hoje: a do último relatório, projetada pra agora com a regeneração">Leald.</th>' +
-      '<th style="width:30px" title="Em cima: comandos meus com nobre a caminho. Embaixo: nobres já gastos neste alvo / teto do modelo">Atks</th>' +
+      '<th style="width:30px" title="Em cima: comandos meus com nobre a caminho. Embaixo: total de nobres que este alvo já consumiu (pousados + no ar)">Atks</th>' +
       '<th style="width:36px" title="Lealdade na hora em que o próximo nobre chegaria — já descontando os ataques no ar e somando a regeneração até lá">Prev.</th>' +
       '<th>Estado</th><th style="width:20px"></th></tr></thead><tbody>' +
       alvos.map((a, i) => {
@@ -7963,18 +8008,19 @@
         const detVoo = nobleEmVooDetalhe(a.coord);
         // Número clicável: abre a caixa com QUEM está mandando / vai mandar. O tooltip já
         // separa voando de pousado, porque o total sozinho mentia ("3" com 1 nobre indo).
-        // GASTO/TETO embaixo do número de comandos no ar. Sem isso a trava do teto é invisível: o
-        // alvo simplesmente para de receber nobre e não há onde ver o porquê. Fica vermelho
-        // quando o orçamento acabou — é o estado em que nada mais sai daqui.
+        // Quanto este alvo JÁ CONSUMIU de nobre, embaixo do número de comandos no ar. Não é uma
+        // trava (quem decide é a simulação da linha do tempo) — é o número que denuncia alvo
+        // problemático: se ele passa de 4-5 e a aldeia não caiu, ou a lealdade está regenerando
+        // mais rápido do que os nobres chegam, ou os comandos estão morrendo antes de bater.
         const gastoA = nobleGasto(a);
-        const tplA = (config.noble.templates || {})[a.tpl || p.tplId] || null;
-        const tetoA = Math.max(1, (tplA && tplA.nobres) || NOBLE_POR_CONQUISTA);
         const pousadosA = Object.keys(a.relsNobre || {}).length;
-        const gastoCel = '<div class="sub" style="color:' + (gastoA >= tetoA ? '#c0483a' : '#8a7340') + '"'
-          + ' title="' + esc('Nobres gastos neste alvo / teto do modelo. São ' + pousadosA
-            + ' que já pousaram (contados pelos relatórios de ataque com nobre da ficha do alvo, então'
-            + ' enxerga envio manual e o que é anterior ao módulo) mais ' + voando + ' ainda no ar.'
-            + ' No teto, o alvo não recebe mais nada.') + '">' + gastoA + '/' + tetoA + '</div>';
+        const caro = gastoA > NOBLE_POR_CONQUISTA + 1;
+        const gastoCel = '<div class="sub" style="color:' + (caro ? '#c0483a' : '#8a7340') + '"'
+          + ' title="' + esc('Nobres já consumidos neste alvo: ' + pousadosA + ' que pousaram'
+            + ' (contados pelos relatórios de ataque com nobre da ficha do alvo, então enxerga envio'
+            + ' manual e o que é anterior ao módulo) mais ' + voando + ' ainda no ar.'
+            + (caro ? ' ACIMA DO ESPERADO — confira se a aldeia está regenerando mais rápido do que'
+                    + ' os nobres chegam.' : '')) + '">' + gastoA + ' nobre(s)</div>';
         const atksCel = (voando
           ? '<a class="twmgr-nb-quem" data-coord="' + esc(a.coord) + '" style="cursor:pointer;color:#3f8f52;font-weight:700" ' +
             'title="' + esc(nobleTxtVoo(a.coord)) + ' — clique pra ver de quais aldeias">' + voando +

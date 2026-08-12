@@ -37,6 +37,7 @@
       passoMs: 50,            // passo dos botões de ajuste fino na fila
       modelos: null,          // modelos de tropa do usuário (null = ainda não semeado)
       fechados: {},           // seções recolhidas do painel (ele fica alto demais com tudo aberto)
+      saidaJa: false,        // 'sair o quanto antes': ignora o campo de chegada e sai agora
       snipeFolgaMs: 150,      // quanto DEPOIS do ataque o apoio pousa (margem de segurança)
       blz: defBlz(),          // blindagem da tribo (pedidos do tópico do fórum)
     });
@@ -103,6 +104,7 @@
         if (c.cmd.suporteOkAt == null) c.cmd.suporteOkAt = 0;
         if (!c.cmd.calib) c.cmd.calib = { biasMs: 0, n: 0 };
         if (!c.cmd.mundo) c.cmd.mundo = { speed: null, unitSpeed: null, unidades: null, at: 0, confiavel: false };
+        if (c.cmd.saidaJa == null) c.cmd.saidaJa = false;
         if (!c.cmd.blz || typeof c.cmd.blz !== 'object') c.cmd.blz = defBlz();
         if (typeof c.cmd.blz.url !== 'string') c.cmd.blz.url = '';
         if (!Array.isArray(c.cmd.blz.pedidos)) c.cmd.blz.pedidos = [];
@@ -1243,7 +1245,18 @@
         + 'vale mover a chegada pra fora da janela.', 'err', 'cmd');
     }
 
+    // ---- Prévia ----
+    // Quando `_ccPrevia` é um array, TODO comando armado cai nele em vez de entrar na fila. É o
+    // único ponto por onde os três caminhos de armar passam (ataque/apoio, fake e operação),
+    // então a prévia é literalmente o código de armar rodando a seco: não tem como ela mostrar
+    // uma coisa e o botão fazer outra, que é o defeito de toda prévia escrita à parte.
+    let _ccPrevia = null;
     function cmdAdicionar(tipo, x, y, amounts, arriveAt, origem, trem) {
+      if (_ccPrevia) {
+        _ccPrevia.push({ tipo: tipo, x: x, y: y, amounts: amounts, arriveAt: arriveAt,
+                         origem: origem || CUR_VID, trem: (trem && trem.length) ? trem : null });
+        return null;
+      }
       const c = { id: genId(), tipo: tipo, origin: origem || CUR_VID, x: String(x), y: String(y),
                   amounts: amounts, arriveAt: arriveAt, durMs: null, sendAt: 0, fireAt: 0,
                   prep: null, state: 'novo', erro: null, sentAt: null, desvioMs: null,
@@ -2132,14 +2145,35 @@
       if (!a) return dizer('Crie um alvo primeiro.');
       const alvoP = ccCoordParse(a.coord);
       if (!alvoP) return dizer('Alvo inválido. Use 478|586.');
-      const base = ccOpChegadaBase(a);
-      if (!base) return dizer('Defina o horário de chegada da 1ª onda.');
       if (!(a.ondas || []).length) return dizer('Nenhuma onda neste alvo.');
+      let base = ccOpChegadaBase(a);
+      if (!ccModoJa() && !base) return dizer('Defina o horário de chegada da 1ª onda — ou marque "sair o quanto antes".');
       const apoio = a.ondas.some((o) => o.tipo === 'support');
       if (apoio && !config.cmd.suporteOkAt) {
         return dizer('Tem onda de apoio, mas o parâmetro de apoio ainda não foi confirmado neste mundo.');
       }
       const offsets = ccOpCalcularOffsets(a);
+      // No modo "quanto antes" a base não vem do campo: é a mais cedo em que NENHUMA onda perde
+      // a saída. Cada onda tem o seu offset e a sua viagem, então a restrição é
+      // base >= saidaJa + viagem_i - offset_i; a base é o maior desses. Preserva a defasagem
+      // entre as ondas, que é o ponto da Operação — só antecipa o conjunto todo.
+      if (ccModoJa()) {
+        const saida = ccSaidaJaMs();
+        let minBase = 0;
+        a.ondas.forEach((o) => {
+          const v = CCVILAS.find((z) => String(z.vid) === String(o.vid));
+          if (!v || v.x == null) return;
+          const am = {};
+          Object.keys(o.amounts || {}).forEach((u) => { if (o.amounts[u] > 0) am[u] = o.amounts[u]; });
+          if (!Object.keys(am).length) return;
+          const t = ccTempoViagemMs(v.x, v.y, alvoP.x, alvoP.y, am);
+          if (t == null) return;
+          const precisa = saida + t - (offsets[o.id] || 0);
+          if (precisa > minBase) minBase = precisa;
+        });
+        if (!minBase) return dizer('Não consegui calcular a viagem de nenhuma onda.');
+        base = minBase;
+      }
       let armados = 0, tremes = 0; const pulados = [];
       // Prepara as ondas válidas mantendo a ordem da lista (é a ordem de chegada).
       const prontas = [];
@@ -2177,8 +2211,7 @@
       } else {
         prontas.forEach((p) => { cmdAdicionar(p.tipo, alvoP.x, alvoP.y, p.amounts, p.chega, p.v.vid); armados++; });
       }
-      ccHistAdd(alvoP.coord); ccHistRender();
-      save();
+      if (!_ccPrevia) { ccHistAdd(alvoP.coord); ccHistRender(); save(); }
       if (!armados) return dizer('Nada armado. ' + (pulados.length ? pulados.join(', ') : ''));
       dizer(armados + ' onda(s) armada(s) → ' + alvoP.coord + ', a 1ª chegando ' + srvClockMs(base) +
             (tremes ? ' · ' + tremes + ' trem(ns) num POST só' : '') +
@@ -2200,8 +2233,10 @@
       return Object.keys(amounts || {}).reduce((s, u) => s + (parseInt(amounts[u], 10) || 0) * (FAKE_POP[u] || 1), 0);
     }
     async function ccArmarFakes(dizer, arriveAt) {
-      if (!arriveAt) return dizer('Defina o horário de chegada.');
-      if (arriveAt <= srvNowP()) return dizer('Esse horário já passou.');
+      if (!ccModoJa()) {
+        if (!arriveAt) return dizer('Defina o horário de chegada — ou marque "sair o quanto antes".');
+        if (arriveAt <= srvNowP()) return dizer('Esse horário já passou.');
+      }
       const comp = ccComposicao();
       if (!Object.keys(comp.amounts).length && !Object.keys(comp.max).length) return dizer('Escolha as tropas do fake.');
       const P = ccParesFake();
@@ -2237,18 +2272,30 @@
           }
         }
         const t = ccTempoViagemMs(v.x, v.y, p.t.x, p.t.y, amounts);
-        if (t != null && (arriveAt - t) <= srvNowP()) { pulados.push(nome + ' (longe)'); return; }
-        cmdAdicionar('fake', p.t.x, p.t.y, amounts, arriveAt, v.vid);
+        const chega = ccModoJa() ? (ccSaidaJaMs() + (t || 0)) : arriveAt;
+        if (!ccModoJa() && t != null && (arriveAt - t) <= srvNowP()) { pulados.push(nome + ' (longe)'); return; }
+        cmdAdicionar('fake', p.t.x, p.t.y, amounts, chega, v.vid);
         armados++;
       });
       if (!armados) return dizer('Nenhum fake armado.' + (pulados.length ? ' Pulados: ' + pulados.length : ''));
-      dizer(armados + ' fake(s) armado(s) em ' + P.alvos.length + ' alvo(s), chegando ' + srvClockMs(arriveAt) +
+      dizer(armados + ' fake(s) armado(s) em ' + P.alvos.length + ' alvo(s), ' +
+            (ccModoJa() ? 'saindo agora' : 'chegando ' + srvClockMs(arriveAt)) +
             (completados ? ' · ' + completados + ' completado(s) com explorador pro piso de ' + FAKE_LIMIT_PCT + '%' : '') +
             (pulados.length ? ' · ' + pulados.length + ' pulado(s)' : ''), '#2e7d3a');
     }
 
     // Arma um comando POR ORIGEM marcada, todos com a MESMA chegada — é isso que faz
     // apoio/ataque de várias aldeias pousar junto.
+    // "Sair o quanto antes": em vez de o usuário escolher a CHEGADA, o horário sai da conta
+    // inversa — saída daqui a pouco, chegada = saída + viagem. O "daqui a pouco" não pode ser
+    // zero: o motor prepara o comando `prepLeadSec` antes de disparar, então saída imediata
+    // nasceria com o horário já vencido e o comando morreria em "horário já passou". A margem
+    // extra cobre o relógio do servidor oscilando entre armar e preparar.
+    const CC_JA_MARGEM_MS = 15000;
+    function ccSaidaJaMs() {
+      return srvNowP() + (config.cmd.prepLeadSec || 60) * 1000 + CC_JA_MARGEM_MS;
+    }
+    function ccModoJa() { return !!config.cmd.saidaJa; }
     function ccArmar() {
       const msg = document.getElementById('cc-msg');
       const dizer = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c0483a'; } };
@@ -2263,10 +2310,13 @@
 
       const alvo = ccAlvo();
       if (!alvo) return dizer('Alvo inválido. Use 478|586.');
+      const ja = ccModoJa();
       const arriveAt = arriveAt0;
-      if (!arriveAt) return dizer('Defina o horário de chegada.');
-      if (arriveAt <= srvNowP()) return dizer('Esse horário já passou.');
-      ccHistAdd(alvo.coord); ccHistRender();
+      if (!ja) {
+        if (!arriveAt) return dizer('Defina o horário de chegada — ou marque "sair o quanto antes".');
+        if (arriveAt <= srvNowP()) return dizer('Esse horário já passou.');
+      }
+      if (!_ccPrevia) { ccHistAdd(alvo.coord); ccHistRender(); }
       if (tipo === 'support' && !config.cmd.suporteOkAt) {
         return dizer('Rode o teste de apoio antes — o parâmetro ainda não foi confirmado neste mundo.');
       }
@@ -2291,17 +2341,76 @@
         if (!ccTemTropa(v, compOrigem)) semTropaAgora++;
         // Tempo pela composição REAL desta aldeia — não pela global.
         const t = (v.x != null) ? ccTempoViagemMs(v.x, v.y, alvo.x, alvo.y, amounts) : null;
-        if (t != null && (arriveAt - t) <= srvNowP()) { pulados.push(nome + ' (longe demais)'); return; }
-        cmdAdicionar(tipo, alvo.x, alvo.y, amounts, arriveAt, v.vid);
+        // No modo "quanto antes" cada origem tem a SUA chegada: todas saem juntas, e quem está
+        // mais longe chega depois. Forçar uma chegada comum seria voltar a agendar.
+        const chega = ja ? (ccSaidaJaMs() + (t || 0)) : arriveAt;
+        if (!ja && t != null && (arriveAt - t) <= srvNowP()) { pulados.push(nome + ' (longe demais)'); return; }
+        cmdAdicionar(tipo, alvo.x, alvo.y, amounts, chega, v.vid);
         armados++;
       });
       if (!armados) return dizer('Nenhum comando armado. ' + (pulados.length ? 'Pulados: ' + pulados.join(', ') : ''));
-      dizer(armados + ' comando(s) armado(s) chegando ' + srvClockMs(arriveAt) +
+      dizer(armados + ' comando(s) armado(s) ' + (ja ? 'saindo agora' : 'chegando ' + srvClockMs(arriveAt)) +
             (semTropaAgora ? ' · ' + semTropaAgora + ' sem a tropa completa agora (confere no preparo)' : '') +
             (pulados.length ? ' · pulados: ' + pulados.join(', ') : ''),
             semTropaAgora ? '#a2643a' : '#2e7d3a');
     }
 
+    // Roda o MESMO armar com a fila desligada e mostra o que teria entrado. `ccArmarFakes` é
+    // assíncrona (lê os pontos das aldeias pro piso do fake), então o desenho espera a promessa —
+    // sem isso o fake sempre mostraria a lista vazia.
+    function ccPrever() {
+      const box = document.getElementById('cc-previa'); if (!box) return;
+      box.innerHTML = '<span class="twmgr-lbl">calculando…</span>';
+      _ccPrevia = [];
+      let p;
+      // As mensagens de recusa ("marque uma origem", "longe demais"...) saem no lugar de sempre,
+      // escritas pelo próprio ccArmar — não precisa duplicar aqui.
+      try { p = ccArmar(); }
+      catch (e) {
+        _ccPrevia = null;
+        box.innerHTML = '<span style="color:#c0483a;font-size:10px">erro na prévia: ' + esc(e.message || e) + '</span>';
+        return;
+      }
+      const fim = () => { const itens = _ccPrevia || []; _ccPrevia = null; ccPreviaRender(itens); };
+      if (p && typeof p.then === 'function') p.then(fim, fim); else fim();
+    }
+    function ccPreviaRender(itens) {
+      const box = document.getElementById('cc-previa'); if (!box) return;
+      const rotU = {}; UNITS.forEach(([u, n]) => { rotU[u] = n; });
+      const nomeDe = (vid) => {
+        const v = CCVILAS.find((z) => String(z.vid) === String(vid));
+        return v ? ((v.nome ? v.nome + ' ' : '') + (v.coord || '')) : String(vid);
+      };
+      if (!itens.length) {
+        box.innerHTML = '<div style="color:#a2643a;font-size:10px">Nada seria armado — o motivo está na mensagem acima.</div>';
+        return;
+      }
+      const agora = srvNowP();
+      itens.sort((a, b) => a.arriveAt - b.arriveAt);
+      box.innerHTML = '<div style="font-size:10px;color:#6f6153;margin-bottom:3px"><b>' + itens.length
+          + '</b> comando(s) seriam armados' + (ccModoJa() ? ' — <b style="color:#8b5426">saída imediata</b>' : '') + '</div>' +
+        '<table style="width:100%;font-size:10px;border-collapse:collapse">' +
+        '<tr style="color:#8a7d6d;text-align:left"><th>origem</th><th style="width:58px">alvo</th>' +
+        '<th style="width:84px">sai</th><th style="width:84px">chega</th><th>tropas</th></tr>' +
+        itens.map((c) => {
+          const sai = c.arriveAt - (ccDurDe(c) || 0);
+          const tropas = Object.keys(c.amounts || {}).filter((u) => c.amounts[u] > 0)
+            .map((u) => fmtN(c.amounts[u]) + ' ' + (rotU[u] || u)).join(', ') || '—';
+          return '<tr style="border-top:1px solid #efe7d8">' +
+            '<td>' + esc(nomeDe(c.origem)) + (c.trem ? ' <b style="color:#8b5426" title="trem: ' + (c.trem.length + 1) + ' ondas num POST só">🚂</b>' : '') + '</td>' +
+            '<td style="color:#8a7d6d">' + esc(c.x + '|' + c.y) + '</td>' +
+            '<td style="color:' + (sai <= agora ? '#c0483a' : '#6f6153') + '">' + srvClockMs(sai) + '</td>' +
+            '<td><b>' + srvClockMs(c.arriveAt) + '</b></td>' +
+            '<td style="color:#6f6153">' + esc(tropas) + '</td></tr>';
+        }).join('') + '</table>' +
+        '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Nada foi armado — isto é só a simulação. Saída em vermelho = o horário já passou.</div>';
+    }
+    // Viagem de um item da prévia, pra mostrar a SAÍDA (o que o usuário quer conferir).
+    function ccDurDe(c) {
+      const v = CCVILAS.find((z) => String(z.vid) === String(c.origem));
+      if (!v || v.x == null) return 0;
+      return ccTempoViagemMs(v.x, v.y, +c.x, +c.y, c.amounts) || 0;
+    }
     // ---- Apoio em massa ----
     // Grade de unidades: um campo por unidade do mundo. Aceita número, "50%" ou "tudo".
     function ccMassaUnidades() {
@@ -4280,10 +4389,16 @@
             '<input id="cc-parcial" type="checkbox"> enviar mesmo com tropa insuficiente (usa o que tiver disponível)</label>' +
         '</div>' +
         '<div id="cc-armar-row" style="display:flex;gap:6px;align-items:center">' +
+          '<button id="cc-prever" class="twmgr-btn twmgr-ghost" style="padding:5px 10px" title="roda o mesmo cálculo do Armar, mas sem entrar na fila — mostra origem, tropas, saída e chegada">👁 Prever</button>' +
           '<button id="cc-armar" class="twmgr-btn twmgr-go" style="flex:1">▶ Armar comando</button>' +
           '<button id="cc-diag" class="twmgr-btn twmgr-ghost" title="copia um relatório do estado interno pra área de transferência">🐛</button>' +
         '</div>' +
+        // Vale pra Ataque, Apoio, Fake e Operação: ignora o campo de chegada e manda sair já.
+        '<label id="cc-ja-row" style="display:flex;align-items:center;gap:5px;font-size:10px;color:#6f6153;margin-top:5px;cursor:pointer" ' +
+          'title="Ignora o horário de chegada: cada origem sai agora e chega quando chegar. O motor ainda prepara o comando ' + '~' + '60s antes, então a saída real é daqui a pouco, não instantânea.">' +
+          '<input type="checkbox" id="cc-ja"> sair o quanto antes <span style="color:#8a7d6d">(ignora o horário de chegada)</span></label>' +
         '<div id="cc-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
+        '<div id="cc-previa" style="font-size:10px;margin-top:4px;max-height:220px;overflow-y:auto"></div>' +
         '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
         '<div style="margin-top:8px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
@@ -4336,6 +4451,23 @@
       // keepAwake PRECISA ser chamado sincronamente dentro do gesto, antes de qualquer await,
       // senão o AudioContext fica 'suspended' e o antichoke não vale nada.
       document.getElementById('cc-armar').addEventListener('click', () => { keepAwake(true); ccArmar(); });
+      document.getElementById('cc-prever').addEventListener('click', ccPrever);
+      {
+        const ja = document.getElementById('cc-ja');
+        if (ja) {
+          ja.checked = !!config.cmd.saidaJa;
+          ja.addEventListener('change', () => {
+            config.cmd.saidaJa = !!ja.checked; save();
+            // O campo de chegada perde a função quando o modo está ligado — apaga em vez de
+            // deixar um horário lá que não vale mais nada.
+            const rc = document.getElementById('cc-row-chegada');
+            if (rc) rc.style.opacity = ja.checked ? '.45' : '1';
+            const box = document.getElementById('cc-previa'); if (box) box.innerHTML = '';
+          });
+          const rc = document.getElementById('cc-row-chegada');
+          if (rc) rc.style.opacity = ja.checked ? '.45' : '1';
+        }
+      }
       document.getElementById('cc-limpar').addEventListener('click', cmdLimpar);
       document.getElementById('cc-diag').addEventListener('click', ccDiagnostico);
       // Apoio em massa

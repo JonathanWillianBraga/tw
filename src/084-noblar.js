@@ -661,42 +661,46 @@
   // seguinte achou que cabiam 4 de novo e mandou mais 3 — os dois últimos chegando depois da
   // conquista, ou seja, auto-ataque.
   //
-  // A contagem sai da FICHA DO ALVO (nobleComandosDoAlvo): é autoritativa e enxerga envio manual
-  // também. A chave é `chegada|origem` — o jogo publica a chegada com ms e ela NÃO muda entre
-  // leituras, então o mesmo comando lido em dez ciclos conta uma vez só, e um NT de 4 comandos da
-  // mesma aldeia conta 4 (as chegadas diferem entre si).
+  // A conta tem DUAS metades, as duas lidas da mesma página da ficha do alvo (que o ciclo já
+  // baixa — custo zero):
   //
-  // LIMITE CONHECIDO: só conta o que a ficha ainda mostra. Nobre que pousou antes desta versão
-  // existir (ou entre dois ciclos) nunca foi visto e não entra. Alvo começado antes do upgrade
-  // vai ter o gasto SUBESTIMADO — quem segura esses é a checagem de cobertura do noblePrecisaDe.
-  function nobleGasto(alvo) { return Object.keys((alvo && alvo.gastoKeys) || {}).length; }
-  function nobleContabilizaGasto(alvo, lista) {
+  //   POUSADOS  = relatórios de ataque COM NOBRE daquele alvo. Todo nobre que bate gera um, e o
+  //               ícone `snob` aparece na LINHA da lista, então dá pra contar sem abrir nada.
+  //               É histórico de verdade: enxerga o que aconteceu antes deste código existir e
+  //               enxerga envio manual. Os ids ficam guardados, então apagar relatório no jogo
+  //               não zera a conta.
+  //   NO AR     = comandos com nobre ainda a caminho, do próprio jogo.
+  //
+  // Um nobre está sempre em exatamente uma das duas: enquanto voa está em NO AR; quando pousa,
+  // sai de lá e vira relatório. Por isso somar as duas não conta ninguém duas vezes, e a conta
+  // se auto-corrige — não depende de bookkeeping nosso acumulado dar certo.
+  //
+  // Medido no 432|588 (que estourou): 4 relatórios com nobre + 3 comandos no ar = 7 nobres num
+  // alvo de teto 4. A versão anterior desta função só via os 3 do ar.
+  function nobleGasto(alvo) {
     if (!alvo) return 0;
-    alvo.gastoKeys = alvo.gastoKeys || {};
-    let novos = 0, semChegada = 0;
+    return Object.keys(alvo.relsNobre || {}).length + nobleEmVoo(alvo.coord);
+  }
+  function nobleContabilizaGasto(alvo, rels) {
+    if (!alvo) return 0;
+    // Migração: a v11.157.0 contava por chave de comando (`gastoKeys`), que só enxergava o que
+    // ainda estava no ar. Não dá pra converter — o histórico vem inteiro dos relatórios agora.
+    if (alvo.gastoKeys) delete alvo.gastoKeys;
+    if (alvo.semChegada != null) delete alvo.semChegada;
+    alvo.relsNobre = alvo.relsNobre || {};
+    let novos = 0;
     const detalhe = [];
-    (lista || []).forEach((e) => {
-      // Sem chegada lida, o registro cai num fallback baseado em Date.now(), que MUDA a cada
-      // ciclo: contar isso inflaria o gasto pra sempre. Fica de fora, mas é avisado — o teto
-      // daquele alvo passa a poder deixar escapar um nobre.
-      if (!e.chegaOk) { semChegada++; return; }
-      const k = String(e.chega) + '|' + (e.origem || e.origemNome || '?');
-      if (alvo.gastoKeys[k]) return;
-      alvo.gastoKeys[k] = e.chega;
+    (rels || []).forEach((r) => {
+      if (!r.comNobre || !r.id || alvo.relsNobre[r.id]) return;
+      alvo.relsNobre[r.id] = r.at || Date.now();
       novos++;
-      detalhe.push((e.origemNome || e.origem || '?') + ' chega ' + new Date(e.chega).toLocaleString('pt-BR'));
+      detalhe.push('relatório ' + r.id + (r.at ? ' de ' + new Date(r.at).toLocaleString('pt-BR') : ''));
     });
-    if (semChegada !== (alvo.semChegada || 0)) {
-      alvo.semChegada = semChegada;
-      if (semChegada) {
-        pushLog('Noblar: ' + alvo.coord + ' — ' + semChegada + ' comando(s) com nobre sem chegada'
-          + ' legível na ficha; ficam FORA da conta do teto (pode escapar nobre a mais aqui).', 'err', 'noble');
-      }
-    }
     if (novos) {
-      pushLog('Noblar: ' + alvo.coord + ' — +' + novos + ' nobre(s) contabilizado(s) no gasto ('
-        + detalhe.join(' · ') + '). Gasto total: ' + nobleGasto(alvo) + '.', '', 'noble');
-      nbTrail(alvo.coord, 'gasto', { novos: novos, gasto: nobleGasto(alvo), detalhe: detalhe });
+      pushLog('Noblar: ' + alvo.coord + ' — ' + novos + ' nobre(s) que JÁ POUSARAM entrando na conta ('
+        + detalhe.join(' · ') + '). Gasto no alvo: ' + nobleGasto(alvo) + '.', '', 'noble');
+      nbTrail(alvo.coord, 'gasto', { novos: novos, pousados: Object.keys(alvo.relsNobre).length,
+                                     noAr: nobleEmVoo(alvo.coord), gasto: nobleGasto(alvo), detalhe: detalhe });
     }
     return novos;
   }
@@ -729,7 +733,11 @@
       const tr = a.closest ? a.closest('tr') : null;
       const tds = tr ? tr.querySelectorAll('td') : [];
       const quando = tds.length ? parseReportDate(tds[tds.length - 1].textContent) : null;
-      rels.push({ id: id, at: quando });
+      // Ataque COM NOBRE dá pra reconhecer na própria linha da lista, pelo ícone — sem abrir o
+      // relatório. É o que torna o histórico de gasto barato: a página já foi baixada.
+      // `/snob.` casa o ícone do ataque e NÃO casa "return_snob.webp" (o do retorno não tem a
+      // barra antes), mesmo truque que a leitura de comandos usa logo abaixo.
+      rels.push({ id: id, at: quando, comNobre: !!(tr && tr.querySelector('img[src*="/snob."]')) });
     });
     _nbRelsPorAlvo[coord] = rels;   // por coordenada: dois alvos no mesmo ciclo não se atropelam
     const cont = doc.querySelector('#commands_outgoings[data-type="towards_village"]');
@@ -754,9 +762,9 @@
       // Na ficha do alvo a 1ª coluna é a ORIGEM (o destino é a própria aldeia da ficha).
       const oTxt = ((tds[0] && tds[0].textContent) || '').replace(/\s+/g, ' ').trim();
       const om = oTxt.match(/\((\d{1,3})\|(\d{1,3})\)/);
-      // `chegaOk` separa chegada LIDA de chegada chutada. O fallback `agora + 1h` serve pro
-      // resto do módulo não quebrar, mas ele muda a cada leitura — quem conta gasto (chave
-      // estável por chegada) precisa saber distinguir. Ver nobleContabilizaGasto.
+      // `chegaOk` separa chegada LIDA de chegada chutada: o fallback `agora + 1h` existe pro
+      // resto do módulo não quebrar, mas ele MUDA a cada leitura, e quem projetar lealdade em
+      // cima dele está projetando em cima de um chute.
       out.push({ at: agora, chega: chega || (agora + 3600000), chegaOk: !!chega, n: 1, doJogo: 1,
                  origem: om ? (om[1] + '|' + om[2]) : null, origemNome: oTxt.split('(')[0].trim() || oTxt || null });
     });
@@ -1286,6 +1294,7 @@
       prevista: need.prevista == null ? null : Math.round(need.prevista),
       prevTudo: need.prevTudo == null ? null : Math.round(need.prevTudo),
       voando: need.voando, gasto: need.gasto, teto: need.teto, orcamento: need.orcamento,
+      pousados: Object.keys(alvo.relsNobre || {}).length,
       pedeLealdade: need.bruto, precisa: precisa, coberto: need.coberto,
       ultDur: alvo.ultDur, tpl: op.id,
     });
@@ -1707,11 +1716,12 @@
       for (const a of ativos) {
         const lista = await nobleComandosDoAlvo(a.coord);
         if (lista == null) continue;                       // alvo fora do village.txt: mantém o que tinha
-        // ANTES de substituir o emVoo: o gasto é cumulativo e precisa ver o comando enquanto ele
-        // ainda está na ficha. Depois que pousa, some daqui pra sempre.
-        nobleContabilizaGasto(a, lista);
         if (lista.length) config.noble.emVoo[a.coord] = lista;
         else delete config.noble.emVoo[a.coord];
+        // DEPOIS de atualizar o emVoo: metade do gasto (o que está no ar) sai dele, então ele
+        // precisa já estar fresco. A outra metade — o que já pousou — vem dos relatórios que a
+        // mesma página listou, guardados em _nbRelsPorAlvo pela leitura acima.
+        nobleContabilizaGasto(a, _nbRelsPorAlvo[a.coord]);
         // A ficha que acabou de ser baixada também lista os relatórios DESTE alvo. Ler daqui é o
         // que garante lealdade fresca: a varredura global não alcança relatório fora da primeira
         // página, e era isso que deixava a medição 21h atrasada.
@@ -2118,9 +2128,12 @@
         const gastoA = nobleGasto(a);
         const tplA = (config.noble.templates || {})[a.tpl || p.tplId] || null;
         const tetoA = Math.max(1, (tplA && tplA.nobres) || NOBLE_POR_CONQUISTA);
+        const pousadosA = Object.keys(a.relsNobre || {}).length;
         const gastoCel = '<div class="sub" style="color:' + (gastoA >= tetoA ? '#c0483a' : '#8a7340') + '"'
-          + ' title="Nobres já gastos neste alvo (contados da ficha do alvo, inclui envio manual)'
-          + ' contra o teto do modelo. No teto, o alvo não recebe mais nada.">' + gastoA + '/' + tetoA + '</div>';
+          + ' title="' + esc('Nobres gastos neste alvo / teto do modelo. São ' + pousadosA
+            + ' que já pousaram (contados pelos relatórios de ataque com nobre da ficha do alvo, então'
+            + ' enxerga envio manual e o que é anterior ao módulo) mais ' + voando + ' ainda no ar.'
+            + ' No teto, o alvo não recebe mais nada.') + '">' + gastoA + '/' + tetoA + '</div>';
         const atksCel = (voando
           ? '<a class="twmgr-nb-quem" data-coord="' + esc(a.coord) + '" style="cursor:pointer;color:#3f8f52;font-weight:700" ' +
             'title="' + esc(nobleTxtVoo(a.coord)) + ' — clique pra ver de quais aldeias">' + voando +

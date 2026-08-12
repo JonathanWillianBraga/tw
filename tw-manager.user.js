@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.159.0
+// @version      11.160.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.159.0';
+  const VERSION = '11.160.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -7962,7 +7962,7 @@
       '<th>Alvo</th><th>Modelo</th>' +
       '<th style="width:36px" title="Lealdade de hoje: a do último relatório, projetada pra agora com a regeneração">Leald.</th>' +
       '<th style="width:30px" title="Em cima: comandos meus com nobre a caminho. Embaixo: total de nobres que este alvo já consumiu (pousados + no ar)">Atks</th>' +
-      '<th style="width:36px" title="Lealdade na hora em que o próximo nobre chegaria — já descontando os ataques no ar e somando a regeneração até lá">Prev.</th>' +
+      '<th style="width:36px" title="Lealdade depois que TUDO que já está a caminho pousar, com a regeneração entre as chegadas. Zerou = alvo resolvido, não sai mais nobre">Prev.</th>' +
       '<th>Estado</th><th style="width:20px"></th></tr></thead><tbody>' +
       alvos.map((a, i) => {
         const p = porCoord[a.coord] || {};
@@ -7994,16 +7994,33 @@
           + (mv && mv.name ? esc(mv.name) + (mv.points ? ' · ' + fmtN(mv.points) + ' pts' : '') + (rel.dono ? ' · ' : '') : '')
           + (rel.dono ? esc(rel.dono) : (mv && mv.name ? '' : '—')) + '</div>';
         const atual = nobleLealdadeAgora(a.coord);
-        const prev = (p.prevista !== undefined) ? p.prevista : nobleLealdadePrevista(a.coord, a.ultDur);
         const lida = nobleLealdadeLida(a.coord);
+        // A coluna mostra a lealdade DEPOIS QUE TUDO QUE JÁ ESTÁ COMPROMETIDO POUSAR — que é a
+        // pergunta que o usuário faz ("já resolvi esse alvo?") e a mesma conta que o motor usa
+        // pra decidir.
+        //
+        // Antes ela mostrava a lealdade no instante em que o MEU PRÓXIMO nobre chegaria, e isso
+        // enganava feio: no 443|580 dava 75 com TRÊS nobres a caminho, porque dois deles pousam
+        // 15 min depois do meu próximo e caíam fora da janela. O cabeçalho ainda prometia "já
+        // descontando os ataques no ar", o que era falso justamente pros que chegam mais tarde.
+        const prevMinha = (p.prevista !== undefined) ? p.prevista : nobleLealdadePrevista(a.coord, a.ultDur);
+        const prevTudo = (p.prevTudo !== undefined) ? p.prevTudo : nobleLealdadeAteUltimoVoo(a.coord, a.ultDur);
+        const prev = (prevTudo !== undefined && prevTudo !== null) ? prevTudo : prevMinha;
+        const chegadasVoo = nobleVoos(a.coord).map((e) => e.chega || e.at);
+        const ultimaVoo = chegadasVoo.length ? Math.max.apply(null, chegadasVoo) : null;
         const dicaAtual = lida
           ? 'medida ' + nobleQuandoTxt(nobleLealdadeAt(rel)) + ': caiu de ' + rel.de + ' para ' + rel.lealdade
           : 'PRESUMIDA. Sem relatório de ataque com nobre, o módulo assume 100 — aldeia nunca noblada está cheia.'
             + ' O primeiro relatório substitui este número.';
         const dicaPrev = (lida ? '' : 'Partindo de 100 presumido. ')
-          + (a.ultDur != null
-            ? 'Projetada pra daqui a ' + fmtDur(a.ultDur) + ', que é a viagem do próximo nobre.'
-            : 'Sem viagem medida ainda — projetada só até a última chegada marcada.');
+          + (ultimaVoo
+            ? 'Depois que TODOS os ' + chegadasVoo.length + ' comando(s) já a caminho pousarem (o último às '
+              + new Date(ultimaVoo).toLocaleTimeString('pt-BR') + '). Zerou = alvo resolvido, não sai mais nobre.'
+            : 'Nada a caminho: é a lealdade de agora projetada pra viagem do próximo nobre.')
+          + (a.ultDur != null && prevMinha != null && Math.round(prevMinha) !== Math.round(prev)
+            ? ' — Na hora em que o SEU próximo nobre chegaria (' + fmtDur(a.ultDur) + ') ela ainda estaria em '
+              + Math.round(prevMinha) + ', porque parte dos comandos pousa depois disso.'
+            : '');
         const voando = nobleEmVoo(a.coord);
         const detVoo = nobleEmVooDetalhe(a.coord);
         // Número clicável: abre a caixa com QUEM está mandando / vai mandar. O tooltip já

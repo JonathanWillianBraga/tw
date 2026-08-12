@@ -361,8 +361,31 @@
     let sent = 0;
     for (const r of ['wood', 'stone', 'iron']) {
       // carente = (atual + o que já vem chegando) abaixo do limiar
+      //
+      // A FILA É POR NECESSIDADE RELATIVA (`falta`), não pelo buraco em unidades.
+      //
+      // Antes era `b.def - a.def`: quem tinha o maior déficit BRUTO passava na frente. Isso
+      // favorecia sistematicamente aldeia grande e matava de fome as novas/pequenas — o buraco
+      // delas é pequeno em unidades mesmo quando estão em 2% do alvo, então elas ficavam sempre
+      // no fim da fila, e quando chegava a vez a capacidade de mercador das doadoras já tinha
+      // acabado. Caso real (br143): Mt Eden parada em 26 de ferro enquanto o Equilíbrio
+      // "equilibrava" aldeias que já estavam confortáveis.
+      //
+      // `falta` = fração do alvo que ainda não tem (1 = vazia, 0 = no alvo). Quem está mais perto
+      // de zerado vai primeiro, do tamanho que for. O quanto ela recebe continua saindo do
+      // déficit real — o que muda é só a ORDEM de atendimento.
       const receivers = st.map((s) => ({ s: s, eff: s.cur[r] + chegando(s, r) }))
-        .filter((x) => x.eff < x.s.thr[r]).map((x) => ({ s: x.s, def: x.s.thr[r] - x.eff })).sort((a, b) => b.def - a.def);
+        .filter((x) => x.eff < x.s.thr[r])
+        .map((x) => ({ s: x.s, def: x.s.thr[r] - x.eff,
+                       falta: x.s.thr[r] > 0 ? (x.s.thr[r] - x.eff) / x.s.thr[r] : 0 }))
+        .sort((a, b) => b.falta - a.falta);
+      // Quem foi pro começo da fila e por quê. Sem isto a mudança de critério é invisível: os
+      // envios saem igual, só em outra ordem, e não dá pra conferir se está fazendo efeito.
+      if (receivers.length) {
+        pushLog('Equilíbrio (' + NOME_RES[r] + '): fila por carência — '
+          + receivers.slice(0, 4).map((x) => x.s.name + ' ' + Math.round((1 - x.falta) * 100) + '% do alvo').join(' · ')
+          + (receivers.length > 4 ? ' · +' + (receivers.length - 4) + ' atrás' : ''), '', 'market');
+      }
       for (const rec of receivers) {
         { const pare = devoParar('market'); if (pare) { pushLog('Equilíbrio: interrompido — ' + pare + '.', '', 'market'); return; } }
         if (rec.def <= 0) continue;

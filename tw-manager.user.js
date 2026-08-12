@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.161.0
+// @version      11.162.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.161.0';
+  const VERSION = '11.162.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -3798,11 +3798,48 @@
   }
 
   // ==================== MERCADO (Cunhagem) ====================
+  const NOME_RES = { wood: 'madeira', stone: 'argila', iron: 'ferro' };
   async function getMarketState(vid) {
     const res = await fetch('/game.php?village=' + vid + '&screen=market&mode=send', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const numOf = (id) => { const el = doc.getElementById(id); return el ? (parseInt((el.textContent || '').replace(/\D/g, ''), 10) || 0) : 0; };
-    return { wood: numOf('wood'), stone: numOf('stone'), iron: numOf('iron'), storage: numOf('storage'), capacity: numOf('market_merchant_max_transport') };
+    return { wood: numOf('wood'), stone: numOf('stone'), iron: numOf('iron'), storage: numOf('storage'),
+             capacity: numOf('market_merchant_max_transport'), inc: parseEntrada(doc) };
+  }
+  // O QUE JÁ ESTÁ CHEGANDO, pela boca do próprio jogo. Esta MESMA página traz a linha
+  // "Entrada: 🪵 1.766 🧱 94.642" — é de graça, o fetch já aconteceu.
+  //
+  // Por que isso existe: o módulo mantinha um caderninho local (`config.market.inflight`) com o
+  // que ele mesmo mandou, e expirava cada registro pela duração do transporte. Só que a duração
+  // quase nunca é lida (o `[data-duration]` não vem nessa tela e o regex de "duração hh:mm:ss"
+  // não casa), então caía no fallback de 1 HORA. Transporte que demora mais que isso sumia do
+  // caderno enquanto ainda estava na estrada: o ciclo seguinte via a aldeia "vazia" e mandava
+  // tudo de novo, várias vezes.
+  //
+  // Caso real (br143, Mt Eden): armazém 115.798, argila em 42.138, e o jogo dizia 94.642 de
+  // argila chegando — 136.780 no total, quase 21 mil condenados a transbordar. O caderno local
+  // só sabia de 42.974; tinha esquecido 51.668 que ainda estavam voando.
+  //
+  // A lição é a mesma do Noblar: quando o jogo sabe a resposta, perguntar pra ele em vez de
+  // manter escrituração paralela que precisa dar certo pra sempre.
+  function parseEntrada(doc) {
+    const out = { wood: 0, stone: 0, iron: 0 };
+    const ths = doc.querySelectorAll('th');
+    for (let i = 0; i < ths.length; i++) {
+      const th = ths[i];
+      if (!/^\s*Entrada\s*:/i.test(th.textContent || '')) continue;
+      th.querySelectorAll('span.nowrap').forEach((sp) => {
+        const ico = sp.querySelector('span.icon.header');
+        if (!ico) return;
+        const r = ['wood', 'stone', 'iron'].filter((k) => ico.classList.contains(k))[0];
+        if (!r) return;
+        // O número vem com separador de milhar em <span class="grey">.</span>, então só sobra
+        // dígito depois de tirar tudo que não é dígito do texto do container.
+        out[r] = parseInt((sp.textContent || '').replace(/\D/g, ''), 10) || 0;
+      });
+      break;                                   // só a primeira: "Saída" é outro <th>
+    }
+    return out;
   }
   // weights ausente/zerado = split IGUAL entre os 3 (comportamento de sempre, usado por
   // Equilíbrio/Solidário). Com weights, cada iteração reparte a capacidade RESTANTE na
@@ -4072,7 +4109,7 @@
       let m; try { m = await getMarketState(v.vid); } catch (e) { continue; }
       if (!m.storage) continue;                 // sem armazém lido -> pula
       base.push({ vid: v.vid, coord: v.coord, name: v.name, cur: { wood: m.wood, stone: m.stone, iron: m.iron },
-        cap: m.capacity, storage: m.storage });
+        cap: m.capacity, storage: m.storage, inc: m.inc || { wood: 0, stone: 0, iron: 0 } });
       await sleep(120);
     }
     // Alvo POR RECURSO. No automático ele sai do que você REALMENTE tem: a fatia que aquele
@@ -4115,14 +4152,32 @@
       if (!config.market.inflight[vid].length) delete config.market.inflight[vid];
     });
     const inSum = (vid, r) => (config.market.inflight[vid] || []).reduce((s, e) => s + (e.r === r ? e.amt : 0), 0);
+    // O QUE ESTÁ CHEGANDO: o maior entre o que o JOGO diz (autoritativo, enxerga envio manual e
+    // não expira sozinho) e o caderno local (cobre a janela entre eu mandar e o snapshot deste
+    // ciclo, que foi lido ANTES do envio). Nunca a soma — seria contar o mesmo transporte duas
+    // vezes. Ver parseEntrada.
+    const chegando = (s, r) => Math.max(inSum(s.vid, r), (s.inc && s.inc[r]) || 0);
     let sent = 0;
     for (const r of ['wood', 'stone', 'iron']) {
       // carente = (atual + o que já vem chegando) abaixo do limiar
-      const receivers = st.map((s) => ({ s: s, eff: s.cur[r] + inSum(s.vid, r) }))
+      const receivers = st.map((s) => ({ s: s, eff: s.cur[r] + chegando(s, r) }))
         .filter((x) => x.eff < x.s.thr[r]).map((x) => ({ s: x.s, def: x.s.thr[r] - x.eff })).sort((a, b) => b.def - a.def);
       for (const rec of receivers) {
         { const pare = devoParar('market'); if (pare) { pushLog('Equilíbrio: interrompido — ' + pare + '.', '', 'market'); return; } }
         if (rec.def <= 0) continue;
+        // TRAVA DE TRANSBORDO, independente do limiar. O que já está no armazém mais o que está
+        // na estrada não pode passar da capacidade — recurso que chega em armazém cheio é
+        // simplesmente perdido. `thr` é uma fração do armazém e deveria bastar, mas ele parte de
+        // um snapshot: se a leitura estiver velha ou o alvo automático subir, esta é a rede que
+        // impede a perda. Sobra um respiro de 2% pra produção entre ciclos.
+        const espaco = Math.max(0, (rec.s.storage * 0.98) - (rec.s.cur[r] + chegando(rec.s, r)));
+        if (espaco <= 0) {
+          pushLog('Equilíbrio: ' + rec.s.name + ' não recebe ' + NOME_RES[r] + ' — armazém já comprometido ('
+            + fmtN(Math.round(rec.s.cur[r])) + ' + ' + fmtN(Math.round(chegando(rec.s, r))) + ' chegando, cabe '
+            + fmtN(rec.s.storage) + ').', '', 'market');
+          continue;
+        }
+        if (rec.def > espaco) rec.def = espaco;
         const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] > s.thr[r])
           .map((s) => ({ s: s, exc: s.cur[r] - s.thr[r], d: coordDist(s.coord, rec.s.coord) }))
           .filter((x) => x.d <= maxDist)
@@ -4284,15 +4339,27 @@
     for (const v of recvMembers.concat(donorPool)) {
       let m; try { m = await getMarketState(v.vid); } catch (e) { continue; }
       if (!m.storage) continue;
-      st.push({ vid: v.vid, coord: v.coord, name: v.name, isRecv: !!recvSetIds[v.vid], cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, storage: m.storage, thr: m.storage * pct });
+      st.push({ vid: v.vid, coord: v.coord, name: v.name, isRecv: !!recvSetIds[v.vid], cur: { wood: m.wood, stone: m.stone, iron: m.iron }, cap: m.capacity, storage: m.storage, thr: m.storage * pct,
+                inc: m.inc || { wood: 0, stone: 0, iron: 0 } });
       await sleep(120);
     }
+    // Mesma correção do Equilíbrio: o que está chegando vem do JOGO, não só do caderno local que
+    // expira pelo fallback de 1h. Aqui pesa ainda mais — o destino é aldeia de OUTRO membro, e o
+    // caderno nunca enxerga o que os outros mandaram pra ele.
+    const chegando = (s, r) => Math.max(inSum(s.vid, r), (s.inc && s.inc[r]) || 0);
     let sent = 0;
     for (const r of ['wood', 'stone', 'iron']) {
-      const receivers = st.filter((s) => s.isRecv).map((s) => ({ s: s, eff: s.cur[r] + inSum(s.vid, r) }))
+      const receivers = st.filter((s) => s.isRecv).map((s) => ({ s: s, eff: s.cur[r] + chegando(s, r) }))
         .filter((x) => x.eff < x.s.thr).map((x) => ({ s: x.s, def: x.s.thr - x.eff })).sort((a, b) => b.def - a.def);
       for (const rec of receivers) {
         if (rec.def <= 0) continue;
+        const espaco = Math.max(0, (rec.s.storage * 0.98) - (rec.s.cur[r] + chegando(rec.s, r)));
+        if (espaco <= 0) {
+          pushLog('Solidário: ' + rec.s.name + ' não recebe ' + NOME_RES[r] + ' — armazém já comprometido ('
+            + fmtN(Math.round(rec.s.cur[r])) + ' + ' + fmtN(Math.round(chegando(rec.s, r))) + ' chegando).', '', 'market');
+          continue;
+        }
+        if (rec.def > espaco) rec.def = espaco;
         let covered = false;
         // passo normal: só doa quem tem excedente acima do próprio piso (recurso mais baixo × %), mais perto primeiro.
         // "s.cur[r] >= donorMinFor(s)" é essencial: sem isso, uma aldeia carente NESSE MESMO recurso podia ainda

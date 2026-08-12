@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.154.0
+// @version      11.155.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.154.0';
+  const VERSION = '11.155.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5520,6 +5520,11 @@
     if (config.research.seguirGrupo && config.research.filterGroup) {
       try { await pesqSincronizarGrupo(); }
       catch (e) { pushLog('Pesquisa: não consegui ler o grupo (' + (e.message || e) + ') — sigo com a lista atual.', '', 'research'); }
+    } else if (config.research.seguirGrupo && !config.research.filterGroup) {
+      // Estado que a UI hoje impede de criar, mas que já podia estar salvo (config antigo,
+      // import) e o motor aceitava calado: "seguir" ligado sem grupo nunca sincronizava nada,
+      // ciclo após ciclo, sem uma linha de log dizendo por quê. Uma vez por ciclo dá pra notar.
+      pushLog('Pesquisa: "seguir o grupo" está ligado mas nenhum grupo foi escolhido — nenhuma aldeia nova entra na gestão até você selecionar um.', 'err', 'research');
     }
     const assign = config.research.villages || {};
     const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.research.templates[assign[v].tpl]);
@@ -12267,9 +12272,30 @@
     document.getElementById('twmgr-pq-tpl-del').addEventListener('click', pesqApagarModelo);
     document.getElementById('twmgr-pq-add-btn').addEventListener('click', pesqAddUnidade);
     document.getElementById('twmgr-pq-reset').addEventListener('click', pesqResetOrdem);
-    document.getElementById('twmgr-pq-group').addEventListener('change', (e) => { config.research.filterGroup = e.target.value; save(); pesqCarregarAldeias(); fillPesqGrupoTpl(); });
+    document.getElementById('twmgr-pq-group').addEventListener('change', (e) => {
+      config.research.filterGroup = e.target.value;
+      // Tirar o grupo com "seguir" ligado reabriria o mesmo buraco: a caixa continuaria marcada
+      // e o auto-adicionar voltaria a nunca disparar, calado.
+      if (!config.research.filterGroup && config.research.seguirGrupo) {
+        config.research.seguirGrupo = false;
+        const sw = document.getElementById('twmgr-pq-seguir'); if (sw) sw.checked = false;
+      }
+      save(); pesqCarregarAldeias(); fillPesqGrupoTpl();
+    });
     document.getElementById('twmgr-pq-seguir').checked = !!config.research.seguirGrupo;
-    document.getElementById('twmgr-pq-seguir').addEventListener('change', (e) => { config.research.seguirGrupo = e.target.checked; save(); });
+    document.getElementById('twmgr-pq-seguir').addEventListener('change', (e) => {
+      // Sem grupo escolhido, "seguir o grupo" não tem o que seguir — e o researchTick aceitava
+      // esse estado calado: a condição `seguirGrupo && filterGroup` falhava toda vez, pra sempre,
+      // sem log nenhum. O usuário marcava a caixa achando que aldeia nova ia entrar sozinha e
+      // nada nunca acontecia. Agora recusa ligar sem grupo, na hora, em vez de guardar um
+      // interruptor que não liga nada.
+      if (e.target.checked && !config.research.filterGroup) {
+        e.target.checked = false;
+        alert('Escolha um grupo primeiro — "seguir o grupo" precisa de um grupo pra seguir.');
+        return;
+      }
+      config.research.seguirGrupo = e.target.checked; save();
+    });
     document.getElementById('twmgr-pq-grptpl').addEventListener('change', (e) => { config.research.grupoTpl = e.target.value; save(); });
     fillPesqGrupoTpl();
     document.getElementById('twmgr-pq-vil-reload').addEventListener('click', pesqCarregarAldeias);

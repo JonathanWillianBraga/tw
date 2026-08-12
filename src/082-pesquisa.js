@@ -195,6 +195,11 @@
     if (config.research.seguirGrupo && config.research.filterGroup) {
       try { await pesqSincronizarGrupo(); }
       catch (e) { pushLog('Pesquisa: não consegui ler o grupo (' + (e.message || e) + ') — sigo com a lista atual.', '', 'research'); }
+    } else if (config.research.seguirGrupo && !config.research.filterGroup) {
+      // Estado que a UI hoje impede de criar, mas que já podia estar salvo (config antigo,
+      // import) e o motor aceitava calado: "seguir" ligado sem grupo nunca sincronizava nada,
+      // ciclo após ciclo, sem uma linha de log dizendo por quê. Uma vez por ciclo dá pra notar.
+      pushLog('Pesquisa: "seguir o grupo" está ligado mas nenhum grupo foi escolhido — nenhuma aldeia nova entra na gestão até você selecionar um.', 'err', 'research');
     }
     const assign = config.research.villages || {};
     const ativas = Object.keys(assign).filter((v) => !assign[v].paused && config.research.templates[assign[v].tpl]);

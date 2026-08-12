@@ -610,6 +610,103 @@
   // 12h é folgado pro caso normal (o relatório chega em minutos) e curto o bastante pra impedir o
   // absurdo do 484|571, onde 21h de regeneração transformaram 66 em "87" com o alvo em 19.
   const NB_MEDICAO_H = 12;
+
+  // ===== Trilha de decisão (debug) =====
+  // O log geral guarda 200 linhas pra TODOS os módulos juntos: um ciclo de recruta com 7 aldeias
+  // já come 1/4 dele. Quando o Noblar erra, a informação que explicaria o erro normalmente já
+  // rolou pra fora — foi exatamente o que aconteceu na investigação do 432|588, em que o log só
+  // tinha "faltam 32 moeda(s)" repetido e nenhum registro dos envios.
+  //
+  // Esta trilha é só do Noblar, guarda os NÚMEROS da decisão (não frase montada) e mora numa
+  // chave própria, então não disputa espaço com ninguém. Grava só quando algo MUDA: alvo parado
+  // não vira linha nova a cada ciclo.
+  //
+  // Pra ler no console:  JSON.parse(localStorage.twMgr_<mundo>_nobleTrail)  — ou twMgrNobleTrail()
+  const NB_TRAIL_MAX = 400;
+  const NB_TRAILKEY = KEY + '_nobleTrail';
+  function nbTrailLer() {
+    try { return JSON.parse(localStorage.getItem(NB_TRAILKEY) || '[]'); } catch (e) { return []; }
+  }
+  // Eventos que NUNCA são deduplicados: cada ocorrência é um fato próprio, e perder um significa
+  // perder a contagem. Um NT manda comandos idênticos com 400ms entre eles — mesma origem, mesma
+  // hora de chegada até o segundo — e o dedupe engoliria o segundo, que é exatamente o registro
+  // que faltou pra reconstruir o que aconteceu no 432|588.
+  const NB_TRAIL_SEMPRE = { envio: 1, 'envio-falhou': 1, gasto: 1 };
+  function nbTrail(coord, ev, dados) {
+    const arr = nbTrailLer();
+    const linha = Object.assign({ ts: Date.now(), hora: new Date().toLocaleString('pt-BR'), coord: coord, ev: ev }, dados || {});
+    // Dedupe contra a ÚLTIMA linha deste alvo+evento (o array é mais-novo-primeiro): se todos os
+    // números baterem, o ciclo não trouxe informação nova e não vira registro.
+    const ult = NB_TRAIL_SEMPRE[ev] ? null : arr.find((l) => l.coord === coord && l.ev === ev);
+    if (ult) {
+      const igual = Object.keys(linha).every((k) =>
+        k === 'ts' || k === 'hora' || JSON.stringify(ult[k]) === JSON.stringify(linha[k]));
+      if (igual) return;
+    }
+    arr.unshift(linha);
+    try { localStorage.setItem(NB_TRAILKEY, JSON.stringify(arr.slice(0, NB_TRAIL_MAX))); } catch (e) {}
+  }
+  // Atalho de console pra investigar depois sem precisar lembrar o nome da chave.
+  try { window.twMgrNobleTrail = function (coord) {
+    const a = nbTrailLer(); return coord ? a.filter((l) => l.coord === coord) : a;
+  }; } catch (e) {}
+
+  // ===== Gasto por alvo (o teto do modelo) =====
+  // O `nobres` do modelo é TETO DE GASTO, não de simultâneos — é o que o comentário do
+  // noblePrecisaDe sempre disse ("não quero mais que 2 nobres nessa"). Mas a conta era
+  // `teto - nobleEmVoo()`, e `nobleEmVoo` só enxerga o que está NO AR neste instante: assim que
+  // o comando pousa ele some da ficha do alvo, o contador zera e o orçamento se renova sozinho.
+  //
+  // Foi assim que o 432|588 (teto 4) levou SEIS nobres: 3 pousaram, a lista esvaziou, o ciclo
+  // seguinte achou que cabiam 4 de novo e mandou mais 3 — os dois últimos chegando depois da
+  // conquista, ou seja, auto-ataque.
+  //
+  // A contagem sai da FICHA DO ALVO (nobleComandosDoAlvo): é autoritativa e enxerga envio manual
+  // também. A chave é `chegada|origem` — o jogo publica a chegada com ms e ela NÃO muda entre
+  // leituras, então o mesmo comando lido em dez ciclos conta uma vez só, e um NT de 4 comandos da
+  // mesma aldeia conta 4 (as chegadas diferem entre si).
+  //
+  // LIMITE CONHECIDO: só conta o que a ficha ainda mostra. Nobre que pousou antes desta versão
+  // existir (ou entre dois ciclos) nunca foi visto e não entra. Alvo começado antes do upgrade
+  // vai ter o gasto SUBESTIMADO — quem segura esses é a checagem de cobertura do noblePrecisaDe.
+  function nobleGasto(alvo) { return Object.keys((alvo && alvo.gastoKeys) || {}).length; }
+  function nobleContabilizaGasto(alvo, lista) {
+    if (!alvo) return 0;
+    alvo.gastoKeys = alvo.gastoKeys || {};
+    let novos = 0, semChegada = 0;
+    const detalhe = [];
+    (lista || []).forEach((e) => {
+      // Sem chegada lida, o registro cai num fallback baseado em Date.now(), que MUDA a cada
+      // ciclo: contar isso inflaria o gasto pra sempre. Fica de fora, mas é avisado — o teto
+      // daquele alvo passa a poder deixar escapar um nobre.
+      if (!e.chegaOk) { semChegada++; return; }
+      const k = String(e.chega) + '|' + (e.origem || e.origemNome || '?');
+      if (alvo.gastoKeys[k]) return;
+      alvo.gastoKeys[k] = e.chega;
+      novos++;
+      detalhe.push((e.origemNome || e.origem || '?') + ' chega ' + new Date(e.chega).toLocaleString('pt-BR'));
+    });
+    if (semChegada !== (alvo.semChegada || 0)) {
+      alvo.semChegada = semChegada;
+      if (semChegada) {
+        pushLog('Noblar: ' + alvo.coord + ' — ' + semChegada + ' comando(s) com nobre sem chegada'
+          + ' legível na ficha; ficam FORA da conta do teto (pode escapar nobre a mais aqui).', 'err', 'noble');
+      }
+    }
+    if (novos) {
+      pushLog('Noblar: ' + alvo.coord + ' — +' + novos + ' nobre(s) contabilizado(s) no gasto ('
+        + detalhe.join(' · ') + '). Gasto total: ' + nobleGasto(alvo) + '.', '', 'noble');
+      nbTrail(alvo.coord, 'gasto', { novos: novos, gasto: nobleGasto(alvo), detalhe: detalhe });
+    }
+    return novos;
+  }
+  // A lealdade projetada até a ÚLTIMA chegada já marcada (não só até a do meu próximo nobre).
+  // É o número que responde "o que já está no ar resolve sozinho?".
+  function nobleLealdadeAteUltimoVoo(coord, durSec) {
+    const chegadas = nobleVoos(coord).map((e) => e.chega || e.at);
+    const minha = (durSec != null) ? (Date.now() + durSec * 1000) : Date.now();
+    return nobleLealdadeEm(coord, Math.max.apply(null, chegadas.concat([minha])));
+  }
   // Relatórios que a ficha de cada alvo listou no último ciclo. Preenchido por
   // nobleComandosDoAlvo, consumido por nobleLerRelatorioDoAlvo.
   const _nbRelsPorAlvo = {};
@@ -657,7 +754,10 @@
       // Na ficha do alvo a 1ª coluna é a ORIGEM (o destino é a própria aldeia da ficha).
       const oTxt = ((tds[0] && tds[0].textContent) || '').replace(/\s+/g, ' ').trim();
       const om = oTxt.match(/\((\d{1,3})\|(\d{1,3})\)/);
-      out.push({ at: agora, chega: chega || (agora + 3600000), n: 1, doJogo: 1,
+      // `chegaOk` separa chegada LIDA de chegada chutada. O fallback `agora + 1h` serve pro
+      // resto do módulo não quebrar, mas ele muda a cada leitura — quem conta gasto (chave
+      // estável por chegada) precisa saber distinguir. Ver nobleContabilizaGasto.
+      out.push({ at: agora, chega: chega || (agora + 3600000), chegaOk: !!chega, n: 1, doJogo: 1,
                  origem: om ? (om[1] + '|' + om[2]) : null, origemNome: oTxt.split('(')[0].trim() || oTxt || null });
     });
     return out;
@@ -810,12 +910,25 @@
   // O `nobres` do modelo virou TETO, nao meta. Serve pra voce limitar o gasto num alvo especifico
   // ("nao quero mais que 2 nobres nessa"); nunca faz mandar MAIS do que a lealdade pede.
   function noblePrecisaDe(alvo, tpl, durSec) {
-    const prev = nobleLealdadePrevista(alvo.coord, durSec != null ? durSec : alvo.ultDur);
+    const dur = (durSec != null) ? durSec : alvo.ultDur;
+    const prev = nobleLealdadePrevista(alvo.coord, dur);
     const voando = nobleEmVoo(alvo.coord);
+    const gasto = nobleGasto(alvo);
     const calc = (prev == null) ? 0 : Math.max(0, Math.ceil(prev / (config.noble.lealdadePorAtk || 25)));
     const teto = Math.max(1, tpl.nobres || NOBLE_POR_CONQUISTA);
-    const base = Math.min(calc, Math.max(0, teto - voando));
+    // ORÇAMENTO = teto menos o que JÁ FOI GASTO neste alvo. Era `teto - voando`, e voando zera
+    // quando o comando pousa — o orçamento se renovava sozinho. Ver nobleContabilizaGasto.
+    const orcamento = Math.max(0, teto - gasto);
+    // COBERTURA. `prev` para na chegada do MEU próximo nobre, então ela é cega pra comando que
+    // pousa DEPOIS dele: com 3 nobres chegando 19:04, 20:11 e 21:29 e o meu previsto pra 18:59,
+    // nenhum dos três entrava na conta e o alvo ainda pedia "mais 1". Aqui a linha do tempo vai
+    // até a última chegada marcada — se a lealdade zera em QUALQUER ponto dela, o que já está no
+    // ar resolve e mandar mais é nobre jogado fora (e auto-ataque depois da conquista).
+    const prevTudo = nobleLealdadeAteUltimoVoo(alvo.coord, dur);
+    const coberto = (prevTudo != null && prevTudo <= 0);
+    const base = coberto ? 0 : Math.min(calc, orcamento);
     return { precisa: base, lealdade: nobleLealdadeAgora(alvo.coord), prevista: prev,
+             prevTudo: prevTudo, coberto: coberto, teto: teto, gasto: gasto, orcamento: orcamento,
              voando: voando, bruto: calc };
   }
 
@@ -1166,11 +1279,35 @@
     // comando ja a caminho conta como se tivesse pousado.
     const need = noblePrecisaDe(alvo, tpl);
     const precisa = need.precisa;
+    // Os NÚMEROS da decisão, todo ciclo, na trilha própria do Noblar (dedupada). É daqui que sai
+    // a resposta de "por que esse alvo recebeu/não recebeu nobre" quando algo der errado.
+    nbTrail(alvo.coord, 'decisao', {
+      medida: Math.round(need.lealdade), lida: nobleLealdadeLida(alvo.coord),
+      prevista: need.prevista == null ? null : Math.round(need.prevista),
+      prevTudo: need.prevTudo == null ? null : Math.round(need.prevTudo),
+      voando: need.voando, gasto: need.gasto, teto: need.teto, orcamento: need.orcamento,
+      pedeLealdade: need.bruto, precisa: precisa, coberto: need.coberto,
+      ultDur: alvo.ultDur, tpl: op.id,
+    });
     if (precisa <= 0) {
+      // Três motivos BEM diferentes de não mandar, e antes todos viravam a mesma frase. O do meio
+      // é o que estava faltando: o teto de gasto do modelo, que agora conta pousado também.
+      const motivo = need.orcamento <= 0
+        ? ('teto do modelo: já gastei ' + need.gasto + ' de ' + need.teto + ' nobre(s) neste alvo')
+        : need.coberto
+          ? ('coberto: ' + nobleTxtVoo(alvo.coord) + ' — lealdade prevista '
+             + Math.round(need.prevTudo) + ' na última chegada')
+          : 'lealdade zerada';
+      if (need.orcamento <= 0) {
+        pushLog('Noblar: ' + alvo.coord + ' — TETO do modelo "' + (tpl.name || op.id) + '" atingido ('
+          + need.gasto + '/' + need.teto + ' nobres). Não sai mais nada daqui; aumente o teto do'
+          + ' modelo se quiser insistir.', 'err', 'noble');
+      }
       return { pronto: false, envios: [], falta: 0, dentroDoLimite: noAlcance, tpl: tpl,
                tplId: op.id, tplNome: tpl.name, coberto: true,
-               lealdade: need.lealdade, prevista: need.prevista, voando: need.voando,
-               motivo: need.voando ? ('coberto: ' + nobleTxtVoo(alvo.coord)) : 'lealdade zerada' };
+               lealdade: need.lealdade, prevista: need.prevista, prevTudo: need.prevTudo,
+               voando: need.voando, gasto: need.gasto, teto: need.teto, orcamento: need.orcamento,
+               motivo: motivo };
     }
 
     const limite = Math.max(1, tpl.maxHoras || 6) * 3600;
@@ -1245,7 +1382,8 @@
     return {
       pronto: envios.length > 0,
       envios: envios, falta: Math.max(0, faltam), levando: levando, precisa: precisa,
-      lealdade: need.lealdade, prevista: need.prevista, voando: need.voando,
+      lealdade: need.lealdade, prevista: need.prevista, prevTudo: need.prevTudo,
+      voando: need.voando, gasto: need.gasto, teto: need.teto, orcamento: need.orcamento,
       dentroDoLimite: noAlcance, tpl: tpl, tplId: op.id, tplNome: tpl.name,
       motivo: faltam > 0
         ? ('parcial: ' + levando + ' de ' + precisa + ' nobre(s)')
@@ -1515,7 +1653,16 @@
     }
     if (feitas.length) {
       const resumo = feitas.map((f) => f.nome + ': ' + (f.ok ? 'NOBRE em produção' : f.motivo)).join(' \u00b7 ');
-      pushLog('Noblar (recruta) → ' + alvo.coord + ' — ' + resumo, formados ? 'ok' : '', 'noble');
+      // Repetir a MESMA linha a cada ciclo — o caso comum é "faltam 32 moeda(s)" nas mesmas 7
+      // aldeias — enchia sozinho o log de 200 linhas, que é compartilhado com TODOS os módulos, e
+      // varria pra fora justamente o histórico de envio que explicaria um erro depois (foi o que
+      // aconteceu no 432|588: sobrou só o flood da recruta). Produção de nobre sempre loga;
+      // repetição idêntica fica só na trilha.
+      if (formados || resumo !== alvo.ultRecruta) {
+        alvo.ultRecruta = resumo;
+        pushLog('Noblar (recruta) → ' + alvo.coord + ' — ' + resumo, formados ? 'ok' : '', 'noble');
+      }
+      nbTrail(alvo.coord, 'recruta', { resumo: resumo, formados: formados, naFila: naFila });
     }
     return { formados: formados, naFila: naFila, prontoEm: prontoEm };
   }
@@ -1560,6 +1707,9 @@
       for (const a of ativos) {
         const lista = await nobleComandosDoAlvo(a.coord);
         if (lista == null) continue;                       // alvo fora do village.txt: mantém o que tinha
+        // ANTES de substituir o emVoo: o gasto é cumulativo e precisa ver o comando enquanto ele
+        // ainda está na ficha. Depois que pousa, some daqui pra sempre.
+        nobleContabilizaGasto(a, lista);
         if (lista.length) config.noble.emVoo[a.coord] = lista;
         else delete config.noble.emVoo[a.coord];
         // A ficha que acabou de ser baixada também lista os relatórios DESTE alvo. Ler daqui é o
@@ -1652,7 +1802,9 @@
       plano.push({ coord: alvo.coord, x: alvo.x, y: alvo.y, pronto: r.pronto,
                    envios: r.envios, falta: r.falta, levando: r.levando, precisa: r.precisa,
                    tplId: r.tplId, tplNome: r.tplNome, propria: r.propria, coberto: r.coberto,
-                   lealdade: r.lealdade, prevista: r.prevista, voando: r.voando, motivo: r.motivo });
+                   lealdade: r.lealdade, prevista: r.prevista, prevTudo: r.prevTudo,
+                   gasto: r.gasto, teto: r.teto, orcamento: r.orcamento,
+                   voando: r.voando, motivo: r.motivo });
       const item = plano[plano.length - 1];
       if (r.pronto) prontos++;
 
@@ -1791,9 +1943,20 @@
         ok += e.qtd;
         // Registra comando a comando: se o laco morrer no meio, o que ja saiu continua contado.
         nobleRegistraEnvio(item.coord, e.qtd, e.durSec, e.nome || e.coord || null);
-        pushLog('Noblar' + marca + ': ' + e.nome + ' → ' + item.coord + ' — 1 nobre enviado, chega em ' + fmtDur(e.durSec) + '.', 'ok', 'noble');
+        // O ENVIO é o evento mais importante pra reconstruir "por que esse alvo levou N nobres".
+        // Vai pra trilha com hora de chegada calculada, porque o log geral rola pra fora rápido.
+        nbTrail(item.coord, 'envio', {
+          origem: e.nome, origemCoord: e.coord, durSec: e.durSec,
+          chegaEm: new Date(Date.now() + (e.durSec || 0) * 1000).toLocaleString('pt-BR'),
+          gastoAntes: item.gasto, teto: item.teto, precisa: item.precisa, marca: (marca || '').trim(),
+        });
+        pushLog('Noblar' + marca + ': ' + e.nome + ' → ' + item.coord + ' — 1 nobre enviado, chega em '
+          + fmtDur(e.durSec) + ' (' + new Date(Date.now() + (e.durSec || 0) * 1000).toLocaleTimeString('pt-BR')
+          + '). Gasto no alvo antes deste: ' + (item.gasto != null ? item.gasto : '?')
+          + '/' + (item.teto != null ? item.teto : '?') + '.', 'ok', 'noble');
       } catch (err) {
         pushLog('Noblar' + marca + ': ' + e.nome + ' → ' + item.coord + ' FALHOU: ' + (err.message || err), 'err', 'noble');
+        nbTrail(item.coord, 'envio-falhou', { origem: e.nome, erro: String(err.message || err) });
       }
       await sleep(400);
     }
@@ -1902,7 +2065,7 @@
       '<th style="width:34px" title="Ordem na fila — uma aldeia é noblada por vez">Fila</th>' +
       '<th>Alvo</th><th>Modelo</th>' +
       '<th style="width:36px" title="Lealdade de hoje: a do último relatório, projetada pra agora com a regeneração">Leald.</th>' +
-      '<th style="width:30px" title="Comandos meus com nobre a caminho">Atks</th>' +
+      '<th style="width:30px" title="Em cima: comandos meus com nobre a caminho. Embaixo: nobres já gastos neste alvo / teto do modelo">Atks</th>' +
       '<th style="width:36px" title="Lealdade na hora em que o próximo nobre chegaria — já descontando os ataques no ar e somando a regeneração até lá">Prev.</th>' +
       '<th>Estado</th><th style="width:20px"></th></tr></thead><tbody>' +
       alvos.map((a, i) => {
@@ -1949,11 +2112,21 @@
         const detVoo = nobleEmVooDetalhe(a.coord);
         // Número clicável: abre a caixa com QUEM está mandando / vai mandar. O tooltip já
         // separa voando de pousado, porque o total sozinho mentia ("3" com 1 nobre indo).
-        const atksCel = voando
+        // GASTO/TETO embaixo do número de comandos no ar. Sem isso a trava do teto é invisível: o
+        // alvo simplesmente para de receber nobre e não há onde ver o porquê. Fica vermelho
+        // quando o orçamento acabou — é o estado em que nada mais sai daqui.
+        const gastoA = nobleGasto(a);
+        const tplA = (config.noble.templates || {})[a.tpl || p.tplId] || null;
+        const tetoA = Math.max(1, (tplA && tplA.nobres) || NOBLE_POR_CONQUISTA);
+        const gastoCel = '<div class="sub" style="color:' + (gastoA >= tetoA ? '#c0483a' : '#8a7340') + '"'
+          + ' title="Nobres já gastos neste alvo (contados da ficha do alvo, inclui envio manual)'
+          + ' contra o teto do modelo. No teto, o alvo não recebe mais nada.">' + gastoA + '/' + tetoA + '</div>';
+        const atksCel = (voando
           ? '<a class="twmgr-nb-quem" data-coord="' + esc(a.coord) + '" style="cursor:pointer;color:#3f8f52;font-weight:700" ' +
             'title="' + esc(nobleTxtVoo(a.coord)) + ' — clique pra ver de quais aldeias">' + voando +
             (detVoo.pousados ? '<span style="color:#a07a42">*</span>' : '') + '</a>'
-          : '<a class="twmgr-nb-quem" data-coord="' + esc(a.coord) + '" style="cursor:pointer;color:#8a7340" title="ver de quais aldeias sai o nobre">—</a>';
+          : '<a class="twmgr-nb-quem" data-coord="' + esc(a.coord) + '" style="cursor:pointer;color:#8a7340" title="ver de quais aldeias sai o nobre">—</a>')
+          + gastoCel;
         // O estado é SÓ de quem entrou no processo. Quem espera a vez fica em "Aguardando".
         const chave = fim ? (a.noblada ? 'noblada' : 'perdida') : (p.estado || 'aguardando');
         const E = NB_ESTADOS[chave] || NB_ESTADOS.aguardando;

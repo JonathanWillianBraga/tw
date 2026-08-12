@@ -237,11 +237,21 @@
     const overlay = mapEnsureOverlay();
     if (!overlay) return;
 
-    // Sincroniza tamanho se o mapa foi redimensionado
+    // Sincroniza tamanho se o mapa foi redimensionado.
+    //
+    // ARREDONDA ANTES DE COMPARAR. `TWMap.map.size` devolve fracionário — medido no br143:
+    // [1325, 1025.99] — e o atributo width/height de um canvas só aceita inteiro, virando 1025.
+    // Comparar 1025 com 1025.99 dava sempre diferente, então este bloco reatribuía o tamanho em
+    // TODO quadro. E atribuir width/height a um canvas APAGA o conteúdo dele: o desenho era
+    // limpo 4x por segundo. Antes da assinatura de quadro isso só desperdiçava (limpava e
+    // redesenhava logo em seguida); com ela, o redraw seguinte era pulado por "nada mudou" e o
+    // overlay ficava em branco — era isso que fazia o "esconder" piscar.
     const size = T.map.size || [overlay.width, overlay.height];
-    if (overlay.width !== size[0] || overlay.height !== size[1]) {
-      overlay.width = size[0]; overlay.height = size[1];
-      overlay.style.width = size[0] + 'px'; overlay.style.height = size[1] + 'px';
+    const sw = Math.ceil(size[0]), sh = Math.ceil(size[1]);
+    if (overlay.width !== sw || overlay.height !== sh) {
+      overlay.width = sw; overlay.height = sh;
+      overlay.style.width = sw + 'px'; overlay.style.height = sh + 'px';
+      _mapAssinatura = '';   // o resize limpou o canvas: o próximo quadro precisa redesenhar
     }
     // Overlay é filho de #map (wrapper visível), então left/top: 0 já ancora corretamente.
 

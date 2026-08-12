@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TW Operação — envio coordenado avulso
 // @namespace    twmgr-avulso
-// @version      1.0.0
+// @version      1.0.1
 // @description  Dispara N comandos de aldeias diferentes para alvos diferentes, todos POUSANDO no mesmo instante. Independente do TW Manager.
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -123,12 +123,16 @@
     // Alguns mundos devolvem a confirmação embrulhada em JSON.
     try { const j = JSON.parse(t); t = (j.response && j.response.dialog) || j.dialog || t; } catch (e) {}
     const doc = new DOMParser().parseFromString(t, 'text/html');
-    const form = doc.querySelector('#command-data-form') || doc.querySelector('form[action*="action=command"]');
-    if (!form) {
-      const err = doc.querySelector('.error, .autoHideBox, #command_confirmation_error');
-      throw new Error(err ? err.textContent.trim().replace(/\s+/g, ' ').slice(0, 90)
-                          : 'o jogo não devolveu o formulário (tropa insuficiente? alvo inválido?)');
-    }
+    // A RECUSA VEM PRIMEIRO, e vem em `.error_box`. Conferido nos três casos:
+    //   válido            -> tem [data-duration], sem .error_box
+    //   tropa insuficiente-> sem duração, .error_box = "Não existem unidades suficientes"
+    //   abaixo do piso    -> sem duração, .error_box = "A força de ataque precisa do mínimo…"
+    const eb = doc.querySelector('.error_box');
+    const et = eb ? (eb.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    if (et) throw new Error(et.slice(0, 110));
+    // QUEM PROVA QUE É UMA CONFIRMAÇÃO É A DURAÇÃO, não o formulário: `#command-data-form`
+    // existe também na praça NORMAL, então usá-lo como sinal engolia a recusa e o erro saía
+    // como "não achei a duração" — mentindo sobre a causa. Foi exatamente o que aconteceu.
     let dur = null;
     const dd = doc.querySelector('[data-duration]');
     if (dd) dur = parseInt(dd.getAttribute('data-duration'), 10);
@@ -137,7 +141,9 @@
         .match(/dura[çc][aã]o[^0-9]{0,12}(\d{1,3}):([0-5]\d):([0-5]\d)/i);
       if (m) dur = (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
     }
-    if (!dur || dur <= 0) throw new Error('não achei a duração na confirmação');
+    if (!dur || dur <= 0) throw new Error('o jogo não confirmou (sem duração e sem mensagem de erro — tela inesperada)');
+    const form = doc.querySelector('#command-data-form') || doc.querySelector('form[action*="action=command"]');
+    if (!form) throw new Error('confirmou mas não achei o formulário de envio');
     return { dur: dur, form: form };
   }
 

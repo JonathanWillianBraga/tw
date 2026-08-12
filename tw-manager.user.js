@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.160.0
+// @version      11.161.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.160.0';
+  const VERSION = '11.161.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -4894,12 +4894,27 @@
     }
     // Ler grupo deixa o jogo com ele selecionado; volta pra "todos" pra nao afetar as outras telas.
     if (usouGrupo) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
+    // O mapa POR ALDEIA vence o grupo — proposital, pra exceção pontual. O problema era ser
+    // silencioso: config velha aqui atropela o "Aplicar ao grupo" que o painel mostra, e nada
+    // dizia isso. Agora quem atropela é contado e vai pro log (a aba Modelos mostra e deixa
+    // limpar; ver bldRenderAvulsas/bldLimparAvulsas).
+    const atropelou = {};
     Object.keys(config.build.villages || {}).forEach((vid) => {
       const a = config.build.villages[vid];
       if (a.paused) { delete out[vid]; return; }        // pausada sai, mesmo vindo do grupo
       if (!config.build.templates[a.tpl]) return;
+      if (out[vid] && out[vid].tpl !== a.tpl) {
+        const de = (config.build.templates[out[vid].tpl] || {}).name || out[vid].tpl;
+        atropelou[de] = (atropelou[de] || 0) + 1;
+      }
       out[vid] = { tpl: a.tpl, name: a.name || a.coord || vid, coord: a.coord || null };
     });
+    const nAtropelo = Object.values(atropelou).reduce((s, n) => s + n, 0);
+    if (nAtropelo) {
+      pushLog('Construções: ' + nAtropelo + ' aldeia(s) do grupo estão com atribuição AVULSA e não'
+        + ' seguem o modelo do grupo (' + Object.keys(atropelou).map((d) => atropelou[d] + '× que seriam "' + d + '"').join(', ')
+        + '). Elas aparecem com ✱ no Status; use "Limpar avulsas" na aba Modelos pra valer o grupo.', 'err', 'build');
+    }
     return out;
   }
 
@@ -5249,6 +5264,58 @@
     delete config.build.templates[_bldActiveProf];
     _bldActiveProf = bldTplIds()[0];
     save(); bldRenderTplSelect(); renderBuildPlan(); bldRenderStatus();
+  }
+
+  // ===== Atribuições avulsas (por aldeia) =====
+  // O mapa `config.build.villages` VENCE o grupo do modelo (ver bldResolverAldeias): quem está lá
+  // ignora o "Aplicar ao grupo" e segue o modelo gravado nele. É proposital pra exceção pontual —
+  // mas vira armadilha quando sobra config velha, porque nada na aba Modelos mostrava isso.
+  //
+  // Caso real (br143): o painel dizia "Maluquinho v6 → Todas as Aldeias" e o usuário tinha 38
+  // aldeias, mas 27 delas ainda tinham entrada avulsa de uma configuração anterior (12 Ofensiva,
+  // 15 Defensiva). Só 11 rodavam o modelo escolhido, e uma aldeia parada de construir levou horas
+  // pra ser explicada — ela tinha COMPLETADO o modelo antigo, não o que estava na tela.
+  function bldAvulsasQueVencemGrupo() {
+    const comGrupo = {};
+    Object.keys(config.build.templates || {}).forEach((id) => {
+      if (config.build.templates[id].grupo) comGrupo[id] = 1;
+    });
+    // Só conta como conflito se ALGUM modelo tem grupo — sem grupo nenhum, o mapa avulso é a
+    // única forma de atribuição e não está atropelando coisa alguma.
+    if (!Object.keys(comGrupo).length) return [];
+    return Object.keys(config.build.villages || {}).filter((v) => {
+      const a = config.build.villages[v];
+      return a && !a.paused && config.build.templates[a.tpl] && !comGrupo[a.tpl];
+    });
+  }
+  function bldRenderAvulsas() {
+    const box = document.getElementById('twmgr-bld-avulsas');
+    const txt = document.getElementById('twmgr-bld-avulsas-txt');
+    if (!box || !txt) return;
+    const lista = bldAvulsasQueVencemGrupo();
+    if (!lista.length) { box.style.display = 'none'; return; }
+    const porTpl = {};
+    lista.forEach((v) => {
+      const nome = (config.build.templates[config.build.villages[v].tpl] || {}).name || '?';
+      porTpl[nome] = (porTpl[nome] || 0) + 1;
+    });
+    box.style.display = '';
+    txt.innerHTML = '⚠ <b>' + lista.length + ' aldeia(s)</b> têm atribuição avulsa e <b>ignoram o grupo</b>: '
+      + esc(Object.keys(porTpl).map((n) => porTpl[n] + '× ' + n).join(', '))
+      + '. Elas seguem esse modelo, não o escolhido acima.';
+  }
+  function bldLimparAvulsas() {
+    const lista = bldAvulsasQueVencemGrupo();
+    if (!lista.length) return;
+    if (!confirm('Remover a atribuição avulsa de ' + lista.length + ' aldeia(s)?\n\n'
+      + 'Elas passam a seguir o grupo do modelo, como o painel já mostra.\n'
+      + 'Os modelos e o progresso das aldeias não são tocados — só a amarração.')) return;
+    lista.forEach((v) => { delete config.build.villages[v]; });
+    config.build.nextAt = 0;              // o próximo ciclo já reatribui
+    save();
+    pushLog('Construções: ' + lista.length + ' atribuição(ões) avulsa(s) removida(s) — essas aldeias'
+      + ' passam a seguir o grupo do modelo no próximo ciclo.', 'ok', 'build');
+    bldRenderAvulsas(); bldRenderStatus();
   }
 
   // ===== Exportar / importar modelo (equivalente ao "Importar Modelo" do Gerente de conta) =====
@@ -12044,6 +12111,14 @@
               '<select id="twmgr-bld-tplgrp" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
             '<div id="twmgr-bld-plano-resumo" style="font-size:9px;color:#8a7d6d;margin-top:5px"></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Aldeia que entra no grupo no jogo entra na gestão <b>sozinha</b>, no ciclo seguinte — não precisa marcar nada aqui.</div>' +
+            // Atribuição avulsa VENCE o grupo, e isso era invisível: o painel mostrava "Aplicar ao
+            // grupo: Todas as Aldeias" enquanto 27 das 38 aldeias rodavam calado um modelo antigo,
+            // porque tinham sobrado no mapa por aldeia. O ✱ na aba Status marcava, mas ninguém
+            // acha um asterisco. Aqui o número aparece na cara e dá pra zerar.
+            '<div id="twmgr-bld-avulsas" style="display:none;font-size:9px;margin-top:7px;padding:5px 6px;border:1px solid #e0c9a0;border-radius:6px;background:#fdf6e8">' +
+              '<span id="twmgr-bld-avulsas-txt" style="color:#b03030"></span> ' +
+              '<a id="twmgr-bld-avulsas-limpar" class="twmgr-btn twmgr-ghost" style="padding:2px 8px;font-size:9px;margin-left:4px;white-space:nowrap">Limpar avulsas</a>' +
+            '</div>' +
             '<div class="twmgr-fld" style="margin-top:9px"><span title="Derruba nível acima do alvo">Demolir excedente</span>' +
               '<label class="twmgr-sw"><input id="twmgr-bld-demolir" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#b03030;margin-top:4px">⚠ Demolir <b>não devolve recurso</b> e reconstruir custa o preço cheio. Não há desfazer.</div>' +
@@ -12501,7 +12576,11 @@
       save();
       pushLog('Construções: modelo "' + (t.name || _bldActiveProf) + '" '
         + (t.grupo ? 'aplicado ao grupo selecionado.' : 'desamarrado do grupo.'), 'ok', 'build');
+      // Amarrar um modelo a um grupo é justamente quando as atribuições avulsas passam a
+      // atropelar — o aviso tem que reaparecer na hora, não só no próximo ciclo.
+      bldRenderAvulsas();
     });
+    document.getElementById('twmgr-bld-avulsas-limpar').addEventListener('click', bldLimparAvulsas);
     document.getElementById('twmgr-bld-stgroup').addEventListener('change', (e) => bldStatusFiltrar(e.target.value));
     document.getElementById('twmgr-bld-st-reload').addEventListener('click', bldAtualizarStatus);
     document.getElementById('twmgr-bld-demolir').checked = !!config.build.demolir;
@@ -12513,6 +12592,7 @@
     bldRenderTplSelect();
     bldSwitchProf(_bldActiveProf);
     fillBldTplGrupo();
+    bldRenderAvulsas();
     bldRenderStatus();
     // ---- Pesquisa ----
     document.getElementById('twmgr-pq-tpl').addEventListener('change', (e) => pesqSwitchTpl(e.target.value));
@@ -12667,7 +12747,7 @@
     const abreTela = (id) => { const el = document.getElementById(id); if (el) el.style.display = 'flex'; };
     const fechaTela = (id) => { const el = document.getElementById(id); if (el) el.style.display = 'none'; };
     document.getElementById('twmgr-bld-abrir-tpl').addEventListener('click', () => abreTela('twmgr-tela-tpl-build'));
-    document.getElementById('twmgr-bld-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-build'); bldRenderTplSelect(); fillBldTplGrupo(); bldRenderStatus(); });
+    document.getElementById('twmgr-bld-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-build'); bldRenderTplSelect(); fillBldTplGrupo(); bldRenderStatus(); bldRenderAvulsas(); });
     document.getElementById('twmgr-pq-abrir-tpl').addEventListener('click', () => abreTela('twmgr-tela-tpl-pq'));
     document.getElementById('twmgr-pq-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-pq'); renderResearchVillages(); });
     document.querySelectorAll('[data-sub]').forEach((b) => b.addEventListener('click', () => {

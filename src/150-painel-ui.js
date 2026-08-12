@@ -694,6 +694,14 @@
               '<select id="twmgr-bld-tplgrp" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
             '<div id="twmgr-bld-plano-resumo" style="font-size:9px;color:#8a7d6d;margin-top:5px"></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Aldeia que entra no grupo no jogo entra na gestão <b>sozinha</b>, no ciclo seguinte — não precisa marcar nada aqui.</div>' +
+            // Atribuição avulsa VENCE o grupo, e isso era invisível: o painel mostrava "Aplicar ao
+            // grupo: Todas as Aldeias" enquanto 27 das 38 aldeias rodavam calado um modelo antigo,
+            // porque tinham sobrado no mapa por aldeia. O ✱ na aba Status marcava, mas ninguém
+            // acha um asterisco. Aqui o número aparece na cara e dá pra zerar.
+            '<div id="twmgr-bld-avulsas" style="display:none;font-size:9px;margin-top:7px;padding:5px 6px;border:1px solid #e0c9a0;border-radius:6px;background:#fdf6e8">' +
+              '<span id="twmgr-bld-avulsas-txt" style="color:#b03030"></span> ' +
+              '<a id="twmgr-bld-avulsas-limpar" class="twmgr-btn twmgr-ghost" style="padding:2px 8px;font-size:9px;margin-left:4px;white-space:nowrap">Limpar avulsas</a>' +
+            '</div>' +
             '<div class="twmgr-fld" style="margin-top:9px"><span title="Derruba nível acima do alvo">Demolir excedente</span>' +
               '<label class="twmgr-sw"><input id="twmgr-bld-demolir" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#b03030;margin-top:4px">⚠ Demolir <b>não devolve recurso</b> e reconstruir custa o preço cheio. Não há desfazer.</div>' +
@@ -1151,7 +1159,11 @@
       save();
       pushLog('Construções: modelo "' + (t.name || _bldActiveProf) + '" '
         + (t.grupo ? 'aplicado ao grupo selecionado.' : 'desamarrado do grupo.'), 'ok', 'build');
+      // Amarrar um modelo a um grupo é justamente quando as atribuições avulsas passam a
+      // atropelar — o aviso tem que reaparecer na hora, não só no próximo ciclo.
+      bldRenderAvulsas();
     });
+    document.getElementById('twmgr-bld-avulsas-limpar').addEventListener('click', bldLimparAvulsas);
     document.getElementById('twmgr-bld-stgroup').addEventListener('change', (e) => bldStatusFiltrar(e.target.value));
     document.getElementById('twmgr-bld-st-reload').addEventListener('click', bldAtualizarStatus);
     document.getElementById('twmgr-bld-demolir').checked = !!config.build.demolir;
@@ -1163,6 +1175,7 @@
     bldRenderTplSelect();
     bldSwitchProf(_bldActiveProf);
     fillBldTplGrupo();
+    bldRenderAvulsas();
     bldRenderStatus();
     // ---- Pesquisa ----
     document.getElementById('twmgr-pq-tpl').addEventListener('change', (e) => pesqSwitchTpl(e.target.value));
@@ -1317,7 +1330,7 @@
     const abreTela = (id) => { const el = document.getElementById(id); if (el) el.style.display = 'flex'; };
     const fechaTela = (id) => { const el = document.getElementById(id); if (el) el.style.display = 'none'; };
     document.getElementById('twmgr-bld-abrir-tpl').addEventListener('click', () => abreTela('twmgr-tela-tpl-build'));
-    document.getElementById('twmgr-bld-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-build'); bldRenderTplSelect(); fillBldTplGrupo(); bldRenderStatus(); });
+    document.getElementById('twmgr-bld-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-build'); bldRenderTplSelect(); fillBldTplGrupo(); bldRenderStatus(); bldRenderAvulsas(); });
     document.getElementById('twmgr-pq-abrir-tpl').addEventListener('click', () => abreTela('twmgr-tela-tpl-pq'));
     document.getElementById('twmgr-pq-fechar-tpl').addEventListener('click', () => { fechaTela('twmgr-tela-tpl-pq'); renderResearchVillages(); });
     document.querySelectorAll('[data-sub]').forEach((b) => b.addEventListener('click', () => {

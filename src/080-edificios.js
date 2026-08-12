@@ -372,12 +372,27 @@
     }
     // Ler grupo deixa o jogo com ele selecionado; volta pra "todos" pra nao afetar as outras telas.
     if (usouGrupo) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
+    // O mapa POR ALDEIA vence o grupo — proposital, pra exceção pontual. O problema era ser
+    // silencioso: config velha aqui atropela o "Aplicar ao grupo" que o painel mostra, e nada
+    // dizia isso. Agora quem atropela é contado e vai pro log (a aba Modelos mostra e deixa
+    // limpar; ver bldRenderAvulsas/bldLimparAvulsas).
+    const atropelou = {};
     Object.keys(config.build.villages || {}).forEach((vid) => {
       const a = config.build.villages[vid];
       if (a.paused) { delete out[vid]; return; }        // pausada sai, mesmo vindo do grupo
       if (!config.build.templates[a.tpl]) return;
+      if (out[vid] && out[vid].tpl !== a.tpl) {
+        const de = (config.build.templates[out[vid].tpl] || {}).name || out[vid].tpl;
+        atropelou[de] = (atropelou[de] || 0) + 1;
+      }
       out[vid] = { tpl: a.tpl, name: a.name || a.coord || vid, coord: a.coord || null };
     });
+    const nAtropelo = Object.values(atropelou).reduce((s, n) => s + n, 0);
+    if (nAtropelo) {
+      pushLog('Construções: ' + nAtropelo + ' aldeia(s) do grupo estão com atribuição AVULSA e não'
+        + ' seguem o modelo do grupo (' + Object.keys(atropelou).map((d) => atropelou[d] + '× que seriam "' + d + '"').join(', ')
+        + '). Elas aparecem com ✱ no Status; use "Limpar avulsas" na aba Modelos pra valer o grupo.', 'err', 'build');
+    }
     return out;
   }
 
@@ -727,6 +742,58 @@
     delete config.build.templates[_bldActiveProf];
     _bldActiveProf = bldTplIds()[0];
     save(); bldRenderTplSelect(); renderBuildPlan(); bldRenderStatus();
+  }
+
+  // ===== Atribuições avulsas (por aldeia) =====
+  // O mapa `config.build.villages` VENCE o grupo do modelo (ver bldResolverAldeias): quem está lá
+  // ignora o "Aplicar ao grupo" e segue o modelo gravado nele. É proposital pra exceção pontual —
+  // mas vira armadilha quando sobra config velha, porque nada na aba Modelos mostrava isso.
+  //
+  // Caso real (br143): o painel dizia "Maluquinho v6 → Todas as Aldeias" e o usuário tinha 38
+  // aldeias, mas 27 delas ainda tinham entrada avulsa de uma configuração anterior (12 Ofensiva,
+  // 15 Defensiva). Só 11 rodavam o modelo escolhido, e uma aldeia parada de construir levou horas
+  // pra ser explicada — ela tinha COMPLETADO o modelo antigo, não o que estava na tela.
+  function bldAvulsasQueVencemGrupo() {
+    const comGrupo = {};
+    Object.keys(config.build.templates || {}).forEach((id) => {
+      if (config.build.templates[id].grupo) comGrupo[id] = 1;
+    });
+    // Só conta como conflito se ALGUM modelo tem grupo — sem grupo nenhum, o mapa avulso é a
+    // única forma de atribuição e não está atropelando coisa alguma.
+    if (!Object.keys(comGrupo).length) return [];
+    return Object.keys(config.build.villages || {}).filter((v) => {
+      const a = config.build.villages[v];
+      return a && !a.paused && config.build.templates[a.tpl] && !comGrupo[a.tpl];
+    });
+  }
+  function bldRenderAvulsas() {
+    const box = document.getElementById('twmgr-bld-avulsas');
+    const txt = document.getElementById('twmgr-bld-avulsas-txt');
+    if (!box || !txt) return;
+    const lista = bldAvulsasQueVencemGrupo();
+    if (!lista.length) { box.style.display = 'none'; return; }
+    const porTpl = {};
+    lista.forEach((v) => {
+      const nome = (config.build.templates[config.build.villages[v].tpl] || {}).name || '?';
+      porTpl[nome] = (porTpl[nome] || 0) + 1;
+    });
+    box.style.display = '';
+    txt.innerHTML = '⚠ <b>' + lista.length + ' aldeia(s)</b> têm atribuição avulsa e <b>ignoram o grupo</b>: '
+      + esc(Object.keys(porTpl).map((n) => porTpl[n] + '× ' + n).join(', '))
+      + '. Elas seguem esse modelo, não o escolhido acima.';
+  }
+  function bldLimparAvulsas() {
+    const lista = bldAvulsasQueVencemGrupo();
+    if (!lista.length) return;
+    if (!confirm('Remover a atribuição avulsa de ' + lista.length + ' aldeia(s)?\n\n'
+      + 'Elas passam a seguir o grupo do modelo, como o painel já mostra.\n'
+      + 'Os modelos e o progresso das aldeias não são tocados — só a amarração.')) return;
+    lista.forEach((v) => { delete config.build.villages[v]; });
+    config.build.nextAt = 0;              // o próximo ciclo já reatribui
+    save();
+    pushLog('Construções: ' + lista.length + ' atribuição(ões) avulsa(s) removida(s) — essas aldeias'
+      + ' passam a seguir o grupo do modelo no próximo ciclo.', 'ok', 'build');
+    bldRenderAvulsas(); bldRenderStatus();
   }
 
   // ===== Exportar / importar modelo (equivalente ao "Importar Modelo" do Gerente de conta) =====

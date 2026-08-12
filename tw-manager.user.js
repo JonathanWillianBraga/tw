@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.152.0
+// @version      11.153.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.152.0';
+  const VERSION = '11.153.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -13175,6 +13175,10 @@
   let _mapRedrawTimer = null;
   let _mapLoggedOnce = false;
 
+  // Assinatura do que faz o desenho mudar. Sem isto o timer redesenhava 4× por segundo mesmo
+  // com o mapa parado — agora quadro repetido custa uma comparação de string. Declarada aqui em
+  // cima porque `mapEnsureOverlay` a zera ao criar um canvas novo.
+  let _mapAssinatura = '';
   function mapEnsureOverlay() {
     try {
       if (_mapOverlay && document.body.contains(_mapOverlay)) return _mapOverlay;
@@ -13195,6 +13199,11 @@
       c.style.width = size[0] + 'px'; c.style.height = size[1] + 'px';
       parent.appendChild(c);
       _mapOverlay = c;
+      // Canvas NOVO nasce em branco. A assinatura de quadro compara viewport e config, que não
+      // mudaram — então sem zerar aqui o próximo redraw seria pulado e o overlay ficaria vazio.
+      // É o que fazia o "esconder" piscar: desenhava, o mapa reconstruía o DOM, e o desenho
+      // nunca voltava.
+      _mapAssinatura = '';
       console.log('[TWMgr Mapa] overlay criado dentro de #' + parent.id + ' (' + parent.tagName + '), rect:', c.getBoundingClientRect());
       return c;
     } catch (e) { console.warn('[TWMgr Mapa] mapEnsureOverlay falhou:', e && e.message); return null; }
@@ -13248,9 +13257,6 @@
     });
     _mapPorCoord = idx; _mapMinhas = minhas;
   }
-  // Assinatura do que faz o desenho mudar. Sem isto o timer redesenhava 4× por segundo mesmo
-  // com o mapa parado — agora quadro repetido custa uma comparação de string.
-  let _mapAssinatura = '';
   function mapCanvasRedraw(forcar) {
     if (!_mapVilCache) return;
     if (!_mapPorCoord) mapIndexar(_mapVilCache);   // cache veio de sessão anterior
@@ -13401,7 +13407,11 @@
         // saltava mais aos olhos que a própria aldeia — o oposto de filtrar. Pintando com a cor
         // do gramado do TW (média do gras4.webp que o próprio mapa usa de fundo), o tile some
         // dentro do mapa e sobra só o que passou no filtro.
-        if (dimEnabled) { ctx.fillStyle = 'rgba(94,114,28,' + (1 - dim) + ')'; ctx.fillRect(px, py, tw, th); }
+        // OPACO. `dimOpacity` valia 0.15, o que deixava a grama em 85% e a aldeia aparecendo
+        // por baixo — no modo "escurecer" isso era o efeito desejado, mas o modo virou
+        // ESCONDER e véu não esconde. Não há UI pra esse valor, então ninguém o estava
+        // ajustando; aqui ele deixa de participar.
+        if (dimEnabled) { ctx.fillStyle = '#5e721c'; ctx.fillRect(px, py, tw, th); }
         return;
       }
 

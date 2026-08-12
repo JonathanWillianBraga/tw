@@ -1510,6 +1510,17 @@
   // try { ccInjetarPraca(); } catch (e) { /* silencioso: injeção só falha se o layout mudou */ }
   // Fora do t=0: loadMapData puxa village.txt e player.txt, os dois maiores downloads do
   // script, e disparar isso junto com as ~128 requisicoes do carregamento da pagina era
-  // pedir 429. Entra depois da fila de retomada dos modulos.
-  setTimeout(() => { try { enhanceMapPage(); } catch (e) { /* silencioso */ } }, 70000);
+  // pedir 429.
+  //
+  // Mas 70s era generoso demais e caia justamente onde doi: `enhanceMapPage` retorna na
+  // primeira linha se a tela nao for o mapa, entao o atraso NUNCA teve efeito fora dela --
+  // so servia pra fazer o usuario esperar mais de um minuto pelo painel de filtros na unica
+  // tela em que ele importa. Medido no br143: village.txt sao 3,5 MB que baixam em 15ms com
+  // cache do navegador (o codigo usa cache:'default', entao a maioria das visitas e 304).
+  // 5s ja passa longe da rajada de carregamento, e o recuo de 30 min em caso de 429 continua
+  // valendo como rede de seguranca.
+  {
+    const naTelaDoMapa = !!(window.game_data && window.game_data.screen === 'map');
+    if (naTelaDoMapa) setTimeout(() => { try { enhanceMapPage(); } catch (e) { /* silencioso */ } }, 5000);
+  }
 })();

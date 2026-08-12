@@ -46,6 +46,7 @@
         vils.set(p[0], { x: +p[2], y: +p[3], playerId: p[4], points: parseInt(p[5], 10) || 0 });
       });
       _mapVilCache = vils;
+      mapIndexar(vils);
       config.mapUi.dataCachedAt = Date.now();
       save();
     }
@@ -201,8 +202,30 @@
         '<span style="color:#6f6153">' + MAP_INTEL_NOME[c] + '</span> <b style="color:#8b5426">' + cont[c] + '</b></div>').join('');
   }
 
-  function mapCanvasRedraw() {
+  // ===== Índice espacial =====
+  // O redraw varria `_mapVilCache` INTEIRO duas vezes e jogava fora tudo que estava fora da
+  // tela — com o timer de 250ms isso dava, medido no br143, 76.302 aldeias × 2 × 4/s =
+  // 610 mil iterações por segundo pra desenhar 930 tiles. Era isso que travava o mapa.
+  //
+  // Como o TW tem no máximo UMA aldeia por coordenada, o índice certo é `"x|y" -> aldeia`:
+  // o redraw passa a percorrer os tiles do viewport e buscar direto, sem varrer nada.
+  // `_mapMinhas` sai do mesmo laço porque as minhas aldeias não mudam durante a sessão e
+  // eram refiltradas do zero a cada quadro.
+  let _mapPorCoord = null, _mapMinhas = null;
+  function mapIndexar(vils) {
+    const idx = new Map(); const minhas = [];
+    vils.forEach((v) => {
+      idx.set(v.x + '|' + v.y, v);
+      if (v.playerId === MY_PLAYER_ID) minhas.push(v);
+    });
+    _mapPorCoord = idx; _mapMinhas = minhas;
+  }
+  // Assinatura do que faz o desenho mudar. Sem isto o timer redesenhava 4× por segundo mesmo
+  // com o mapa parado — agora quadro repetido custa uma comparação de string.
+  let _mapAssinatura = '';
+  function mapCanvasRedraw(forcar) {
     if (!_mapVilCache) return;
+    if (!_mapPorCoord) mapIndexar(_mapVilCache);   // cache veio de sessão anterior
     const T = window.TWMap;
     if (!T || !T.map || typeof T.map.pixelByCoord !== 'function') return;
     const overlay = mapEnsureOverlay();
@@ -217,8 +240,6 @@
     // Overlay é filho de #map (wrapper visível), então left/top: 0 já ancora corretamente.
 
     const ctx = overlay.getContext('2d');
-    ctx.clearRect(0, 0, overlay.width, overlay.height);
-
     const cfg = config.mapUi;
     const dim = cfg.dimOpacity != null ? cfg.dimOpacity : 0.15;
     const pMin = cfg.pointsMin || 0;
@@ -246,6 +267,15 @@
       yMin = pos[1] - rangeY; yMax = pos[1] + rangeY;
     }
 
+    // Quadro repetido custa uma comparação de string em vez de um redesenho inteiro. O mapa fica
+    // parado a maior parte do tempo, e o timer de 250ms estava refazendo tudo do mesmo jeito.
+    const assin = [xMin, xMax, yMin, yMax, overlay.width, overlay.height, dim, pMin, pMax,
+                   cfg.dimMode, cfg.showRange, cfg.showIntel, cfg.showReservations, cfg.showCobertura,
+                   JSON.stringify(cfg.show || {})].join('~');
+    if (!forcar && assin === _mapAssinatura) return;
+    _mapAssinatura = assin;
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
     const counts = { mine: 0, tribe: 0, enemy: 0, barb: 0, visible: 0 };
     let drawn = 0;
 
@@ -272,12 +302,10 @@
     if (cfg.showRange) {
       const raio = (config.map && config.map.maxDist) || 20;
       const r2 = raio * raio;
-      const minhas = [];
-      _mapVilCache.forEach((v) => {
-        if (v.playerId !== MY_PLAYER_ID) return;
-        if (v.x < xMin - raio || v.x > xMax + raio || v.y < yMin - raio || v.y > yMax + raio) return;
-        minhas.push(v);
-      });
+      // Sai da lista pré-montada: antes isto varria as 76 mil aldeias do mundo a cada quadro
+      // só pra achar as ~33 minhas.
+      const minhas = (_mapMinhas || []).filter((v) =>
+        !(v.x < xMin - raio || v.x > xMax + raio || v.y < yMin - raio || v.y > yMax + raio));
       if (minhas.length) {
         // PREENCHE TILE A TILE, não desenha círculos.
         //
@@ -317,8 +345,9 @@
       }
     }
 
-    _mapVilCache.forEach((vil, vid) => {
-      if (vil.x < xMin || vil.x > xMax || vil.y < yMin || vil.y > yMax) return;
+    // Percorre os TILES do viewport (~930) e busca a aldeia daquele tile no índice, em vez de
+    // varrer o mundo inteiro (76 mil) e descartar 99% por estar fora da tela.
+    const visitar = (vil) => {
       let wx, wy;
       try {
         const p = T.map.pixelByCoord(vil.x, vil.y);
@@ -340,7 +369,11 @@
 
       if (!visible) {
         // Filtrada: só escurece se o usuário optou por 'dim'. Padrão 'off' não desenha nada.
-        if (dimEnabled) { ctx.fillStyle = 'rgba(0,0,0,' + (1 - dim) + ')'; ctx.fillRect(px, py, tw, th); }
+        // ESCONDER, não escurecer. O bloco preto marcava a aldeia filtrada com um quadrado que
+        // saltava mais aos olhos que a própria aldeia — o oposto de filtrar. Pintando com a cor
+        // do gramado do TW (média do gras4.webp que o próprio mapa usa de fundo), o tile some
+        // dentro do mapa e sobra só o que passou no filtro.
+        if (dimEnabled) { ctx.fillStyle = 'rgba(94,114,28,' + (1 - dim) + ')'; ctx.fillRect(px, py, tw, th); }
         return;
       }
 
@@ -413,7 +446,13 @@
         ctx.textBaseline = 'top';
         ctx.fillText(label, px + 2, py + th - 21);
       }
-    });
+    };
+    for (let ty = yMin; ty <= yMax; ty++) {
+      for (let tx = xMin; tx <= xMax; tx++) {
+        const vil = _mapPorCoord.get(tx + '|' + ty);
+        if (vil) visitar(vil);
+      }
+    }
 
     if (!_mapLoggedOnce) {
       _mapLoggedOnce = true;
@@ -466,7 +505,7 @@
         check('twmgr-map-cob', 'Mostrar cobertura de exploração', cfg.showCobertura) +
         check('twmgr-map-range', 'Mostrar meu alcance (raio do módulo Mapa)', cfg.showRange) +
         '<div id="twmgr-map-cob-leg" style="font-size:9px;line-height:1.7;margin:2px 0 6px 4px"></div>' +
-        check('twmgr-map-dim', 'Escurecer aldeias filtradas (bloco preto)', cfg.dimMode === 'dim') +
+        check('twmgr-map-dim', 'Esconder aldeias filtradas (cor do gramado)', cfg.dimMode === 'dim') +
         '<div style="margin-top:6px;border-top:1px dashed #b89a5a;padding-top:6px;font-size:10px;color:#ddd2c0">' +
           '<div id="twmgr-map-counts">—</div>' +
           '<div style="margin-top:4px;display:flex;justify-content:space-between;align-items:center;gap:4px;flex-wrap:wrap">' +
@@ -551,8 +590,12 @@
   async function enhanceMapPage() {
     const gd = window.game_data;
     if (!gd || gd.screen !== 'map') return;
-    await loadMapData(false);
+    // Painel PRIMEIRO. Ele não depende dos arquivos de mapa pra existir — só os números dentro
+    // dele dependem. Construindo depois do await, o usuário ficava olhando pra tela sem nada
+    // enquanto 3,5 MB baixavam; agora os controles aparecem na hora e os contadores preenchem
+    // quando o dado chega.
     mapBuildPanel();
+    await loadMapData(false);
     // Espera o TWMap estar pronto (as vezes carrega assincrono)
     const waitTWMap = () => new Promise((resolve) => {
       const t0 = Date.now();
@@ -566,11 +609,12 @@
     const ok = await waitTWMap();
     if (!ok) { console.warn('[TWMgr Mapa] TWMap.map.pixelByCoord não disponível — filtros não funcionarão'); return; }
     mapApplyFilters();
-    // Redraw periódico (250ms) — cobre scroll/zoom. O comentário aqui dizia "só itera aldeias no
-    // viewport", o que é falso: mapCanvasRedraw percorre o cache inteiro e descarta por dentro.
-    // Medido antes de "consertar": 0,62ms por passada com 60 mil aldeias, ou 2,5ms de CPU por
-    // segundo. Não é gargalo, e indexar por coluna seria complexidade sem ganho. Fica como está —
-    // o comentário é que estava mentindo.
+    // Redraw periódico (250ms) — cobre scroll/zoom. Agora ele É barato de verdade: o desenho
+    // busca no índice por coordenada os ~930 tiles do viewport, e quadro sem mudança sai na
+    // comparação de assinatura. Medido no br143 com 76.302 aldeias: varredura completa 0,87ms
+    // por passada (6,9ms de CPU/s contando as duas varreduras a 4 quadros/s) contra 0,19ms
+    // indexado (0,8ms/s). Nenhum dos dois era o motivo do painel demorar — isso era o
+    // setTimeout de 70s no bootstrap, corrigido em 180-centro-comando.js.
     clearInterval(_mapRedrawTimer);
     _mapRedrawTimer = setInterval(mapApplyFilters, 250);
     // Hook opcional: se o TWMap dispara evento de setPos, redesenha imediato

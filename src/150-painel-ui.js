@@ -934,6 +934,16 @@
       '<div class="twmgr-row"><span class="twmgr-lbl">Tópico ntfy.sh (opcional)</span><input id="twmgr-cap-ntfy" class="twmgr-inp" type="text" placeholder="meu-topico" style="width:120px"></div>' +
       '<div class="twmgr-row"><span class="twmgr-lbl" title="Recarrega a página a cada X min quando você está AFK, pra forçar o bot-check a aparecer e te avisar. 0 = desligado.">Auto-F5 AFK (min, 0=off)</span><input id="twmgr-cap-reload" class="twmgr-inp" type="number" min="0" step="1" value="0" style="width:66px"></div>' +
       '<button id="twmgr-cap-test" class="twmgr-btn twmgr-ghost" style="width:100%;margin:4px 0 8px">🔔 Testar notificação</button>' +
+      // Backup: a config vive espalhada em ~22 chaves do localStorage, então exportar "na mão"
+      // (copiar a principal) perderia fichas de alvo, apoios, exploração e trilha do Noblar.
+      '<div style="border-top:1px solid #ece4d8;margin:8px 0 6px;padding-top:8px">' +
+        '<div class="twmgr-hint" style="margin-bottom:6px">💾 <b>Backup completo</b> — leva a configuração inteira pra outro PC: modelos, alvos, fichas, grupos e os <b>ataques programados</b> da Central. Sai como arquivo <code>.json</code>.</div>' +
+        '<div class="twmgr-row" style="gap:4px">' +
+          '<button id="twmgr-bkp-exp" class="twmgr-btn twmgr-ghost" style="flex:1">⬇ Exportar tudo</button>' +
+          '<button id="twmgr-bkp-imp" class="twmgr-btn twmgr-ghost" style="flex:1">⬆ Importar</button>' +
+        '</div>' +
+        '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Importar <b>substitui</b> toda a configuração deste navegador e recarrega a página — exporte a atual antes se quiser poder voltar. Não rode o script nos dois PCs ao mesmo tempo na mesma conta: a trava de aba é por navegador e não enxerga a outra máquina.</div>' +
+      '</div>' +
       '<div id="twmgr-log" class="twmgr-log"></div>' +
       '</div>' +
       '</div>';
@@ -958,6 +968,8 @@
     ['twmgr-cap-en', 'twmgr-cap-brw', 'twmgr-cap-ntfy', 'twmgr-cap-reload'].forEach((id) => document.getElementById(id).addEventListener('change', readCapCfg));
     document.getElementById('twmgr-cap-brw').addEventListener('change', async () => { if (document.getElementById('twmgr-cap-brw').checked) await ensureNotifyPermission(); });
     document.getElementById('twmgr-cap-test').addEventListener('click', testCaptchaNotif);
+    document.getElementById('twmgr-bkp-exp').addEventListener('click', bkpExportar);
+    document.getElementById('twmgr-bkp-imp').addEventListener('click', bkpImportar);
 
     SCAV_UNITS.forEach(([u]) => { const el = document.getElementById('twmgr-su-' + u); if (el) el.checked = !!(config.scav.units && config.scav.units[u]); });
     document.getElementById('twmgr-scav-unlock').checked = !!config.scav.autoUnlock;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.173.0
+// @version      11.174.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.173.0';
+  const VERSION = '11.174.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -1990,6 +1990,10 @@
     const tAld = '<table class="twmgr-bld-tab"><thead><tr>'
       + '<th>Aldeia</th>'
       + '<th style="width:52px" title="Cavalaria leve parada em casa">CL parada</th>'
+      + '<th style="width:38px" title="Saques desta aldeia a caminho do alvo, agora">indo</th>'
+      + '<th style="width:38px" title="Saques voltando pra esta aldeia, agora — e a carga chegando">voltando</th>'
+      + '<th style="width:58px" title="Capacidade de carga que ESTA aldeia despachou hoje. Nao e saque medido: o jogo so publica saque da conta inteira, nunca por aldeia.">carga hoje</th>'
+      + '<th style="width:58px" title="Projecao do fim do dia pela mesma regra de tres da previsao da conta: carga de hoje dividida pela fracao do dia ja decorrida.">previsao</th>'
       + '<th style="width:34px" title="Ataques que sairam daqui neste ciclo">saiu</th>'
       + '<th style="width:46px" title="Distancia ate o alvo elegivel mais proximo, em campos">alvo +perto</th>'
       + '<th title="Por que nao enviou">situacao</th></tr></thead><tbody>'
@@ -2005,13 +2009,19 @@
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">'
           + '<td><b>' + esc(l.nome) + '</b>' + (l.nome !== l.coord ? '<div class="sub">' + esc(l.coord || '') + '</div>' : '') + '</td>'
           + '<td' + (ocioso ? ' style="color:#b03030;font-weight:700"' : '') + '>' + n(l.cl) + '</td>'
+          + '<td>' + (l.saindo || '<span style="color:#8a7340">\u2014</span>') + '</td>'
+          + '<td>' + (l.voltando || '<span style="color:#8a7340">\u2014</span>') + '</td>'
+          + '<td>' + (l.capHoje ? n(l.capHoje) : '<span style="color:#8a7340">\u2014</span>') + '</td>'
+          + '<td' + (l.capPrev ? ' style="color:#2e7d3a;font-weight:600"' : '') + '>' + (l.capPrev ? n(l.capPrev) : '<span style="color:#8a7340">\u2014</span>') + '</td>'
           + '<td>' + (l.enviou ? '<b style="color:#3f8f52">' + l.enviou + '</b>' : '<span style="color:#8a7340">\u2014</span>') + '</td>'
           + '<td>' + (l.distMin != null ? l.distMin : '\u2014') + '</td>'
           + '<td style="font-size:9px;color:#6f6153">' + sit + '</td></tr>';
       }).join('') + '</tbody></table>';
     box.innerHTML = cab
       + '<div style="font-size:9px;color:#8a7d6d;margin:0 0 7px">Foto do ultimo ciclo, ha ' + idade + 's. '
-      + 'Cada alvo vai pra <b>UMA</b> aldeia \u2014 a mais proxima que tiver tropa. As outras nem sao consultadas.</div>'
+      + 'Cada alvo vai pra <b>UMA</b> aldeia \u2014 a mais proxima que tiver tropa. As outras nem sao consultadas.<br>'
+      + '<b>carga hoje</b> e <b>previsao</b> sao capacidade de transporte despachada, nao saque medido: '
+      + 'o jogo so publica saque da conta inteira, nunca por aldeia. Servem pra comparar aldeias entre si.</div>'
       + '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:8px 0 3px">Alvos deste ciclo</div>' + tAlvos
       + '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:11px 0 3px">Aldeias</div>' + tAld;
   }
@@ -2021,13 +2031,25 @@
     const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=attack&page=-1', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const coords = new Set(); let saques = 0; const farmCoords = new Set();
+    // POR ORIGEM: a 2ª coluna é a aldeia de onde o comando saiu ("Josh (453|596) K54"). Sem isso
+    // só dava pra dizer "672 ataques em rota" — número da conta inteira, que não ajuda a decidir
+    // nada sobre uma aldeia específica.
+    const porOrigem = {};
     doc.querySelectorAll('#commands_table tr').forEach((tr) => {
       const label = tr.querySelector('.quickedit-label'); if (!label) return;
       const m = (label.textContent || '').match(/\((\d+)\|(\d+)\)/); const coord = m ? m[1] + '|' + m[2] : null;
       if (coord) coords.add(coord);
-      if (tr.querySelector('img[src*="command/farm"]')) { saques++; if (coord) farmCoords.add(coord); }   // ícone farm.webp = ataque de saque
+      const ehFarm = !!tr.querySelector('img[src*="command/farm"]');   // ícone farm.webp = ataque de saque
+      if (ehFarm) { saques++; if (coord) farmCoords.add(coord); }
+      const tds = tr.querySelectorAll('td');
+      const om = tds[1] ? (tds[1].textContent || '').match(/\((\d+)\|(\d+)\)/) : null;
+      if (om) {
+        const oc = om[1] + '|' + om[2];
+        const o = porOrigem[oc] || (porOrigem[oc] = { total: 0, farm: 0 });
+        o.total++; if (ehFarm) o.farm++;
+      }
     });
-    return { coords: coords, saques: saques, farmCoords: farmCoords };
+    return { coords: coords, saques: saques, farmCoords: farmCoords, porOrigem: porOrigem };
   }
 
   // Ataques VOLTANDO. Mesma tela dos comandos, outro `type` — uma requisição, e é o número que
@@ -2037,12 +2059,22 @@
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     let total = 0, saques = 0;
+    // Na volta a 2ª coluna é a aldeia PRA ONDE a tropa está voltando — mesma estrutura da ida.
+    const porOrigem = {};
     doc.querySelectorAll('#commands_table tr').forEach((tr) => {
       if (!tr.querySelector('.quickedit-label')) return;
       total++;
-      if (tr.querySelector('img[src*="command/farm"], img[src*="return_attack"]')) saques++;
+      const ehFarm = !!tr.querySelector('img[src*="command/farm"], img[src*="return_attack"]');
+      if (ehFarm) saques++;
+      const tds = tr.querySelectorAll('td');
+      const om = tds[1] ? (tds[1].textContent || '').match(/\((\d+)\|(\d+)\)/) : null;
+      if (om) {
+        const oc = om[1] + '|' + om[2];
+        const o = porOrigem[oc] || (porOrigem[oc] = { total: 0, farm: 0 });
+        o.total++; if (ehFarm) o.farm++;
+      }
     });
-    return { total: total, saques: saques };
+    return { total: total, saques: saques, porOrigem: porOrigem };
   }
   // Tropa EM CASA de TODAS as aldeias, numa requisição só. A coluna de cada unidade é descoberta
   // pelo ícone do cabeçalho, não por posição fixa: mundo com 10 unidades e mundo com 12 têm
@@ -2101,6 +2133,31 @@
     d.cap = (d.cap || 0) + (cap || 0);
     d.atks = (d.atks || 0) + (atks || 0);
     cfg.dailyCap = d;
+  }
+  // Mesma contabilidade, POR ALDEIA. O saque real por aldeia não existe no jogo (a pontuação
+  // "hoje" do ranking é da conta inteira), então a base honesta é a CAPACIDADE DE CARGA que cada
+  // aldeia despachou no dia: é o que ela mandou buscar. A previsão extrapola por regra de três
+  // no tempo decorrido, exatamente como a previsão da conta faz.
+  function addDailyCapVila(cfg, porVila) {
+    const sec = serverSecOfDay();
+    const d = cfg.dailyCapVila || { sec: sec, vilas: {} };
+    if (sec != null && d.sec != null && sec < d.sec) d.vilas = {};   // virou o dia no servidor
+    d.sec = (sec != null ? sec : d.sec);
+    d.vilas = d.vilas || {};
+    Object.keys(porVila || {}).forEach((vid) => {
+      const v = d.vilas[vid] || (d.vilas[vid] = { cap: 0, atks: 0 });
+      v.cap += porVila[vid].cap || 0;
+      v.atks += porVila[vid].atks || 0;
+    });
+    cfg.dailyCapVila = d;
+  }
+  // Fração do dia já decorrida no servidor. < 10 min não extrapola: com denominador minúsculo a
+  // projeção vira número absurdo (é a mesma trava da previsão da conta).
+  function fracaoDoDia() {
+    const et = document.querySelector('#serverTime');
+    const tm = et ? (et.textContent || '').match(/(\d{2}):(\d{2}):(\d{2})/) : null;
+    const seg = tm ? ((+tm[1]) * 3600 + (+tm[2]) * 60 + (+tm[3])) : 0;
+    return seg >= 600 ? (seg / 86400) : null;
   }
   async function getDailyLootStats(type) {
     const c = _dailyRead(type);
@@ -2191,7 +2248,8 @@
     if (semCoord.length) pushLog('Saque: ' + semCoord.length + ' aldeia(s) sem coord ignoradas — vids: ' + semCoord.slice(0, 5).join(','), 'err', 'farm');
     cfg.stats = cfg.stats || {}; cfg.stats.mineCount = myV.length; cfg.stats.mineCountRaw = mine.length;
     let pendingCoords = new Set(), saquesAtivos = null, farmCoords = new Set();
-    try { const pa = await getPendingAttack(); pendingCoords = pa.coords; saquesAtivos = pa.saques; farmCoords = pa.farmCoords || new Set(); } catch (e) {}
+    let saidaPorOrigem = {};
+    try { const pa = await getPendingAttack(); pendingCoords = pa.coords; saquesAtivos = pa.saques; farmCoords = pa.farmCoords || new Set(); saidaPorOrigem = pa.porOrigem || {}; } catch (e) {}
     // DIAGNÓSTICO: mais comandos de saque em rota do que alvos distintos = tem ataque duplicado no
     // mesmo alvo. Com "Repetir farm" desligado isso NÃO deveria acontecer, e indica que um envio deu
     // certo mas foi lido como recusa (aí o ciclo tenta outra origem e manda de novo no mesmo lugar).
@@ -2302,6 +2360,7 @@
     let incertos = 0, calcCount = 0;   // envios de resultado ambíguo · envios subidos ao mínimo do mundo
     let lastCalcTxt = '';              // último envio no mínimo (mostrado no painel como amostra)
     let capCycle = 0;                  // capacidade de carga total despachada neste ciclo
+    const capVila = {};                // vid -> { cap, atks } despachado neste ciclo
     // Limite de fake do mundo: o ataque precisa ter no mínimo (pontos da ORIGEM × pct)% de população.
     // Quem estoura isso é a origem grande, não o alvo — então o bloqueio é por origem+modo e vale pro
     // ciclo todo. Assim uma aldeia grande demais pro template B é descartada após UM erro, não a cada alvo.
@@ -2464,10 +2523,14 @@
           if (useCalc) { calcCount++; usedCalcInfo = Object.keys(calcAmounts).map((u) => calcAmounts[u] + ' ' + u).join(' + '); }
           // Capacidade de carga despachada. No C quem monta a tropa é o jogo (dimensiona pelo saque
           // do relatório), então usa o próprio saque estimado como capacidade — é aproximação.
-          capCycle += useCalc ? carryOf(calcAmounts)
+          const capEnvio = useCalc ? carryOf(calcAmounts)
             : mode === 'c' ? sum
             : dyn ? estCL * (CARRY.light || 80)
             : carryOf(mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB));
+          capCycle += capEnvio;
+          // Mesma capacidade, creditada À ALDEIA que despachou — base da previsão por aldeia.
+          const cv = capVila[c.s.vid] || (capVila[c.s.vid] = { cap: 0, atks: 0 });
+          cv.cap += capEnvio; cv.atks++;
           cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break;
         }
       }
@@ -2564,6 +2627,10 @@
       const uHome = await getHomeUnitsAll().catch(() => ({}));
       let ret = null;
       try { ret = await getReturningAttack(); } catch (e) { ret = null; }
+      const saindoPor = saidaPorOrigem;
+      const voltandoPor = (ret && ret.porOrigem) ? ret.porOrigem : {};
+      const capDia = (config.farm.dailyCapVila && config.farm.dailyCapVila.vilas) || {};
+      const frac = fracaoDoDia();
       // alvos no alcance / em quantos é a mais próxima — por origem
       const noAlcance = {}, maisProx = {};
       eligible.forEach((t) => {
@@ -2599,9 +2666,17 @@
         // pior motivo = o que mais apareceu; é o que explica a aldeia neste ciclo
         let motivo = '', pico = 0;
         Object.keys(MOTC).forEach((k) => { if ((o[k] || 0) > pico) { pico = o[k]; motivo = MOTC[k]; } });
+        const cd = capDia[String(s.vid)] || { cap: 0, atks: 0 };
         return { vid: s.vid, nome: s.name || s.coord, coord: s.coord,
           alcance: noAlcance[s.vid] || 0, prox: maisProx[s.vid] || 0,
           distMin: distMin[s.vid] == null ? null : Math.round(distMin[s.vid] * 10) / 10,
+          // ida e volta desta aldeia, contadas na tela de comandos do jogo
+          saindo: (saindoPor[s.coord] || {}).farm || 0,
+          voltando: (voltandoPor[s.coord] || {}).farm || 0,
+          // capacidade despachada HOJE por ela + projeção do fim do dia pela mesma regra de três
+          // que a previsão da conta usa. É capacidade, não saque medido — o jogo não dá saque por aldeia.
+          capHoje: cd.cap || 0, atksHoje: cd.atks || 0,
+          capPrev: frac ? Math.round((cd.cap || 0) / frac) : null,
           enviou: o.enviou || 0, cl: u.light != null ? u.light : null, spy: u.spy != null ? u.spy : null,
           motivo: (o.enviou ? '' : motivo), rejeicoes: pico,
           // "nem foi consultada": nenhuma linha no oDiag e não enviou = o alvo já tinha dono antes
@@ -2669,6 +2744,7 @@
     // Eficiência REAL: saque obtido hoje ÷ capacidade de carga despachada hoje. Diz se a tropa está
     // voltando cheia (intervalo bem calibrado) ou meio vazia (batendo cedo demais no mesmo alvo).
     addDailyCap(cfg, capCycle, count);
+    addDailyCapVila(cfg, capVila);
     cfg.stats.dailyCap = cfg.dailyCap;
     // Intel de aldeias defendidas (com tropas conhecidas) — usado pelo mapa
     cfg.stats.defendedCount = Object.values(defended).filter((d) => typeof d === 'object' && d.coord).length;

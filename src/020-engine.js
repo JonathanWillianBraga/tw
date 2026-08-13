@@ -898,51 +898,77 @@
 
   // Tabela de estatísticas do Saque. Ordenada por cavalaria parada (decrescente): a primeira linha
   // é sempre a aldeia que mais tem tropa ociosa, que é a pergunta que se faz olhando isto.
+  // Estatisticas do Saque. Duas tabelas, porque sao duas perguntas diferentes:
+  //   ALVOS   — quem pegou cada alvo (ou por que ninguem pegou). Um alvo vai pra UMA aldeia.
+  //   ALDEIAS — quanta tropa esta parada em cada uma e por que ela nao trabalhou.
   function renderFarmEstat() {
     const box = document.getElementById('twmgr-farm-estat'); if (!box) return;
     const e = (config.farm && config.farm.estat) || null;
-    if (!e) { box.innerHTML = '<div class="twmgr-hint">Rode um ciclo do Saque pra montar as estatísticas.</div>'; return; }
-    const n = (v) => (v == null ? '—' : fmtN(v));
+    if (!e) { box.innerHTML = '<div class="twmgr-hint">Rode um ciclo do Saque pra montar as estatisticas.</div>'; return; }
+    const n = (v) => (v == null ? '\u2014' : fmtN(v));
     const idade = Math.round((Date.now() - e.at) / 1000);
     const cab = '<div class="twmgr-bld-sum">'
+      + '<span class="twmgr-chip"><b>' + n(e.enviados) + '</b> enviados neste ciclo</span>'
       + '<span class="twmgr-chip"><b>' + n(e.emRota) + '</b> saques em rota</span>'
       + '<span class="twmgr-chip"><b>' + n(e.voltando) + '</b> voltando</span>'
-      + '<span class="twmgr-chip"><b>' + n(e.alvosElegiveis) + '</b> alvos elegíveis</span>'
-      + '<span class="twmgr-chip"><b>' + n(e.enviados) + '</b> enviados no ciclo</span>'
-      + '<span class="twmgr-chip"' + (e.alvosSemOrigem ? ' style="color:#b03030"' : '') + '><b>' + n(e.alvosSemOrigem) + '</b> alvos sem origem</span>'
+      + '<span class="twmgr-chip"' + (e.alvosSemOrigem ? ' style="color:#b03030"' : '') + '><b>' + n(e.alvosSemOrigem) + '</b> alvos sem ninguem</span>'
       + '<span class="twmgr-chip"><b>' + n(e.clParada) + '</b> CL parada</span>'
       + '</div>';
+    // ---- Tabela 1: os alvos deste ciclo ----
+    const alvos = e.alvos || [];
+    const tAlvos = !alvos.length
+      ? '<div class="twmgr-hint">Nenhum alvo elegivel neste ciclo.</div>'
+      : '<table class="twmgr-bld-tab"><thead><tr>'
+        + '<th style="width:66px">Alvo</th>'
+        + '<th style="width:34px" title="Modo do template usado">modo</th>'
+        + '<th>Quem atacou</th>'
+        + '<th style="width:42px" title="Distancia da aldeia que atacou ate o alvo, em campos">dist</th>'
+        + '</tr></thead><tbody>'
+        + alvos.map((a, i) =>
+          '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">'
+          + '<td><b>' + esc(a.coord) + '</b></td>'
+          + '<td style="text-transform:uppercase">' + esc(a.modo || '') + '</td>'
+          + '<td>' + (a.quem
+              ? '<span style="color:#3f8f52">' + esc(a.quem) + '</span>'
+              : a.incerto
+                ? '<span style="color:#b5651d">resposta ambigua \u2014 tratado como enviado</span>'
+                : '<span style="color:#b03030">ninguem</span>'
+                  + '<div class="sub">' + (a.tentadas && a.tentadas.length
+                      ? 'tentei ' + esc(a.tentadas.map((x) => x.nome + ' (' + x.motivo + ')').join(', '))
+                        + (a.maisTentadas ? ' +' + a.maisTentadas : '')
+                      : 'nenhuma das ' + a.candidatos + ' aldeias no alcance serviu') + '</div>')
+            + '</td>'
+          + '<td>' + (a.dist != null ? a.dist : '\u2014') + '</td></tr>').join('')
+        + '</tbody></table>';
+    // ---- Tabela 2: as aldeias ----
     const linhas = (e.origens || []);
-    // Aldeia sem NENHUM alvo no alcance é um caso à parte: não é "não trabalhou", é "não tem o que
-    // atacar daqui". Misturar as duas na mesma leitura é o que faz parecer que o módulo ignora a aldeia.
-    const semAlvo = linhas.filter((l) => !l.alcance).length;
-    const tab = '<table class="twmgr-bld-tab"><thead><tr>'
+    const tAld = '<table class="twmgr-bld-tab"><thead><tr>'
       + '<th>Aldeia</th>'
-      + '<th style="width:38px" title="Alvos elegíveis dentro do alcance de ' + e.maxDist + ' campos">alvos</th>'
-      + '<th style="width:38px" title="Alvos em que ESTA aldeia é a mais próxima — é o trabalho que sobra pra ela por padrão">1ª</th>'
-      + '<th style="width:38px" title="Ataques que saíram daqui neste ciclo">saiu</th>'
-      + '<th style="width:52px" title="Cavalaria leve em casa">CL</th>'
-      + '<th title="Por que não enviou">motivo</th></tr></thead><tbody>'
+      + '<th style="width:52px" title="Cavalaria leve parada em casa">CL parada</th>'
+      + '<th style="width:34px" title="Ataques que sairam daqui neste ciclo">saiu</th>'
+      + '<th style="width:46px" title="Distancia ate o alvo elegivel mais proximo, em campos">alvo +perto</th>'
+      + '<th title="Por que nao enviou">situacao</th></tr></thead><tbody>'
       + linhas.map((l, i) => {
         const ocioso = (l.cl || 0) >= 300 && !l.enviou;
+        let sit;
+        if (l.enviou) sit = '<span style="color:#3f8f52">trabalhou</span>';
+        else if (!l.alcance) sit = 'sem alvo no alcance (' + e.maxDist + ' campos)';
+        else if (l.motivo) sit = '<span style="color:#b03030">' + esc(l.motivo) + '</span>'
+          + (l.rejeicoes > 1 ? ' <span class="sub">(' + l.rejeicoes + '\u00d7)</span>' : '');
+        else if (!l.consultada) sit = 'nem foi consultada \u2014 outra aldeia pegou o alvo antes';
+        else sit = 'consultada, mas o alvo ja tinha dono';
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">'
-          + '<td><b>' + esc(l.nome) + '</b><div class="sub">' + esc(l.coord || '') + '</div></td>'
-          + '<td>' + (l.alcance || '<span style="color:#b03030">0</span>') + '</td>'
-          + '<td>' + (l.prox || '<span style="color:#8a7340">—</span>') + '</td>'
-          + '<td>' + (l.enviou ? '<b style="color:#3f8f52">' + l.enviou + '</b>' : '<span style="color:#8a7340">—</span>') + '</td>'
+          + '<td><b>' + esc(l.nome) + '</b>' + (l.nome !== l.coord ? '<div class="sub">' + esc(l.coord || '') + '</div>' : '') + '</td>'
           + '<td' + (ocioso ? ' style="color:#b03030;font-weight:700"' : '') + '>' + n(l.cl) + '</td>'
-          + '<td style="font-size:9px;color:#6f6153">'
-            + (l.enviou ? '<span style="color:#3f8f52">enviou</span>'
-               : !l.alcance ? 'nenhum alvo a ≤' + e.maxDist + ' campos'
-               : l.motivo ? esc(l.motivo) + (l.rejeicoes > 1 ? ' (' + l.rejeicoes + '×)' : '')
-               : 'nunca foi a mais próxima — as de perto deram conta')
-          + '</td></tr>';
+          + '<td>' + (l.enviou ? '<b style="color:#3f8f52">' + l.enviou + '</b>' : '<span style="color:#8a7340">\u2014</span>') + '</td>'
+          + '<td>' + (l.distMin != null ? l.distMin : '\u2014') + '</td>'
+          + '<td style="font-size:9px;color:#6f6153">' + sit + '</td></tr>';
       }).join('') + '</tbody></table>';
     box.innerHTML = cab
-      + '<div style="font-size:9px;color:#8a7d6d;margin:4px 0 6px">Lido há ' + idade + 's · alcance ' + e.maxDist
-        + ' campos · mínimo de CL ' + e.minCL
-        + (semAlvo ? ' · <b>' + semAlvo + '</b> aldeia(s) sem nenhum alvo no alcance' : '') + '</div>'
-      + tab;
+      + '<div style="font-size:9px;color:#8a7d6d;margin:0 0 7px">Foto do ultimo ciclo, ha ' + idade + 's. '
+      + 'Cada alvo vai pra <b>UMA</b> aldeia \u2014 a mais proxima que tiver tropa. As outras nem sao consultadas.</div>'
+      + '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:8px 0 3px">Alvos deste ciclo</div>' + tAlvos
+      + '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:11px 0 3px">Aldeias</div>' + tAld;
   }
 
   // Lê a tela de comandos (só ataques): coords com ataque nosso em rota (p/ não empilhar) + nº de ATAQUES DE SAQUE em rota (ícone de farm) p/ o card.
@@ -1101,7 +1127,10 @@
     // Origens = minhas aldeias com coordenada (pra escolher a mais próxima por alvo).
     let mine;
     try {
-      if (cfg.group) { mine = (await getVillagesInGroup(cfg.group)).map((x) => ({ vid: x.vid, coord: x.coord, name: x.coord })); try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
+      // `name: x.name || x.coord` — antes era `name: x.coord` cravado, e o nome REAL da aldeia
+      // (que getVillagesInGroup já devolve) era jogado fora. Todo lugar que mostra origem com
+      // filtro de grupo ligado exibia coordenada crua, inclusive as estatísticas e os logs.
+      if (cfg.group) { mine = (await getVillagesInGroup(cfg.group)).map((x) => ({ vid: x.vid, coord: x.coord, name: x.name || x.coord })); try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
       else mine = await getAllVillagesCached();
     } catch (e) { pushLog('Saque: erro ao listar aldeias: ' + (e.message || e), 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
     const myV = [], semCoord = [];
@@ -1195,11 +1224,22 @@
     //
     // Aqui cada REJEIÇÃO de origem é contada com o motivo, e cada envio é creditado à origem.
     const oDiag = {};   // vid -> { nome, enviou, semCL, reserva, semSpy, semTpl, fakeSemPontos, fakeSemTropa, recusa }
+    // Um alvo é entregue a UMA aldeia — a mais próxima que passar em tudo, e o laço para nela.
+    // Aqui fica QUEM pegou cada alvo e, quando ninguém pegou, quais origens foram tentadas e por
+    // que cada uma foi recusada. Responde "esse alvo é tentado por todo mundo?" (não é) e
+    // "por que esse alvo ficou sem ninguém?".
+    const alvoDiag = [];
+    const MOT_CURTO = { semCL: 'sem CL', reserva: 'reserva', semSpy: 'sem explorador',
+      semTpl: 'sem tropa do template', fakeSemTropa: 'sem tropa p/ o piso', fakeSemPontos: 'sem pontos', recusa: 'recusado' };
     const oReg = (vid, nome, campo) => {
       const o = oDiag[vid] || (oDiag[vid] = { nome: nome || vid, enviou: 0, semCL: 0, reserva: 0,
         semSpy: 0, semTpl: 0, fakeSemPontos: 0, fakeSemTropa: 0, recusa: 0 });
       o[campo]++;
+      // Também entra na trilha DO ALVO da vez, pra tabela poder mostrar "tentei estas 3, recusadas
+      // por isto" em vez de só um total agregado que não explica alvo nenhum.
+      if (campo !== 'enviou') _tent.push({ nome: nome || vid, motivo: MOT_CURTO[campo] || campo });
     };
+    let _tent = [];
     const eligible = [];
     targets.forEach((t) => {
       if (!t.reportId) { skip.norep++; return; }
@@ -1289,6 +1329,7 @@
       if (!cands.length) { skip.dist++; continue; }
       const estCL = Math.max(1, Math.ceil((mode === 'b' ? sum * 1.2 : sum) / 80));   // CL estimada do envio (p/ descontar da origem)
       let did = false, usedName = '', usedDist = 0, incerto = false, usedCalc = false, usedCalcInfo = '';
+      _tent = [];                       // trilha deste alvo (preenchida pelo oReg a cada recusa)
       for (const c of cands) {
         // Origem reprovada no limite de fake: em vez de pular, manda quantidade CALCULADA que cumpre
         // o mínimo do mundo (fallback). Só pula de vez se não der pra calcular (sem pontos da aldeia).
@@ -1385,6 +1426,11 @@
           cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break;
         }
       }
+      alvoDiag.push({ coord: t.coord, modo: mode, saque: sum,
+        quem: did ? usedName : null, dist: did ? Math.round(usedDist * 10) / 10 : null,
+        incerto: !!incerto, candidatos: cands.length,
+        // só as 4 primeiras recusas: a lista inteira numa conta de 40 aldeias vira parede de texto
+        tentadas: did ? [] : _tent.slice(0, 4), maisTentadas: did ? 0 : Math.max(0, _tent.length - 4) });
       if (did) {
         sent[t.coord] = Date.now(); cfg.sentReports = sent; pendingCoords.add(t.coord);
         // GRAVA JÁ. O save() do fim do ciclo não basta: a página recarrega no meio (visto no log) e
@@ -1490,6 +1536,18 @@
       const MOTC = { semCL: 'abaixo do mínimo de CL', reserva: 'presa na reserva', semSpy: 'sem explorador',
         semTpl: 'sem a tropa do template', fakeSemTropa: 'sem tropa pro piso de população',
         fakeSemPontos: 'pontos desconhecidos', recusa: 'recusada pelo servidor' };
+      // distância até o alvo elegível MAIS PRÓXIMO — diferencia as aldeias de verdade, ao contrário
+      // de "alvos no alcance", que com alcance de 30 dá o mesmo número pra todo mundo.
+      const distMin = {};
+      myV.forEach((s) => {
+        let melhor = null;
+        eligible.forEach((t) => {
+          const tm = String(t.coord || '').match(/(\d+)\|(\d+)/); if (!tm) return;
+          const dd = fieldDist(s.x, s.y, +tm[1], +tm[2]);
+          if (melhor == null || dd < melhor) melhor = dd;
+        });
+        distMin[s.vid] = melhor;
+      });
       const linhas = myV.map((s) => {
         const o = oDiag[s.vid] || {};
         const u = uHome[String(s.vid)] || {};
@@ -1498,8 +1556,12 @@
         Object.keys(MOTC).forEach((k) => { if ((o[k] || 0) > pico) { pico = o[k]; motivo = MOTC[k]; } });
         return { vid: s.vid, nome: s.name || s.coord, coord: s.coord,
           alcance: noAlcance[s.vid] || 0, prox: maisProx[s.vid] || 0,
+          distMin: distMin[s.vid] == null ? null : Math.round(distMin[s.vid] * 10) / 10,
           enviou: o.enviou || 0, cl: u.light != null ? u.light : null, spy: u.spy != null ? u.spy : null,
-          motivo: (o.enviou ? '' : motivo), rejeicoes: pico };
+          motivo: (o.enviou ? '' : motivo), rejeicoes: pico,
+          // "nem foi consultada": nenhuma linha no oDiag e não enviou = o alvo já tinha dono antes
+          // de chegar nela. É diferente de "foi tentada e recusada", e a diferença é a que importa.
+          consultada: !!oDiag[s.vid] };
       }).sort((a, b) => (b.cl || 0) - (a.cl || 0));
       config.farm.estat = {
         at: Date.now(),
@@ -1508,7 +1570,7 @@
         alvosElegiveis: eligible.length, alvosSemOrigem: skip.semorig, enviados: count,
         clParada: linhas.reduce((s2, l) => s2 + (l.cl || 0), 0),
         maxDist: maxDist, minCL: minCL,
-        origens: linhas,
+        origens: linhas, alvos: alvoDiag,
       };
       renderFarmEstat();
     } catch (e) { pushLog('Saque: não consegui montar as estatísticas (' + (e.message || e) + ').', '', 'farm'); }

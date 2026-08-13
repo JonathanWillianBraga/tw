@@ -1012,7 +1012,10 @@
     const sel = document.getElementById('twmgr-nb-posgid'); if (!sel) return;
     let gs = [];
     try { gs = await getGroups(); } catch (e) { return; }
-    const uteis = (gs || []).filter((g) => String(g.id) !== '0');
+    // SÓ ESTÁTICOS. Aqui a aldeia é ADICIONADA ao grupo, e grupo dinâmico é montado por regra:
+    // o POST volta 200 e não faz nada. Mostrar dinâmico na lista era oferecer uma opção que
+    // falha calada — o usuário escolhe "Todas as Aldeias", a aldeia cai, e nada acontece.
+    const uteis = gruposEstaticos((gs || []).filter((g) => String(g.id) !== '0'));
     _nbGrupos = uteis;
     // Multi-seleção: sem <option> de "— escolha —", porque em lista múltipla ele seria uma opção
     // selecionável de valor vazio em vez de um placeholder. Nada marcado já significa nenhum.
@@ -2153,6 +2156,25 @@
     if (h < 24) return h + 'h atrás';
     return Math.floor(h / 24) + 'd atrás';
   }
+  // Célula do nome futuro. Vive nas DUAS tabelas (Alvos e Pós-conquista) lendo e gravando o
+  // mesmo `a.posNome`, então não há dois lugares pra sincronizar — só duas portas pro mesmo dado.
+  //
+  // O placeholder mostra o que o PADRÃO GLOBAL daria pra esta coordenada (já com {coord}/{x}/{y}
+  // expandidos). Assim dá pra ver que "ATK 432|588" vai acontecer sem digitar nada, em vez de o
+  // campo vazio parecer "não vai renomear".
+  function nomeFuturoCel(a) {
+    const cfg = noblePosDoAlvo(a.coord);
+    const herdado = (a.posNome == null || a.posNome === '') ? cfg.nome : '';
+    const aviso = (!config.noble.posRenomear && (a.posNome || cfg.nome))
+      ? ' style="border-color:#d8a24a"' : '';
+    return '<input class="twmgr-nb-nomefut twmgr-inp" data-coord="' + esc(a.coord) + '" type="text" maxlength="40"'
+      + aviso
+      + ' style="width:100%;font-size:10px" value="' + esc(a.posNome || '') + '"'
+      + ' placeholder="' + esc(herdado || 'manter o nome') + '"'
+      + ' title="' + esc(!config.noble.posRenomear
+          ? 'O interruptor "Renomear a aldeia" está DESLIGADO no Pós-conquista — nada vai ser renomeado enquanto ele estiver assim.'
+          : (herdado ? 'Vazio = usa o padrão global, que aqui daria "' + herdado + '".' : 'Vazio = mantém o nome que o jogo der.')) + '">';
+  }
   let _nbMapaPedido = false;
   function renderNoblePlano() {
     const box = document.getElementById('twmgr-nb-lista'); if (!box) return;
@@ -2178,7 +2200,12 @@
     let pos = 0;
     box.innerHTML = '<table class="twmgr-bld-tab twmgr-nb-tab"><thead><tr>' +
       '<th style="width:34px" title="Ordem na fila — uma aldeia é noblada por vez">Fila</th>' +
-      '<th>Alvo</th><th>Modelo</th>' +
+      '<th>Alvo</th>' +
+      // Nome futuro aqui também, e não só no Pós-conquista: é aqui que você cola as coordenadas
+      // e monta a fila, então é aqui que dá pra batizar cada uma sem trocar de aba. É o MESMO
+      // campo (`a.posNome`) — editar num lado aparece no outro.
+      '<th style="width:104px" title="Como a aldeia vai se chamar quando cair. Aceita {coord}, {x} e {y}. Precisa do interruptor Renomear ligado no Pós-conquista.">Nome futuro</th>' +
+      '<th>Modelo</th>' +
       '<th style="width:36px" title="Lealdade de hoje: a do último relatório, projetada pra agora com a regeneração">Leald.</th>' +
       '<th style="width:30px" title="Em cima: comandos meus com nobre a caminho. Embaixo: total de nobres que este alvo já consumiu (pousados + no ar)">Atks</th>' +
       '<th style="width:36px" title="Lealdade depois que TUDO que já está a caminho pousar, com a regeneração entre as chegadas. Zerou = alvo resolvido, não sai mais nobre">Prev.</th>' +
@@ -2278,7 +2305,9 @@
           + (sub ? '<div class="sub">' + esc(sub) + '</div>' : '')
           + (p.pronto ? '<div class="sub"><a class="twmgr-nb-fire" data-coord="' + esc(a.coord) + '">Enviar agora</a></div>' : '');
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '"' + (fim ? ' style="opacity:.6"' : '') + '>' +
-          '<td>' + filaCel + '</td><td>' + alvoCel + '</td><td>' + sel + '</td>' +
+          '<td>' + filaCel + '</td><td>' + alvoCel + '</td>' +
+          '<td>' + nomeFuturoCel(a) + '</td>' +
+          '<td>' + sel + '</td>' +
           '<td>' + nobleLealdadeCel(atual, dicaAtual, !lida) + '</td>' +
           '<td>' + atksCel + '</td>' +
           '<td>' + nobleLealdadeCel(prev, dicaPrev, !lida) + '</td>' +
@@ -2332,9 +2361,9 @@
           : '<span style="color:#8a7340">—</span>';
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
           '<td><b>' + esc(a.coord) + '</b></td>' +
-          '<td><input class="twmgr-nb-pnome twmgr-inp" data-coord="' + esc(a.coord) + '" type="text" maxlength="40"'
-            + ' style="width:100%;font-size:10px" placeholder="' + esc(cfg.nome || 'manter o nome') + '"'
-            + ' value="' + esc(a.posNome || '') + '">'
+          // Mesma célula da aba Alvos, mesmo campo — editar de qualquer um dos dois lados grava
+          // no mesmo `a.posNome`.
+          '<td>' + nomeFuturoCel(a)
             + (herdaN && cfg.nome ? '<div class="sub">padrão → ' + esc(cfg.nome) + '</div>' : '') + '</td>' +
           '<td><select class="twmgr-nb-pgrp twmgr-inp" data-coord="' + esc(a.coord) + '" multiple size="3"'
             + ' style="width:100%;font-size:10px">' + opts(cfg.grupos) + '</select>'
@@ -2469,9 +2498,10 @@
         a.posGrupos = Array.prototype.map.call(el.selectedOptions || [], (o) => String(o.value));
         delete a.posGrupoId;                   // o formato antigo sai de cena assim que você mexe
       }
-      if (el.classList.contains('twmgr-nb-pnome')) {
+      if (el.classList.contains('twmgr-nb-nomefut')) {
         const v = String(el.value || '').trim().slice(0, 40);
         if (v) a.posNome = v; else delete a.posNome;   // vazio volta a herdar o padrão
+        renderNoblePlano();                            // a aba Alvos mostra o mesmo campo
       }
       save(); renderNoblePos();
     });
@@ -2516,6 +2546,20 @@
     const box = document.getElementById('twmgr-nb-lista'); if (!box) return;
     box.addEventListener('change', (e) => {
       const el = e.target;
+      if (el.classList && el.classList.contains('twmgr-nb-nomefut')) {
+        const c = el.getAttribute('data-coord');
+        const a = (config.noble.alvos || []).find((x) => x.coord === c); if (!a) return;
+        const v = String(el.value || '').trim().slice(0, 40);
+        if (v) a.posNome = v; else delete a.posNome;    // vazio volta a herdar o padrão global
+        save();
+        renderNoblePos();                                // a outra tabela mostra o mesmo campo
+        if (v && !config.noble.posRenomear) {
+          pushLog('Noblar: ' + c + ' vai se chamar "' + noblePosNomeExpandir(v, c) + '" — mas o'
+            + ' interruptor "Renomear a aldeia" está DESLIGADO no Pós-conquista, então nada será'
+            + ' renomeado até você ligar.', 'err', 'noble');
+        }
+        return;
+      }
       if (!el.classList || !el.classList.contains('twmgr-nb-tpl')) return;
       const coord = el.getAttribute('data-coord');
       const a = (config.noble.alvos || []).find((x) => x.coord === coord);

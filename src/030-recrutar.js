@@ -2,15 +2,31 @@
   async function getGroups() {
     const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&page=-1', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    // TIPO do grupo, numa passada à parte. O próprio jogo marca com `data-group-type`
+    // (`static` / `dynamic` / `all`) nesta mesma página — não precisa de requisição extra nem de
+    // adivinhar pelo texto "(Dinâmico)", que é traduzido e mudaria de idioma pra idioma.
+    //
+    // Quem consome precisa da diferença: grupo DINÂMICO é montado por regra e NÃO aceita aldeia
+    // adicionada na mão — o POST de adicionar volta 200 e não faz nada. Ler os membros de um
+    // dinâmico, por outro lado, funciona normal, então quem só lê pode continuar usando todos.
+    const tipos = {};
+    doc.querySelectorAll('[data-group-type][data-group-id]').forEach((el) => {
+      const g = el.getAttribute('data-group-id');
+      if (g) tipos[g] = el.getAttribute('data-group-type') || '';
+    });
     const seen = {}, groups = [];
     doc.querySelectorAll('a[href*="group_id="], [data-group-id]').forEach((el) => {
       let id = el.getAttribute('data-group-id');
       if (!id) { const m = (el.getAttribute('href') || '').match(/group_id=(\d+)/); id = m ? m[1] : null; }
       if (!id || id === '0' || seen[id]) return;
-      seen[id] = 1; groups.push({ id: String(id), name: (el.textContent || '').trim() || ('grupo ' + id) });
+      seen[id] = 1; groups.push({ id: String(id), name: (el.textContent || '').trim() || ('grupo ' + id),
+                                  tipo: tipos[id] || '' });
     });
     return groups;
   }
+  // Só os que aceitam aldeia adicionada na mão. Grupo sem tipo lido entra na lista: o certo é
+  // errar mostrando um grupo a mais do que sumir com o grupo do usuário se o jogo mudar o HTML.
+  function gruposEstaticos(gs) { return (gs || []).filter((g) => g.tipo !== 'dynamic' && g.tipo !== 'all'); }
   async function getVillagesInGroup(gid) {
     // Cache-bust (&_=timestamp) + Cache-Control: no-cache — o TW cacheia overview_villages por sessão às vezes.
     // Sem isso, mexer no grupo (add/remove aldeia) pode não refletir aqui até fechar/abrir a aba.

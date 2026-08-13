@@ -67,6 +67,17 @@ Chaves de módulo (`wall`, `map`) seguem valendo em `config`, `refreshCards` e `
 - **CRLF:** os arquivos usam quebra de linha Windows (CRLF). O build preserva byte a byte.
 - **Estado do usuário:** fica no `localStorage` do jogo (`twMgr_<mundo>`); reinstalar o
   script não apaga config.
+- **Backup (`155-backup.js`) não tem lista de campos** — ele copia a string crua de **toda
+  chave `twMgr*`**. Campo novo dentro de `config` entra no export sozinho; não existe lista
+  pra atualizar. Duas coisas, porém, quebram isso em silêncio:
+  1. **Chave nova de `localStorage` sem o prefixo `twMgr`** fica de fora do backup e o
+     usuário perde aquilo ao trocar de PC. Nomeie `twMgr_<mundo>_<coisa>` (ou `twMgr_<coisa>`
+     se for global, tipo o estado da UI). A única exceção deliberada é `_lock`, que é
+     arbitragem de aba e não pode viajar.
+  2. **Sanitizador do `load()` que RECONSTRÓI objeto** (`lista.map((x) => ({a, b}))` com
+     campos escolhidos a dedo) apaga o que não está no molde — inclusive campo importado de
+     outro PC e campo que outro módulo gravou ali. Sanitize **corrigindo/filtrando no lugar**
+     (é o que `c.noble.alvos` faz), nunca remontando.
 - **Um módulo por preocupação.** Se um módulo quebra em runtime, o bootstrap usa
   `try/catch` por módulo pra o resto continuar — mas erro de SINTAXE derruba o bundle
   inteiro (é um arquivo só). Por isso o `check.py`/parse antes de commitar.
@@ -84,6 +95,7 @@ Chaves de módulo (`wall`, `map`) seguem valendo em `config`, `refreshCards` e `
 | `095-saque-tplB` `100-barbaros-mapa` | saque template B, bárbaros do mapa (o `090-bb`/Cultivo foi aposentado na v11.15.0) |
 | `110-cadeado` `120-etiqueta` | reserva de bárbara, auto-rótulo |
 | `130-captcha` `140-painel-controllers` `150-painel-ui` | captcha, controladores, UI do painel |
+| `155-backup` | exportar/importar a config inteira (todas as chaves `twMgr*`) |
 | `160-desviar` `170-mapa` | desviar, filtros do mapa |
 | `175-cc-rico` | **Central de Comando rica (ilha IIFE isolada)** |
 | `180-centro-comando` | motor de precisão `cc*` + bootstrap + fecha a IIFE |

@@ -1009,7 +1009,7 @@
   // `ajax=load_group_menu` devolve false e parseia o overview). "todos" (id 0) fica de fora:
   // não é grupo de verdade, e mandar aldeia pra lá não faz nada.
   async function fillNobleGrupos() {
-    const sel = document.getElementById('twmgr-nb-posgid'); if (!sel) return;
+    const host = document.getElementById('twmgr-nb-posgid'); if (!host) return;
     let gs = [];
     try { gs = await getGroups(); } catch (e) { return; }
     // SÓ ESTÁTICOS. Aqui a aldeia é ADICIONADA ao grupo, e grupo dinâmico é montado por regra:
@@ -1017,14 +1017,10 @@
     // falha calada — o usuário escolhe "Todas as Aldeias", a aldeia cai, e nada acontece.
     const uteis = gruposEstaticos((gs || []).filter((g) => String(g.id) !== '0'));
     _nbGrupos = uteis;
-    // Multi-seleção: sem <option> de "— escolha —", porque em lista múltipla ele seria uma opção
-    // selecionável de valor vazio em vez de um placeholder. Nada marcado já significa nenhum.
-    sel.innerHTML = uteis.map((g) => '<option value="' + esc(String(g.id)) + '">' + esc(g.name || g.id) + '</option>').join('');
-    const marcados = (Array.isArray(config.noble.posGrupos) && config.noble.posGrupos.length)
-      ? config.noble.posGrupos.map(String)
-      : (config.noble.posGrupoId ? [String(config.noble.posGrupoId)] : []);
-    Array.prototype.forEach.call(sel.options, (o) => { o.selected = marcados.indexOf(String(o.value)) >= 0; });
+    host.innerHTML = nbGruposDropdown('*');
+    bindNobleGrupoDropdown();
     renderNoblePos();   // a tabela depende desta lista
+    renderNoblePlano(); // a coluna Grupos da aba Alvos também
     nobleRenderBandPadrao();
   }
 
@@ -2175,6 +2171,102 @@
           ? 'O interruptor "Renomear a aldeia" está DESLIGADO no Pós-conquista — nada vai ser renomeado enquanto ele estiver assim.'
           : (herdado ? 'Vazio = usa o padrão global, que aqui daria "' + herdado + '".' : 'Vazio = mantém o nome que o jogo der.')) + '">';
   }
+  // Dropdown de grupos com checkbox. `coord` = '*' é o padrão global; qualquer outro é o alvo.
+  //
+  // Substitui o <select multiple>, que era ruim por dois motivos concretos: exigia Ctrl pra marcar
+  // mais de um (ninguém descobre sozinho) e tinha altura fixa, engolindo o resto da tabela.
+  //
+  // O painel NÃO é redesenhado a cada clique — a tabela inteira redesenharia junto e o dropdown
+  // fecharia no primeiro check, obrigando a reabrir pra cada grupo. Aqui o clique grava e só
+  // atualiza o rótulo do botão; ver bindNobleGrupoDropdown.
+  function nbGruposSel(coord) {
+    if (coord === '*') {
+      return (Array.isArray(config.noble.posGrupos) && config.noble.posGrupos.length)
+        ? config.noble.posGrupos.map(String)
+        : (config.noble.posGrupoId ? [String(config.noble.posGrupoId)] : []);
+    }
+    const a = (config.noble.alvos || []).find((x) => x.coord === coord) || {};
+    if (Array.isArray(a.posGrupos)) return a.posGrupos.map(String);
+    if (a.posGrupoId != null && a.posGrupoId !== '') return [String(a.posGrupoId)];
+    return null;                                   // null = herda o padrão (≠ lista vazia)
+  }
+  function nbGruposRotulo(coord) {
+    const sel = nbGruposSel(coord);
+    const herda = (sel === null);
+    const ids = herda ? (nbGruposSel('*') || []) : sel;
+    if (!ids.length) return { txt: herda ? 'padrão: nenhum' : 'nenhum', vazio: true };
+    const nomes = ids.map((id) => {
+      const g = _nbGrupos.find((x) => String(x.id) === String(id));
+      return g ? (g.name || g.id) : id;
+    });
+    const txt = (nomes.length <= 2) ? nomes.join(', ') : (nomes.length + ' grupos');
+    return { txt: (herda ? 'padrão: ' : '') + txt, vazio: false };
+  }
+  function nbGruposDropdown(coord) {
+    const sel = nbGruposSel(coord);
+    const marcados = (sel === null) ? (nbGruposSel('*') || []) : sel;
+    const rot = nbGruposRotulo(coord);
+    const corpo = _nbGrupos.length
+      ? _nbGrupos.map((g) => '<label><input type="checkbox" class="twmgr-gd-chk" data-coord="' + esc(coord) + '"'
+          + ' value="' + esc(String(g.id)) + '"' + (marcados.indexOf(String(g.id)) >= 0 ? ' checked' : '') + '>'
+          + esc(g.name || g.id) + '</label>').join('')
+      : '<div class="vazioaviso">Nenhum grupo estático na conta. Crie um no jogo — grupo dinâmico não aceita aldeia na mão.</div>';
+    return '<span class="twmgr-gd">'
+      + '<a class="twmgr-gd-btn twmgr-nb-gdbtn' + (rot.vazio ? ' vazio' : '') + '" data-coord="' + esc(coord) + '"'
+      + ' title="' + esc(rot.txt) + '">' + esc(rot.txt) + '</a>'
+      + '<div class="twmgr-gd-pan" style="display:none">' + corpo + '</div></span>';
+  }
+  // Um listener só, no documento, porque as tabelas são redesenhadas o tempo todo.
+  let _nbGdLigado = false;
+  function bindNobleGrupoDropdown() {
+    if (_nbGdLigado) return;
+    _nbGdLigado = true;
+    document.addEventListener('click', (e) => {
+      const alvo = e.target.closest ? e.target : null;
+      if (!alvo) return;
+      const btn = alvo.closest('.twmgr-nb-gdbtn');
+      const dentroDoPainel = !!alvo.closest('.twmgr-gd-pan');
+      // Navega pelo WRAPPER, não por nextSibling: um espaço em branco no HTML entre o <a> e o
+      // <div> viraria um nó de texto e o dropdown não abriria.
+      const meu = btn ? btn.closest('.twmgr-gd') : null;
+      // Clicar dentro do painel não fecha nada (marcar vários seguidos). Fora, fecha tudo.
+      if (!dentroDoPainel) {
+        document.querySelectorAll('.twmgr-gd').forEach((w) => {
+          if (w === meu) return;
+          const p = w.querySelector('.twmgr-gd-pan'); if (p) p.style.display = 'none';
+        });
+      }
+      if (!btn || !meu) return;
+      e.preventDefault();
+      const pan = meu.querySelector('.twmgr-gd-pan');
+      if (pan) pan.style.display = (pan.style.display === 'none') ? '' : 'none';
+    });
+    document.addEventListener('change', (e) => {
+      const el = e.target;
+      if (!el.classList || !el.classList.contains('twmgr-gd-chk')) return;
+      const coord = el.getAttribute('data-coord');
+      const pan = el.closest('.twmgr-gd-pan');
+      const ids = pan ? Array.prototype.filter.call(pan.querySelectorAll('.twmgr-gd-chk'), (c) => c.checked)
+        .map((c) => String(c.value)) : [];
+      if (coord === '*') {
+        config.noble.posGrupos = ids;
+        config.noble.posGrupoId = ids[0] || '';      // espelho do formato antigo
+      } else {
+        const a = (config.noble.alvos || []).find((x) => x.coord === coord); if (!a) return;
+        a.posGrupos = ids;                            // lista vazia = "nenhum NESTE alvo"
+        delete a.posGrupoId;
+      }
+      save();
+      // Só o rótulo, no lugar. Redesenhar a tabela fecharia o dropdown a cada check.
+      const wrap = pan ? pan.parentNode : null;
+      const btn = wrap ? wrap.querySelector('.twmgr-nb-gdbtn') : null;
+      if (btn) {
+        const rot = nbGruposRotulo(coord);
+        btn.textContent = rot.txt; btn.title = rot.txt;
+        btn.classList.toggle('vazio', rot.vazio);
+      }
+    });
+  }
   let _nbMapaPedido = false;
   function renderNoblePlano() {
     const box = document.getElementById('twmgr-nb-lista'); if (!box) return;
@@ -2205,6 +2297,7 @@
       // e monta a fila, então é aqui que dá pra batizar cada uma sem trocar de aba. É o MESMO
       // campo (`a.posNome`) — editar num lado aparece no outro.
       '<th style="width:104px" title="Como a aldeia vai se chamar quando cair. Aceita {coord}, {x} e {y}. Precisa do interruptor Renomear ligado no Pós-conquista.">Nome futuro</th>' +
+      '<th style="width:96px" title="Grupos em que a aldeia entra assim que for tomada. Só grupos estáticos — dinâmico é montado por regra e não aceita aldeia na mão.">Grupos</th>' +
       '<th>Modelo</th>' +
       '<th style="width:36px" title="Lealdade de hoje: a do último relatório, projetada pra agora com a regeneração">Leald.</th>' +
       '<th style="width:30px" title="Em cima: comandos meus com nobre a caminho. Embaixo: total de nobres que este alvo já consumiu (pousados + no ar)">Atks</th>' +
@@ -2307,6 +2400,7 @@
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '"' + (fim ? ' style="opacity:.6"' : '') + '>' +
           '<td>' + filaCel + '</td><td>' + alvoCel + '</td>' +
           '<td>' + nomeFuturoCel(a) + '</td>' +
+          '<td>' + nbGruposDropdown(a.coord) + '</td>' +
           '<td>' + sel + '</td>' +
           '<td>' + nobleLealdadeCel(atual, dicaAtual, !lida) + '</td>' +
           '<td>' + atksCel + '</td>' +
@@ -2341,33 +2435,30 @@
       box.innerHTML = '<div style="color:#8a7340;text-align:center;padding:10px;font-size:10px">— nenhum alvo na lista —</div>';
       return;
     }
-    // Multi-seleção: o jogo aceita a aldeia em vários grupos estáticos ao mesmo tempo, e é
-    // comum querer isso (ex.: "Novas" + "Defensivas"). `size` fixo pra caixa não engolir a
-    // tabela quando a conta tem muitos grupos.
-    const opts = (sels) => _nbGrupos.map((g) => '<option value="' + esc(String(g.id)) + '"'
-      + (sels.indexOf(String(g.id)) >= 0 ? ' selected' : '') + '>' + esc(g.name || g.id) + '</option>').join('');
+    // Nome e grupos saíram daqui: os dois viraram coluna na aba ALVOS, que é onde você monta a
+    // fila e onde faz sentido decidir "esta aldeia vai se chamar X e entrar no grupo Y". Esta
+    // tabela ficou com o que é só dela — a bandeira — mais o estado da aplicação.
     box.innerHTML = '<table class="twmgr-bld-tab twmgr-nb-tab"><thead><tr>' +
-      '<th>Alvo</th><th title="Como a aldeia vai se chamar assim que for tomada. Aceita {coord}, {x} e {y}">Nome futuro</th>' +
-      '<th title="Segure Ctrl pra marcar mais de um">Grupos</th><th>Bandeira</th><th>Estado</th></tr></thead><tbody>' +
+      '<th>Alvo</th><th title="Nome e grupos ficam na aba Alvos">Vai virar</th>' +
+      '<th>Bandeira</th><th>Estado</th></tr></thead><tbody>' +
       alvos.map((a, i) => {
         const cfg = noblePosDoAlvo(a.coord);
-        const herdaG = (a.posGrupos == null && a.posGrupoId == null);
         const herdaB = (a.posBandTipo == null);
-        const herdaN = (a.posNome == null || a.posNome === '');
         const feito = config.noble.posFeitos[a.coord];
         const l = nobleLealdadeAgora(a.coord);
         const estado = feito ? '<b style="color:#3f8f52">aplicado</b>'
           : (l != null && l <= 0) ? '<span style="color:#b5651d">conquistada, aguardando</span>'
           : '<span style="color:#8a7340">—</span>';
+        // Espelho só de leitura do que foi configurado na aba Alvos, pra dar pra conferir a
+        // fila inteira sem trocar de aba.
+        const gNomes = (cfg.grupos || []).map((id) => {
+          const g = _nbGrupos.find((x) => String(x.id) === String(id));
+          return g ? (g.name || g.id) : id;
+        });
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
           '<td><b>' + esc(a.coord) + '</b></td>' +
-          // Mesma célula da aba Alvos, mesmo campo — editar de qualquer um dos dois lados grava
-          // no mesmo `a.posNome`.
-          '<td>' + nomeFuturoCel(a)
-            + (herdaN && cfg.nome ? '<div class="sub">padrão → ' + esc(cfg.nome) + '</div>' : '') + '</td>' +
-          '<td><select class="twmgr-nb-pgrp twmgr-inp" data-coord="' + esc(a.coord) + '" multiple size="3"'
-            + ' style="width:100%;font-size:10px">' + opts(cfg.grupos) + '</select>'
-            + (herdaG ? '<div class="sub">padrão</div>' : '') + '</td>' +
+          '<td style="color:#6f6153">' + (cfg.nome ? esc(cfg.nome) : '<span style="color:#8a7340">nome atual</span>')
+            + '<div class="sub">' + esc(gNomes.length ? gNomes.join(', ') : 'sem grupo') + '</div></td>' +
           '<td>' + nobleBandBtn(a.coord, cfg.bandTipo, cfg.bandNivel)
             + (herdaB ? '<div class="sub">padrão</div>' : '') + '</td>' +
           '<td>' + estado + '</td></tr>';
@@ -2492,18 +2583,7 @@
       const el = e.target, coord = el.getAttribute && el.getAttribute('data-coord');
       if (!coord) return;
       const a = (config.noble.alvos || []).find((x) => x.coord === coord); if (!a) return;
-      if (el.classList.contains('twmgr-nb-pgrp')) {
-        // Lista, não valor único. Vazia = "não quero grupo nenhum neste alvo", que é diferente
-        // de herdar o padrão — por isso grava `[]` em vez de apagar o campo.
-        a.posGrupos = Array.prototype.map.call(el.selectedOptions || [], (o) => String(o.value));
-        delete a.posGrupoId;                   // o formato antigo sai de cena assim que você mexe
-      }
-      if (el.classList.contains('twmgr-nb-nomefut')) {
-        const v = String(el.value || '').trim().slice(0, 40);
-        if (v) a.posNome = v; else delete a.posNome;   // vazio volta a herdar o padrão
-        renderNoblePlano();                            // a aba Alvos mostra o mesmo campo
-      }
-      save(); renderNoblePos();
+      void a;                 // nome e grupos migraram pra aba Alvos; aqui só sobrou a bandeira
     });
     // Cliques do seletor de bandeira, delegados porque a grade é redesenhada a cada abertura.
     //
@@ -2764,11 +2844,8 @@
     if (g('twmgr-nb-cunhar-ate')) c.cunharAte = Math.max(1, Math.min(8, parseInt(g('twmgr-nb-cunhar-ate').value, 10) || 4));
     if (g('twmgr-nb-cunhar-n')) c.cunharMaxAldeias = Math.max(1, Math.min(12, parseInt(g('twmgr-nb-cunhar-n').value, 10) || 3));
     if (g('twmgr-nb-posgrupo')) c.posGrupo = g('twmgr-nb-posgrupo').checked;
-    if (g('twmgr-nb-posgid')) {
-      const sel = g('twmgr-nb-posgid');
-      c.posGrupos = Array.prototype.map.call(sel.selectedOptions || [], (o) => String(o.value));
-      c.posGrupoId = c.posGrupos[0] || '';     // espelho do formato antigo, pra não quebrar leitura velha
-    }
+    // `posGrupos` não é lido aqui: o dropdown de checkbox grava direto no config quando você
+    // marca (ver bindNobleGrupoDropdown). Ler de novo por cima aqui apagaria a escolha.
     if (g('twmgr-nb-posrenom')) c.posRenomear = g('twmgr-nb-posrenom').checked;
     if (g('twmgr-nb-posnome')) c.posNomePadrao = String(g('twmgr-nb-posnome').value || '').trim().slice(0, 40);
     if (g('twmgr-nb-posband')) c.posBandeira = g('twmgr-nb-posband').checked;

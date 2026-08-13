@@ -227,6 +227,18 @@
       "#twmgr-panel.twmgr-collapsed{width:auto}",
       "#twmgr-panel.twmgr-collapsed .twmgr-tabs,#twmgr-panel.twmgr-collapsed #twmgr-body{display:none}",
       "#twmgr-panel.twmgr-collapsed #twmgr-head{border-bottom:none}",
+      // Dropdown de grupos com checkbox. Substitui o <select multiple>, que exigia Ctrl pra marcar
+      // mais de um (ninguém descobre isso sozinho) e ocupava altura fixa engolindo a tabela.
+      ".twmgr-gd{position:relative;display:inline-block;width:100%}",
+      ".twmgr-gd-btn{display:block;width:100%;box-sizing:border-box;cursor:pointer;background:#fffdf9;border:1px solid #e0d6c6;border-radius:5px;padding:2px 16px 2px 5px;font-size:10px;color:#6f6153;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}",
+      ".twmgr-gd-btn:after{content:'▾';position:absolute;right:5px;top:2px;color:#a2643a}",
+      ".twmgr-gd-btn.vazio{color:#a99b86}",
+      // O painel flutua ACIMA da tabela (position:absolute + z-index): dentro do fluxo ele
+      // empurraria as linhas de baixo e a tabela pularia a cada abertura.
+      ".twmgr-gd-pan{position:absolute;z-index:40;left:0;top:100%;min-width:100%;max-height:170px;overflow-y:auto;background:#fffdf9;border:1px solid #d8cbb4;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.18);padding:4px}",
+      ".twmgr-gd-pan label{display:flex;align-items:center;gap:5px;padding:2px 4px;font-size:10px;color:#5c4423;cursor:pointer;white-space:nowrap;border-radius:4px}",
+      ".twmgr-gd-pan label:hover{background:#f6f1e8}",
+      ".twmgr-gd-pan .vazioaviso{font-size:9px;color:#b03030;padding:3px 4px}",
       ".twmgr-dot{width:9px;height:9px;border-radius:50%;background:#ddd2c0;transition:.2s;flex:0 0 auto}",
       ".twmgr-dot.on{background:#3f8f52;box-shadow:0 0 8px #3f8f52}",
       ".twmgr-bld-sum{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:5px}",
@@ -860,8 +872,9 @@
             '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Use <code>{coord}</code>, <code>{x}</code> ou <code>{y}</code> pra o mesmo padrão servir pra vários alvos. Cada alvo pode ter o nome dele na tabela abaixo, e o que estiver lá vence este. Nome vazio = mantém o que o jogo deu.</div>' +
             '<div class="twmgr-fld" style="margin-top:11px"><span>Pôr nos grupos automaticamente</span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-posgrupo" type="checkbox"><i></i></label></div>' +
-            '<div class="twmgr-fld"><span>Grupos padrão</span><select id="twmgr-nb-posgid" class="twmgr-inp" multiple size="4" style="flex:0 0 140px;width:140px"></select></div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Segure <b>Ctrl</b> pra marcar mais de um — a aldeia entra em todos. Só grupo <b>estático</b>: grupo dinâmico é montado por regra e não aceita aldeia na mão — mandar pra lá falharia calado.</div>' +
+            '<div class="twmgr-fld"><span>Grupos padrão</span><span id="twmgr-nb-posgid" style="flex:0 0 140px;width:140px"></span></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Marque quantos quiser — a aldeia entra em todos. A lista só mostra grupo <b>estático</b>: dinâmico é montado por regra e não aceita aldeia na mão, então mandar pra lá falharia calado.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Isto é só o <b>padrão</b>. Quem manda é a coluna <b>Grupos</b> da aba <b>Alvos</b>, alvo por alvo.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A conquista é detectada pela <b>lealdade ≤ 0</b> no relatório, então depende de <b>Ler relatórios</b> estar ligado. Cada aldeia entra <b>uma vez</b> só.</div>' +
             '<div class="twmgr-fld" style="margin-top:11px"><span>Equipar bandeira</span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-posband" type="checkbox"><i></i></label></div>' +
@@ -1285,7 +1298,9 @@
     document.getElementById('twmgr-nb-parcial').checked = !!config.noble.parcialSempre;
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
      'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen', 'twmgr-nb-paralelo', 'twmgr-nb-parcial',
-     'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid',
+     // `twmgr-nb-posgid` saiu daqui: virou dropdown de checkbox, que grava no config sozinho.
+     // Deixá-lo na lista faria o `change` de um checkbox rodar o readNobleCfg e reescrever por cima.
+     'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo',
      'twmgr-nb-posband', 'twmgr-nb-posrenom', 'twmgr-nb-posnome'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });

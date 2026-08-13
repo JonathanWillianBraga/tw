@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.172.0
+// @version      11.173.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.172.0';
+  const VERSION = '11.173.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -12383,7 +12383,7 @@
   const FARM_SUB_KEY = 'twMgr_farmSub';
   // Sub-abas por módulo. Era só do Saque; virou genérico quando o Noblar também passou a ter —
   // duplicar a função daria duas cópias pra manter em sincronia.
-  const SUBS = { farm: ['farm', 'wall', 'map', 'fichas'], noble: ['alvos', 'cunhar', 'pos'],
+  const SUBS = { farm: ['farm', 'estat', 'wall', 'map', 'fichas'], noble: ['alvos', 'cunhar', 'pos'],
                  recruit: ['rcmodelos', 'rcstatus'], build: ['bldmodelos', 'bldstatus'],
                  market: ['cunhagem', 'equilibrio', 'solidario', 'pacotes'] };
   function showSub(mod, name) {
@@ -12506,6 +12506,7 @@
       '<div id="twmgr-tab-farm" style="display:none">' +
         '<div class="twmgr-subtabs">' +
           subBtn('farm', '🐎', 'Saque') +
+          subBtn('estat', '📊', 'Estatísticas') +
           subBtn('wall', '🐏', 'Muralha') +
           subBtn('map', '🗺️', 'Mapa') +
           subBtn('fichas', '🎯', 'Notas') +
@@ -12537,14 +12538,13 @@
           '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-farm-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-farm-start" class="twmgr-btn twmgr-go">▶ Saquear</button><button id="twmgr-farm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-farm-status" class="twmgr-cstatus"></div>' +
-        // Estatísticas DENTRO do Saque, não como sub-aba irmã: é a leitura do que o Saque acabou
-        // de fazer, então separar em outra aba obrigava a trocar de tela pra entender o ciclo que
-        // você está olhando. Fica recolhida por padrão pra não empurrar o log pra baixo.
-        '<details class="twmgr-section" style="padding:0">' +
-          '<summary class="twmgr-sec-h" style="cursor:pointer;list-style:revert">📊 Estatísticas do último ciclo</summary>' +
-          '<div id="twmgr-farm-estat" style="padding:2px 0 4px"></div>' +
-        '</details>' +
         modLog('farm') +
+        '</div>' +
+        // Sub-aba irmã de Muralha e Mapa. Tem a tela inteira pra ela: as tabelas são largas
+        // (uma linha por alvo e uma por aldeia) e espremidas no fim da aba do Saque ficavam
+        // ilegíveis — foi como saiu na v11.172.0 e estava ruim mesmo.
+        '<div id="twmgr-sub-estat" style="display:none">' +
+          '<div id="twmgr-farm-estat"></div>' +
         '</div>' +
         '<div id="twmgr-sub-wall" style="display:none">' +
         hint('🐏 Manda bárbaro + aríete + explorador pra derrubar muralhas dos alvos do assistente. Roda em paralelo ao Saque.') +

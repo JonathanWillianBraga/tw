@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.168.0
+// @version      11.169.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.168.0';
+  const VERSION = '11.169.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2143,6 +2143,20 @@
     const availCache = {};
     const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
     const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, mur: 0, pend: 0, semorig: 0, dist: 0 };
+    // ===== Diagnóstico POR ORIGEM =====
+    // O módulo é alvo-cêntrico: pra cada alvo ele varre as origens mais próximas e usa a primeira
+    // que passa. Quando nenhuma passa, o contador `semorig` subia e o log dizia "acabou a
+    // cavalaria" — mas esse é só UM dos motivos possíveis, e as outras razões (piso de população
+    // do mundo, reserva da aldeia, mínimo de CL, falta de explorador) desapareciam sem registro.
+    // Daí a pergunta que não tinha resposta: "por que essa aldeia não mandou nada?".
+    //
+    // Aqui cada REJEIÇÃO de origem é contada com o motivo, e cada envio é creditado à origem.
+    const oDiag = {};   // vid -> { nome, enviou, semCL, reserva, semSpy, semTpl, fakeSemPontos, fakeSemTropa, recusa }
+    const oReg = (vid, nome, campo) => {
+      const o = oDiag[vid] || (oDiag[vid] = { nome: nome || vid, enviou: 0, semCL: 0, reserva: 0,
+        semSpy: 0, semTpl: 0, fakeSemPontos: 0, fakeSemTropa: 0, recusa: 0 });
+      o[campo]++;
+    };
     const eligible = [];
     targets.forEach((t) => {
       if (!t.reportId) { skip.norep++; return; }
@@ -2239,18 +2253,21 @@
         const ptsC = vPoints ? (parseInt(vPoints[String(c.s.vid)], 10) || 0) : 0;
         const minPopC = ptsC > 0 ? Math.ceil((fakePct / 100) * ptsC) : 0;
         if (mode !== 'c' && !tplOnlySpy[mode] && (fakeBlock[c.s.vid + '|' + mode] || (!dyn && tplPop[mode] > 0 && minPopC > 0 && tplPop[mode] < minPopC))) {
-          if (!minPopC) continue;   // sem os pontos da origem não dá pra calcular o piso -> pula
+          if (!minPopC) { oReg(c.s.vid, c.s.name, 'fakeSemPontos'); continue; }   // sem os pontos da origem não dá pra calcular o piso -> pula
           useCalc = true;
         }
         const avail = await getAvail(c.s.vid);
-        if (minCL > 0 && (avail.light || 0) < minCL) continue;   // origem drenada -> tenta a próxima mais próxima
+        if (minCL > 0 && (avail.light || 0) < minCL) { oReg(c.s.vid, c.s.name, 'semCL'); continue; }   // origem drenada -> tenta a próxima mais próxima
         // No C quem monta a tropa é o jogo, então o piso usa a MESMA estimativa que o desconto
         // logo abaixo (estCL). É aproximação, e é a única honesta: não dá pra saber a composição
         // do template C antes de mandar.
-        if (mode === 'c' && (resCL > 0 || resSpy > 0) && livre(avail, 'light') < estCL) continue;
+        if (mode === 'c' && (resCL > 0 || resSpy > 0) && livre(avail, 'light') < estCL) { oReg(c.s.vid, c.s.name, 'reserva'); continue; }
         // Modo dinâmico A/B manda {light: estCL, spy: 1}. Se a origem não tem isso (ex.: aldeia recém-noblada
         // sem CL), o servidor recusa e o log mentia "enviado". Pula pra próxima origem em vez de falso-positivo.
-        if (dyn && mode !== 'c') { if (livre(avail, 'light') < estCL) continue; if (livre(avail, 'spy') < 1) continue; }
+        if (dyn && mode !== 'c') {
+          if (livre(avail, 'light') < estCL) { oReg(c.s.vid, c.s.name, 'reserva'); continue; }
+          if (livre(avail, 'spy') < 1) { oReg(c.s.vid, c.s.name, 'semSpy'); continue; }
+        }
         // Sem template dinâmico o A/B manda a composição fixa do assistente. Antes a gente disparava
         // e deixava o servidor recusar — 1 requisição jogada fora por origem sem tropa. Agora confere
         // antes, usando as unidades lidas do próprio template. Se não deu pra ler (mapa vazio), passa
@@ -2259,7 +2276,7 @@
           const need = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {};
           let falta = false;
           for (const u in need) { if (livre(avail, u) < need[u]) { falta = true; break; } }
-          if (falta) continue;
+          if (falta) { oReg(c.s.vid, c.s.name, 'semTpl'); continue; }
         }
         // Envio calculado = O TEMPLATE DO USUÁRIO subido até o mínimo do mundo. Mantém as unidades que
         // ele escolheu no assistente e só multiplica a quantidade o suficiente pra passar. O saque do
@@ -2278,7 +2295,7 @@
           if (!Object.keys(calcAmounts).length) continue;
           let semTropa = false;
           for (const u in calcAmounts) { if (livre(avail, u) < calcAmounts[u]) { semTropa = true; break; } }
-          if (semTropa) continue;   // origem não tem o template + o complemento -> tenta a próxima
+          if (semTropa) { oReg(c.s.vid, c.s.name, 'fakeSemTropa'); continue; }   // origem não tem o template + o complemento -> tenta a próxima
         }
         try {
           if (mode === 'c') { await sendFarmC(c.s.vid, t.reportId); did = true; }
@@ -2293,6 +2310,7 @@
           if (/^ambiguo:/.test(em)) { incerto = true; break; }
           errs++;
           errReasons[em] = (errReasons[em] || 0) + 1;
+          oReg(c.s.vid, c.s.name, 'recusa');
           // Limite de fake: o template é pequeno demais PRA ESSA ORIGEM (vale pra qualquer alvo).
           // Marca e não tenta de novo no ciclo — antes gastava uma requisição por alvo.
           const fl = em.match(/m[ií]nimo de (\d+) habitantes/i);
@@ -2313,6 +2331,7 @@
           else if (mode === 'c') { avail.light = Math.max(0, (avail.light || 0) - estCL); }
           else { const used = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {}; for (const u in used) avail[u] = Math.max(0, (avail[u] || 0) - used[u]); }
           usedName = c.s.name; usedDist = c.d; usedCalc = useCalc; count++;
+          oReg(c.s.vid, c.s.name, 'enviou');
           if (useCalc) { calcCount++; usedCalcInfo = Object.keys(calcAmounts).map((u) => calcAmounts[u] + ' ' + u).join(' + '); }
           // Capacidade de carga despachada. No C quem monta a tropa é o jogo (dimensiona pelo saque
           // do relatório), então usa o próprio saque estimado como capacidade — é aproximação.
@@ -2345,6 +2364,27 @@
     // cavalaria. Falha de verdade é envio recusado pelo servidor (errs) ou de resultado incerto.
     const naoEnviados = Math.max(0, eligible.length - count - incertos);
     const topErr = Object.keys(errReasons).map((m) => [m, errReasons[m]]).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    // Contabilidade por ORIGEM, calculada aqui porque o painel (logo abaixo) e o log (mais adiante)
+    // usam os mesmos números.
+    const oVals = Object.keys(oDiag).map((v) => oDiag[v]);
+    const somaOrig = (campo) => oVals.reduce((s, o) => s + o[campo], 0);
+    const MOT = [
+      ['semCL', 'abaixo do mínimo de CL'],
+      ['reserva', 'CL/exploradores presos na reserva'],
+      ['semSpy', 'sem explorador livre'],
+      ['semTpl', 'sem a tropa que o template pede'],
+      ['fakeSemTropa', 'sem tropa pro complemento do piso de população'],
+      ['fakeSemPontos', 'pontos da origem desconhecidos (piso não calculável)'],
+      ['recusa', 'recusadas pelo servidor'],
+    ];
+    const motivos = MOT.map(([k, txt]) => [somaOrig(k), txt]).filter((p) => p[0] > 0)
+      .sort((a, b) => b[0] - a[0]).map((p) => p[0] + '× ' + p[1]);
+    const usadas = oVals.filter((o) => o.enviou > 0).sort((a, b) => b.enviou - a.enviou);
+    const paradas = oVals.filter((o) => o.enviou === 0);
+    const _farmOrigTxt = oVals.length
+      ? (usadas.length + ' enviaram' + (paradas.length ? ' · ' + paradas.length + ' recusadas' : '')
+         + (motivos.length ? ' (' + motivos.slice(0, 3).join(' · ') + ')' : ''))
+      : '';
     // PAINEL fica com o detalhe (tem espaço e é status, não histórico).
     const parts = [];
     if (skip.pend) parts.push(skip.pend + ' já em rota');
@@ -2361,7 +2401,8 @@
         (incertos ? (' · ? ' + incertos + ' incerto(s)') : '') +
         (naoEnviados ? (' · ⏭ ' + naoEnviados + ' não enviado(s)') : '') +
         (parts.length ? ('<br><span style="opacity:.7">' + parts.join(' · ') + '</span>') : '') +
-        (lastCalcTxt ? ('<br><span style="opacity:.7">completado: ' + lastCalcTxt + '</span>') : '')));
+        (lastCalcTxt ? ('<br><span style="opacity:.7">completado: ' + lastCalcTxt + '</span>') : '') +
+        (_farmOrigTxt ? ('<br><span style="opacity:.7">origens: ' + _farmOrigTxt + '</span>') : '')));
     } else setFarmProg('Nenhum alvo elegível neste ciclo.');
     // LOG enxuto: o resumo sai mais abaixo ("ciclo concluído"). Aqui, só problema DE VERDADE —
     // recusa do servidor ou envio incerto. Falta de tropa não entra: é teto, não defeito.
@@ -2369,8 +2410,25 @@
       pushLog('Saque: ' + (errs ? errs + ' recusa(s)' : '') + (incertos ? ((errs ? ' · ' : '') + incertos + ' incerto(s)') : '') +
         (topErr.length ? (' — ' + topErr.map((p) => p[1] + '× "' + p[0] + '"').join(' · ')) : ''), 'err', 'farm');
     }
-    // Tropa esgotada é informação útil (dá pra decidir intervalo/ordem), mas em tom neutro.
-    if (skip.semorig) pushLog('Saque: ' + skip.semorig + ' alvo(s) sem origem com tropa — acabou a cavalaria antes dos alvos.', '', 'farm');
+    // ===== POR QUE as origens não serviram =====
+    // Antes esta linha dizia sempre "acabou a cavalaria", que era um CHUTE: o alvo cai em
+    // `semorig` quando NENHUMA origem passou, e a cavalaria é só um dos motivos possíveis. Agora
+    // o motivo sai contado, e some a pergunta "por que essa aldeia não mandou nada?".
+    if (skip.semorig) {
+      pushLog('Saque: ' + skip.semorig + ' alvo(s) ficaram sem origem'
+        + (motivos.length ? ' — origens recusadas: ' + motivos.join(' · ') : ' — nenhuma origem no alcance passou nos filtros')
+        + '.', '', 'farm');
+    }
+    // Quem trabalhou e quem ficou parada. É a resposta direta pra "essa aldeia mandou alguma
+    // coisa?" — o resumo por alvo nunca conseguiu dar isso, porque conta o lado errado da conta.
+    if (oVals.length) {
+      const topo = usadas.slice(0, 6).map((o) => o.nome + ' ' + o.enviou + '×').join(' · ');
+      pushLog('Saque: ' + usadas.length + ' aldeia(s) enviaram'
+        + (topo ? ' (' + topo + (usadas.length > 6 ? ' · +' + (usadas.length - 6) : '') + ')' : '')
+        + (paradas.length ? ' · ' + paradas.length + ' cogitada(s) e não usada(s): '
+            + paradas.slice(0, 4).map((o) => o.nome).join(', ') + (paradas.length > 4 ? '…' : '') : '')
+        + '.', '', 'farm');
+    }
     // Detecção de BLOQUEIO por efeito (pega bot-check enquanto você está AFK). Só conta como suspeito o
     // que é sintoma REAL de bloqueio: servidor RECUSOU envios (errs) OU o assistente voltou VAZIO
     // (0 alvos, degradado). "0 enviados por falta de CL / fora de alcance / cooldown" é NORMAL e ZERA o

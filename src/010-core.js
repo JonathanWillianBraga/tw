@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.164.0
+// @version      11.165.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.164.0';
+  const VERSION = '11.165.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -320,8 +320,13 @@
     // A troca real é outra: com muito tempo entre um nobre e outro, a lealdade regenera no meio
     // e o primeiro rende menos. Por isso é opção, não padrão.
     parcialSempre: false,
-    // Pós-conquista: joga a aldeia tomada num grupo estático.
-    posGrupo: false, posGrupoId: '', posFeitos: {},
+    // Pós-conquista: joga a aldeia tomada nos grupos estáticos escolhidos.
+    // `posGrupoId` (um grupo só) é o formato antigo; `posGrupos` é a lista e tem precedência.
+    // O antigo continua lido pra config existente não perder o grupo já configurado.
+    posGrupo: false, posGrupoId: '', posGrupos: [], posFeitos: {},
+    // Renomear a aldeia ao tomar. `posNomePadrao` aceita {coord}, {x} e {y}; cada alvo pode ter
+    // o nome dele em `posNome`, que vence o padrão.
+    posRenomear: false, posNomePadrao: '',
     posBandeira: false, posBandeiraTipo: '', posBandeiraNivel: 1,
     // Histórico de conquistas. Existe por um motivo prático: o alvo conquistado some da fila
     // 30 min depois, e com ele sumia a linha do Pós-conquista — não havia mais como pôr bandeira
@@ -752,6 +757,17 @@
     c.noble.cunharMaxAldeias = Math.max(1, Math.min(12, parseInt(c.noble.cunharMaxAldeias, 10) || 3));
     if (c.noble.posGrupo == null) c.noble.posGrupo = false;
     if (c.noble.posGrupoId == null) c.noble.posGrupoId = '';
+    // Migração do grupo único pra lista: quem já tinha um grupo padrão configurado não pode
+    // perdê-lo só porque o campo virou array.
+    if (!Array.isArray(c.noble.posGrupos)) {
+      c.noble.posGrupos = c.noble.posGrupoId ? [String(c.noble.posGrupoId)] : [];
+    }
+    if (c.noble.posRenomear == null) c.noble.posRenomear = false;
+    if (c.noble.posNomePadrao == null) c.noble.posNomePadrao = '';
+    (c.noble.alvos || []).forEach((a) => {
+      if (a && a.posGrupos != null && !Array.isArray(a.posGrupos)) delete a.posGrupos;
+      if (a && a.posGrupos == null && a.posGrupoId != null && a.posGrupoId !== '') a.posGrupos = [String(a.posGrupoId)];
+    });
     if (!c.noble.posFeitos || typeof c.noble.posFeitos !== 'object') c.noble.posFeitos = {};
     if (!Array.isArray(c.noble.conquistadas)) c.noble.conquistadas = [];
     if (c.noble.posBandeira == null) c.noble.posBandeira = false;

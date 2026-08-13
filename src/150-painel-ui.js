@@ -853,10 +853,15 @@
         '</div>' +
         '<div id="twmgr-sub-pos" style="display:none">' +
           sec('Quando a aldeia cair',
-            '<div class="twmgr-fld"><span>Pôr num grupo automaticamente</span>' +
+            '<div class="twmgr-fld"><span>Renomear a aldeia</span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-posrenom" type="checkbox"><i></i></label></div>' +
+            '<div class="twmgr-fld"><span title="Vale pros alvos que não têm nome próprio. Aceita {coord}, {x} e {y}">Nome padrão</span>' +
+              '<input id="twmgr-nb-posnome" class="twmgr-inp" type="text" maxlength="40" placeholder="ex.: ATK {coord}" style="flex:0 0 140px;width:140px"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Use <code>{coord}</code>, <code>{x}</code> ou <code>{y}</code> pra o mesmo padrão servir pra vários alvos. Cada alvo pode ter o nome dele na tabela abaixo, e o que estiver lá vence este. Nome vazio = mantém o que o jogo deu.</div>' +
+            '<div class="twmgr-fld" style="margin-top:11px"><span>Pôr nos grupos automaticamente</span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-posgrupo" type="checkbox"><i></i></label></div>' +
-            '<div class="twmgr-fld"><span>Grupo padrão</span><select id="twmgr-nb-posgid" class="twmgr-inp" style="flex:0 0 140px;width:140px"></select></div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Só grupo <b>estático</b>. Grupo dinâmico é montado por regra e não aceita aldeia na mão — mandar pra lá falharia calado.</div>' +
+            '<div class="twmgr-fld"><span>Grupos padrão</span><select id="twmgr-nb-posgid" class="twmgr-inp" multiple size="4" style="flex:0 0 140px;width:140px"></select></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Segure <b>Ctrl</b> pra marcar mais de um — a aldeia entra em todos. Só grupo <b>estático</b>: grupo dinâmico é montado por regra e não aceita aldeia na mão — mandar pra lá falharia calado.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A conquista é detectada pela <b>lealdade ≤ 0</b> no relatório, então depende de <b>Ler relatórios</b> estar ligado. Cada aldeia entra <b>uma vez</b> só.</div>' +
             '<div class="twmgr-fld" style="margin-top:11px"><span>Equipar bandeira</span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-posband" type="checkbox"><i></i></label></div>' +
@@ -1264,6 +1269,8 @@
     document.getElementById('twmgr-nb-cunhar-n').value = config.noble.cunharMaxAldeias != null ? config.noble.cunharMaxAldeias : 3;
     document.getElementById('twmgr-nb-posgrupo').checked = !!config.noble.posGrupo;
     document.getElementById('twmgr-nb-posband').checked = !!config.noble.posBandeira;
+    document.getElementById('twmgr-nb-posrenom').checked = !!config.noble.posRenomear;
+    document.getElementById('twmgr-nb-posnome').value = config.noble.posNomePadrao || '';
 
 
     fillNobleGrupos();
@@ -1279,7 +1286,7 @@
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
      'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen', 'twmgr-nb-paralelo', 'twmgr-nb-parcial',
      'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid',
-     'twmgr-nb-posband'].forEach((id) => {
+     'twmgr-nb-posband', 'twmgr-nb-posrenom', 'twmgr-nb-posnome'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.164.0
+// @version      11.165.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.164.0';
+  const VERSION = '11.165.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -320,8 +320,13 @@
     // A troca real é outra: com muito tempo entre um nobre e outro, a lealdade regenera no meio
     // e o primeiro rende menos. Por isso é opção, não padrão.
     parcialSempre: false,
-    // Pós-conquista: joga a aldeia tomada num grupo estático.
-    posGrupo: false, posGrupoId: '', posFeitos: {},
+    // Pós-conquista: joga a aldeia tomada nos grupos estáticos escolhidos.
+    // `posGrupoId` (um grupo só) é o formato antigo; `posGrupos` é a lista e tem precedência.
+    // O antigo continua lido pra config existente não perder o grupo já configurado.
+    posGrupo: false, posGrupoId: '', posGrupos: [], posFeitos: {},
+    // Renomear a aldeia ao tomar. `posNomePadrao` aceita {coord}, {x} e {y}; cada alvo pode ter
+    // o nome dele em `posNome`, que vence o padrão.
+    posRenomear: false, posNomePadrao: '',
     posBandeira: false, posBandeiraTipo: '', posBandeiraNivel: 1,
     // Histórico de conquistas. Existe por um motivo prático: o alvo conquistado some da fila
     // 30 min depois, e com ele sumia a linha do Pós-conquista — não havia mais como pôr bandeira
@@ -752,6 +757,17 @@
     c.noble.cunharMaxAldeias = Math.max(1, Math.min(12, parseInt(c.noble.cunharMaxAldeias, 10) || 3));
     if (c.noble.posGrupo == null) c.noble.posGrupo = false;
     if (c.noble.posGrupoId == null) c.noble.posGrupoId = '';
+    // Migração do grupo único pra lista: quem já tinha um grupo padrão configurado não pode
+    // perdê-lo só porque o campo virou array.
+    if (!Array.isArray(c.noble.posGrupos)) {
+      c.noble.posGrupos = c.noble.posGrupoId ? [String(c.noble.posGrupoId)] : [];
+    }
+    if (c.noble.posRenomear == null) c.noble.posRenomear = false;
+    if (c.noble.posNomePadrao == null) c.noble.posNomePadrao = '';
+    (c.noble.alvos || []).forEach((a) => {
+      if (a && a.posGrupos != null && !Array.isArray(a.posGrupos)) delete a.posGrupos;
+      if (a && a.posGrupos == null && a.posGrupoId != null && a.posGrupoId !== '') a.posGrupos = [String(a.posGrupoId)];
+    });
     if (!c.noble.posFeitos || typeof c.noble.posFeitos !== 'object') c.noble.posFeitos = {};
     if (!Array.isArray(c.noble.conquistadas)) c.noble.conquistadas = [];
     if (c.noble.posBandeira == null) c.noble.posBandeira = false;
@@ -7012,9 +7028,13 @@
     try { gs = await getGroups(); } catch (e) { return; }
     const uteis = (gs || []).filter((g) => String(g.id) !== '0');
     _nbGrupos = uteis;
-    sel.innerHTML = '<option value="">— escolha —</option>'
-      + uteis.map((g) => '<option value="' + esc(String(g.id)) + '">' + esc(g.name || g.id) + '</option>').join('');
-    if (config.noble.posGrupoId) sel.value = String(config.noble.posGrupoId);
+    // Multi-seleção: sem <option> de "— escolha —", porque em lista múltipla ele seria uma opção
+    // selecionável de valor vazio em vez de um placeholder. Nada marcado já significa nenhum.
+    sel.innerHTML = uteis.map((g) => '<option value="' + esc(String(g.id)) + '">' + esc(g.name || g.id) + '</option>').join('');
+    const marcados = (Array.isArray(config.noble.posGrupos) && config.noble.posGrupos.length)
+      ? config.noble.posGrupos.map(String)
+      : (config.noble.posGrupoId ? [String(config.noble.posGrupoId)] : []);
+    Array.prototype.forEach.call(sel.options, (o) => { o.selected = marcados.indexOf(String(o.value)) >= 0; });
     renderNoblePos();   // a tabela depende desta lista
     nobleRenderBandPadrao();
   }
@@ -7054,12 +7074,49 @@
   // O que aplicar quando ESTE alvo cair. A escolha do alvo manda; sem ela, herda o padrão
   // global. String vazia no alvo significa "nenhum" de propósito — diferente de indefinido,
   // que é "usa o padrão". Sem essa distinção não dá pra desligar um alvo isolado.
+  // Expande {coord}, {x} e {y} no nome. Serve pro padrão global valer pra vários alvos de uma
+  // vez ("ATK {coord}") sem você ter que digitar aldeia por aldeia.
+  function noblePosNomeExpandir(txt, coord) {
+    const m = String(coord || '').match(/(\d+)\|(\d+)/) || [];
+    return String(txt || '')
+      .replace(/\{coord\}/gi, coord || '')
+      .replace(/\{x\}/gi, m[1] || '')
+      .replace(/\{y\}/gi, m[2] || '')
+      .trim().slice(0, 40);          // o jogo corta nomes longos; corta aqui pra não surpreender
+  }
   function noblePosDoAlvo(coord) {
     const a = (config.noble.alvos || []).find((x) => x.coord === coord) || {};
-    const gid = (a.posGrupoId != null) ? a.posGrupoId : (config.noble.posGrupoId || '');
+    // GRUPOS: a lista do alvo vence a lista global; `posGrupoId` (formato antigo, um grupo só)
+    // continua sendo aceito como último recurso pra config velha não perder o que já tinha.
+    let grupos = Array.isArray(a.posGrupos) ? a.posGrupos
+      : (a.posGrupoId != null && a.posGrupoId !== '') ? [String(a.posGrupoId)]
+      : (Array.isArray(config.noble.posGrupos) && config.noble.posGrupos.length) ? config.noble.posGrupos
+      : (config.noble.posGrupoId ? [String(config.noble.posGrupoId)] : []);
+    grupos = grupos.filter((g) => g !== '' && g != null).map(String);
     const bt = (a.posBandTipo != null) ? a.posBandTipo : (config.noble.posBandeiraTipo || '');
     const bn = (a.posBandNivel != null) ? a.posBandNivel : (config.noble.posBandeiraNivel || 1);
-    return { gid: gid, bandTipo: bt, bandNivel: bn };
+    const nome = noblePosNomeExpandir(
+      (a.posNome != null && a.posNome !== '') ? a.posNome : (config.noble.posNomePadrao || ''), coord);
+    return { grupos: grupos, gid: grupos[0] || '', nome: nome, bandTipo: bt, bandNivel: bn };
+  }
+  // Renomeia a aldeia. Endpoint confirmado lendo o formulário de screen=main (não chutado):
+  // POST /game.php?village=<vid>&screen=main&action=change_name&h=<CSRF>  com  name=<novo>
+  async function nobleRenomear(vid, nome) {
+    const body = new URLSearchParams();
+    body.append('name', nome);
+    const res = await fetch('/game.php?village=' + vid + '&screen=main&action=change_name&h=' + CSRF,
+      { method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    // Confere no HTML devolvido que o campo voltou com o nome novo. Sem isso um POST recusado
+    // (nome duplicado, caractere inválido) passaria por sucesso e a aldeia ficaria com o nome
+    // velho sem ninguém saber.
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const inp = doc.querySelector('input[name="name"]');
+    if (inp && inp.value && inp.value.trim() !== nome.trim()) {
+      throw new Error('o jogo manteve "' + inp.value.trim() + '"');
+    }
+    return true;
   }
 
   // Equipa bandeira. Chamada CONFIRMADA pelo dump do FlagsScreen.assignFlag:
@@ -7123,7 +7180,8 @@
     });
     lista.unshift({ coord: a.coord, nome: v.name || a.coord, vid: v.vid || null,
                     at: Date.now(), nobres: (nobleVoos(a.coord) || []).length, origens: origens,
-                    gid: cfg.gid, bandTipo: cfg.bandTipo, bandNivel: cfg.bandNivel });
+                    gid: cfg.gid, grupos: cfg.grupos, novoNome: cfg.nome,
+                    bandTipo: cfg.bandTipo, bandNivel: cfg.bandNivel });
     config.noble.conquistadas = lista.slice(0, 100);
   }
   // Aplica grupo e bandeira numa aldeia já conquistada. Usada pelo automático E pelo botão
@@ -7133,10 +7191,28 @@
   // a intenção é essa, não a de um checkbox de configuração.
   async function nobleAplicarPos(c, v, forcar) {
     const feito = [];
-    if ((forcar || config.noble.posGrupo) && c.gid) {
-      try { await nobleAddGrupo(v.vid, c.gid); feito.push('grupo'); }
-      catch (e) { pushLog('Noblar: não consegui pôr ' + c.coord + ' no grupo (' + (e.message || e) + ').', 'err', 'noble'); }
+    // RENOMEAR PRIMEIRO: o grupo e a bandeira não dependem do nome, mas o log e o histórico
+    // ficam legíveis se a aldeia já aparecer com o nome novo daqui pra frente.
+    const novoNome = c.novoNome || '';
+    if ((forcar || config.noble.posRenomear) && novoNome) {
+      try {
+        await nobleRenomear(v.vid, novoNome);
+        c.nome = novoNome;                        // o histórico passa a mostrar o nome novo
+        feito.push('nome "' + novoNome + '"');
+      } catch (e) { pushLog('Noblar: não consegui renomear ' + c.coord + ' para "' + novoNome + '" (' + (e.message || e) + ').', 'err', 'noble'); }
       await sleep(400);
+    }
+    // GRUPOS (plural). O endpoint do jogo aceita um grupo por chamada, então é um POST por grupo.
+    // Falha em um não impede os outros — meia aldeia no lugar certo é melhor que nenhuma.
+    const grupos = Array.isArray(c.grupos) ? c.grupos : (c.gid ? [c.gid] : []);
+    if ((forcar || config.noble.posGrupo) && grupos.length) {
+      let ok = 0;
+      for (const gid of grupos) {
+        try { await nobleAddGrupo(v.vid, gid); ok++; }
+        catch (e) { pushLog('Noblar: não consegui pôr ' + c.coord + ' no grupo ' + gid + ' (' + (e.message || e) + ').', 'err', 'noble'); }
+        await sleep(400);
+      }
+      if (ok) feito.push(ok + ' grupo(s)');
     }
     if ((forcar || config.noble.posBandeira) && c.bandTipo) {
       try { await nobleEquiparBandeira(v.vid, c.bandTipo, c.bandNivel || 1); feito.push('bandeira'); }
@@ -7157,7 +7233,7 @@
   // que desligava o bloco inteiro — nunca recebia bandeira nem grupo. Agora a fonte é o
   // histórico, que é escrito pelo mesmo detector que marca `noblada`.
   async function noblePosConquista(todas) {
-    if (!config.noble.posGrupo && !config.noble.posBandeira) return;
+    if (!config.noble.posGrupo && !config.noble.posBandeira && !config.noble.posRenomear) return;
     for (const c of (config.noble.conquistadas || [])) {
       if (config.noble.posFeitos[c.coord]) continue;
       const v = (todas || []).find((x) => (x.coord || '') === c.coord);
@@ -8250,14 +8326,19 @@
       box.innerHTML = '<div style="color:#8a7340;text-align:center;padding:10px;font-size:10px">— nenhum alvo na lista —</div>';
       return;
     }
-    const opts = (sel) => '<option value=""' + (!sel ? ' selected' : '') + '>— nenhum —</option>'
-      + _nbGrupos.map((g) => '<option value="' + esc(String(g.id)) + '"'
-        + (String(g.id) === String(sel) ? ' selected' : '') + '>' + esc(g.name || g.id) + '</option>').join('');
+    // Multi-seleção: o jogo aceita a aldeia em vários grupos estáticos ao mesmo tempo, e é
+    // comum querer isso (ex.: "Novas" + "Defensivas"). `size` fixo pra caixa não engolir a
+    // tabela quando a conta tem muitos grupos.
+    const opts = (sels) => _nbGrupos.map((g) => '<option value="' + esc(String(g.id)) + '"'
+      + (sels.indexOf(String(g.id)) >= 0 ? ' selected' : '') + '>' + esc(g.name || g.id) + '</option>').join('');
     box.innerHTML = '<table class="twmgr-bld-tab twmgr-nb-tab"><thead><tr>' +
-      '<th>Alvo</th><th>Grupo</th><th>Bandeira</th><th>Estado</th></tr></thead><tbody>' +
+      '<th>Alvo</th><th title="Como a aldeia vai se chamar assim que for tomada. Aceita {coord}, {x} e {y}">Nome futuro</th>' +
+      '<th title="Segure Ctrl pra marcar mais de um">Grupos</th><th>Bandeira</th><th>Estado</th></tr></thead><tbody>' +
       alvos.map((a, i) => {
         const cfg = noblePosDoAlvo(a.coord);
-        const herdaG = (a.posGrupoId == null), herdaB = (a.posBandTipo == null);
+        const herdaG = (a.posGrupos == null && a.posGrupoId == null);
+        const herdaB = (a.posBandTipo == null);
+        const herdaN = (a.posNome == null || a.posNome === '');
         const feito = config.noble.posFeitos[a.coord];
         const l = nobleLealdadeAgora(a.coord);
         const estado = feito ? '<b style="color:#3f8f52">aplicado</b>'
@@ -8265,7 +8346,12 @@
           : '<span style="color:#8a7340">—</span>';
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
           '<td><b>' + esc(a.coord) + '</b></td>' +
-          '<td><select class="twmgr-nb-pgrp twmgr-inp" data-coord="' + esc(a.coord) + '">' + opts(cfg.gid) + '</select>'
+          '<td><input class="twmgr-nb-pnome twmgr-inp" data-coord="' + esc(a.coord) + '" type="text" maxlength="40"'
+            + ' style="width:100%;font-size:10px" placeholder="' + esc(cfg.nome || 'manter o nome') + '"'
+            + ' value="' + esc(a.posNome || '') + '">'
+            + (herdaN && cfg.nome ? '<div class="sub">padrão → ' + esc(cfg.nome) + '</div>' : '') + '</td>' +
+          '<td><select class="twmgr-nb-pgrp twmgr-inp" data-coord="' + esc(a.coord) + '" multiple size="3"'
+            + ' style="width:100%;font-size:10px">' + opts(cfg.grupos) + '</select>'
             + (herdaG ? '<div class="sub">padrão</div>' : '') + '</td>' +
           '<td>' + nobleBandBtn(a.coord, cfg.bandTipo, cfg.bandNivel)
             + (herdaB ? '<div class="sub">padrão</div>' : '') + '</td>' +
@@ -8285,10 +8371,14 @@
     }
     box.innerHTML = '<table class="twmgr-bld-tab twmgr-nb-tab"><thead><tr>' +
       '<th>Aldeia</th><th style="width:78px">quando</th><th style="width:52px" title="nobres que este módulo mandou pra ela">custo</th>' +
-      '<th style="width:88px">Grupo</th><th style="width:74px">Bandeira</th><th style="width:92px"></th></tr></thead><tbody>' +
+      '<th style="width:88px">Grupos</th><th style="width:74px">Bandeira</th><th style="width:92px"></th></tr></thead><tbody>' +
       lista.map((c, i) => {
         const feito = config.noble.posFeitos[c.coord];
-        const g = _nbGrupos.find((x) => String(x.id) === String(c.gid));
+        const gids = (Array.isArray(c.grupos) && c.grupos.length) ? c.grupos : (c.gid ? [c.gid] : []);
+        const gTxt = gids.map((id) => {
+          const gg = _nbGrupos.find((x) => String(x.id) === String(id));
+          return gg ? (gg.name || gg.id) : String(id);
+        }).join(', ');
         const dias = Math.floor((Date.now() - c.at) / 86400000);
         return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
           '<td>' + (c.vid ? '<a href="/game.php?village=' + esc(String(c.vid)) + '&screen=overview" target="_blank" style="color:#5c4423"><b>'
@@ -8298,7 +8388,8 @@
             + (dias > 0 ? ' <span title="' + dias + ' dia(s) atrás">(' + dias + 'd)</span>' : '') + '</td>' +
           '<td title="' + esc((c.origens || []).map((o) => o.n + '× ' + o.nome).join(', ') || 'origem não registrada') + '">'
             + (c.nobres ? '<b>' + c.nobres + '</b>👑' : '<span style="color:#8a7340">—</span>') + '</td>' +
-          '<td style="color:#6f6153">' + esc(g ? (g.name || g.id) : (c.gid ? String(c.gid) : '—')) + '</td>' +
+          '<td style="color:#6f6153">' + esc(gTxt || '—')
+            + (c.novoNome ? '<div class="sub" title="nome definido pra quando ela caísse">→ ' + esc(c.novoNome) + '</div>' : '') + '</td>' +
           '<td>' + (c.bandTipo ? esc(String(c.bandTipo)) + ' nv' + (c.bandNivel || 1) : '<span style="color:#8a7340">—</span>') + '</td>' +
           '<td>' + (feito
             ? '<span style="color:#3f8f52" title="aplicado em ' + new Date(feito).toLocaleString('pt-BR') + '">✔ aplicado</span>'
@@ -8308,7 +8399,8 @@
     box.querySelectorAll('.twmgr-nb-posgo').forEach((b) => b.addEventListener('click', async () => {
       const coord = b.getAttribute('data-coord');
       const c = (config.noble.conquistadas || []).find((x) => x.coord === coord); if (!c) return;
-      if (!c.gid && !c.bandTipo) { alert('Essa aldeia não tem grupo nem bandeira definidos — o alvo caiu antes de você configurar.'); return; }
+      const temGrupo = (Array.isArray(c.grupos) && c.grupos.length) || c.gid;
+      if (!temGrupo && !c.bandTipo && !c.novoNome) { alert('Essa aldeia não tem nome, grupo nem bandeira definidos — o alvo caiu antes de você configurar.'); return; }
       b.disabled = true; b.textContent = 'aplicando…';
       try {
         const todas = await getAllVillagesCached(true);
@@ -8385,7 +8477,16 @@
       const el = e.target, coord = el.getAttribute && el.getAttribute('data-coord');
       if (!coord) return;
       const a = (config.noble.alvos || []).find((x) => x.coord === coord); if (!a) return;
-      if (el.classList.contains('twmgr-nb-pgrp')) a.posGrupoId = el.value;
+      if (el.classList.contains('twmgr-nb-pgrp')) {
+        // Lista, não valor único. Vazia = "não quero grupo nenhum neste alvo", que é diferente
+        // de herdar o padrão — por isso grava `[]` em vez de apagar o campo.
+        a.posGrupos = Array.prototype.map.call(el.selectedOptions || [], (o) => String(o.value));
+        delete a.posGrupoId;                   // o formato antigo sai de cena assim que você mexe
+      }
+      if (el.classList.contains('twmgr-nb-pnome')) {
+        const v = String(el.value || '').trim().slice(0, 40);
+        if (v) a.posNome = v; else delete a.posNome;   // vazio volta a herdar o padrão
+      }
       save(); renderNoblePos();
     });
     // Cliques do seletor de bandeira, delegados porque a grade é redesenhada a cada abertura.
@@ -8633,7 +8734,13 @@
     if (g('twmgr-nb-cunhar-ate')) c.cunharAte = Math.max(1, Math.min(8, parseInt(g('twmgr-nb-cunhar-ate').value, 10) || 4));
     if (g('twmgr-nb-cunhar-n')) c.cunharMaxAldeias = Math.max(1, Math.min(12, parseInt(g('twmgr-nb-cunhar-n').value, 10) || 3));
     if (g('twmgr-nb-posgrupo')) c.posGrupo = g('twmgr-nb-posgrupo').checked;
-    if (g('twmgr-nb-posgid')) c.posGrupoId = g('twmgr-nb-posgid').value;
+    if (g('twmgr-nb-posgid')) {
+      const sel = g('twmgr-nb-posgid');
+      c.posGrupos = Array.prototype.map.call(sel.selectedOptions || [], (o) => String(o.value));
+      c.posGrupoId = c.posGrupos[0] || '';     // espelho do formato antigo, pra não quebrar leitura velha
+    }
+    if (g('twmgr-nb-posrenom')) c.posRenomear = g('twmgr-nb-posrenom').checked;
+    if (g('twmgr-nb-posnome')) c.posNomePadrao = String(g('twmgr-nb-posnome').value || '').trim().slice(0, 40);
     if (g('twmgr-nb-posband')) c.posBandeira = g('twmgr-nb-posband').checked;
     // Tipo/nível da bandeira não são mais campos de texto: quem grava é o seletor de ícones.
 
@@ -12360,10 +12467,15 @@
         '</div>' +
         '<div id="twmgr-sub-pos" style="display:none">' +
           sec('Quando a aldeia cair',
-            '<div class="twmgr-fld"><span>Pôr num grupo automaticamente</span>' +
+            '<div class="twmgr-fld"><span>Renomear a aldeia</span>' +
+              '<label class="twmgr-sw"><input id="twmgr-nb-posrenom" type="checkbox"><i></i></label></div>' +
+            '<div class="twmgr-fld"><span title="Vale pros alvos que não têm nome próprio. Aceita {coord}, {x} e {y}">Nome padrão</span>' +
+              '<input id="twmgr-nb-posnome" class="twmgr-inp" type="text" maxlength="40" placeholder="ex.: ATK {coord}" style="flex:0 0 140px;width:140px"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Use <code>{coord}</code>, <code>{x}</code> ou <code>{y}</code> pra o mesmo padrão servir pra vários alvos. Cada alvo pode ter o nome dele na tabela abaixo, e o que estiver lá vence este. Nome vazio = mantém o que o jogo deu.</div>' +
+            '<div class="twmgr-fld" style="margin-top:11px"><span>Pôr nos grupos automaticamente</span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-posgrupo" type="checkbox"><i></i></label></div>' +
-            '<div class="twmgr-fld"><span>Grupo padrão</span><select id="twmgr-nb-posgid" class="twmgr-inp" style="flex:0 0 140px;width:140px"></select></div>' +
-            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Só grupo <b>estático</b>. Grupo dinâmico é montado por regra e não aceita aldeia na mão — mandar pra lá falharia calado.</div>' +
+            '<div class="twmgr-fld"><span>Grupos padrão</span><select id="twmgr-nb-posgid" class="twmgr-inp" multiple size="4" style="flex:0 0 140px;width:140px"></select></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">Segure <b>Ctrl</b> pra marcar mais de um — a aldeia entra em todos. Só grupo <b>estático</b>: grupo dinâmico é montado por regra e não aceita aldeia na mão — mandar pra lá falharia calado.</div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">A conquista é detectada pela <b>lealdade ≤ 0</b> no relatório, então depende de <b>Ler relatórios</b> estar ligado. Cada aldeia entra <b>uma vez</b> só.</div>' +
             '<div class="twmgr-fld" style="margin-top:11px"><span>Equipar bandeira</span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-posband" type="checkbox"><i></i></label></div>' +
@@ -12771,6 +12883,8 @@
     document.getElementById('twmgr-nb-cunhar-n').value = config.noble.cunharMaxAldeias != null ? config.noble.cunharMaxAldeias : 3;
     document.getElementById('twmgr-nb-posgrupo').checked = !!config.noble.posGrupo;
     document.getElementById('twmgr-nb-posband').checked = !!config.noble.posBandeira;
+    document.getElementById('twmgr-nb-posrenom').checked = !!config.noble.posRenomear;
+    document.getElementById('twmgr-nb-posnome').value = config.noble.posNomePadrao || '';
 
 
     fillNobleGrupos();
@@ -12786,7 +12900,7 @@
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
      'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen', 'twmgr-nb-paralelo', 'twmgr-nb-parcial',
      'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo', 'twmgr-nb-posgid',
-     'twmgr-nb-posband'].forEach((id) => {
+     'twmgr-nb-posband', 'twmgr-nb-posrenom', 'twmgr-nb-posnome'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.addEventListener('change', readNobleCfg);
     });
     bindNobleHandlers();

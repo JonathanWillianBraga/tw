@@ -348,7 +348,7 @@
   const FARM_SUB_KEY = 'twMgr_farmSub';
   // Sub-abas por módulo. Era só do Saque; virou genérico quando o Noblar também passou a ter —
   // duplicar a função daria duas cópias pra manter em sincronia.
-  const SUBS = { farm: ['farm', 'wall', 'map', 'fichas'], noble: ['alvos', 'cunhar', 'pos'],
+  const SUBS = { farm: ['farm', 'estat', 'wall', 'map', 'fichas'], noble: ['alvos', 'cunhar', 'pos'],
                  recruit: ['rcmodelos', 'rcstatus'], build: ['bldmodelos', 'bldstatus'],
                  market: ['cunhagem', 'equilibrio', 'solidario', 'pacotes'] };
   function showSub(mod, name) {
@@ -471,6 +471,7 @@
       '<div id="twmgr-tab-farm" style="display:none">' +
         '<div class="twmgr-subtabs">' +
           subBtn('farm', '🐎', 'Saque') +
+          subBtn('estat', '📊', 'Estatísticas') +
           subBtn('wall', '🐏', 'Muralha') +
           subBtn('map', '🗺️', 'Mapa') +
           subBtn('fichas', '🎯', 'Notas') +
@@ -503,6 +504,12 @@
         '<div class="twmgr-actions"><button id="twmgr-farm-start" class="twmgr-btn twmgr-go">▶ Saquear</button><button id="twmgr-farm-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
         '<div id="twmgr-farm-status" class="twmgr-cstatus"></div>' +
         modLog('farm') +
+        '</div>' +
+        '<div id="twmgr-sub-estat" style="display:none">' +
+          sec('Por aldeia',
+            '<div id="twmgr-farm-estat"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:6px">A foto é do <b>último ciclo</b>. <b>alvos</b> = quantos alvos elegíveis estão no alcance daquela aldeia; <b>1ª</b> = em quantos ela é a mais próxima, que é o trabalho que naturalmente sobra pra ela. Aldeia com muita <b>CL</b> e <b>0</b> em "1ª" é periférica: só entra quando as de perto secam.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">O módulo já tenta a 2ª, 3ª, N-ésima origem mais próxima dentro do alcance — a coluna <b>motivo</b> diz por que cada uma foi recusada quando não enviou.</div>') +
         '</div>' +
         '<div id="twmgr-sub-wall" style="display:none">' +
         hint('🐏 Manda bárbaro + aríete + explorador pra derrubar muralhas dos alvos do assistente. Roda em paralelo ao Saque.') +
@@ -1407,6 +1414,7 @@
     let subIni = 'farm';
     try { const sv = localStorage.getItem(FARM_SUB_KEY); if (['farm', 'wall', 'map'].indexOf(sv) >= 0) subIni = sv; } catch (e) {}
     showFarmSub(subIni);
+    renderFarmEstat();   // mostra a foto do último ciclo já na abertura do painel
     showTab('farm');
     renderLog();
     setStatus(config.running);

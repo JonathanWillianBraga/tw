@@ -896,6 +896,55 @@
     return rows;
   }
 
+  // Tabela de estatísticas do Saque. Ordenada por cavalaria parada (decrescente): a primeira linha
+  // é sempre a aldeia que mais tem tropa ociosa, que é a pergunta que se faz olhando isto.
+  function renderFarmEstat() {
+    const box = document.getElementById('twmgr-farm-estat'); if (!box) return;
+    const e = (config.farm && config.farm.estat) || null;
+    if (!e) { box.innerHTML = '<div class="twmgr-hint">Rode um ciclo do Saque pra montar as estatísticas.</div>'; return; }
+    const n = (v) => (v == null ? '—' : fmtN(v));
+    const idade = Math.round((Date.now() - e.at) / 1000);
+    const cab = '<div class="twmgr-bld-sum">'
+      + '<span class="twmgr-chip"><b>' + n(e.emRota) + '</b> saques em rota</span>'
+      + '<span class="twmgr-chip"><b>' + n(e.voltando) + '</b> voltando</span>'
+      + '<span class="twmgr-chip"><b>' + n(e.alvosElegiveis) + '</b> alvos elegíveis</span>'
+      + '<span class="twmgr-chip"><b>' + n(e.enviados) + '</b> enviados no ciclo</span>'
+      + '<span class="twmgr-chip"' + (e.alvosSemOrigem ? ' style="color:#b03030"' : '') + '><b>' + n(e.alvosSemOrigem) + '</b> alvos sem origem</span>'
+      + '<span class="twmgr-chip"><b>' + n(e.clParada) + '</b> CL parada</span>'
+      + '</div>';
+    const linhas = (e.origens || []);
+    // Aldeia sem NENHUM alvo no alcance é um caso à parte: não é "não trabalhou", é "não tem o que
+    // atacar daqui". Misturar as duas na mesma leitura é o que faz parecer que o módulo ignora a aldeia.
+    const semAlvo = linhas.filter((l) => !l.alcance).length;
+    const tab = '<table class="twmgr-bld-tab"><thead><tr>'
+      + '<th>Aldeia</th>'
+      + '<th style="width:38px" title="Alvos elegíveis dentro do alcance de ' + e.maxDist + ' campos">alvos</th>'
+      + '<th style="width:38px" title="Alvos em que ESTA aldeia é a mais próxima — é o trabalho que sobra pra ela por padrão">1ª</th>'
+      + '<th style="width:38px" title="Ataques que saíram daqui neste ciclo">saiu</th>'
+      + '<th style="width:52px" title="Cavalaria leve em casa">CL</th>'
+      + '<th title="Por que não enviou">motivo</th></tr></thead><tbody>'
+      + linhas.map((l, i) => {
+        const ocioso = (l.cl || 0) >= 300 && !l.enviou;
+        return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">'
+          + '<td><b>' + esc(l.nome) + '</b><div class="sub">' + esc(l.coord || '') + '</div></td>'
+          + '<td>' + (l.alcance || '<span style="color:#b03030">0</span>') + '</td>'
+          + '<td>' + (l.prox || '<span style="color:#8a7340">—</span>') + '</td>'
+          + '<td>' + (l.enviou ? '<b style="color:#3f8f52">' + l.enviou + '</b>' : '<span style="color:#8a7340">—</span>') + '</td>'
+          + '<td' + (ocioso ? ' style="color:#b03030;font-weight:700"' : '') + '>' + n(l.cl) + '</td>'
+          + '<td style="font-size:9px;color:#6f6153">'
+            + (l.enviou ? '<span style="color:#3f8f52">enviou</span>'
+               : !l.alcance ? 'nenhum alvo a ≤' + e.maxDist + ' campos'
+               : l.motivo ? esc(l.motivo) + (l.rejeicoes > 1 ? ' (' + l.rejeicoes + '×)' : '')
+               : 'nunca foi a mais próxima — as de perto deram conta')
+          + '</td></tr>';
+      }).join('') + '</tbody></table>';
+    box.innerHTML = cab
+      + '<div style="font-size:9px;color:#8a7d6d;margin:4px 0 6px">Lido há ' + idade + 's · alcance ' + e.maxDist
+        + ' campos · mínimo de CL ' + e.minCL
+        + (semAlvo ? ' · <b>' + semAlvo + '</b> aldeia(s) sem nenhum alvo no alcance' : '') + '</div>'
+      + tab;
+  }
+
   // Lê a tela de comandos (só ataques): coords com ataque nosso em rota (p/ não empilhar) + nº de ATAQUES DE SAQUE em rota (ícone de farm) p/ o card.
   async function getPendingAttack() {
     const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=attack&page=-1', { credentials: 'include' });
@@ -908,6 +957,45 @@
       if (tr.querySelector('img[src*="command/farm"]')) { saques++; if (coord) farmCoords.add(coord); }   // ícone farm.webp = ataque de saque
     });
     return { coords: coords, saques: saques, farmCoords: farmCoords };
+  }
+
+  // Ataques VOLTANDO. Mesma tela dos comandos, outro `type` — uma requisição, e é o número que
+  // responde "quanta tropa está no caminho de casa" sem abrir aldeia por aldeia.
+  async function getReturningAttack() {
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=return&page=-1', { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    let total = 0, saques = 0;
+    doc.querySelectorAll('#commands_table tr').forEach((tr) => {
+      if (!tr.querySelector('.quickedit-label')) return;
+      total++;
+      if (tr.querySelector('img[src*="command/farm"], img[src*="return_attack"]')) saques++;
+    });
+    return { total: total, saques: saques };
+  }
+  // Tropa EM CASA de TODAS as aldeias, numa requisição só. A coluna de cada unidade é descoberta
+  // pelo ícone do cabeçalho, não por posição fixa: mundo com 10 unidades e mundo com 12 têm
+  // colunas diferentes, e contar na mão quebraria num deles.
+  async function getHomeUnitsAll() {
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=home&page=-1', { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const idx = {};
+    doc.querySelectorAll('#units_table thead th, table.vis thead th').forEach((th, i) => {
+      const img = th.querySelector('img'); if (!img) return;
+      const m = (img.getAttribute('src') || '').match(/unit_(\w+)\./);
+      if (m) idx[m[1]] = i;
+    });
+    const out = {};
+    doc.querySelectorAll('#units_table tbody tr, table.vis tbody tr').forEach((tr) => {
+      const tds = tr.querySelectorAll('td'); if (tds.length < 4) return;
+      const lbl = tds[0].querySelector('.quickedit-vn[data-id], .quickedit[data-id]');
+      const vid = lbl ? lbl.getAttribute('data-id') : null; if (!vid) return;
+      const u = {};
+      Object.keys(idx).forEach((k) => { u[k] = parseInt((tds[idx[k]] || {}).textContent, 10) || 0; });
+      out[String(vid)] = u;
+    });
+    return out;
   }
 
   // "Minha pontuação hoje" do ranking Em um dia (type: loot_res = saqueado, scavenge = coletado). Cache por type.
@@ -1374,6 +1462,56 @@
         + (motivos.length ? ' — origens recusadas: ' + motivos.join(' · ') : ' — nenhuma origem no alcance passou nos filtros')
         + '.', '', 'farm');
     }
+    // ===== ESTATÍSTICAS (aba Saque > Estatísticas) =====
+    // Fotografia do ciclo, por aldeia. Responde as perguntas que o log não consegue responder sem
+    // virar parede de texto: quantos alvos cada aldeia alcança, em quantos ela é a mais próxima,
+    // quanta cavalaria está parada nela e por quê ela não foi usada.
+    //
+    // Fica no config (e portanto no backup) porque é diagnóstico, não estado de operação: dá pra
+    // olhar depois, comparar com o ciclo anterior e mandar print.
+    try {
+      const uHome = await getHomeUnitsAll().catch(() => ({}));
+      let ret = null;
+      try { ret = await getReturningAttack(); } catch (e) { ret = null; }
+      // alvos no alcance / em quantos é a mais próxima — por origem
+      const noAlcance = {}, maisProx = {};
+      eligible.forEach((t) => {
+        const tm = String(t.coord || '').match(/(\d+)\|(\d+)/); if (!tm) return;
+        const tx2 = +tm[1], ty2 = +tm[2];
+        let melhor = null, melhorD = 1e9;
+        myV.forEach((s) => {
+          const dd = fieldDist(s.x, s.y, tx2, ty2);
+          if (dd > maxDist) return;
+          noAlcance[s.vid] = (noAlcance[s.vid] || 0) + 1;
+          if (dd < melhorD) { melhorD = dd; melhor = s.vid; }
+        });
+        if (melhor) maisProx[melhor] = (maisProx[melhor] || 0) + 1;
+      });
+      const MOTC = { semCL: 'abaixo do mínimo de CL', reserva: 'presa na reserva', semSpy: 'sem explorador',
+        semTpl: 'sem a tropa do template', fakeSemTropa: 'sem tropa pro piso de população',
+        fakeSemPontos: 'pontos desconhecidos', recusa: 'recusada pelo servidor' };
+      const linhas = myV.map((s) => {
+        const o = oDiag[s.vid] || {};
+        const u = uHome[String(s.vid)] || {};
+        // pior motivo = o que mais apareceu; é o que explica a aldeia neste ciclo
+        let motivo = '', pico = 0;
+        Object.keys(MOTC).forEach((k) => { if ((o[k] || 0) > pico) { pico = o[k]; motivo = MOTC[k]; } });
+        return { vid: s.vid, nome: s.name || s.coord, coord: s.coord,
+          alcance: noAlcance[s.vid] || 0, prox: maisProx[s.vid] || 0,
+          enviou: o.enviou || 0, cl: u.light != null ? u.light : null, spy: u.spy != null ? u.spy : null,
+          motivo: (o.enviou ? '' : motivo), rejeicoes: pico };
+      }).sort((a, b) => (b.cl || 0) - (a.cl || 0));
+      config.farm.estat = {
+        at: Date.now(),
+        emRota: saquesAtivos != null ? saquesAtivos : null,
+        voltando: ret ? ret.saques : null, voltandoTotal: ret ? ret.total : null,
+        alvosElegiveis: eligible.length, alvosSemOrigem: skip.semorig, enviados: count,
+        clParada: linhas.reduce((s2, l) => s2 + (l.cl || 0), 0),
+        maxDist: maxDist, minCL: minCL,
+        origens: linhas,
+      };
+      renderFarmEstat();
+    } catch (e) { pushLog('Saque: não consegui montar as estatísticas (' + (e.message || e) + ').', '', 'farm'); }
     // Quem trabalhou e quem ficou parada. É a resposta direta pra "essa aldeia mandou alguma
     // coisa?" — o resumo por alvo nunca conseguiu dar isso, porque conta o lado errado da conta.
     if (oVals.length) {

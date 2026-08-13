@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.167.0
+// @version      11.168.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.167.0';
+  const VERSION = '11.168.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -8246,6 +8246,30 @@
       + ' title="' + esc(rot.txt) + '">' + esc(rot.txt) + '</a>'
       + '<div class="twmgr-gd-pan" style="display:none">' + corpo + '</div></span>';
   }
+  // Posiciona o painel (que é `fixed`) logo abaixo do botão, em coordenadas de viewport.
+  //
+  // Abre pra CIMA quando não cabe embaixo — numa lista de 20 alvos, os últimos ficam no pé da
+  // tela e o painel sairia pela borda inferior, que é o mesmo sintoma de antes com outra causa.
+  function nbGdPosicionar(btn, pan) {
+    const r = btn.getBoundingClientRect();
+    pan.style.minWidth = Math.max(130, Math.round(r.width)) + 'px';
+    pan.style.left = '-9999px';                 // mede escondido, sem piscar no lugar errado
+    pan.style.top = '0px';
+    pan.style.display = '';
+    const h = pan.offsetHeight;
+    const cabeAbaixo = (window.innerHeight - r.bottom) >= h + 4;
+    const top = (cabeAbaixo || r.top < h + 4) ? (r.bottom + 2) : (r.top - h - 2);
+    // Não deixa vazar pela direita quando o botão está colado na borda do painel.
+    const left = Math.max(4, Math.min(r.left, window.innerWidth - pan.offsetWidth - 6));
+    pan.style.left = Math.round(left) + 'px';
+    pan.style.top = Math.round(top) + 'px';
+  }
+  function nbGdFecharTodos(exceto) {
+    document.querySelectorAll('.twmgr-gd').forEach((w) => {
+      if (w === exceto) return;
+      const p = w.querySelector('.twmgr-gd-pan'); if (p) p.style.display = 'none';
+    });
+  }
   // Um listener só, no documento, porque as tabelas são redesenhadas o tempo todo.
   let _nbGdLigado = false;
   function bindNobleGrupoDropdown() {
@@ -8260,17 +8284,19 @@
       // <div> viraria um nó de texto e o dropdown não abriria.
       const meu = btn ? btn.closest('.twmgr-gd') : null;
       // Clicar dentro do painel não fecha nada (marcar vários seguidos). Fora, fecha tudo.
-      if (!dentroDoPainel) {
-        document.querySelectorAll('.twmgr-gd').forEach((w) => {
-          if (w === meu) return;
-          const p = w.querySelector('.twmgr-gd-pan'); if (p) p.style.display = 'none';
-        });
-      }
+      if (!dentroDoPainel) nbGdFecharTodos(meu);
       if (!btn || !meu) return;
       e.preventDefault();
       const pan = meu.querySelector('.twmgr-gd-pan');
-      if (pan) pan.style.display = (pan.style.display === 'none') ? '' : 'none';
+      if (!pan) return;
+      if (pan.style.display === 'none') nbGdPosicionar(btn, pan);
+      else pan.style.display = 'none';
     });
+    // O painel é `fixed`: ele não acompanha a rolagem da lista nem do painel. Em vez de
+    // reposicionar a cada frame (caro e trêmulo), fecha — o usuário reabre onde parou.
+    // `true` = fase de captura, senão a rolagem da lista interna não chegaria ao documento.
+    document.addEventListener('scroll', () => nbGdFecharTodos(null), true);
+    window.addEventListener('resize', () => nbGdFecharTodos(null));
     document.addEventListener('change', (e) => {
       const el = e.target;
       if (!el.classList || !el.classList.contains('twmgr-gd-chk')) return;
@@ -11984,9 +12010,14 @@
       ".twmgr-gd-btn{display:block;width:100%;box-sizing:border-box;cursor:pointer;background:#fffdf9;border:1px solid #e0d6c6;border-radius:5px;padding:2px 16px 2px 5px;font-size:10px;color:#6f6153;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}",
       ".twmgr-gd-btn:after{content:'▾';position:absolute;right:5px;top:2px;color:#a2643a}",
       ".twmgr-gd-btn.vazio{color:#a99b86}",
-      // O painel flutua ACIMA da tabela (position:absolute + z-index): dentro do fluxo ele
-      // empurraria as linhas de baixo e a tabela pularia a cada abertura.
-      ".twmgr-gd-pan{position:absolute;z-index:40;left:0;top:100%;min-width:100%;max-height:170px;overflow-y:auto;background:#fffdf9;border:1px solid #d8cbb4;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.18);padding:4px}",
+      // `fixed`, não `absolute`. Com absolute o painel era CLIPADO três vezes: o `td` tem
+      // overflow:hidden (regra de .twmgr-bld-tab td), a lista #twmgr-nb-lista tem overflow:auto e
+      // o #twmgr-body também. z-index não resolve isso — recorte não é ordem de pintura.
+      //
+      // Fixed se posiciona pela viewport, então escapa do overflow de qualquer ancestral (vale
+      // enquanto nenhum deles tiver transform/filter, o que foi conferido). O preço é que as
+      // coordenadas passam a ser calculadas na abertura — ver nbGdPosicionar.
+      ".twmgr-gd-pan{position:fixed;z-index:100000;max-height:190px;overflow-y:auto;background:#fffdf9;border:1px solid #d8cbb4;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.22);padding:4px}",
       ".twmgr-gd-pan label{display:flex;align-items:center;gap:5px;padding:2px 4px;font-size:10px;color:#5c4423;cursor:pointer;white-space:nowrap;border-radius:4px}",
       ".twmgr-gd-pan label:hover{background:#f6f1e8}",
       ".twmgr-gd-pan .vazioaviso{font-size:9px;color:#b03030;padding:3px 4px}",

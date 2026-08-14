@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.181.0
+// @version      11.182.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.181.0';
+  const VERSION = '11.182.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -3994,37 +3994,65 @@
     if (_tropasVoo) return _tropasVoo;
     _tropasVoo = (async () => {
       try {
-        const res = await fetch('/game.php?village=' + CUR_VID
-          + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-        const tabela = doc.querySelector('#units_table') || doc.querySelector('table.overview_table');
-        if (!tabela) throw new Error('não achei a tabela de tropas');
-        const ordem = [];
-        (tabela.querySelector('thead tr') || tabela.querySelector('tr')).querySelectorAll('th').forEach((th) => {
-          const img = th.querySelector('img[src*="unit_"]');
-          if (!img) return;
-          const m = (img.getAttribute('src') || '').match(/unit_(\w+)\./);
-          if (m) ordem.push(m[1]);
-        });
-        if (!ordem.length) throw new Error('não consegui ler as unidades do cabeçalho');
-        const out = {};
-        tabela.querySelectorAll('tr').forEach((tr) => {
-          const q = tr.querySelector('.quickedit-vn[data-id]'); if (!q) return;
-          const vid = q.getAttribute('data-id'); if (!vid) return;
-          const cels = tr.querySelectorAll('td.unit-item');
-          // Contagem diferente do cabeçalho = linha que eu não entendi. Descartar em silêncio
-          // é o que produz "aldeia sem tropa" fantasma, então registra.
-          if (cels.length !== ordem.length) {
-            pushLog('Tropas: linha da aldeia ' + vid + ' tem ' + cels.length + ' colunas e o cabeçalho '
-              + ordem.length + ' — ignorada.', 'err');
-            return;
+        // UMA tentativa. Devolve o mapa, ou lança com a EVIDÊNCIA do que veio — status, tamanho e
+        // assinatura da página. "não achei a tabela" sozinho não distingue sessão caída de
+        // bot-check, de tela em outro modo, de servidor com soluço; e sem distinguir não dá pra
+        // consertar. Custa nada e é a diferença entre um log e um diagnóstico.
+        const lerUma = async () => {
+          const res = await fetch('/game.php?village=' + CUR_VID
+            + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
+          const html = await res.text();
+          if (!res.ok) throw new Error('HTTP ' + res.status + ' (' + html.length + ' bytes)');
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const tabela = doc.querySelector('#units_table') || doc.querySelector('table.overview_table');
+          if (!tabela) {
+            // Bot-check tem tratamento próprio (o watcher de DOM avisa você); não adianta retentar.
+            const txt = ((doc.body && doc.body.textContent) || '').replace(/\s+/g, ' ').trim();
+            let bot = false; try { bot = scanForBotCheck(txt); } catch (e) {}
+            if (bot) throw new Error('a página veio com bot-check');
+            const titulo = ((doc.querySelector('h1, h2, .content-border h3') || {}).textContent || doc.title || '')
+              .replace(/\s+/g, ' ').trim().slice(0, 60);
+            throw new Error('sem a tabela · HTTP ' + res.status + ' · ' + html.length + ' bytes · página "'
+              + (titulo || '?') + '" · começo: ' + txt.slice(0, 90));
           }
-          const n = {};
-          cels.forEach((td, i) => { n[ordem[i]] = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0; });
-          out[String(vid)] = n;
-        });
-        if (!Object.keys(out).length) throw new Error('a tabela veio sem nenhuma aldeia');
+          const ordem = [];
+          (tabela.querySelector('thead tr') || tabela.querySelector('tr')).querySelectorAll('th').forEach((th) => {
+            const img = th.querySelector('img[src*="unit_"]');
+            if (!img) return;
+            const m = (img.getAttribute('src') || '').match(/unit_(\w+)\./);
+            if (m) ordem.push(m[1]);
+          });
+          if (!ordem.length) throw new Error('a tabela veio sem cabeçalho de unidades');
+          const out = {};
+          tabela.querySelectorAll('tr').forEach((tr) => {
+            const q = tr.querySelector('.quickedit-vn[data-id]'); if (!q) return;
+            const vid = q.getAttribute('data-id'); if (!vid) return;
+            const cels = tr.querySelectorAll('td.unit-item');
+            // Contagem diferente do cabeçalho = linha que eu não entendi. Descartar em silêncio é o
+            // que produz "aldeia sem tropa" fantasma, então registra.
+            if (cels.length !== ordem.length) {
+              pushLog('Tropas: linha da aldeia ' + vid + ' tem ' + cels.length + ' colunas e o cabeçalho '
+                + ordem.length + ' — ignorada.', 'err');
+              return;
+            }
+            const n = {};
+            cels.forEach((td, i) => { n[ordem[i]] = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0; });
+            out[String(vid)] = n;
+          });
+          if (!Object.keys(out).length) throw new Error('a tabela veio sem nenhuma aldeia');
+          return out;
+        };
+        // Uma retentativa. A falha foi INTERMITENTE (no ciclo anterior a mesma leitura levou 3,2 s e
+        // passou), e o preço de desistir é alto: o fallback são 47 requisições. Uma segunda tentativa
+        // custa ~400 ms. Não retenta bot-check — ali insistir é pior que desistir.
+        let out;
+        try { out = await lerUma(); }
+        catch (e1) {
+          if (/bot-check/.test(e1.message || '')) throw e1;
+          pushLog('Tropas: 1ª tentativa falhou (' + (e1.message || e1) + ') — repetindo em 800ms.', 'err');
+          await sleep(800);
+          out = await lerUma();
+        }
         _tropasCache = out; _tropasAt = Date.now();
         return out;
       } finally { _tropasVoo = null; }

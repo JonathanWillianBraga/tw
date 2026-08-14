@@ -324,7 +324,9 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'paladin', 'etiqueta', 'obra', 'apoios', 'log'].forEach((n) => {
+    // LISTA FIXA: aba nova precisa entrar AQUI também, senão o botão acende e o conteúdo nunca
+    // aparece — o div fica em display:none pra sempre. Foi o que aconteceu com 'rel' na v11.192.0.
+    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'paladin', 'etiqueta', 'obra', 'apoios', 'rel', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });

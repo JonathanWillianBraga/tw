@@ -808,6 +808,9 @@
   function scheduleScav() { clearTimeout(scavTimer); if (!config.scav.running) return; scavTimer = setTimeout(scavTick, Math.min(Math.max((config.scav.nextAt || 0) - Date.now(), 1000), 60000)); }
 
   let _farmPagesInfo = null;   // diagnóstico: quantas páginas do assistente foram lidas no último ciclo
+  // Teto de linhas por página do assistente. 1000 é o mesmo número que o Nexus usa nas telas em
+  // que força o ajuste; cobre com folga os ~500 alvos da maior conta vista aqui.
+  const FARM_PAGE_SIZE = 1000;
   // Memoria curta do assistente, COMPARTILHADA entre os modulos.
   //
   // Saque, Muralha e Mapa liam a lista inteira cada um por conta — e ela e paginada, entao
@@ -888,7 +891,49 @@
     };
     // O assistente PAGINA (teto de 100 linhas por página). Lendo só a primeira, os alvos das páginas
     // seguintes ficavam invisíveis e a tropa sobrava parada. Segue a paginação até o fim.
-    const doc0 = await fetchPage(0);
+    // ===== TRAZER TUDO NUMA PÁGINA =====
+    // Medido: 3 páginas custaram 9,8 s do ciclo de 89 s. O jogo tem ajuste de linhas por página;
+    // é preferência DE CONTA e fica gravada no servidor, então isto roda uma vez e nunca mais.
+    //
+    // CAPTURA o formulário em vez de deduzir a ação: telas diferentes do TW usam nomes diferentes
+    // pra mesma coisa (`change_pagesize` no am_village, `change_page_size` no overview_villages).
+    // Adivinhar aqui erra em silêncio com HTTP 200 — foi assim que a retirada de apoio quebrou
+    // quatro versões seguidas.
+    //
+    // Se qualquer passo falhar, devolve o documento original e a paginação normal segue valendo.
+    // O preço do fracasso é 1 requisição; o do sucesso é 2 requisições a menos POR CICLO, pra
+    // sempre.
+    const ampliarPagina = async (doc) => {
+      try {
+        const inp = doc.querySelector('input[name="page_size"]');
+        if (!inp) return doc;                                             // esta tela não oferece o ajuste
+        if ((parseInt(inp.value, 10) || 0) >= FARM_PAGE_SIZE) return doc; // já está grande
+        if (!doc.querySelector('a[href*="Farm_page="]')) return doc;      // já cabe numa página só
+        const form = inp.closest('form');
+        let acao = form ? (form.getAttribute('action') || '') : '';
+        if (!acao) return doc;
+        if (acao.indexOf('http') !== 0 && acao.charAt(0) !== '/') acao = '/' + acao;
+        const b = new URLSearchParams();
+        form.querySelectorAll('input[name], select[name]').forEach((el) => {
+          const t = (el.getAttribute('type') || '').toLowerCase();
+          if ((t === 'checkbox' || t === 'radio') && !el.checked) return;
+          b.set(el.getAttribute('name'), el.value == null ? '' : el.value);
+        });
+        b.set('page_size', String(FARM_PAGE_SIZE));
+        if (CSRF) b.set('h', CSRF);
+        const res = await fetch(acao, { method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }, body: b.toString() });
+        if (!res.ok) { pushLog('Saque: não consegui ampliar a página do assistente (HTTP ' + res.status + ') — seguindo paginado.', '', 'farm'); return doc; }
+        // VERIFICAÇÃO POR EFEITO: HTTP 200 não prova nada. Quem prova é a lista ter crescido.
+        const novo = await fetchPage(0);
+        const antes = doc.querySelectorAll('#plunder_list tr[id^="village_"]').length;
+        const depois = novo.querySelectorAll('#plunder_list tr[id^="village_"]').length;
+        if (depois <= antes) { pushLog('Saque: o pedido de ampliar a página não teve efeito (' + antes + ' → ' + depois + ' linhas) — seguindo paginado.', '', 'farm'); return doc; }
+        pushLog('Saque: assistente ampliado de ' + antes + ' para ' + depois + ' linhas por página — leitura em 1 requisição de agora em diante.', 'ok', 'farm');
+        return novo;
+      } catch (e) { return doc; }
+    };
+    const doc0 = await ampliarPagina(await fetchPage(0));
     parseDoc(doc0);
     const pages = new Set();
     doc0.querySelectorAll('a[href*="Farm_page="]').forEach((a) => {

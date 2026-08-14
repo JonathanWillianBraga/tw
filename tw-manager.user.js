@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.177.0
+// @version      11.178.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.177.0';
+  const VERSION = '11.178.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -294,6 +294,10 @@
     alvos: [], plano: [], planoAt: 0,
     maxHoras: 6, soNT: false,
     produzir: true,   // formar nobre quando faltar (NUNCA cunhar — decisão do usuário)
+    // Nobre sozinho morre pra qualquer defesa, e a lealdade so cai se o ataque VENCER —
+    // entao nobre pelado que morre e gasto irreversivel com efeito zero. 0 = desligado (o
+    // comportamento antigo, "envio parcial vale" ate o extremo).
+    escoltaMinPct: 0,
     templates: { padrao: defNobleTpl('Padrão') },
     ordem: ['padrao'],   // prioridade dos modelos; alvo com tpl:'' segue esta ordem
     lerRelatorios: true,
@@ -762,6 +766,7 @@
     if (!Array.isArray(c.noble.posGrupos)) {
       c.noble.posGrupos = c.noble.posGrupoId ? [String(c.noble.posGrupoId)] : [];
     }
+    c.noble.escoltaMinPct = Math.max(0, Math.min(100, parseInt(c.noble.escoltaMinPct, 10) || 0));
     if (c.noble.posRenomear == null) c.noble.posRenomear = false;
     if (c.noble.posNomePadrao == null) c.noble.posNomePadrao = '';
     (c.noble.alvos || []).forEach((a) => {
@@ -7782,6 +7787,8 @@
     return r;
   }
 
+  // Avisa UMA vez por ciclo que a trava de escolta esta ligada sem escolta no modelo.
+  let _nbAvisouEscoltaVazia = false;
   // Plano com UM modelo ja escolhido. Devolve { pronto, envios[], falta, motivo }.
   //   pronto  = ha ao menos 1 nobre pra mandar (parcial vale)
   //   envios  = [{vid, nome, coord, qtd, unidades, durSec}]
@@ -7875,6 +7882,41 @@
         if (vai > 0) unidades[u] = vai;
         if (vai < querem) curta.push(unitPt(u) + ' ' + vai + '/' + querem);
       });
+
+      // ESCOLTA MINIMA. Sem isto, "envio parcial vale" chegava ao extremo de mandar `{snob:1}`
+      // puro quando a origem nao tinha nenhuma tropa da escolta — e nobre sozinho morre pra
+      // qualquer defesa, inclusive milicia de barbara. Como a lealdade so cai se o ataque VENCER,
+      // um nobre pelado que morre e gasto irreversivel com efeito zero.
+      //
+      // A trava e por unidade: cada tropa da escolta precisa de pelo menos `escoltaMinPct` da
+      // cota do modelo. Origem que nao alcanca e PULADA, nao o alvo — a proxima mais proxima pode
+      // ter a tropa, e essa e a diferenca entre travar um alvo e escolher melhor a origem.
+      const minPct = Math.max(0, Math.min(100, config.noble.escoltaMinPct || 0));
+      if (minPct > 0) {
+        const exigidas = Object.keys(tpl.escolta || {}).filter((u) => (tpl.escolta[u] || 0) > 0);
+        if (!exigidas.length) {
+          // Trava ligada com escolta vazia no modelo nao protege nada: nao ha cota pra exigir.
+          // Avisa uma vez por ciclo em vez de fingir que esta protegendo.
+          if (!_nbAvisouEscoltaVazia) {
+            _nbAvisouEscoltaVazia = true;
+            pushLog('Noblar: "escolta mínima" está ligada (' + minPct + '%), mas o modelo "'
+              + (tpl.name || op.id) + '" está com a escolta VAZIA — não há cota a exigir, então a'
+              + ' trava não protege nada. Preencha a escolta do modelo.', 'err', 'noble');
+          }
+        } else {
+          const faltando = exigidas.filter((u) => {
+            const querem = tpl.escolta[u] || 0;
+            const piso = Math.ceil(querem * (minPct / 100));
+            return (unidades[u] || 0) < piso;
+          });
+          if (faltando.length) {
+            pushLog('Noblar: ' + o.nome + ' → ' + alvo.coord + ' PULADA — escolta abaixo do mínimo de '
+              + minPct + '% (' + faltando.map((u) => unitPt(u) + ' ' + (unidades[u] || 0) + '/'
+              + Math.ceil((tpl.escolta[u] || 0) * (minPct / 100))).join(', ') + '). Tento a próxima origem.', '', 'noble');
+            continue;
+          }
+        }
+      }
 
       // Duracao medida UMA vez por (aldeia, escolta): os comandos sao identicos, entao repetir o
       // fakePrepare seria requisicao jogada fora.
@@ -8300,6 +8342,7 @@
     try { await noblePosConquista(todas); }
     catch (e) { pushLog('Noblar (pós-conquista): ' + (e.message || e), 'err', 'noble'); }
 
+    _nbAvisouEscoltaVazia = false;   // aviso da escolta minima: uma vez por ciclo
     const cacheTropa = {};
     // Pool global: quanto de cada aldeia os alvos ANTERIORES desta rodada ja levaram. E o que
     // impede o mesmo nobre de aparecer no plano de dois alvos.
@@ -9298,6 +9341,7 @@
     if (g('twmgr-nb-posgrupo')) c.posGrupo = g('twmgr-nb-posgrupo').checked;
     // `posGrupos` não é lido aqui: o dropdown de checkbox grava direto no config quando você
     // marca (ver bindNobleGrupoDropdown). Ler de novo por cima aqui apagaria a escolha.
+    if (g('twmgr-nb-escmin')) c.escoltaMinPct = Math.max(0, Math.min(100, parseInt(g('twmgr-nb-escmin').value, 10) || 0));
     if (g('twmgr-nb-posrenom')) c.posRenomear = g('twmgr-nb-posrenom').checked;
     if (g('twmgr-nb-posnome')) c.posNomePadrao = String(g('twmgr-nb-posnome').value || '').trim().slice(0, 40);
     if (g('twmgr-nb-posband')) c.posBandeira = g('twmgr-nb-posband').checked;
@@ -13070,6 +13114,10 @@
             '<div class="twmgr-fld" style="margin-top:9px"><span title="Por padrão, se a leva sai incompleta E há nobre em produção, ele segura pra mandar tudo junto — porque a lealdade regenera entre uma chegada e outra. Ligado, manda o que estiver pronto agora e completa nos ciclos seguintes. NÃO há risco de excesso: o que falta é recalculado todo ciclo pela lealdade prevista, que já desconta os nobres voando.">Enviar parcial sempre <span style="color:#8a7d6d">(não esperar fechar a leva)</span></span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-parcial" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Some o "segurando: +N em produção". Em troca, se demorar muito entre um nobre e outro, a lealdade regenera no meio e o primeiro rende menos.</div>' +
+            '<div class="twmgr-fld" style="margin-top:9px"><span title="Percentual da escolta do modelo que a aldeia de origem TEM que conseguir mandar. Abaixo disso ela é pulada e o módulo tenta a próxima origem mais perto. 0 = desligado (manda mesmo sem escolta nenhuma).">Escolta mínima <span style="color:#8a7d6d">(% da cota do modelo, 0=off)</span></span>' +
+              '<input id="twmgr-nb-escmin" class="twmgr-inp" type="number" min="0" max="100" step="5" value="0" style="width:66px"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Sem isto o módulo manda <b>nobre sozinho</b> quando a origem não tem a escolta — e nobre pelado morre pra qualquer defesa, até milícia de bárbara. Como a lealdade só cai se o ataque <b>vencer</b>, esse nobre é gasto sem volta e sem efeito.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Pula a <b>origem</b>, não o alvo: a próxima mais perto pode ter a tropa. Só funciona se o modelo tiver escolta preenchida — com escolta vazia não há cota a exigir, e o log avisa.</div>' +
             '<div class="twmgr-fld" style="margin-top:9px"><span title="Por padrão a fila é serial: o alvo da vez trava os de trás até a lealdade prevista dele chegar a zero, pra reservar o nobre que ainda vai sair da Academia. Ligado, todo alvo é planejado no mesmo ciclo e pega o que sobrou — a ordem da fila segue dando a primeira escolha. Útil quando os alvos estão em regiões diferentes e não disputam os mesmos nobres.">Planejar todos os alvos <span style="color:#8a7d6d">(não travar a fila)</span></span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-paralelo" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Desligado, alvo de outra região fica em <b>Aguardando</b> mesmo tendo nobre perto dele. Ligado, ele é planejado — e se não achar nobre, diz <b>sem nobres</b> em vez de esconder o motivo.</div>' +
@@ -13519,8 +13567,10 @@
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
     document.getElementById('twmgr-nb-paralelo').checked = !!config.noble.paralelo;
     document.getElementById('twmgr-nb-parcial').checked = !!config.noble.parcialSempre;
+    document.getElementById('twmgr-nb-escmin').value = config.noble.escoltaMinPct != null ? config.noble.escoltaMinPct : 0;
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
      'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen', 'twmgr-nb-paralelo', 'twmgr-nb-parcial',
+     'twmgr-nb-escmin',
      // `twmgr-nb-posgid` saiu daqui: virou dropdown de checkbox, que grava no config sozinho.
      // Deixá-lo na lista faria o `change` de um checkbox rodar o readNobleCfg e reescrever por cima.
      'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo',

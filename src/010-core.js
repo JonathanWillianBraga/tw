@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.177.0
+// @version      11.178.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.177.0';
+  const VERSION = '11.178.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -294,6 +294,10 @@
     alvos: [], plano: [], planoAt: 0,
     maxHoras: 6, soNT: false,
     produzir: true,   // formar nobre quando faltar (NUNCA cunhar — decisão do usuário)
+    // Nobre sozinho morre pra qualquer defesa, e a lealdade so cai se o ataque VENCER —
+    // entao nobre pelado que morre e gasto irreversivel com efeito zero. 0 = desligado (o
+    // comportamento antigo, "envio parcial vale" ate o extremo).
+    escoltaMinPct: 0,
     templates: { padrao: defNobleTpl('Padrão') },
     ordem: ['padrao'],   // prioridade dos modelos; alvo com tpl:'' segue esta ordem
     lerRelatorios: true,
@@ -762,6 +766,7 @@
     if (!Array.isArray(c.noble.posGrupos)) {
       c.noble.posGrupos = c.noble.posGrupoId ? [String(c.noble.posGrupoId)] : [];
     }
+    c.noble.escoltaMinPct = Math.max(0, Math.min(100, parseInt(c.noble.escoltaMinPct, 10) || 0));
     if (c.noble.posRenomear == null) c.noble.posRenomear = false;
     if (c.noble.posNomePadrao == null) c.noble.posNomePadrao = '';
     (c.noble.alvos || []).forEach((a) => {

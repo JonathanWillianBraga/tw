@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.186.0
+// @version      11.187.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.186.0';
+  const VERSION = '11.187.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5631,7 +5631,7 @@
     // silencioso: config velha aqui atropela o "Aplicar ao grupo" que o painel mostra, e nada
     // dizia isso. Agora quem atropela é contado e vai pro log (a aba Modelos mostra e deixa
     // limpar; ver bldRenderAvulsas/bldLimparAvulsas).
-    const atropelou = {};
+    const atropelou = {}, atropeloVids = [];
     Object.keys(config.build.villages || {}).forEach((vid) => {
       const a = config.build.villages[vid];
       if (a.paused) { delete out[vid]; return; }        // pausada sai, mesmo vindo do grupo
@@ -5639,9 +5639,20 @@
       if (out[vid] && out[vid].tpl !== a.tpl) {
         const de = (config.build.templates[out[vid].tpl] || {}).name || out[vid].tpl;
         atropelou[de] = (atropelou[de] || 0) + 1;
+        atropeloVids.push(vid);
       }
       out[vid] = { tpl: a.tpl, name: a.name || a.coord || vid, coord: a.coord || null };
     });
+    // GUARDA A LISTA, não só a contagem. O banner e o botão "Limpar avulsas" usavam uma conta
+    // PRÓPRIA e diferente desta: flagravam toda avulsa cujo modelo não tem grupo, sem verificar se
+    // a aldeia está em algum grupo. Duas consequências, as duas ruins:
+    //   · o botão apagava atribuição deliberada de aldeia que não atropelava NADA, e essas aldeias
+    //     ficavam sem modelo nenhum — paravam de construir. O confirm prometia "passam a seguir o
+    //     grupo" pra aldeia que não tem grupo pra seguir;
+    //   · e NÃO apagava as que o log reclama, quando a avulsa aponta pra um modelo que TEM grupo.
+    // Ou seja: o log mandava apertar um botão que não agia sobre o que ele reclamava.
+    // Agora log, banner e botão leem a MESMA lista, medida aqui com os grupos resolvidos.
+    config.build.atropelo = { vids: atropeloVids, porTpl: atropelou, at: Date.now() };
     const nAtropelo = Object.values(atropelou).reduce((s, n) => s + n, 0);
     if (nAtropelo) {
       pushLog('Construções: ' + nAtropelo + ' aldeia(s) do grupo estão com atribuição AVULSA e não'
@@ -6008,18 +6019,15 @@
   // aldeias, mas 27 delas ainda tinham entrada avulsa de uma configuração anterior (12 Ofensiva,
   // 15 Defensiva). Só 11 rodavam o modelo escolhido, e uma aldeia parada de construir levou horas
   // pra ser explicada — ela tinha COMPLETADO o modelo antigo, não o que estava na tela.
+  // Quem atropela o grupo só se sabe RESOLVENDO os grupos, e isso é rede — não dá pra fazer aqui,
+  // que roda a cada render de painel. Então esta função LÊ o que o último ciclo mediu, em vez de
+  // recalcular por um atalho que erra. Sem ciclo, devolve vazio: melhor não mostrar nada do que
+  // oferecer um botão destrutivo baseado em palpite.
   function bldAvulsasQueVencemGrupo() {
-    const comGrupo = {};
-    Object.keys(config.build.templates || {}).forEach((id) => {
-      if (config.build.templates[id].grupo) comGrupo[id] = 1;
-    });
-    // Só conta como conflito se ALGUM modelo tem grupo — sem grupo nenhum, o mapa avulso é a
-    // única forma de atribuição e não está atropelando coisa alguma.
-    if (!Object.keys(comGrupo).length) return [];
-    return Object.keys(config.build.villages || {}).filter((v) => {
-      const a = config.build.villages[v];
-      return a && !a.paused && config.build.templates[a.tpl] && !comGrupo[a.tpl];
-    });
+    const a = config.build.atropelo;
+    if (!a || !a.vids || !a.vids.length) return [];
+    // A medição é do último ciclo e o usuário pode ter mexido depois: descarta o que já não existe.
+    return a.vids.filter((v) => (config.build.villages || {})[v] && !config.build.villages[v].paused);
   }
   function bldRenderAvulsas() {
     const box = document.getElementById('twmgr-bld-avulsas');
@@ -6027,21 +6035,19 @@
     if (!box || !txt) return;
     const lista = bldAvulsasQueVencemGrupo();
     if (!lista.length) { box.style.display = 'none'; return; }
-    const porTpl = {};
-    lista.forEach((v) => {
-      const nome = (config.build.templates[config.build.villages[v].tpl] || {}).name || '?';
-      porTpl[nome] = (porTpl[nome] || 0) + 1;
-    });
+    // O banner dizia o nome do modelo da AVULSA; o log diz o do GRUPO. Dois números diferentes pro
+    // mesmo problema tornavam impossível casar a tela com o log. Aqui vale o do log.
+    const porTpl = (config.build.atropelo || {}).porTpl || {};
     box.style.display = '';
-    txt.innerHTML = '⚠ <b>' + lista.length + ' aldeia(s)</b> têm atribuição avulsa e <b>ignoram o grupo</b>: '
-      + esc(Object.keys(porTpl).map((n) => porTpl[n] + '× ' + n).join(', '))
-      + '. Elas seguem esse modelo, não o escolhido acima.';
+    txt.innerHTML = '⚠ <b>' + lista.length + ' aldeia(s)</b> estão num grupo mas têm atribuição avulsa e <b>ignoram o modelo do grupo</b>: '
+      + esc(Object.keys(porTpl).map((n) => porTpl[n] + '× que seriam "' + n + '"').join(', '))
+      + '. Limpar a avulsa faz elas voltarem pro modelo do grupo.';
   }
   function bldLimparAvulsas() {
     const lista = bldAvulsasQueVencemGrupo();
     if (!lista.length) return;
     if (!confirm('Remover a atribuição avulsa de ' + lista.length + ' aldeia(s)?\n\n'
-      + 'Elas passam a seguir o grupo do modelo, como o painel já mostra.\n'
+      + 'Todas estão num grupo, então passam a seguir o modelo do grupo.\n'
       + 'Os modelos e o progresso das aldeias não são tocados — só a amarração.')) return;
     lista.forEach((v) => { delete config.build.villages[v]; });
     config.build.nextAt = 0;              // o próximo ciclo já reatribui

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.176.0
+// @version      11.177.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.176.0';
+  const VERSION = '11.177.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -974,7 +974,21 @@
   //      continuava martelando o servidor.
   // Chamar no topo de cada iteração: `if (devoParar('farm')) break;`
   // Renova a trava de brinde — quem está trabalhando é quem deve segurá-la.
+  // ===== SINAL DE VIDA DOS LAÇOS LONGOS =====
+  // `devoParar` é chamado no topo de CADA iteração dos laços longos (Saque, Muralha, Mapa,
+  // Mercado, Recrutar...). Então ele é, de graça, o lugar que sabe que existe um ciclo andando
+  // AGORA — sem precisar de flag ligada/desligada em dez lugares, que vaza quando o laço morre
+  // por exceção e passa a mentir "tem ciclo" pra sempre.
+  // É um CARIMBO DE TEMPO, não um booleano: expira sozinho. Laço que morreu para de renovar.
+  let _cicloAt = 0, _cicloMod = '';
+  const CICLO_VIVO_MS = 30000;
+  function marcarCiclo(mod) { _cicloAt = Date.now(); if (mod) _cicloMod = mod; }
+  // Devolve o nome do módulo em ciclo, ou '' — string vazia pra poder usar direto no if e ainda
+  // ter o que escrever no log.
+  function cicloEmAndamento() { return (Date.now() - _cicloAt) < CICLO_VIVO_MS ? (_cicloMod || 'um módulo') : ''; }
+
   function devoParar(mod) {
+    marcarCiclo(mod);
     if (mod) {
       const c = config[mod];
       if (c && c.running === false) return 'parado pelo usuário';

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.176.0
+// @version      11.177.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.176.0';
+  const VERSION = '11.177.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -974,7 +974,21 @@
   //      continuava martelando o servidor.
   // Chamar no topo de cada iteração: `if (devoParar('farm')) break;`
   // Renova a trava de brinde — quem está trabalhando é quem deve segurá-la.
+  // ===== SINAL DE VIDA DOS LAÇOS LONGOS =====
+  // `devoParar` é chamado no topo de CADA iteração dos laços longos (Saque, Muralha, Mapa,
+  // Mercado, Recrutar...). Então ele é, de graça, o lugar que sabe que existe um ciclo andando
+  // AGORA — sem precisar de flag ligada/desligada em dez lugares, que vaza quando o laço morre
+  // por exceção e passa a mentir "tem ciclo" pra sempre.
+  // É um CARIMBO DE TEMPO, não um booleano: expira sozinho. Laço que morreu para de renovar.
+  let _cicloAt = 0, _cicloMod = '';
+  const CICLO_VIVO_MS = 30000;
+  function marcarCiclo(mod) { _cicloAt = Date.now(); if (mod) _cicloMod = mod; }
+  // Devolve o nome do módulo em ciclo, ou '' — string vazia pra poder usar direto no if e ainda
+  // ter o que escrever no log.
+  function cicloEmAndamento() { return (Date.now() - _cicloAt) < CICLO_VIVO_MS ? (_cicloMod || 'um módulo') : ''; }
+
   function devoParar(mod) {
+    marcarCiclo(mod);
     if (mod) {
       const c = config[mod];
       if (c && c.running === false) return 'parado pelo usuário';
@@ -11866,6 +11880,10 @@
   // contra Bots" aparece e o watcher de DOM dispara o ntfy. NÃO recarrega se você está ativo, se outra
   // aba está no comando, ou se o bot-check já está na tela (deixa você resolver).
   let _reloadTimer = null, _lastActivity = Date.now();
+  // Quantas verificações seguidas o auto-F5 pode ceder a um ciclo longo antes de recarregar de
+  // qualquer jeito. Com reloadMin=2 isso é no máximo 10 min de bot-check sem ser detectado.
+  let _reloadAdiado = 0;
+  const RELOAD_MAX_ADIAMENTOS = 5;
   function _markActivity() { _lastActivity = Date.now(); }
   function maybeAutoReload() {
     try {
@@ -11880,6 +11898,27 @@
       // Mesma razão pra Central: recarregar no meio da escada de espera mata o timer, e
       // a retomada custa segundos que um trem de nobre não tem.
       if (ccJanelaCritica(60000)) { pushLog('Auto-F5 adiado: a Central tem disparo em menos de 1 min.', ''); return; }
+      // MESMA RAZÃO, e esta custava caro em silêncio: recarregar no meio de um ciclo longo MATA
+      // o ciclo. Medido no log do usuário com reloadMin=2 e 514 alvos no assistente: o Saque
+      // reiniciava a cada ~2 min, relia as 6 páginas do assistente (~25 s) e NUNCA chegava ao
+      // fim da lista — em 8 min de log não saiu uma única linha de "ciclo concluído". O saque
+      // parecia lento; na verdade ele estava sendo interrompido e recomeçado do zero.
+      // O Desviar e a Central já tinham essa proteção; o laço mais longo do script, não.
+      //
+      // O adiamento é LIMITADO de propósito. Se um ciclo estiver sempre em andamento, adiar pra
+      // sempre desligaria a detecção de bot-check em silêncio — trocaria um problema por outro
+      // pior, porque este aqui aparece no log e aquele não.
+      const cicMod = cicloEmAndamento();
+      if (cicMod) {
+        if (_reloadAdiado < RELOAD_MAX_ADIAMENTOS) {
+          _reloadAdiado++;
+          pushLog('Auto-F5 adiado (' + _reloadAdiado + '/' + RELOAD_MAX_ADIAMENTOS + '): ciclo do ' + cicMod + ' em andamento.', '');
+          return;
+        }
+        pushLog('Auto-F5: ciclo do ' + cicMod + ' em andamento há ' + RELOAD_MAX_ADIAMENTOS
+          + ' verificações seguidas — recarregando assim mesmo pra não perder o bot-check.', 'err');
+      }
+      _reloadAdiado = 0;
       location.reload();
     } catch (e) {}
   }

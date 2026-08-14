@@ -106,6 +106,27 @@
     const out = {};
     Object.keys(av).forEach((k) => { out[k] = av[k]; });
     Object.keys(un).forEach((k) => { out[k] = Object.assign({}, un[k], { _indisp: true }); });
+    // FILA DE PESQUISA. Sem isto, tropa que está sendo pesquisada AGORA vem com
+    // `error_level: true` (o jogo não deixa enfileirar de novo) e era lida como "já no máximo" —
+    // então a aldeia que está trabalhando aparecia como CONCLUÍDA. Caso real: Armin van Buuren
+    // com Cavalaria pesada e Catapulta na fila, ambas nível 0, contadas como completas.
+    //
+    // A fila não tem id nem classe própria: são linhas de uma `table.vis` com um link "Cancelar".
+    // O casamento nome→tech usa o `name` que o PRÓPRIO jogo mandou no techs (Cavalaria pesada ->
+    // heavy), então não depende de rótulo traduzido nosso nem de abreviação.
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const porNome = {};
+      Object.keys(out).forEach((k) => { if (out[k] && out[k].name) porNome[out[k].name] = k; });
+      doc.querySelectorAll('a').forEach((a) => {
+        if (!/cancelar/i.test(a.textContent || '')) return;
+        const tr = a.closest ? a.closest('tr') : null; if (!tr) return;
+        const txt = (tr.textContent || '').replace(/\s+/g, ' ').trim();
+        Object.keys(porNome).forEach((nome) => {
+          if (txt.indexOf(nome) === 0 && out[porNome[nome]]) out[porNome[nome]]._fila = true;
+        });
+      });
+    } catch (e) { /* fila é diagnóstico: se o HTML mudar, o resto continua valendo */ }
     return out;
   }
   async function smithResearch(vid, techId) {

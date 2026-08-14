@@ -66,6 +66,10 @@
         travadas.push({ tech: tech, motivo: 'falta ' + (PESQ_PREDIO[tech] || 'o predio exigido') });
         continue;
       }
+      // JA ESTA NA FILA. Tem que vir ANTES do teste de nivel: o jogo marca error_level nela (nao
+      // da pra enfileirar duas vezes) e o teste abaixo a leria como "ja no maximo", declarando
+      // concluida uma aldeia que esta pesquisando neste exato momento.
+      if (t._fila) { travadas.push({ tech: tech, motivo: 'ja esta na fila de pesquisa', fila: true }); continue; }
       const nivel = parseInt(t.level, 10) || 0;
       const teto = parseInt(t.level_highest, 10) || parseInt(t.max_level, 10) || 1;
       // `level_highest` e o teto PERMITIDO PELO FERREIRO ATUAL, nao o maximo do mundo: com Ferreiro
@@ -275,7 +279,13 @@
         // — so nao da pra fazer ainda. Chamar isso de completo faz o usuario parar de subir o
         // Ferreiro achando que ja terminou, e a aldeia fica congelada de vez.
         const pendentes = (pc.travadas || []).filter((x) => !x.fim);
-        if (pendentes.length) {
+        // Pesquisando agora tem estado proprio: nao e "completa" (nao terminou) nem "bloqueada"
+        // (nada falta — so esta em curso). Antes caia em completa, que era o pior dos tres.
+        if (pendentes.some((x) => x.fila)) {
+          andando++;
+          const naFila = pendentes.filter((x) => x.fila).map((x) => nomeTropa(x.tech));
+          bloqueioDetalhe[rotulo] = ['pesquisando agora: ' + naFila.join(', ')];
+        } else if (pendentes.length) {
           bloqueadas++;
           bloqueioDetalhe[rotulo] = pendentes.slice(0, 3).map((x) => nomeTropa(x.tech) + ': ' + x.motivo);
         } else completas++;

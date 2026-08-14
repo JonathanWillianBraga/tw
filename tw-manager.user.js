@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.176.0
+// @version      11.177.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.176.0';
+  const VERSION = '11.177.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5914,6 +5914,10 @@
         travadas.push({ tech: tech, motivo: 'falta ' + (PESQ_PREDIO[tech] || 'o predio exigido') });
         continue;
       }
+      // JA ESTA NA FILA. Tem que vir ANTES do teste de nivel: o jogo marca error_level nela (nao
+      // da pra enfileirar duas vezes) e o teste abaixo a leria como "ja no maximo", declarando
+      // concluida uma aldeia que esta pesquisando neste exato momento.
+      if (t._fila) { travadas.push({ tech: tech, motivo: 'ja esta na fila de pesquisa', fila: true }); continue; }
       const nivel = parseInt(t.level, 10) || 0;
       const teto = parseInt(t.level_highest, 10) || parseInt(t.max_level, 10) || 1;
       // `level_highest` e o teto PERMITIDO PELO FERREIRO ATUAL, nao o maximo do mundo: com Ferreiro
@@ -6123,7 +6127,13 @@
         // — so nao da pra fazer ainda. Chamar isso de completo faz o usuario parar de subir o
         // Ferreiro achando que ja terminou, e a aldeia fica congelada de vez.
         const pendentes = (pc.travadas || []).filter((x) => !x.fim);
-        if (pendentes.length) {
+        // Pesquisando agora tem estado proprio: nao e "completa" (nao terminou) nem "bloqueada"
+        // (nada falta — so esta em curso). Antes caia em completa, que era o pior dos tres.
+        if (pendentes.some((x) => x.fila)) {
+          andando++;
+          const naFila = pendentes.filter((x) => x.fila).map((x) => nomeTropa(x.tech));
+          bloqueioDetalhe[rotulo] = ['pesquisando agora: ' + naFila.join(', ')];
+        } else if (pendentes.length) {
           bloqueadas++;
           bloqueioDetalhe[rotulo] = pendentes.slice(0, 3).map((x) => nomeTropa(x.tech) + ': ' + x.motivo);
         } else completas++;
@@ -9418,6 +9428,27 @@
     const out = {};
     Object.keys(av).forEach((k) => { out[k] = av[k]; });
     Object.keys(un).forEach((k) => { out[k] = Object.assign({}, un[k], { _indisp: true }); });
+    // FILA DE PESQUISA. Sem isto, tropa que está sendo pesquisada AGORA vem com
+    // `error_level: true` (o jogo não deixa enfileirar de novo) e era lida como "já no máximo" —
+    // então a aldeia que está trabalhando aparecia como CONCLUÍDA. Caso real: Armin van Buuren
+    // com Cavalaria pesada e Catapulta na fila, ambas nível 0, contadas como completas.
+    //
+    // A fila não tem id nem classe própria: são linhas de uma `table.vis` com um link "Cancelar".
+    // O casamento nome→tech usa o `name` que o PRÓPRIO jogo mandou no techs (Cavalaria pesada ->
+    // heavy), então não depende de rótulo traduzido nosso nem de abreviação.
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const porNome = {};
+      Object.keys(out).forEach((k) => { if (out[k] && out[k].name) porNome[out[k].name] = k; });
+      doc.querySelectorAll('a').forEach((a) => {
+        if (!/cancelar/i.test(a.textContent || '')) return;
+        const tr = a.closest ? a.closest('tr') : null; if (!tr) return;
+        const txt = (tr.textContent || '').replace(/\s+/g, ' ').trim();
+        Object.keys(porNome).forEach((nome) => {
+          if (txt.indexOf(nome) === 0 && out[porNome[nome]]) out[porNome[nome]]._fila = true;
+        });
+      });
+    } catch (e) { /* fila é diagnóstico: se o HTML mudar, o resto continua valendo */ }
     return out;
   }
   async function smithResearch(vid, techId) {

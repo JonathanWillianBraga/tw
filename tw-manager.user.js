@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.178.0
+// @version      11.179.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.178.0';
+  const VERSION = '11.179.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2411,6 +2411,12 @@
     // alvo, então recusa num alvo grande não prevê nada sobre um alvo pequeno — bloquear ali
     // desligaria envios que dariam certo.
     const semTropaBlock = {};
+    // No C a quantidade é decidida pelo JOGO, pelo saque do alvo — então bloquear a origem de vez
+    // desligaria envios menores que dariam certo. O que se guarda é o MENOR pedido que o servidor
+    // recusou: a partir dele, qualquer alvo que peça igual ou mais é pulado sem gastar requisição,
+    // e alvos menores continuam sendo tentados. É correção APRENDIDA da recusa real, que não
+    // depende da nossa estimativa estar certa.
+    const semTropaMin = {};   // vid -> menor estCL que o servidor já recusou neste ciclo
     // As 3 primeiras recusas saem DETALHADAS no fim do ciclo. A pré-checagem tinha aprovado essas
     // origens, e a lacuna entre "o que eu achei que tinha" e "o que o servidor disse" é a única
     // coisa que explica o defeito. Sem isso fica só a contagem, que não aponta pra lugar nenhum.
@@ -2487,6 +2493,7 @@
       for (const c of cands) {
         // Origem que já recusou por falta de tropa neste ciclo: nem tenta.
         if (semTropaBlock[c.s.vid + '|' + mode]) { oReg(c.s.vid, c.s.name, 'semTpl'); continue; }
+        if (mode === 'c' && semTropaMin[c.s.vid] != null && estCL >= semTropaMin[c.s.vid]) { oReg(c.s.vid, c.s.name, 'semTpl'); continue; }
         // Origem reprovada no limite de fake: em vez de pular, manda quantidade CALCULADA que cumpre
         // o mínimo do mundo (fallback). Só pula de vez se não der pra calcular (sem pontos da aldeia).
         let useCalc = false;
@@ -2501,7 +2508,15 @@
         // No C quem monta a tropa é o jogo, então o piso usa a MESMA estimativa que o desconto
         // logo abaixo (estCL). É aproximação, e é a única honesta: não dá pra saber a composição
         // do template C antes de mandar.
-        if (mode === 'c' && (resCL > 0 || resSpy > 0) && livre(avail, 'light') < estCL) { oReg(c.s.vid, c.s.name, 'reserva'); continue; }
+        // ANTES esta linha exigia `(resCL > 0 || resSpy > 0)`: com as duas reservas em 0 — que é o
+        // padrão — o C ficava SEM NENHUMA pré-checagem de tropa e só o "Mínimo CL" separava. Aí uma
+        // aldeia com 30 cavalarias passava no mínimo 25 e era mandada contra um alvo que pede 100,
+        // gastando uma requisição pra ouvir "não existem unidades suficientes" — a cada alvo.
+        // Foi a causa das 44 recusas medidas no log.
+        //
+        // A reserva nunca teve nada a ver com isso: com reserva 0, `livre()` devolve o próprio
+        // saldo e a comparação continua sendo a certa. O gate era um engano.
+        if (mode === 'c' && livre(avail, 'light') < estCL) { oReg(c.s.vid, c.s.name, resCL > 0 ? 'reserva' : 'semTpl'); continue; }
         // Modo dinâmico A/B manda {light: estCL, spy: 1}. Se a origem não tem isso (ex.: aldeia recém-noblada
         // sem CL), o servidor recusa e o log mentia "enviado". Pula pra próxima origem em vez de falso-positivo.
         if (dyn && mode !== 'c') {
@@ -2554,6 +2569,14 @@
           // Limite de fake: o template é pequeno demais PRA ESSA ORIGEM (vale pra qualquer alvo).
           // Marca e não tenta de novo no ciclo — antes gastava uma requisição por alvo.
           // Falta de tropa: bloqueia a origem PRO CICLO e registra a divergência vs a pré-checagem.
+          if (/unidades suficientes/i.test(em) && mode === 'c') {
+            const w = semTropaMin[c.s.vid];
+            if (w == null || estCL < w) semTropaMin[c.s.vid] = estCL;
+            if (semTropaDiag.length < 3) {
+              semTropaDiag.push(c.s.name + ' (C): alvo com ' + sum + ' de saque pede ~' + estCL
+                + ' cav. leve · eu li ' + (avail.light || 0) + ' na aldeia');
+            }
+          }
           if (/unidades suficientes/i.test(em) && !dyn && mode !== 'c' && !useCalc) {
             semTropaBlock[c.s.vid + '|' + mode] = true;
             if (semTropaDiag.length < 3) {

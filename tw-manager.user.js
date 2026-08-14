@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.187.0
+// @version      11.188.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.187.0';
+  const VERSION = '11.188.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -6170,29 +6170,59 @@
     return 'desconhecido';
   }
 
-  // Candidatas a pesquisar, NA ORDEM do modelo. Dois campos bastam e ambos existem de verdade:
-  // `level` (nivel atual) e `level_highest` (teto). `error_level` e o jeito do jogo dizer "nao ha
-  // nivel a subir aqui".
+  // Candidatas a pesquisar, NA ORDEM do modelo. Um item travado por requisito (Ariete sem Oficina)
+  // nao pode parar a ordem inteira -- prioridade significa "se essa nao da, tenta a proxima".
   //
-  // Devolve LISTA, nao a primeira: um item travado por requisito (Ariete sem Oficina, p.ex.) nao
-  // pode parar a ordem inteira -- prioridade significa "se essa nao da, tenta a proxima". Sem isso
-  // a aldeia ficava presa no Ariete pra sempre e nunca pesquisava Lanc./Espad./C.pes.
+  // Devolve { candidatas, travadas } — e a separacao E o ponto.
+  //
+  // Antes esta funcao devolvia so a lista de candidatas, e quem chamava fazia:
+  //     if (!candidatas.length) { completas++; continue; }
+  // com o comentario admitindo "tudo pesquisado, OU o resto esta travado". Duas situacoes
+  // opostas no mesmo balde: uma quer dizer "acabou, pode esquecer esta aldeia", a outra quer
+  // dizer "falta subir um predio aqui". O painel dizia MODELO COMPLETO nas duas.
+  //
+  // `travadas` carrega o motivo de cada tropa que ficou de fora, pra tela poder dizer o que
+  // falta em vez de mentir que acabou.
   function pesqCandidatos(techs, ordem, bloqueios, agora) {
     const ttl = Math.max(1, config.research.blockTtlH || 6) * 3600 * 1000;
-    const out = [];
+    const out = [], travadas = [];
     for (const tech of ordem) {
       const t = techs[tech];
-      if (!t) continue;                                   // tropa que nao existe neste mundo
+      if (!t) { travadas.push({ tech: tech, motivo: 'nao existe neste mundo', fim: true }); continue; }
+      // Marcada pelo getSmithTechs como vinda do bloco `unavailable`: o jogo sabe que o requisito
+      // (predio) ainda nao foi cumprido. Antes caia no `!t` acima e era confundida com "nao existe".
+      // PESQ_PREDIO ja mapeia tropa -> predio exigido; usar aqui transforma "falta predio" num
+      // recado acionavel ("falta Oficina") em vez de mandar o usuario adivinhar qual.
+      if (t._indisp) {
+        travadas.push({ tech: tech, motivo: 'falta ' + (PESQ_PREDIO[tech] || 'o predio exigido') });
+        continue;
+      }
+      // JA ESTA NA FILA. Tem que vir ANTES do teste de nivel: o jogo marca error_level nela (nao
+      // da pra enfileirar duas vezes) e o teste abaixo a leria como "ja no maximo", declarando
+      // concluida uma aldeia que esta pesquisando neste exato momento.
+      if (t._fila) { travadas.push({ tech: tech, motivo: 'ja esta na fila de pesquisa', fila: true }); continue; }
       const nivel = parseInt(t.level, 10) || 0;
       const teto = parseInt(t.level_highest, 10) || parseInt(t.max_level, 10) || 1;
-      if (nivel >= teto) continue;                        // ja no maximo
-      if (t.error_level) continue;                        // o jogo diz que nao ha nivel a subir
+      // `level_highest` e o teto PERMITIDO PELO FERREIRO ATUAL, nao o maximo do mundo: com Ferreiro
+      // baixo ele vale 1, e sobe quando o predio sobe. Entao "no teto" aqui NAO e "terminou" —
+      // e "terminou ate onde este Ferreiro deixa".
+      if (nivel >= teto || t.error_level) {
+        const maxMundo = parseInt(t.max_level, 10) || 0;
+        travadas.push({ tech: tech, nivel: nivel, teto: teto,
+          motivo: (maxMundo && teto < maxMundo) ? ('no teto do Ferreiro (nivel ' + nivel + '/' + teto + ', mundo permite ' + maxMundo + ')')
+            : 'ja no maximo', fim: !(maxMundo && teto < maxMundo) });
+        continue;
+      }
       // Recusada por requisito faz pouco tempo? Nao insiste -- predio nao nasce em 15 min. O TTL
       // existe pra ela voltar a ser tentada depois que o Construcoes tiver subido a Oficina.
-      if (bloqueios[tech] && (agora - bloqueios[tech]) < ttl) continue;
+      if (bloqueios[tech] && (agora - bloqueios[tech]) < ttl) {
+        const h = Math.max(0, Math.round((ttl - (agora - bloqueios[tech])) / 3600000));
+        travadas.push({ tech: tech, motivo: 'recusada por requisito, tento de novo em ~' + h + 'h' });
+        continue;
+      }
       out.push(tech);
     }
-    return out;
+    return { candidatas: out, travadas: travadas };
   }
 
   // Puxa recurso da aldeia mais PROXIMA que tem excedente. "Excedente" = acima de
@@ -6350,6 +6380,9 @@
     // por aldeia (44 aldeias davam ~60 linhas de log por ciclo).
     const travadasPorTropa = {};
     let pesquisadas = 0, abastecidas = 0, completas = 0, semPredio = 0, andando = 0;
+    // Aldeia SEM NADA A FAZER AGORA mas com pendencia real (predio faltando / teto do
+    // Ferreiro). Contada a parte de `completas`, que agora so conta quem terminou de verdade.
+    let bloqueadas = 0; const bloqueioDetalhe = {};
     for (const vid of ativas) {
       { const pare = devoParar('research'); if (pare) { pushLog('Pesquisa: ciclo interrompido - ' + pare + '.', '', 'research'); break; } }
       const alvo = assign[vid];
@@ -6369,8 +6402,26 @@
       const nomeTropa = (t) => { const u = UNITS.find((x) => x[0] === t); return u ? u[1] : t; };
       config.research.blocked = config.research.blocked || {};
       const bloqueios = config.research.blocked[vid] = config.research.blocked[vid] || {};
-      const candidatas = pesqCandidatos(techs, ordem, bloqueios, now);
-      if (!candidatas.length) { completas++; continue; }   // tudo pesquisado, ou o resto esta travado
+      const pc = pesqCandidatos(techs, ordem, bloqueios, now);
+      const candidatas = pc.candidatas;
+      if (!candidatas.length) {
+        // AQUI estava a mentira. Nada a fazer AGORA nao e "modelo completo": se sobrou tropa
+        // travada por requisito ou pelo teto do Ferreiro, a aldeia continua com trabalho pendente
+        // — so nao da pra fazer ainda. Chamar isso de completo faz o usuario parar de subir o
+        // Ferreiro achando que ja terminou, e a aldeia fica congelada de vez.
+        const pendentes = (pc.travadas || []).filter((x) => !x.fim);
+        // Pesquisando agora tem estado proprio: nao e "completa" (nao terminou) nem "bloqueada"
+        // (nada falta — so esta em curso). Antes caia em completa, que era o pior dos tres.
+        if (pendentes.some((x) => x.fila)) {
+          andando++;
+          const naFila = pendentes.filter((x) => x.fila).map((x) => nomeTropa(x.tech));
+          bloqueioDetalhe[rotulo] = ['pesquisando agora: ' + naFila.join(', ')];
+        } else if (pendentes.length) {
+          bloqueadas++;
+          bloqueioDetalhe[rotulo] = pendentes.slice(0, 3).map((x) => nomeTropa(x.tech) + ': ' + x.motivo);
+        } else completas++;
+        continue;
+      }
 
       // Nao existe campo dizendo se da pra pesquisar agora: tenta e le a resposta do servidor.
       // Anda a lista ate uma passar; requisito nao atendido apenas pula pra proxima da ordem.
@@ -6415,6 +6466,7 @@
     config.research.stats = {
       villages: ativas.length, pesquisadas: pesquisadas, abastecidas: abastecidas,
       completas: completas, andando: andando, semPredio: semPredio,
+      bloqueadas: bloqueadas, bloqueioDetalhe: bloqueioDetalhe,
     };
     config.research.nextAt = now + Math.max(60, config.research.interval || 900) * 1000;
     _pesqEmVoo = false;
@@ -6431,8 +6483,18 @@
               '. Nao insisto nas proximas ' + (config.research.blockTtlH || 6) + 'h.', '', 'research');
     });
     pushLog('Pesquisa: ciclo concluido - ' + pesquisadas + ' iniciada(s), ' + abastecidas + ' abastecida(s), ' +
-            completas + ' sem nada a fazer' + (semPredio ? ', ' + semPredio + ' com item travado por requisito' : '') +
+            completas + ' concluida(s) de verdade' +
+            (bloqueadas ? ', ' + bloqueadas + ' AGUARDANDO requisito (nao estao completas)' : '') +
+            (semPredio ? ', ' + semPredio + ' com item recusado neste ciclo' : '') +
             '. Proximo em ' + Math.round((config.research.interval || 900) / 60) + ' min.', 'ok', 'research');
+    // As aldeias que o painel chamava de completas e nao estao. Uma linha com o motivo real de
+    // cada uma — e o que faltava pra saber ONDE subir predio, em vez de achar que acabou.
+    const bdKeys = Object.keys(bloqueioDetalhe);
+    if (bdKeys.length) {
+      pushLog('Pesquisa: ' + bdKeys.length + ' aldeia(s) sem nada a pesquisar AGORA, mas com pendencia — '
+        + bdKeys.slice(0, 4).map((k) => k + ' (' + bloqueioDetalhe[k].join('; ') + ')').join(' · ')
+        + (bdKeys.length > 4 ? ' · +' + (bdKeys.length - 4) : '') + '.', '', 'research');
+    }
     scheduleResearch();
   }
   function scheduleResearch() {
@@ -9609,7 +9671,40 @@
     const json = extractBalancedJSON(html, idx + marker.length);
     if (!json) throw new Error('parse de BuildingSmith.techs falhou');
     const data = JSON.parse(json);
-    return (data && data.available) || {};
+    // O jogo separa `available` de `unavailable` — e devolver só o primeiro apagava a diferença
+    // entre "esta tropa não existe neste mundo" e "existe, mas o requisito ainda não foi
+    // cumprido". Quem lê ficava sem como distinguir as duas, e a Pesquisa chamava a segunda de
+    // "modelo completo".
+    //
+    // Agora vem tudo, com `_indisp` marcando quem está travado. Chamador antigo que só olha o
+    // nível continua funcionando: os campos originais estão intactos.
+    const av = (data && data.available) || {};
+    const un = (data && data.unavailable) || {};
+    const out = {};
+    Object.keys(av).forEach((k) => { out[k] = av[k]; });
+    Object.keys(un).forEach((k) => { out[k] = Object.assign({}, un[k], { _indisp: true }); });
+    // FILA DE PESQUISA. Sem isto, tropa que está sendo pesquisada AGORA vem com
+    // `error_level: true` (o jogo não deixa enfileirar de novo) e era lida como "já no máximo" —
+    // então a aldeia que está trabalhando aparecia como CONCLUÍDA. Caso real: Armin van Buuren
+    // com Cavalaria pesada e Catapulta na fila, ambas nível 0, contadas como completas.
+    //
+    // A fila não tem id nem classe própria: são linhas de uma `table.vis` com um link "Cancelar".
+    // O casamento nome→tech usa o `name` que o PRÓPRIO jogo mandou no techs (Cavalaria pesada ->
+    // heavy), então não depende de rótulo traduzido nosso nem de abreviação.
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const porNome = {};
+      Object.keys(out).forEach((k) => { if (out[k] && out[k].name) porNome[out[k].name] = k; });
+      doc.querySelectorAll('a').forEach((a) => {
+        if (!/cancelar/i.test(a.textContent || '')) return;
+        const tr = a.closest ? a.closest('tr') : null; if (!tr) return;
+        const txt = (tr.textContent || '').replace(/\s+/g, ' ').trim();
+        Object.keys(porNome).forEach((nome) => {
+          if (txt.indexOf(nome) === 0 && out[porNome[nome]]) out[porNome[nome]]._fila = true;
+        });
+      });
+    } catch (e) { /* fila é diagnóstico: se o HTML mudar, o resto continua valendo */ }
+    return out;
   }
   async function smithResearch(vid, techId) {
     const b = new URLSearchParams();
@@ -9635,6 +9730,11 @@
     for (const techId of order) {
       const t = techs[techId];
       if (!t) continue;
+      // Travada por requisito (bloco `unavailable` do jogo). ANTES da v11.175.0 ela nem chegava
+      // aqui — getSmithTechs devolvia só o `available` — e caía no `!t` acima, seguindo pra
+      // próxima da ordem. Agora que ela chega, precisa do mesmo tratamento: sem esta linha ela
+      // cairia no `return null` lá embaixo e PARARIA a ordem inteira no primeiro item travado.
+      if (t._indisp) continue;
       if ((+t.level || 0) >= 1) continue;        // já pesquisado -> próximo da ordem
       if (t.error_buildings) return null;        // falta prédio (Estábulo/Oficina/Ferreiro) -> Obra resolve subindo o prédio, espera
       if (t.can_research) { await smithResearch(vid, techId); return techId; }

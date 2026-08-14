@@ -94,7 +94,40 @@
     const json = extractBalancedJSON(html, idx + marker.length);
     if (!json) throw new Error('parse de BuildingSmith.techs falhou');
     const data = JSON.parse(json);
-    return (data && data.available) || {};
+    // O jogo separa `available` de `unavailable` — e devolver só o primeiro apagava a diferença
+    // entre "esta tropa não existe neste mundo" e "existe, mas o requisito ainda não foi
+    // cumprido". Quem lê ficava sem como distinguir as duas, e a Pesquisa chamava a segunda de
+    // "modelo completo".
+    //
+    // Agora vem tudo, com `_indisp` marcando quem está travado. Chamador antigo que só olha o
+    // nível continua funcionando: os campos originais estão intactos.
+    const av = (data && data.available) || {};
+    const un = (data && data.unavailable) || {};
+    const out = {};
+    Object.keys(av).forEach((k) => { out[k] = av[k]; });
+    Object.keys(un).forEach((k) => { out[k] = Object.assign({}, un[k], { _indisp: true }); });
+    // FILA DE PESQUISA. Sem isto, tropa que está sendo pesquisada AGORA vem com
+    // `error_level: true` (o jogo não deixa enfileirar de novo) e era lida como "já no máximo" —
+    // então a aldeia que está trabalhando aparecia como CONCLUÍDA. Caso real: Armin van Buuren
+    // com Cavalaria pesada e Catapulta na fila, ambas nível 0, contadas como completas.
+    //
+    // A fila não tem id nem classe própria: são linhas de uma `table.vis` com um link "Cancelar".
+    // O casamento nome→tech usa o `name` que o PRÓPRIO jogo mandou no techs (Cavalaria pesada ->
+    // heavy), então não depende de rótulo traduzido nosso nem de abreviação.
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const porNome = {};
+      Object.keys(out).forEach((k) => { if (out[k] && out[k].name) porNome[out[k].name] = k; });
+      doc.querySelectorAll('a').forEach((a) => {
+        if (!/cancelar/i.test(a.textContent || '')) return;
+        const tr = a.closest ? a.closest('tr') : null; if (!tr) return;
+        const txt = (tr.textContent || '').replace(/\s+/g, ' ').trim();
+        Object.keys(porNome).forEach((nome) => {
+          if (txt.indexOf(nome) === 0 && out[porNome[nome]]) out[porNome[nome]]._fila = true;
+        });
+      });
+    } catch (e) { /* fila é diagnóstico: se o HTML mudar, o resto continua valendo */ }
+    return out;
   }
   async function smithResearch(vid, techId) {
     const b = new URLSearchParams();
@@ -120,6 +153,11 @@
     for (const techId of order) {
       const t = techs[techId];
       if (!t) continue;
+      // Travada por requisito (bloco `unavailable` do jogo). ANTES da v11.175.0 ela nem chegava
+      // aqui — getSmithTechs devolvia só o `available` — e caía no `!t` acima, seguindo pra
+      // próxima da ordem. Agora que ela chega, precisa do mesmo tratamento: sem esta linha ela
+      // cairia no `return null` lá embaixo e PARARIA a ordem inteira no primeiro item travado.
+      if (t._indisp) continue;
       if ((+t.level || 0) >= 1) continue;        // já pesquisado -> próximo da ordem
       if (t.error_buildings) return null;        // falta prédio (Estábulo/Oficina/Ferreiro) -> Obra resolve subindo o prédio, espera
       if (t.can_research) { await smithResearch(vid, techId); return techId; }

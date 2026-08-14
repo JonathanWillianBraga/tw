@@ -1258,10 +1258,19 @@
     catch (e) { pushLog('Saque: erro ao ler os alvos do assistente (' + (e.message || e) + ').', 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
     if (_farmPagesInfo && _farmPagesInfo.pages > 1) pushLog('Saque: assistente tem ' + _farmPagesInfo.pages + ' página(s) — ' + _farmPagesInfo.alvos + ' alvo(s) no total.', '', 'farm');
     let tpl = null;
-    if (!dyn) { try { tpl = await cron('templates A/B', () => getFarmTemplates(CUR_VID)); } catch (e) { tpl = null; } }
+    // A MATRIZ DECIDE. Se nenhuma cor está marcada como A ou B, tudo que vem a seguir é trabalho
+    // sobre um template que não vai ser usado nem uma vez no ciclo — e não é trabalho barato:
+    //   · getFarmTemplates  = 1 requisição da página do assistente;
+    //   · getVillagePoints  = baixa /map/village.txt, que é a lista de TODAS as aldeias do mundo.
+    // O village.txt só tem cache de MEMÓRIA, e o auto-F5 (2 min na conta do usuário) zerava a
+    // memória antes do ciclo seguinte — então ele era rebaixado praticamente todo ciclo. Quem usa
+    // só o C pagava um download do mundo inteiro pra calcular um limite de fake nunca consultado.
+    const usaAB = Object.keys(M).some((k) => M[k] && (M[k].mode === 'a' || M[k].mode === 'b'));
+    if (!dyn && usaAB) { try { tpl = await cron('templates A/B', () => getFarmTemplates(CUR_VID)); } catch (e) { tpl = null; } }
+    if (!usaAB) pushLog('Saque: matriz só usa C — pulei os templates A/B e o download do village.txt (não seriam consultados).', '', 'farm');
     // Sem as unidades dos templates não dá pra saber se a origem tem tropa, e o ciclo cai no
     // "tenta e deixa o servidor recusar" — o que enche o log de recusa e gasta requisição à toa.
-    if (!dyn) {
+    if (!dyn && usaAB) {
       const nA = (tpl && tpl.unitsA) ? Object.keys(tpl.unitsA).length : 0;
       const nB = (tpl && tpl.unitsB) ? Object.keys(tpl.unitsB).length : 0;
       if (!nA && !nB) pushLog('Saque: ⚠ não li as unidades dos templates A/B do assistente — sem pré-checagem de tropa. Espere muitas recusas de "unidades insuficientes". [ids: A=' + ((tpl && tpl.a) || '?') + ' B=' + ((tpl && tpl.b) || '?') + ' · como achei: ' + (((tpl && tpl.debug) || []).join(', ') || 'nada') + ']', 'err', 'farm');

@@ -1270,8 +1270,14 @@
         pushLog('Saque: limite de fake ativo — template A=' + tplPop.a + ' pop' + (tplOnlySpy.a ? ' (só explorador: isento)' : '') + ', B=' + tplPop.b + ' pop' + (tplOnlySpy.b ? ' (só explorador: isento)' : '') + '; origem precisa de ' + fakePct + '% dos pontos dela.', '', 'farm');
       }
     }
+    // Tropa de TODAS as aldeias numa requisição só (~400ms), em vez de um `screen=place`
+    // por aldeia (362ms × 47 = 17s medidos). Se a leitura em massa falhar, `getAvailDeAldeia`
+    // cai sozinho pra leitura individual — o ciclo fica lento, não quebra.
+    let mapaTropa = null;
+    try { mapaTropa = await getTropaTodasAldeias(); }
+    catch (e) { pushLog('Tropas: leitura em massa falhou (' + (e.message || e) + ') — lendo aldeia por aldeia.', 'err', 'farm'); }
     const availCache = {};
-    const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
+    const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = await getAvailDeAldeia(vid, mapaTropa); } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
     const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, mur: 0, pend: 0, semorig: 0, dist: 0 };
     // ===== Diagnóstico POR ORIGEM =====
     // O módulo é alvo-cêntrico: pra cada alvo ele varre as origens mais próximas e usa a primeira
@@ -1747,8 +1753,14 @@
     eligible.sort((a, b) => (b.wall || 0) - (a.wall || 0));
     const pendingWalls = eligible.length;
     // Tropa por aldeia (sob demanda, com cache) — descontada conforme vai assinando alvos.
+    // Tropa de TODAS as aldeias numa requisição só (~400ms), em vez de um `screen=place`
+    // por aldeia (362ms × 47 = 17s medidos). Se a leitura em massa falhar, `getAvailDeAldeia`
+    // cai sozinho pra leitura individual — o ciclo fica lento, não quebra.
+    let mapaTropa = null;
+    try { mapaTropa = await getTropaTodasAldeias(); }
+    catch (e) { pushLog('Tropas: leitura em massa falhou (' + (e.message || e) + ') — lendo aldeia por aldeia.', 'err', 'wall'); }
     const availCache = {};
-    const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
+    const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = await getAvailDeAldeia(vid, mapaTropa); } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
     // Usa o alcance do Saque como padrão (mesma frota, mesma lógica de vizinhança). Fixo pro
     // ciclo inteiro — não depende do alvo, então sai do loop (antes era recalculado à toa a
     // cada alvo).

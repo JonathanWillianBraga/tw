@@ -846,3 +846,80 @@
     } catch (e) { pushLog('Diag Recrutar falhou: ' + (e.message || e), 'err'); }
   }
 
+
+  // ==================== TROPA DE TODAS AS ALDEIAS — UMA REQUISIÇÃO ====================
+  // O Saque e a Muralha liam `screen=place` POR ALDEIA pra saber quanta tropa há em casa.
+  // Medido nesta conta: 362 ms por leitura × 47 aldeias = 17 s parados antes do primeiro
+  // envio sair, e 47 requisições numa conta cujo 429 é GLOBAL.
+  //
+  // A mesma informação vem inteira numa requisição só (~400 ms). O leitor abaixo é o mesmo
+  // que o Noblar já usava — promovido a helper compartilhado em vez de copiado.
+  //
+  // POR QUE `overview_villages&mode=units` E NÃO `place&mode=scavenge_mass`:
+  // o scavenge_mass também traz tudo numa requisição, mas o nosso parser dele filtra por
+  // SCAV_UNITS, que NÃO tem explorador nem aríete. O Saque testa `livre(avail,'spy') < 1`
+  // no modo dinâmico — com aquela fonte, toda aldeia pareceria ter zero explorador e o
+  // ciclo pularia tudo EM SILÊNCIO. Esta traz as 11 unidades do mundo.
+  //
+  // A ordem das colunas sai do CABEÇALHO, nunca fixa: br143 tem 11 unidades e br141 tem
+  // outras. Coluna deslocada dá número plausível e errado, que é o pior defeito possível.
+  //
+  // Conferido contra a fonte antiga em 4 aldeias, unidade por unidade: bateu exato.
+  const TROPAS_TTL_MS = 45000;   // curto: dentro do ciclo quem mantém a conta é o desconto local
+  let _tropasCache = null, _tropasAt = 0, _tropasVoo = null;
+
+  async function getTropaTodasAldeias(forcar) {
+    if (!forcar && _tropasCache && (Date.now() - _tropasAt) < TROPAS_TTL_MS) return _tropasCache;
+    // Duas chamadas simultâneas (Saque e Muralha rodam em paralelo) esperam a MESMA leitura
+    // em vez de abrirem duas.
+    if (_tropasVoo) return _tropasVoo;
+    _tropasVoo = (async () => {
+      try {
+        const res = await fetch('/game.php?village=' + CUR_VID
+          + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+        const tabela = doc.querySelector('#units_table') || doc.querySelector('table.overview_table');
+        if (!tabela) throw new Error('não achei a tabela de tropas');
+        const ordem = [];
+        (tabela.querySelector('thead tr') || tabela.querySelector('tr')).querySelectorAll('th').forEach((th) => {
+          const img = th.querySelector('img[src*="unit_"]');
+          if (!img) return;
+          const m = (img.getAttribute('src') || '').match(/unit_(\w+)\./);
+          if (m) ordem.push(m[1]);
+        });
+        if (!ordem.length) throw new Error('não consegui ler as unidades do cabeçalho');
+        const out = {};
+        tabela.querySelectorAll('tr').forEach((tr) => {
+          const q = tr.querySelector('.quickedit-vn[data-id]'); if (!q) return;
+          const vid = q.getAttribute('data-id'); if (!vid) return;
+          const cels = tr.querySelectorAll('td.unit-item');
+          // Contagem diferente do cabeçalho = linha que eu não entendi. Descartar em silêncio
+          // é o que produz "aldeia sem tropa" fantasma, então registra.
+          if (cels.length !== ordem.length) {
+            pushLog('Tropas: linha da aldeia ' + vid + ' tem ' + cels.length + ' colunas e o cabeçalho '
+              + ordem.length + ' — ignorada.', 'err');
+            return;
+          }
+          const n = {};
+          cels.forEach((td, i) => { n[ordem[i]] = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0; });
+          out[String(vid)] = n;
+        });
+        if (!Object.keys(out).length) throw new Error('a tabela veio sem nenhuma aldeia');
+        _tropasCache = out; _tropasAt = Date.now();
+        return out;
+      } finally { _tropasVoo = null; }
+    })();
+    return _tropasVoo;
+  }
+
+  // Tropa livre de UMA aldeia, já descontada a reserva do Coordenado.
+  //
+  // Cai pra leitura individual quando a aldeia não está no mapa (aldeia recém-conquistada,
+  // leitura que falhou). NUNCA devolve {} calado: zero tropa faz o módulo pular a origem, e
+  // "não consegui ler" viraria "não tem tropa" — o tipo de erro que some do log.
+  async function getAvailDeAldeia(vid, mapa) {
+    const m = mapa && mapa[String(vid)];
+    if (m) return applyReservationsToAvail(vid, m);
+    return (await getVillageStateReserved(vid)).avail || {};
+  }

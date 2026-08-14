@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.174.0
+// @version      11.175.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.174.0';
+  const VERSION = '11.175.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2315,8 +2315,14 @@
         pushLog('Saque: limite de fake ativo — template A=' + tplPop.a + ' pop' + (tplOnlySpy.a ? ' (só explorador: isento)' : '') + ', B=' + tplPop.b + ' pop' + (tplOnlySpy.b ? ' (só explorador: isento)' : '') + '; origem precisa de ' + fakePct + '% dos pontos dela.', '', 'farm');
       }
     }
+    // Tropa de TODAS as aldeias numa requisição só (~400ms), em vez de um `screen=place`
+    // por aldeia (362ms × 47 = 17s medidos). Se a leitura em massa falhar, `getAvailDeAldeia`
+    // cai sozinho pra leitura individual — o ciclo fica lento, não quebra.
+    let mapaTropa = null;
+    try { mapaTropa = await getTropaTodasAldeias(); }
+    catch (e) { pushLog('Tropas: leitura em massa falhou (' + (e.message || e) + ') — lendo aldeia por aldeia.', 'err', 'farm'); }
     const availCache = {};
-    const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
+    const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = await getAvailDeAldeia(vid, mapaTropa); } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
     const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, mur: 0, pend: 0, semorig: 0, dist: 0 };
     // ===== Diagnóstico POR ORIGEM =====
     // O módulo é alvo-cêntrico: pra cada alvo ele varre as origens mais próximas e usa a primeira
@@ -2792,8 +2798,14 @@
     eligible.sort((a, b) => (b.wall || 0) - (a.wall || 0));
     const pendingWalls = eligible.length;
     // Tropa por aldeia (sob demanda, com cache) — descontada conforme vai assinando alvos.
+    // Tropa de TODAS as aldeias numa requisição só (~400ms), em vez de um `screen=place`
+    // por aldeia (362ms × 47 = 17s medidos). Se a leitura em massa falhar, `getAvailDeAldeia`
+    // cai sozinho pra leitura individual — o ciclo fica lento, não quebra.
+    let mapaTropa = null;
+    try { mapaTropa = await getTropaTodasAldeias(); }
+    catch (e) { pushLog('Tropas: leitura em massa falhou (' + (e.message || e) + ') — lendo aldeia por aldeia.', 'err', 'wall'); }
     const availCache = {};
-    const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = (await getVillageStateReserved(vid)).avail || {}; } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
+    const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = await getAvailDeAldeia(vid, mapaTropa); } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
     // Usa o alcance do Saque como padrão (mesma frota, mesma lógica de vizinhança). Fixo pro
     // ciclo inteiro — não depende do alvo, então sai do loop (antes era recalculado à toa a
     // cada alvo).
@@ -3833,6 +3845,83 @@
     } catch (e) { pushLog('Diag Recrutar falhou: ' + (e.message || e), 'err'); }
   }
 
+
+  // ==================== TROPA DE TODAS AS ALDEIAS — UMA REQUISIÇÃO ====================
+  // O Saque e a Muralha liam `screen=place` POR ALDEIA pra saber quanta tropa há em casa.
+  // Medido nesta conta: 362 ms por leitura × 47 aldeias = 17 s parados antes do primeiro
+  // envio sair, e 47 requisições numa conta cujo 429 é GLOBAL.
+  //
+  // A mesma informação vem inteira numa requisição só (~400 ms). O leitor abaixo é o mesmo
+  // que o Noblar já usava — promovido a helper compartilhado em vez de copiado.
+  //
+  // POR QUE `overview_villages&mode=units` E NÃO `place&mode=scavenge_mass`:
+  // o scavenge_mass também traz tudo numa requisição, mas o nosso parser dele filtra por
+  // SCAV_UNITS, que NÃO tem explorador nem aríete. O Saque testa `livre(avail,'spy') < 1`
+  // no modo dinâmico — com aquela fonte, toda aldeia pareceria ter zero explorador e o
+  // ciclo pularia tudo EM SILÊNCIO. Esta traz as 11 unidades do mundo.
+  //
+  // A ordem das colunas sai do CABEÇALHO, nunca fixa: br143 tem 11 unidades e br141 tem
+  // outras. Coluna deslocada dá número plausível e errado, que é o pior defeito possível.
+  //
+  // Conferido contra a fonte antiga em 4 aldeias, unidade por unidade: bateu exato.
+  const TROPAS_TTL_MS = 45000;   // curto: dentro do ciclo quem mantém a conta é o desconto local
+  let _tropasCache = null, _tropasAt = 0, _tropasVoo = null;
+
+  async function getTropaTodasAldeias(forcar) {
+    if (!forcar && _tropasCache && (Date.now() - _tropasAt) < TROPAS_TTL_MS) return _tropasCache;
+    // Duas chamadas simultâneas (Saque e Muralha rodam em paralelo) esperam a MESMA leitura
+    // em vez de abrirem duas.
+    if (_tropasVoo) return _tropasVoo;
+    _tropasVoo = (async () => {
+      try {
+        const res = await fetch('/game.php?village=' + CUR_VID
+          + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+        const tabela = doc.querySelector('#units_table') || doc.querySelector('table.overview_table');
+        if (!tabela) throw new Error('não achei a tabela de tropas');
+        const ordem = [];
+        (tabela.querySelector('thead tr') || tabela.querySelector('tr')).querySelectorAll('th').forEach((th) => {
+          const img = th.querySelector('img[src*="unit_"]');
+          if (!img) return;
+          const m = (img.getAttribute('src') || '').match(/unit_(\w+)\./);
+          if (m) ordem.push(m[1]);
+        });
+        if (!ordem.length) throw new Error('não consegui ler as unidades do cabeçalho');
+        const out = {};
+        tabela.querySelectorAll('tr').forEach((tr) => {
+          const q = tr.querySelector('.quickedit-vn[data-id]'); if (!q) return;
+          const vid = q.getAttribute('data-id'); if (!vid) return;
+          const cels = tr.querySelectorAll('td.unit-item');
+          // Contagem diferente do cabeçalho = linha que eu não entendi. Descartar em silêncio
+          // é o que produz "aldeia sem tropa" fantasma, então registra.
+          if (cels.length !== ordem.length) {
+            pushLog('Tropas: linha da aldeia ' + vid + ' tem ' + cels.length + ' colunas e o cabeçalho '
+              + ordem.length + ' — ignorada.', 'err');
+            return;
+          }
+          const n = {};
+          cels.forEach((td, i) => { n[ordem[i]] = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0; });
+          out[String(vid)] = n;
+        });
+        if (!Object.keys(out).length) throw new Error('a tabela veio sem nenhuma aldeia');
+        _tropasCache = out; _tropasAt = Date.now();
+        return out;
+      } finally { _tropasVoo = null; }
+    })();
+    return _tropasVoo;
+  }
+
+  // Tropa livre de UMA aldeia, já descontada a reserva do Coordenado.
+  //
+  // Cai pra leitura individual quando a aldeia não está no mapa (aldeia recém-conquistada,
+  // leitura que falhou). NUNCA devolve {} calado: zero tropa faz o módulo pular a origem, e
+  // "não consegui ler" viraria "não tem tropa" — o tipo de erro que some do log.
+  async function getAvailDeAldeia(vid, mapa) {
+    const m = mapa && mapa[String(vid)];
+    if (m) return applyReservationsToAvail(vid, m);
+    return (await getVillageStateReserved(vid)).avail || {};
+  }
   // ==================== ENVIO (primitivas de ataque/apoio compartilhadas) ====================
   // Sobrou do módulo Fakes, aposentado na v11.16.0. Nada aqui é específico de fake: é o preparo de
   // comando em 2 etapas do jogo (`try=confirm` -> `action=command`) mais helpers de aldeia/pontos.
@@ -6483,39 +6572,11 @@
   // (só o que está em casa), que é exatamente quem pode sair agora — a versão `complete` traz 5
   // linhas por aldeia e obrigaria a casar rótulo. Por aldeia seria 1 fetch cada, inviável pra
   // uma tabela que abre no clique.
-  let _nbSnobCache = null, _nbSnobAt = 0;
-  async function nobleSnobPorAldeia(forcar) {
-    if (!forcar && _nbSnobCache && (Date.now() - _nbSnobAt) < 60000) return _nbSnobCache;
-    const res = await fetch('/game.php?village=' + CUR_VID
-      + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    const tabela = doc.querySelector('#units_table') || doc.querySelector('table.overview_table');
-    if (!tabela) throw new Error('não achei a tabela de tropas');
-    // A ordem das colunas sai do cabeçalho DESTA tabela: varia por mundo (arqueiro, milícia...).
-    const ordem = [];
-    (tabela.querySelector('thead tr') || tabela.querySelector('tr')).querySelectorAll('th').forEach((th) => {
-      const img = th.querySelector('img[src*="unit_"]');
-      if (!img) return;
-      const m = (img.getAttribute('src') || '').match(/unit_(\w+)\./);
-      if (m) ordem.push(m[1]);
-    });
-    // Guarda TODAS as unidades, não só o nobre: o diagnóstico precisa saber se a origem consegue
-    // montar a escolta do modelo — foi o caso real de uma aldeia com nobre e só 26 bárbaros
-    // contra os 50 que o modelo pede.
-    const out = {};
-    tabela.querySelectorAll('tr').forEach((tr) => {
-      const q = tr.querySelector('.quickedit-vn[data-id]'); if (!q) return;
-      const vid = q.getAttribute('data-id'); if (!vid) return;
-      const cels = tr.querySelectorAll('td.unit-item');
-      if (cels.length !== ordem.length) return;
-      const n = {};
-      cels.forEach((td, i) => { n[ordem[i]] = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0; });
-      out[String(vid)] = n;
-    });
-    _nbSnobCache = out; _nbSnobAt = Date.now();
-    return out;
-  }
+  // O parser vive em `040-tropas.js` (`getTropaTodasAldeias`) desde a v11.175.0, porque o Saque
+  // e a Muralha passaram a usar a MESMA leitura. Duas cópias do mesmo parse é como uma delas
+  // deixa de aprender a correção da outra; aqui ficou só o nome que o resto do Noblar chama.
+  async function nobleSnobPorAldeia(forcar) { return getTropaTodasAldeias(forcar); }
+
   // Velocidade do nobre, do próprio mundo (min por campo). O limite do modelo é em HORAS, então
   // mostrar distância em campos não responde "cabe no limite?" — medido na conta: 26,9 campos
   // são 15,7 h, contra um limite de 10 h. Parecia perto e estava fora.

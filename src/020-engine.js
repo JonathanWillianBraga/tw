@@ -865,6 +865,14 @@
       if (distTd) { const dm = (distTd.textContent || '').replace(',', '.').match(/[\d.]+/); if (dm) dist = parseFloat(dm[0]); }
       const cA = tr.querySelector('.farm_icon_c');
       const cEnabled = !!(cA && !cA.classList.contains('farm_icon_disabled') && !cA.classList.contains('start_locked') && cA.getAttribute('data-units-forecast'));
+      // A PREVISÃO DO PRÓPRIO JOGO. Já estávamos olhando pra esse atributo — só pra ver se ele
+      // existe — e jogando fora o conteúdo, que é exatamente a composição que o C vai mandar.
+      // Guardar é de graça (já temos o elemento em mãos) e é a diferença entre diagnosticar a
+      // recusa e adivinhá-la. Ainda NÃO uso na pré-checagem: a página é renderizada pra aldeia
+      // atual, e usar composição de uma aldeia pra decidir por outra é o tipo de erro que só
+      // aparece semanas depois. Primeiro medir, depois confiar.
+      let cUnits = null;
+      if (cA) { const rawF = cA.getAttribute('data-units-forecast'); if (rawF) { try { cUnits = JSON.parse(rawF); } catch (e) { cUnits = null; } } }
       const iconOk = (el) => !!(el && !el.classList.contains('farm_icon_disabled') && !el.classList.contains('start_locked'));
       const aEnabled = iconOk(tr.querySelector('.farm_icon_a'));
       const bEnabled = iconOk(tr.querySelector('.farm_icon_b'));
@@ -875,7 +883,7 @@
       const mm = mlImg ? (mlImg.getAttribute('src') || '').match(/max_loot\/(\d)/) : null;
       const full = mm ? (mm[1] === '1') : false;                        // true = cheio, false = vazio
       seen[targetId] = 1;
-      rows.push({ targetId: targetId, reportId: reportId, reportAt: reportAt, wood: nums[0] || 0, stone: nums[1] || 0, iron: nums[2] || 0, wall: wall, dist: dist, cEnabled: cEnabled, aEnabled: aEnabled, bEnabled: bEnabled, color: color, full: full, coord: coord });
+      rows.push({ targetId: targetId, reportId: reportId, reportAt: reportAt, wood: nums[0] || 0, stone: nums[1] || 0, iron: nums[2] || 0, wall: wall, dist: dist, cEnabled: cEnabled, cUnits: cUnits, aEnabled: aEnabled, bEnabled: bEnabled, color: color, full: full, coord: coord });
     });
     };
     // O assistente PAGINA (teto de 100 linhas por página). Lendo só a primeira, os alvos das páginas
@@ -1451,6 +1459,13 @@
         // Origem que já recusou por falta de tropa neste ciclo: nem tenta.
         if (semTropaBlock[c.s.vid + '|' + mode]) { oReg(c.s.vid, c.s.name, 'semTpl'); continue; }
         if (mode === 'c' && semTropaMin[c.s.vid] != null && estCL >= semTropaMin[c.s.vid]) { oReg(c.s.vid, c.s.name, 'semCavC'); continue; }
+        // O LIMITE DE FAKE VALE PRO C TAMBÉM. O bloqueio existia e era gravado, mas a linha que o
+        // consulta começa com `mode !== 'c'` — então no C ele nunca era lido: a mesma origem era
+        // retentada a cada alvo, recusada de novo, e cada recusa reimprimia a mesma linha no log.
+        // Medido: 22 recusas de "mínimo de 59 habitantes" e 7 linhas idênticas seguidas.
+        // Aqui não cabe o envio calculado (que completa um template): no C quem monta a tropa é o
+        // jogo. A origem pequena demais pro piso do mundo só pode ser pulada.
+        if (mode === 'c' && fakeBlock[c.s.vid + '|c']) { oReg(c.s.vid, c.s.name, 'fakeSemPontos'); continue; }
         // Origem reprovada no limite de fake: em vez de pular, manda quantidade CALCULADA que cumpre
         // o mínimo do mundo (fallback). Só pula de vez se não der pra calcular (sem pontos da aldeia).
         let useCalc = false;
@@ -1533,8 +1548,15 @@
             const w = semTropaMin[c.s.vid];
             if (sum > 0 && (w == null || estCL < w)) semTropaMin[c.s.vid] = estCL;
             if (semTropaDiag.length < 3) {
-              semTropaDiag.push(c.s.name + ' (C): alvo com ' + sum + ' de saque pede ~' + estCL
-                + ' cav. leve · eu li ' + (avail.light || 0) + ' na aldeia');
+              // O `estCL` é PALPITE nosso (saque ÷ 80, tudo em cavalaria leve). O assistente publica
+              // a previsão real do jogo no atributo `data-units-forecast` do ícone C. Quando os dois
+              // discordam, é o nosso palpite que está errado — e é isso que explica uma aldeia com
+              // 1757 cavalarias ser recusada por 585. Mostrar os dois lado a lado decide.
+              const prev = t.cUnits ? Object.keys(t.cUnits).filter((u) => t.cUnits[u] > 0)
+                .map((u) => t.cUnits[u] + ' ' + u).join(' + ') : '';
+              semTropaDiag.push(c.s.name + ' (C): alvo com ' + sum + ' de saque · meu palpite ~' + estCL
+                + ' cav. leve · eu li ' + (avail.light || 0) + ' livre(s) na aldeia'
+                + (prev ? ' · o assistente prevê ' + prev : ' · sem previsão no ícone C'));
             }
           }
           if (/unidades suficientes/i.test(em) && !dyn && mode !== 'c' && !useCalc) {

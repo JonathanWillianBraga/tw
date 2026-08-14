@@ -94,7 +94,19 @@
     const json = extractBalancedJSON(html, idx + marker.length);
     if (!json) throw new Error('parse de BuildingSmith.techs falhou');
     const data = JSON.parse(json);
-    return (data && data.available) || {};
+    // O jogo separa `available` de `unavailable` — e devolver só o primeiro apagava a diferença
+    // entre "esta tropa não existe neste mundo" e "existe, mas o requisito ainda não foi
+    // cumprido". Quem lê ficava sem como distinguir as duas, e a Pesquisa chamava a segunda de
+    // "modelo completo".
+    //
+    // Agora vem tudo, com `_indisp` marcando quem está travado. Chamador antigo que só olha o
+    // nível continua funcionando: os campos originais estão intactos.
+    const av = (data && data.available) || {};
+    const un = (data && data.unavailable) || {};
+    const out = {};
+    Object.keys(av).forEach((k) => { out[k] = av[k]; });
+    Object.keys(un).forEach((k) => { out[k] = Object.assign({}, un[k], { _indisp: true }); });
+    return out;
   }
   async function smithResearch(vid, techId) {
     const b = new URLSearchParams();

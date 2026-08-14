@@ -119,39 +119,11 @@
   // (só o que está em casa), que é exatamente quem pode sair agora — a versão `complete` traz 5
   // linhas por aldeia e obrigaria a casar rótulo. Por aldeia seria 1 fetch cada, inviável pra
   // uma tabela que abre no clique.
-  let _nbSnobCache = null, _nbSnobAt = 0;
-  async function nobleSnobPorAldeia(forcar) {
-    if (!forcar && _nbSnobCache && (Date.now() - _nbSnobAt) < 60000) return _nbSnobCache;
-    const res = await fetch('/game.php?village=' + CUR_VID
-      + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    const tabela = doc.querySelector('#units_table') || doc.querySelector('table.overview_table');
-    if (!tabela) throw new Error('não achei a tabela de tropas');
-    // A ordem das colunas sai do cabeçalho DESTA tabela: varia por mundo (arqueiro, milícia...).
-    const ordem = [];
-    (tabela.querySelector('thead tr') || tabela.querySelector('tr')).querySelectorAll('th').forEach((th) => {
-      const img = th.querySelector('img[src*="unit_"]');
-      if (!img) return;
-      const m = (img.getAttribute('src') || '').match(/unit_(\w+)\./);
-      if (m) ordem.push(m[1]);
-    });
-    // Guarda TODAS as unidades, não só o nobre: o diagnóstico precisa saber se a origem consegue
-    // montar a escolta do modelo — foi o caso real de uma aldeia com nobre e só 26 bárbaros
-    // contra os 50 que o modelo pede.
-    const out = {};
-    tabela.querySelectorAll('tr').forEach((tr) => {
-      const q = tr.querySelector('.quickedit-vn[data-id]'); if (!q) return;
-      const vid = q.getAttribute('data-id'); if (!vid) return;
-      const cels = tr.querySelectorAll('td.unit-item');
-      if (cels.length !== ordem.length) return;
-      const n = {};
-      cels.forEach((td, i) => { n[ordem[i]] = parseInt((td.textContent || '').replace(/\D/g, ''), 10) || 0; });
-      out[String(vid)] = n;
-    });
-    _nbSnobCache = out; _nbSnobAt = Date.now();
-    return out;
-  }
+  // O parser vive em `040-tropas.js` (`getTropaTodasAldeias`) desde a v11.175.0, porque o Saque
+  // e a Muralha passaram a usar a MESMA leitura. Duas cópias do mesmo parse é como uma delas
+  // deixa de aprender a correção da outra; aqui ficou só o nome que o resto do Noblar chama.
+  async function nobleSnobPorAldeia(forcar) { return getTropaTodasAldeias(forcar); }
+
   // Velocidade do nobre, do próprio mundo (min por campo). O limite do modelo é em HORAS, então
   // mostrar distância em campos não responde "cabe no limite?" — medido na conta: 26,9 campos
   // são 15,7 h, contra um limite de 10 h. Parecia perto e estava fora.

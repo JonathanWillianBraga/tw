@@ -1180,7 +1180,24 @@
     let total = 0; cells.forEach((c) => { total += parseInt((c.textContent || '').replace(/\D/g, ''), 10) || 0; });
     return total;
   }
+  // ===== UM CICLO POR VEZ =====
+  // Medido no log: DOIS ciclos rodando juntos, cada linha duplicada no mesmo segundo e dois
+  // "ciclo concluído" (21,5 s e 25,5 s). `farmStart()` chama farmTick() na hora, e o timer do
+  // `scheduleFarm` podia disparar outro antes do primeiro terminar — um ciclo dura minutos.
+  //
+  // A trava de aba (`claimLock`) não pega isto: as duas execuções são da MESMA aba e seguram a
+  // mesma trava legitimamente. É reentrância, não concorrência entre abas.
+  //
+  // O estrago não era só gastar o dobro de requisição: os dois ciclos liam a mesma tropa, cada um
+  // descontava só os próprios envios, e mandavam no mesmo alvo. É a origem dos "48 ataque(s)
+  // DUPLICADO(S)" que o próprio diagnóstico vinha denunciando sem que a gente soubesse a causa.
+  let _farmEmVoo = false;
   async function farmTick() {
+    if (_farmEmVoo) { pushLog('Saque: já tem um ciclo rodando — ignorei o disparo repetido.', '', 'farm'); return; }
+    _farmEmVoo = true;
+    try { return await farmTickInterno(); } finally { _farmEmVoo = false; }
+  }
+  async function farmTickInterno() {
     clearTimeout(farmTimer);
     if (!config.farm.running) return;
     if (lockOther()) { farmTimer = setTimeout(farmTick, 5000); return; }
@@ -1328,10 +1345,10 @@
     // "por que esse alvo ficou sem ninguém?".
     const alvoDiag = [];
     const MOT_CURTO = { semCL: 'sem CL', reserva: 'reserva', semSpy: 'sem explorador',
-      semTpl: 'sem tropa do template', semCavC: 'sem cav. p/ o saque', fakeSemTropa: 'sem tropa p/ o piso', fakeSemPontos: 'sem pontos', recusa: 'recusado' };
+      semTpl: 'sem tropa do template', semCavC: 'sem cav. p/ o saque', fakePisoC: 'menor que o piso do mundo', fakeSemTropa: 'sem tropa p/ o piso', fakeSemPontos: 'sem pontos', recusa: 'recusado' };
     const oReg = (vid, nome, campo) => {
       const o = oDiag[vid] || (oDiag[vid] = { nome: nome || vid, enviou: 0, semCL: 0, reserva: 0,
-        semSpy: 0, semTpl: 0, semCavC: 0, fakeSemPontos: 0, fakeSemTropa: 0, recusa: 0 });
+        semSpy: 0, semTpl: 0, semCavC: 0, fakePisoC: 0, fakeSemPontos: 0, fakeSemTropa: 0, recusa: 0 });
       o[campo]++;
       // Também entra na trilha DO ALVO da vez, pra tabela poder mostrar "tentei estas 3, recusadas
       // por isto" em vez de só um total agregado que não explica alvo nenhum.
@@ -1465,7 +1482,7 @@
         // Medido: 22 recusas de "mínimo de 59 habitantes" e 7 linhas idênticas seguidas.
         // Aqui não cabe o envio calculado (que completa um template): no C quem monta a tropa é o
         // jogo. A origem pequena demais pro piso do mundo só pode ser pulada.
-        if (mode === 'c' && fakeBlock[c.s.vid + '|c']) { oReg(c.s.vid, c.s.name, 'fakeSemPontos'); continue; }
+        if (mode === 'c' && fakeBlock[c.s.vid + '|c']) { oReg(c.s.vid, c.s.name, 'fakePisoC'); continue; }
         // Origem reprovada no limite de fake: em vez de pular, manda quantidade CALCULADA que cumpre
         // o mínimo do mundo (fallback). Só pula de vez se não der pra calcular (sem pontos da aldeia).
         let useCalc = false;
@@ -1638,6 +1655,7 @@
       ['semSpy', 'sem explorador livre'],
       ['semTpl', 'sem a tropa que o template pede'],
       ['semCavC', 'sem cavalaria leve pro saque estimado do alvo (modo C)'],
+      ['fakePisoC', 'origem grande demais: o C monta menos população que o piso de 1% do mundo'],
       ['fakeSemTropa', 'sem tropa pro complemento do piso de população'],
       ['fakeSemPontos', 'pontos da origem desconhecidos (piso não calculável)'],
       ['recusa', 'recusadas pelo servidor'],

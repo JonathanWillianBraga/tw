@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.188.0
+// @version      11.189.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.188.0';
+  const VERSION = '11.189.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5970,7 +5970,21 @@
   function bldRenderTplSelect() {
     const sel = document.getElementById('twmgr-bld-tpl'); if (!sel) return;
     const ids = bldTplIds();
-    sel.innerHTML = ids.map((id) => '<option value="' + esc(id) + '">' + esc(config.build.templates[id].name) + ' (' + (config.build.templates[id].plan || []).length + ')</option>').join('');
+    // O NÚMERO ENTRE PARÊNTESES é a quantidade de PRÉDIOS do modelo, e ele fica logo acima de um
+    // campo chamado "Aplicar ao grupo" — então era lido como quantidade de ALDEIAS. Caso real: o
+    // seletor dizia "Mercado (2)" e o Status mostrava 44 aldeias com o modelo Mercado; parecia que
+    // a amarração ao grupo tinha falhado, quando estava certa (o grupo [bb+] tem 44 aldeias).
+    // Agora a unidade é escrita, e o GRUPO aparece junto — que é a pergunta real de quem está
+    // nesta tela: qual modelo vai pra qual grupo.
+    sel.innerHTML = ids.map((id) => {
+      const t = config.build.templates[id];
+      const n = (t.plan || []).length;
+      const g = t.grupo ? (_twGroupsCache || []).filter((x) => String(x.id) === String(t.grupo))[0] : null;
+      // Grupo gravado que não está mais na lista do jogo (grupo apagado) tem que APARECER, não
+      // sumir: é justamente o caso em que o modelo não pega aldeia nenhuma e ninguém entende.
+      const gTxt = t.grupo ? (g ? esc(g.name) : 'grupo ' + esc(String(t.grupo)) + ' — NÃO EXISTE MAIS') : 'sem grupo';
+      return '<option value="' + esc(id) + '">' + esc(t.name) + ' (' + n + ' ' + (n === 1 ? 'prédio' : 'prédios') + ') → ' + gTxt + '</option>';
+    }).join('');
     if (ids.indexOf(_bldActiveProf) < 0 && ids.length) _bldActiveProf = ids[0];
     sel.value = _bldActiveProf;
     // O seletor de modelo da barra de ação em massa espelha a mesma lista

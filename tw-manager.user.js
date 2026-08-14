@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.177.0
+// @version      11.178.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.177.0';
+  const VERSION = '11.178.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2402,6 +2402,19 @@
     // Quem estoura isso é a origem grande, não o alvo — então o bloqueio é por origem+modo e vale pro
     // ciclo todo. Assim uma aldeia grande demais pro template B é descartada após UM erro, não a cada alvo.
     const fakeBlock = {};
+    // Mesma ideia do fakeBlock, pro erro mais caro medido no log do usuário: 44 recusas de "Não
+    // existem unidades suficientes" para 24 envios bons — quase 2 requisições jogadas fora por
+    // envio. Falta de tropa é propriedade da ORIGEM, não do alvo: se a aldeia não tinha o template
+    // agora, não vai ter no próximo alvo do mesmo ciclo. Antes ela era retentada a cada alvo.
+    //
+    // Só vale pro A/B de template FIXO. No C e no dinâmico a quantidade é calculada pelo saque do
+    // alvo, então recusa num alvo grande não prevê nada sobre um alvo pequeno — bloquear ali
+    // desligaria envios que dariam certo.
+    const semTropaBlock = {};
+    // As 3 primeiras recusas saem DETALHADAS no fim do ciclo. A pré-checagem tinha aprovado essas
+    // origens, e a lacuna entre "o que eu achei que tinha" e "o que o servidor disse" é a única
+    // coisa que explica o defeito. Sem isso fica só a contagem, que não aponta pra lugar nenhum.
+    const semTropaDiag = [];
     const errReasons = {};     // motivo -> quantas vezes (pra saber POR QUE recusou, não só quantas)
     // Barra de progresso do ciclo: UMA linha de log que se atualiza conforme percorre os alvos e, no
     // fim, vira o extrato. Throttle de 400ms pra não redesenhar o log a cada aldeia.
@@ -2472,6 +2485,8 @@
       let did = false, usedName = '', usedDist = 0, incerto = false, usedCalc = false, usedCalcInfo = '';
       _tent = [];                       // trilha deste alvo (preenchida pelo oReg a cada recusa)
       for (const c of cands) {
+        // Origem que já recusou por falta de tropa neste ciclo: nem tenta.
+        if (semTropaBlock[c.s.vid + '|' + mode]) { oReg(c.s.vid, c.s.name, 'semTpl'); continue; }
         // Origem reprovada no limite de fake: em vez de pular, manda quantidade CALCULADA que cumpre
         // o mínimo do mundo (fallback). Só pula de vez se não der pra calcular (sem pontos da aldeia).
         let useCalc = false;
@@ -2538,6 +2553,16 @@
           oReg(c.s.vid, c.s.name, 'recusa');
           // Limite de fake: o template é pequeno demais PRA ESSA ORIGEM (vale pra qualquer alvo).
           // Marca e não tenta de novo no ciclo — antes gastava uma requisição por alvo.
+          // Falta de tropa: bloqueia a origem PRO CICLO e registra a divergência vs a pré-checagem.
+          if (/unidades suficientes/i.test(em) && !dyn && mode !== 'c' && !useCalc) {
+            semTropaBlock[c.s.vid + '|' + mode] = true;
+            if (semTropaDiag.length < 3) {
+              const nd = (mode === 'a' ? (tpl && tpl.unitsA) : (tpl && tpl.unitsB)) || {};
+              semTropaDiag.push(c.s.name + ' (' + mode.toUpperCase() + '): template pede '
+                + (Object.keys(nd).map((u) => nd[u] + ' ' + u).join(' + ') || '???')
+                + ' · eu li ' + (Object.keys(nd).map((u) => (avail[u] || 0) + ' ' + u).join(' + ') || '???'));
+            }
+          }
           const fl = em.match(/m[ií]nimo de (\d+) habitantes/i);
           if (fl) {
             fakeBlock[c.s.vid + '|' + mode] = true;
@@ -2643,6 +2668,12 @@
     if (errs || incertos || topErr.length) {
       pushLog('Saque: ' + (errs ? errs + ' recusa(s)' : '') + (incertos ? ((errs ? ' · ' : '') + incertos + ' incerto(s)') : '') +
         (topErr.length ? (' — ' + topErr.map((p) => p[1] + '× "' + p[0] + '"').join(' · ')) : ''), 'err', 'farm');
+    }
+    // A pré-checagem aprovou e o servidor recusou: mostrar os dois lados é o que transforma
+    // "44 recusas" em algo acionável.
+    if (semTropaDiag.length) {
+      pushLog('Saque: origens que passaram na pré-checagem e o servidor recusou por falta de tropa — '
+        + semTropaDiag.join(' | ') + '.', 'err', 'farm');
     }
     // ===== POR QUE as origens não serviram =====
     // Antes esta linha dizia sempre "acabou a cavalaria", que era um CHUTE: o alvo cai em

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.175.0
+// @version      11.176.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.175.0';
+  const VERSION = '11.176.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2224,6 +2224,23 @@
     if (captchaBlocked()) { farmTimer = setTimeout(farmTick, 30000); return; }
     claimLock();
     const now = Date.now();
+    // ===== CRONÔMETRO DO CICLO =====
+    // A leitura de tropa em massa (v11.175.0) cortou 17 s e o ciclo não mudou de tamanho — ou seja,
+    // os 17 s nunca foram o gargalo. Em vez de adivinhar qual é, o ciclo agora se mede: cada etapa
+    // acumula CHAMADAS e MILISSEGUNDOS, e o fim do ciclo imprime o extrato ordenado.
+    // Mede tempo de PAREDE, não de rede: uma pausa deliberada aparece igual a uma requisição lenta,
+    // que é exatamente o que se quer saber — o relógio do usuário não distingue as duas.
+    const _crono = {};
+    const cron = async (nome, fn) => {
+      const t0 = Date.now();
+      try { return await fn(); }
+      finally { const e = _crono[nome] || (_crono[nome] = { n: 0, ms: 0 }); e.n++; e.ms += Date.now() - t0; }
+    };
+    // Envolvem as chamadas sem mudar a assinatura: o laço continua lendo igual.
+    const _cSendAttack = (...a) => cron('envio', () => sendAttack(...a));
+    const _cSendFarmB = (...a) => cron('envio', () => sendFarmB(...a));
+    const _cSendFarmC = (...a) => cron('envio', () => sendFarmC(...a));
+    const _cSleep = (ms) => cron('pausa entre envios', () => sleep(ms));
     if ((config.farm.nextAt || 0) > now) { scheduleFarm(); return; }
     const cfg = config.farm;
     // Origens = minhas aldeias com coordenada (pra escolher a mais próxima por alvo).
@@ -2232,8 +2249,8 @@
       // `name: x.name || x.coord` — antes era `name: x.coord` cravado, e o nome REAL da aldeia
       // (que getVillagesInGroup já devolve) era jogado fora. Todo lugar que mostra origem com
       // filtro de grupo ligado exibia coordenada crua, inclusive as estatísticas e os logs.
-      if (cfg.group) { mine = (await getVillagesInGroup(cfg.group)).map((x) => ({ vid: x.vid, coord: x.coord, name: x.name || x.coord })); try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
-      else mine = await getAllVillagesCached();
+      if (cfg.group) { mine = (await cron('aldeias (lista)', () => getVillagesInGroup(cfg.group))).map((x) => ({ vid: x.vid, coord: x.coord, name: x.name || x.coord })); try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
+      else mine = await cron('aldeias (lista)', () => getAllVillagesCached());
     } catch (e) { pushLog('Saque: erro ao listar aldeias: ' + (e.message || e), 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
     const myV = [], semCoord = [];
     mine.forEach((v) => {
@@ -2249,7 +2266,7 @@
     cfg.stats = cfg.stats || {}; cfg.stats.mineCount = myV.length; cfg.stats.mineCountRaw = mine.length;
     let pendingCoords = new Set(), saquesAtivos = null, farmCoords = new Set();
     let saidaPorOrigem = {};
-    try { const pa = await getPendingAttack(); pendingCoords = pa.coords; saquesAtivos = pa.saques; farmCoords = pa.farmCoords || new Set(); saidaPorOrigem = pa.porOrigem || {}; } catch (e) {}
+    try { const pa = await cron('comandos em rota', () => getPendingAttack()); pendingCoords = pa.coords; saquesAtivos = pa.saques; farmCoords = pa.farmCoords || new Set(); saidaPorOrigem = pa.porOrigem || {}; } catch (e) {}
     // DIAGNÓSTICO: mais comandos de saque em rota do que alvos distintos = tem ataque duplicado no
     // mesmo alvo. Com "Repetir farm" desligado isso NÃO deveria acontecer, e indica que um envio deu
     // certo mas foi lido como recusa (aí o ciclo tenta outra origem e manda de novo no mesmo lugar).
@@ -2282,11 +2299,11 @@
     const colorTxt = (t) => ({ green: 'verde', yellow: 'amarelo', blue: 'azul', red: 'vermelho' }[t.color] || t.color) + (t.full ? ' cheio' : ' vazio');
     // Lê os alvos (assistente = conta inteira) e os templates uma vez só.
     let targets;
-    try { targets = await getFarmTargetsCached(CUR_VID, true); }
+    try { targets = await cron('alvos (assistente)', () => getFarmTargetsCached(CUR_VID, true)); }
     catch (e) { pushLog('Saque: erro ao ler os alvos do assistente (' + (e.message || e) + ').', 'err', 'farm'); cfg.nextAt = now + 120000; save(); scheduleFarm(); return; }
     if (_farmPagesInfo && _farmPagesInfo.pages > 1) pushLog('Saque: assistente tem ' + _farmPagesInfo.pages + ' página(s) — ' + _farmPagesInfo.alvos + ' alvo(s) no total.', '', 'farm');
     let tpl = null;
-    if (!dyn) { try { tpl = await getFarmTemplates(CUR_VID); } catch (e) { tpl = null; } }
+    if (!dyn) { try { tpl = await cron('templates A/B', () => getFarmTemplates(CUR_VID)); } catch (e) { tpl = null; } }
     // Sem as unidades dos templates não dá pra saber se a origem tem tropa, e o ciclo cai no
     // "tenta e deixa o servidor recusar" — o que enche o log de recusa e gasta requisição à toa.
     if (!dyn) {
@@ -2311,7 +2328,7 @@
       tplPop.a = popOf(tpl.unitsA); tplPop.b = popOf(tpl.unitsB);
       tplOnlySpy.a = soSpy(tpl.unitsA); tplOnlySpy.b = soSpy(tpl.unitsB);
       if (tplPop.a || tplPop.b) {
-        try { vPoints = await getVillagePoints(); } catch (e) { vPoints = null; }
+        try { vPoints = await cron('pontos das aldeias', () => getVillagePoints()); } catch (e) { vPoints = null; }
         pushLog('Saque: limite de fake ativo — template A=' + tplPop.a + ' pop' + (tplOnlySpy.a ? ' (só explorador: isento)' : '') + ', B=' + tplPop.b + ' pop' + (tplOnlySpy.b ? ' (só explorador: isento)' : '') + '; origem precisa de ' + fakePct + '% dos pontos dela.', '', 'farm');
       }
     }
@@ -2319,10 +2336,10 @@
     // por aldeia (362ms × 47 = 17s medidos). Se a leitura em massa falhar, `getAvailDeAldeia`
     // cai sozinho pra leitura individual — o ciclo fica lento, não quebra.
     let mapaTropa = null;
-    try { mapaTropa = await getTropaTodasAldeias(); }
+    try { mapaTropa = await cron('tropa (leitura em massa)', () => getTropaTodasAldeias()); }
     catch (e) { pushLog('Tropas: leitura em massa falhou (' + (e.message || e) + ') — lendo aldeia por aldeia.', 'err', 'farm'); }
     const availCache = {};
-    const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = await getAvailDeAldeia(vid, mapaTropa); } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
+    const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = await cron(mapaTropa ? 'tropa (do mapa, sem rede)' : 'tropa (aldeia a aldeia)', () => getAvailDeAldeia(vid, mapaTropa)); } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
     const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, mur: 0, pend: 0, semorig: 0, dist: 0 };
     // ===== Diagnóstico POR ORIGEM =====
     // O módulo é alvo-cêntrico: pra cada alvo ele varre as origens mais próximas e usa a primeira
@@ -2411,7 +2428,7 @@
         // Não deu pra ler o relatório? PULA. Azul é o único que pode ter defesa; mandar sem saber
         // é o erro mais caro do módulo. Errar pra menos custa um saque; errar pra mais custa tropa.
         let defTotal = 0;
-        try { defTotal = await getReportDefenseTotal(t.reportId); }
+        try { defTotal = await cron('relatório azul (defesa)', () => getReportDefenseTotal(t.reportId)); }
         catch (e) {
           skip.def++;
           errReasons['azul sem leitura de defesa: ' + String(e.message || e).slice(0, 60)] = (errReasons['azul sem leitura de defesa: ' + String(e.message || e).slice(0, 60)] || 0) + 1;
@@ -2492,10 +2509,10 @@
           if (semTropa) { oReg(c.s.vid, c.s.name, 'fakeSemTropa'); continue; }   // origem não tem o template + o complemento -> tenta a próxima
         }
         try {
-          if (mode === 'c') { await sendFarmC(c.s.vid, t.reportId); did = true; }
-          else if (useCalc) { await sendAttack(c.s.vid, tx, ty, calcAmounts); did = true; }
-          else if (mode === 'a') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum / 80)), spy: 1 }); } else { if (!tpl || !tpl.a) break; await sendFarmB(c.s.vid, t.targetId, tpl.a); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
-          else if (mode === 'b') { for (let k = 0; k < qty; k++) { if (dyn) { await sendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum * 1.2 / 80)), spy: 1 }); } else { if (!tpl || !tpl.b) break; await sendFarmB(c.s.vid, t.targetId, tpl.b); } did = true; if (k < qty - 1) await sleep(delayBase + Math.floor(Math.random() * 250)); } }
+          if (mode === 'c') { await _cSendFarmC(c.s.vid, t.reportId); did = true; }
+          else if (useCalc) { await _cSendAttack(c.s.vid, tx, ty, calcAmounts); did = true; }
+          else if (mode === 'a') { for (let k = 0; k < qty; k++) { if (dyn) { await _cSendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum / 80)), spy: 1 }); } else { if (!tpl || !tpl.a) break; await _cSendFarmB(c.s.vid, t.targetId, tpl.a); } did = true; if (k < qty - 1) await _cSleep(delayBase + Math.floor(Math.random() * 250)); } }
+          else if (mode === 'b') { for (let k = 0; k < qty; k++) { if (dyn) { await _cSendAttack(c.s.vid, tx, ty, { light: Math.max(1, Math.ceil(sum * 1.2 / 80)), spy: 1 }); } else { if (!tpl || !tpl.b) break; await _cSendFarmB(c.s.vid, t.targetId, tpl.b); } did = true; if (k < qty - 1) await _cSleep(delayBase + Math.floor(Math.random() * 250)); } }
         } catch (e) {   // envio recusado -> guarda o MOTIVO (antes era engolido e a gente ficava no escuro)
           did = false;
           const em = String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 90);
@@ -2537,7 +2554,7 @@
           // Mesma capacidade, creditada À ALDEIA que despachou — base da previsão por aldeia.
           const cv = capVila[c.s.vid] || (capVila[c.s.vid] = { cap: 0, atks: 0 });
           cv.cap += capEnvio; cv.atks++;
-          cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await sleep(delayBase + Math.floor(Math.random() * 250)); break;
+          cfg.activeSends.push({ coord: t.coord, mode: mode, vid: c.s.vid, at: now }); await _cSleep(delayBase + Math.floor(Math.random() * 250)); break;
         }
       }
       alvoDiag.push({ coord: t.coord, modo: mode, saque: sum,
@@ -2630,9 +2647,9 @@
     // Fica no config (e portanto no backup) porque é diagnóstico, não estado de operação: dá pra
     // olhar depois, comparar com o ciclo anterior e mandar print.
     try {
-      const uHome = await getHomeUnitsAll().catch(() => ({}));
+      const uHome = await cron('estatísticas: tropa em casa', () => getHomeUnitsAll().catch(() => ({})));
       let ret = null;
-      try { ret = await getReturningAttack(); } catch (e) { ret = null; }
+      try { ret = await cron('estatísticas: tropa voltando', () => getReturningAttack()); } catch (e) { ret = null; }
       const saindoPor = saidaPorOrigem;
       const voltandoPor = (ret && ret.porOrigem) ? ret.porOrigem : {};
       const capDia = (config.farm.dailyCapVila && config.farm.dailyCapVila.vilas) || {};
@@ -2757,6 +2774,20 @@
     cfg.nextAt = now + Math.max(60, cfg.interval || 600) * 1000;
     save();
     refreshCards('farm'); refreshDaily('farm', cfg, 'loot', 'loot_res');
+    // ===== EXTRATO DE TEMPO =====
+    // Ordenado por milissegundos, não por ordem de execução: o que está no topo É o gargalo.
+    // "resto" = o tempo do ciclo que não passou por nenhuma etapa medida (parse, laço, painel).
+    // Se ele liderar, o gargalo está em código nosso e não em espera — e a medição seguinte muda de lugar.
+    const _msTotal = Date.now() - now;
+    const _etapas = Object.keys(_crono).map((k) => [k, _crono[k].n, _crono[k].ms]).sort((a, b) => b[2] - a[2]);
+    const _medido = _etapas.reduce((a, e) => a + e[2], 0);
+    const _seg = (ms) => (ms / 1000).toFixed(1) + 's';
+    const _pc = (ms) => _msTotal > 0 ? (' ' + Math.round(ms / _msTotal * 100) + '%') : '';
+    pushLog('Saque: ⏱ ciclo levou ' + _seg(_msTotal) + ' — '
+      + _etapas.map((e) => e[0] + ' ' + _seg(e[2]) + _pc(e[2]) + ' (' + e[1] + '×'
+          + (e[1] > 1 ? (', ' + Math.round(e[2] / e[1]) + 'ms cada') : '') + ')').join(' · ')
+      + ' · resto ' + _seg(Math.max(0, _msTotal - _medido)) + _pc(Math.max(0, _msTotal - _medido))
+      + '.', '', 'farm');
     pushLog('Saque: ciclo concluído — ' + count + ' saque(s) enviado(s)' + (calcCount ? (', ' + calcCount + ' completado(s) ao mínimo') : '') + '. Próximo em ' + Math.round((cfg.interval || 600) / 60) + ' min.', 'ok', 'farm');
     scheduleFarm();
   }

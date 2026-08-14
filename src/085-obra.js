@@ -132,6 +132,11 @@
     for (const techId of order) {
       const t = techs[techId];
       if (!t) continue;
+      // Travada por requisito (bloco `unavailable` do jogo). ANTES da v11.175.0 ela nem chegava
+      // aqui — getSmithTechs devolvia só o `available` — e caía no `!t` acima, seguindo pra
+      // próxima da ordem. Agora que ela chega, precisa do mesmo tratamento: sem esta linha ela
+      // cairia no `return null` lá embaixo e PARARIA a ordem inteira no primeiro item travado.
+      if (t._indisp) continue;
       if ((+t.level || 0) >= 1) continue;        // já pesquisado -> próximo da ordem
       if (t.error_buildings) return null;        // falta prédio (Estábulo/Oficina/Ferreiro) -> Obra resolve subindo o prédio, espera
       if (t.can_research) { await smithResearch(vid, techId); return techId; }

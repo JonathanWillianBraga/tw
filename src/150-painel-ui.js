@@ -391,7 +391,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + tabBtn('apoios', '🛡️', 'Apoios') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + tabBtn('apoios', '🛡️', 'Apoios') + tabBtn('rel', '💎', 'Relíquias') + '</div>' +
       // Telas de modelo: overlay DENTRO do painel, nao aba nova. Ficam fora do #twmgr-body pra
       // cobrir o painel inteiro (inclusive a barra de abas) enquanto abertas -- e uma tela cheia
       // de edicao, entao trocar de aba no meio nao faz sentido.
@@ -950,6 +950,12 @@
         sec('Aguardando recurso', '<div id="twmgr-ob-demand"></div>') +
         modLog('obra') +
       '</div>' +
+      '<div id="twmgr-tab-rel" style="display:none">' +
+        hint('💎 Onde equipar cada relíquia. Lê o inventário e as suas aldeias do próprio jogo — nada é fixo, então vale pra qualquer conta.') +
+        '<div class="twmgr-actions"><button id="twmgr-rel-ler" class="twmgr-btn twmgr-ghost" style="width:100%">↻ Analisar</button></div>' +
+        '<div id="twmgr-rel-corpo"></div>' +
+        modLog('rel') +
+      '</div>' +
       '<div id="twmgr-tab-apoios" style="display:none">' +
         hint('🛡️ O jogo só mostra tropa fora agrupada por <b>origem</b> — "a aldeia 001 tem 1999 lanças fora". Nunca por <b>destino</b>. Esta tela inverte: uma linha por aldeia que você está apoiando, com o total somado; clique pra ver quais aldeias suas mandaram. A leitura <b>fica guardada</b> e só é refeita quando você clica em <b>↻ Ler apoios</b> — ela custa uma requisição por aldeia sua com tropa fora.') +
         sec('Apoios enviados',
@@ -1002,6 +1008,8 @@
     ['twmgr-cap-en', 'twmgr-cap-brw', 'twmgr-cap-ntfy', 'twmgr-cap-reload'].forEach((id) => document.getElementById(id).addEventListener('change', readCapCfg));
     document.getElementById('twmgr-cap-brw').addEventListener('change', async () => { if (document.getElementById('twmgr-cap-brw').checked) await ensureNotifyPermission(); });
     document.getElementById('twmgr-cap-test').addEventListener('click', testCaptchaNotif);
+    document.getElementById('twmgr-rel-ler').addEventListener('click', relAnalisar);
+    renderReliquias();
     document.getElementById('twmgr-bkp-exp').addEventListener('click', bkpExportar);
     document.getElementById('twmgr-bkp-imp').addEventListener('click', bkpImportar);
 

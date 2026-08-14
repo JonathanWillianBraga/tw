@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.191.0
+// @version      11.192.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.191.0';
+  const VERSION = '11.192.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -11064,6 +11064,308 @@
       alvosLer(Math.max(1, Math.min(10, n)));
     });
   }
+  // ==================== RELÍQUIAS (onde equipar, e o que fundir) ====================
+  // O jogo entrega TUDO pronto na tela `screen=relic_system`: o inventário vem embutido como JSON
+  // no HTML, com `range`, `main_stat`, `sub_stats`, onde cada uma está equipada e o cooldown de
+  // remoção. Nada aqui raspa DOM da grade paginada nem chuta tabela de qualidade.
+  //
+  // NADA É HARDCODED DA CONTA DE NINGUÉM. O script é compartilhado entre jogadores diferentes:
+  // inventário, aldeias, número de espaços e os limiares que destravam espaço novo são todos
+  // lidos ao vivo. O único número fixo é o `expoente` da ponderação, que é escolha de estratégia.
+  //
+  // MÉTRICA: distância EUCLIDIANA, validada contra o próprio jogo. A aba "Visualização geral"
+  // publica "Outras aldeias afetadas: N" para cada relíquia equipada; euclidiana bateu 6/6 num
+  // teste real, Chebyshev errou 1. Por isso `relCobertura` usa sqrt e não max().
+  //
+  // SEM TETO DE EMPILHAMENTO (decisão do usuário, ago/2026): dois bônus do mesmo tipo somam sem
+  // saturar. Isso torna cada relíquia INDEPENDENTE — não há trade-off de sobreposição, então a
+  // melhor alocação é "cada relíquia na aldeia onde ela rende mais", limitada só pelos espaços e
+  // por uma relíquia por aldeia. Se um dia aparecer teto, aqui vira problema de cobertura máxima
+  // e a alocação precisa virar gulosa por ganho marginal.
+
+  const REL_URL = '/game.php?screen=relic_system';
+
+  // Extrai o array de relíquias de dentro do HTML. O JSON não está numa variável nomeada, então a
+  // âncora é o campo `"range"` (que só existe em relíquia) e daí se anda pros colchetes que
+  // delimitam o array, contando profundidade — regex não dá conta de aninhamento.
+  function relExtrairJSON(html) {
+    const i = html.indexOf('"range"');
+    if (i < 0) return null;
+    let ini = i, prof = 0;
+    for (let k = i; k > 0; k--) {
+      if (html[k] === ']') prof++;
+      if (html[k] === '[') { if (prof === 0) { ini = k; break; } prof--; }
+    }
+    let fim = ini, d = 0;
+    for (let k = ini; k < html.length; k++) {
+      if (html[k] === '[') d++;
+      else if (html[k] === ']') { d--; if (d === 0) { fim = k + 1; break; } }
+    }
+    try {
+      const arr = JSON.parse(html.slice(ini, fim));
+      return Array.isArray(arr) ? arr : null;
+    } catch (e) { return null; }
+  }
+
+  async function relLerInventario() {
+    const res = await fetch(REL_URL + '&village=' + CUR_VID, { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const arr = relExtrairJSON(await res.text());
+    if (!arr) throw new Error('não achei o inventário no HTML (a tela mudou?)');
+    return arr;
+  }
+
+  // Espaços de relíquia. O jogo NÃO publica isso em JSON — está no texto da aba "Visualização
+  // geral": um bloco por espaço, uns dizendo "Espaço livre", outros "Obtenha N aldeias para
+  // desbloquear". Os limiares variam por mundo, então são LIDOS, nunca fixados.
+  async function relLerEspacos() {
+    const res = await fetch(REL_URL + '&mode=overview&village=' + CUR_VID, { credentials: 'include' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const t = ((doc.querySelector('#content_value') || doc.body).textContent || '').replace(/\s+/g, ' ');
+    const livres = (t.match(/Espa[çc]o livre/gi) || []).length;
+    const travados = (t.match(/Obtenha\s+(\d+)\s+aldeias/gi) || [])
+      .map((s) => parseInt((s.match(/\d+/) || [])[0], 10)).filter((n) => n).sort((a, b) => a - b);
+    return { livres: livres, proximosLimiares: travados };
+  }
+
+  // Unidade e percentual de um stat. A unidade vem do ÍCONE (`.../unit_spear.webp`), não do texto:
+  // o nome é traduzido e mudaria de idioma pra idioma. O percentual vem do texto porque só existe
+  // lá ("Lanceiro: +6% poder de ataque e defesa").
+  function relStat(st) {
+    if (!st) return null;
+    const img = (st.benefit && st.benefit.img) || st.img || '';
+    const mu = String(img).match(/unit_(\w+)\.\w+$/);
+    const txt = st.name || (st.benefit && st.benefit.description) || '';
+    const mp = String(txt).match(/([+-]?\d+(?:[.,]\d+)?)\s*%/);
+    return {
+      unidade: mu ? mu[1] : null,
+      pct: mp ? Math.abs(parseFloat(String(mp[1]).replace(',', '.'))) : 0,
+      texto: String(txt).slice(0, 80),
+    };
+  }
+  function relStats(r) {
+    const out = [];
+    const m = relStat(r.main_stat); if (m) out.push(Object.assign({ principal: true }, m));
+    (r.sub_stats || []).forEach((s) => { const x = relStat(s); if (x) out.push(Object.assign({ principal: false }, x)); });
+    return out.filter((s) => s.pct > 0);
+  }
+
+  function relDist(a, b) { return Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)); }
+  // Aldeias MINHAS dentro do raio, sem contar a própria — é a mesma definição do "Outras aldeias
+  // afetadas" que o jogo mostra, e foi contra ela que a métrica foi validada.
+  function relCobertura(vila, raio, vilas) {
+    return vilas.filter((o) => o !== vila && relDist(vila, o) <= raio);
+  }
+
+  // Valor de colocar a relíquia R na aldeia V.
+  //
+  // A própria aldeia CONTA (ela recebe o bônus também) — só não entra em "outras afetadas". Cada
+  // stat vale `pct × quantidade da tropa beneficiada` na aldeia coberta: uma relíquia de Cavalaria
+  // Pesada num raio de aldeias sem cavalaria pesada vale zero, e é isso que separa "cobrir muita
+  // aldeia" de "cobrir aldeia certa".
+  //
+  // Stat que não é de tropa (produção, velocidade de recrutamento) não tem como ser ponderado por
+  // tropa: entra com peso fixo `REL_PESO_GENERICO` por aldeia coberta, pra não sumir da conta.
+  const REL_PESO_GENERICO = 50;
+  function relValor(r, vila, vilas, tropas) {
+    const alvos = [vila].concat(relCobertura(vila, r.range || 0, vilas));
+    const stats = relStats(r);
+    let total = 0;
+    alvos.forEach((a) => {
+      const t = tropas[String(a.vid)] || {};
+      stats.forEach((s) => {
+        total += s.pct * (s.unidade ? (t[s.unidade] || 0) : REL_PESO_GENERICO);
+      });
+    });
+    return { valor: Math.round(total), cobre: alvos.length - 1, alvos: alvos };
+  }
+
+  // Relíquia utilizável? Bloqueada, inativa ou anunciada em troca não entra no plano.
+  function relDisponivel(r) {
+    return !r.locked_state && !r.inactive_until && !r.trade_offer_id;
+  }
+
+  // ===== Sugestão de alocação =====
+  // Sem teto de empilhamento cada relíquia é independente, então NÃO é cobertura máxima: é
+  // atribuição. Com N espaços, escolhe os N melhores pares (relíquia, aldeia) com aldeias
+  // distintas — uma relíquia por aldeia, que é o que os dados do jogo mostram.
+  function relSugerir(inv, vilas, tropas, espacos) {
+    const usaveis = inv.filter(relDisponivel);
+    const pares = [];
+    usaveis.forEach((r) => {
+      let melhor = null;
+      vilas.forEach((v) => {
+        const c = relValor(r, v, vilas, tropas);
+        if (!melhor || c.valor > melhor.valor) melhor = { r: r, v: v, valor: c.valor, cobre: c.cobre };
+      });
+      if (melhor && melhor.valor > 0) pares.push(melhor);
+    });
+    pares.sort((a, b) => b.valor - a.valor);
+    const plano = [], vilaUsada = {}, relUsada = {};
+    for (const p of pares) {
+      if (plano.length >= espacos) break;
+      if (vilaUsada[p.v.coord] || relUsada[p.r.id]) continue;
+      vilaUsada[p.v.coord] = 1; relUsada[p.r.id] = 1;
+      plano.push(p);
+    }
+    return plano;
+  }
+
+  // ===== O que está equipado hoje, e quanto perde =====
+  // Compara cada equipada com o MELHOR lugar dela. `ganho` é o que se ganharia movendo — e o
+  // cooldown de remoção entra no relatório porque mover custa tempo real (24h no mundo medido).
+  function relAvaliarEquipadas(inv, vilas, tropas) {
+    return inv.filter((r) => r.village_id).map((r) => {
+      const atual = vilas.filter((v) => String(v.vid) === String(r.village_id))[0] || null;
+      const hoje = atual ? relValor(r, atual, vilas, tropas) : { valor: 0, cobre: 0 };
+      let melhor = null;
+      vilas.forEach((v) => {
+        const c = relValor(r, v, vilas, tropas);
+        if (!melhor || c.valor > melhor.valor) melhor = { v: v, valor: c.valor, cobre: c.cobre };
+      });
+      return {
+        // Relíquia equipada ALÉM do limite de espaços fica `inactive_until` — ela está numa
+        // aldeia mas não dá bônus nenhum. Medido: 13 com village_id e só 6 ativas. Sem separar
+        // isso a tabela sugeriria mover uma peça que já não está fazendo efeito.
+        inativa: !!r.inactive_until,
+        r: r, atual: atual, valorHoje: hoje.valor, cobreHoje: hoje.cobre,
+        melhorVila: melhor ? melhor.v : null, melhorValor: melhor ? melhor.valor : 0,
+        melhorCobre: melhor ? melhor.cobre : 0,
+        ganho: melhor ? (melhor.valor - hoje.valor) : 0,
+        cooldownH: Math.round((r.remaining_removal_cooldown || 0) / 3600),
+      };
+    }).sort((a, b) => b.ganho - a.ganho);
+  }
+
+  // ===== Fusões =====
+  // A tela diz: três do MESMO tipo e qualidade -> uma de qualidade superior; três de tipos
+  // diferentes e mesma qualidade -> uma aleatória de qualidade superior. Com poucos espaços, a
+  // maioria do inventário nunca vai ser equipada — fundir é o que transforma volume em alcance.
+  function relFusoes(inv) {
+    const porTipoQual = {}, porQual = {};
+    inv.filter(relDisponivel).filter((r) => !r.village_id).forEach((r) => {
+      const k = r.type + '|' + r.quality;
+      (porTipoQual[k] = porTipoQual[k] || []).push(r);
+      (porQual[r.quality] = porQual[r.quality] || []).push(r);
+    });
+    const mesmas = Object.keys(porTipoQual).filter((k) => porTipoQual[k].length >= 3)
+      .map((k) => ({ tipo: k.split('|')[0], qual: k.split('|')[1], n: porTipoQual[k].length,
+                     fusoes: Math.floor(porTipoQual[k].length / 3) }))
+      .sort((a, b) => b.fusoes - a.fusoes);
+    const mistas = Object.keys(porQual).map((q) => ({ qual: q, n: porQual[q].length,
+                     fusoes: Math.floor(porQual[q].length / 3) }))
+      .filter((x) => x.fusoes > 0).sort((a, b) => b.fusoes - a.fusoes);
+    return { mesmoTipo: mesmas, mesmaQualidade: mistas };
+  }
+
+  // ===== Ciclo =====
+  let _relDados = null;
+  async function relAnalisar() {
+    const btn = document.getElementById('twmgr-rel-ler');
+    if (btn) { btn.disabled = true; btn.textContent = 'lendo…'; }
+    try {
+      const inv = await relLerInventario();
+      const esp = await relLerEspacos().catch(() => ({ livres: 0, proximosLimiares: [] }));
+      const todas = await getAllVillagesCached();
+      const vilas = [];
+      todas.forEach((v) => {
+        const m = (v.coord || '').match(/(\d+)\|(\d+)/);
+        if (m) vilas.push({ vid: v.vid, nome: v.name || v.coord, coord: v.coord, x: +m[1], y: +m[2] });
+      });
+      let tropas = {};
+      try { tropas = await getHomeUnitsAll(); } catch (e) { tropas = {}; }
+      // Espaços TOTAIS = livres + já ocupadas. O jogo só mostra os livres e os travados.
+      const equipadas = inv.filter((r) => r.village_id).length;
+      const espacos = esp.livres + equipadas;
+      _relDados = {
+        at: Date.now(), inv: inv, vilas: vilas, tropas: tropas,
+        espacos: espacos, livres: esp.livres, proximosLimiares: esp.proximosLimiares,
+        equipadasAval: relAvaliarEquipadas(inv, vilas, tropas),
+        plano: relSugerir(inv, vilas, tropas, espacos),
+        fusoes: relFusoes(inv),
+        semTropa: !Object.keys(tropas).length,
+      };
+      renderReliquias();
+      pushLog('Relíquias: ' + inv.length + ' no inventário, ' + equipadas + ' equipada(s), '
+        + esp.livres + ' espaço(s) livre(s).', 'ok', 'rel');
+    } catch (e) {
+      pushLog('Relíquias: ' + (e.message || e), 'err', 'rel');
+      const box = document.getElementById('twmgr-rel-corpo');
+      if (box) box.innerHTML = '<div class="twmgr-hint" style="color:#b03030">Não consegui ler: ' + esc(String(e.message || e)) + '</div>';
+    } finally { if (btn) { btn.disabled = false; btn.textContent = '↻ Analisar'; } }
+  }
+
+  function relNomeQual(q) {
+    return ({ shoddy: 'De má qualidade', polished: 'Resistente', refined: 'Aprimorado',
+              superior: 'Superior', renowned: 'Reconhecido' })[q] || q;
+  }
+
+  function renderReliquias() {
+    const box = document.getElementById('twmgr-rel-corpo'); if (!box) return;
+    const D = _relDados;
+    if (!D) { box.innerHTML = '<div class="twmgr-hint">Clique em <b>↻ Analisar</b> pra ler o inventário e as suas aldeias.</div>'; return; }
+    const n = (v) => fmtN(v);
+    const cab = '<div class="twmgr-bld-sum">'
+      + '<span class="twmgr-chip"><b>' + D.inv.length + '</b> relíquias</span>'
+      + '<span class="twmgr-chip"><b>' + D.espacos + '</b> espaços</span>'
+      + '<span class="twmgr-chip"><b>' + D.livres + '</b> livre(s)</span>'
+      + '<span class="twmgr-chip"><b>' + D.vilas.length + '</b> aldeias</span>'
+      + (D.proximosLimiares.length ? '<span class="twmgr-chip">próximo espaço com <b>' + D.proximosLimiares[0] + '</b> aldeias</span>' : '')
+      + '</div>';
+    const aviso = D.semTropa
+      ? '<div class="twmgr-hint" style="color:#b5651d">Não consegui ler a tropa das aldeias — o valor está contando só os efeitos que não dependem de tropa. Os números de <b>cobre</b> continuam certos.</div>'
+      : '';
+    // --- equipadas ---
+    const eq = D.equipadasAval;
+    const tEq = !eq.length ? '<div class="twmgr-hint">Nenhuma relíquia equipada.</div>'
+      : '<table class="twmgr-bld-tab"><thead><tr><th>Relíquia</th><th>Onde está</th>'
+        + '<th style="width:44px" title="Outras aldeias suas dentro do alcance">cobre</th>'
+        + '<th>Melhor lugar</th><th style="width:44px">cobre</th>'
+        + '<th style="width:56px" title="Quanto o valor sobe se mover">ganho</th></tr></thead><tbody>'
+        + eq.map((x, i) => {
+          const vale = x.ganho > 0 && x.melhorVila && x.melhorVila.coord !== (x.atual && x.atual.coord);
+          return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">'
+            + '<td><b>' + esc(x.r.name || '') + '</b><div class="sub">' + esc(relNomeQual(x.r.quality)) + ' · alcance ' + (x.r.range || '?')
+              + (x.inativa ? ' · <span style="color:#b03030">INATIVA (além do limite de espaços)</span>' : '') + '</div></td>'
+            + '<td>' + esc(x.atual ? x.atual.nome : '?') + '<div class="sub">' + esc(x.atual ? x.atual.coord : '') + '</div></td>'
+            + '<td' + (x.cobreHoje === 0 ? ' style="color:#b03030;font-weight:700"' : '') + '>' + x.cobreHoje + '</td>'
+            + '<td>' + (vale ? '<b style="color:#3f8f52">' + esc(x.melhorVila.nome) + '</b><div class="sub">' + esc(x.melhorVila.coord) + '</div>'
+                             : '<span style="color:#8a7340">já está no melhor</span>') + '</td>'
+            + '<td>' + x.melhorCobre + '</td>'
+            + '<td>' + (vale ? '<b style="color:#3f8f52">+' + n(x.ganho) + '</b>'
+                + (x.cooldownH ? '<div class="sub" style="color:#b5651d">trava ' + x.cooldownH + 'h</div>' : '')
+                : '—') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    // --- plano ---
+    const tPl = !D.plano.length ? '<div class="twmgr-hint">Sem sugestão — nenhuma relíquia disponível.</div>'
+      : '<table class="twmgr-bld-tab"><thead><tr><th style="width:22px">#</th><th>Relíquia</th><th>Aldeia</th>'
+        + '<th style="width:44px">cobre</th><th style="width:56px">valor</th></tr></thead><tbody>'
+        + D.plano.map((p, i) => '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">'
+          + '<td>' + (i + 1) + '</td>'
+          + '<td><b>' + esc(p.r.name || '') + '</b><div class="sub">' + esc(relNomeQual(p.r.quality)) + ' · alcance ' + (p.r.range || '?')
+            + (p.r.village_id ? ' · <span style="color:#b5651d">já equipada</span>' : '') + '</div></td>'
+          + '<td>' + esc(p.v.nome) + '<div class="sub">' + esc(p.v.coord) + '</div></td>'
+          + '<td>' + p.cobre + '</td><td><b>' + n(p.valor) + '</b></td></tr>').join('') + '</tbody></table>';
+    // --- fusões ---
+    const f = D.fusoes;
+    const tFu = (!f.mesmoTipo.length && !f.mesmaQualidade.length)
+      ? '<div class="twmgr-hint">Nada a fundir — não há 3 do mesmo grupo sobrando.</div>'
+      : (f.mesmoTipo.length ? '<div style="font-size:9px;color:#6f6153;margin:2px 0 3px">Mesmo tipo <b>e</b> qualidade → sobe de qualidade <b>mantendo o tipo</b>:</div>'
+          + '<div class="twmgr-bld-sum">' + f.mesmoTipo.slice(0, 8).map((x) =>
+            '<span class="twmgr-chip">' + esc(x.tipo) + ' ' + esc(relNomeQual(x.qual)) + ': <b>' + x.fusoes + '</b>× (tem ' + x.n + ')</span>').join('') + '</div>' : '')
+        + (f.mesmaQualidade.length ? '<div style="font-size:9px;color:#6f6153;margin:6px 0 3px">Só mesma qualidade → sobe de qualidade com <b>tipo aleatório</b>:</div>'
+          + '<div class="twmgr-bld-sum">' + f.mesmaQualidade.map((x) =>
+            '<span class="twmgr-chip">' + esc(relNomeQual(x.qual)) + ': até <b>' + x.fusoes + '</b>× (tem ' + x.n + ')</span>').join('') + '</div>' : '');
+    box.innerHTML = cab + aviso
+      + '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:9px 0 3px">Equipadas — vale mover?</div>' + tEq
+      + '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:11px 0 3px">Melhor alocação pros ' + D.espacos + ' espaços</div>' + tPl
+      + '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:11px 0 3px">Fusões possíveis</div>' + tFu
+      + '<div style="font-size:9px;color:#8a7d6d;margin-top:8px"><b>valor</b> = soma, nas aldeias cobertas, de (percentual do efeito × quantidade da tropa que ele beneficia). '
+      + 'Efeito que não é de tropa (produção, recrutamento) entra com peso fixo. Serve pra comparar opções entre si, não é "% de ganho".</div>'
+      + '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Distância <b>euclidiana</b>, conferida contra o "Outras aldeias afetadas" que o próprio jogo publica. '
+      + 'O módulo <b>não equipa nada</b>: mover tem cooldown de remoção, então a decisão é sua.</div>';
+  }
   // ==================== ASSISTENTE DE SAQUE: TEMPLATE B ====================
   // Descobre o template_id do B (e as unidades) direto do am_farm; envia via o endpoint
   // oficial do assistente pra manter o alvo listado com relatório fresco.
@@ -12956,7 +13258,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + tabBtn('apoios', '🛡️', 'Apoios') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + tabBtn('apoios', '🛡️', 'Apoios') + tabBtn('rel', '💎', 'Relíquias') + '</div>' +
       // Telas de modelo: overlay DENTRO do painel, nao aba nova. Ficam fora do #twmgr-body pra
       // cobrir o painel inteiro (inclusive a barra de abas) enquanto abertas -- e uma tela cheia
       // de edicao, entao trocar de aba no meio nao faz sentido.
@@ -13515,6 +13817,12 @@
         sec('Aguardando recurso', '<div id="twmgr-ob-demand"></div>') +
         modLog('obra') +
       '</div>' +
+      '<div id="twmgr-tab-rel" style="display:none">' +
+        hint('💎 Onde equipar cada relíquia. Lê o inventário e as suas aldeias do próprio jogo — nada é fixo, então vale pra qualquer conta.') +
+        '<div class="twmgr-actions"><button id="twmgr-rel-ler" class="twmgr-btn twmgr-ghost" style="width:100%">↻ Analisar</button></div>' +
+        '<div id="twmgr-rel-corpo"></div>' +
+        modLog('rel') +
+      '</div>' +
       '<div id="twmgr-tab-apoios" style="display:none">' +
         hint('🛡️ O jogo só mostra tropa fora agrupada por <b>origem</b> — "a aldeia 001 tem 1999 lanças fora". Nunca por <b>destino</b>. Esta tela inverte: uma linha por aldeia que você está apoiando, com o total somado; clique pra ver quais aldeias suas mandaram. A leitura <b>fica guardada</b> e só é refeita quando você clica em <b>↻ Ler apoios</b> — ela custa uma requisição por aldeia sua com tropa fora.') +
         sec('Apoios enviados',
@@ -13567,6 +13875,8 @@
     ['twmgr-cap-en', 'twmgr-cap-brw', 'twmgr-cap-ntfy', 'twmgr-cap-reload'].forEach((id) => document.getElementById(id).addEventListener('change', readCapCfg));
     document.getElementById('twmgr-cap-brw').addEventListener('change', async () => { if (document.getElementById('twmgr-cap-brw').checked) await ensureNotifyPermission(); });
     document.getElementById('twmgr-cap-test').addEventListener('click', testCaptchaNotif);
+    document.getElementById('twmgr-rel-ler').addEventListener('click', relAnalisar);
+    renderReliquias();
     document.getElementById('twmgr-bkp-exp').addEventListener('click', bkpExportar);
     document.getElementById('twmgr-bkp-imp').addEventListener('click', bkpImportar);
 

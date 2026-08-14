@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.180.0
+// @version      11.181.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.180.0';
+  const VERSION = '11.181.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2363,7 +2363,7 @@
     catch (e) { pushLog('Tropas: leitura em massa falhou (' + (e.message || e) + ') — lendo aldeia por aldeia.', 'err', 'farm'); }
     const availCache = {};
     const getAvail = async (vid) => { if (!availCache[vid]) { try { availCache[vid] = await cron(mapaTropa ? 'tropa (do mapa, sem rede)' : 'tropa (aldeia a aldeia)', () => getAvailDeAldeia(vid, mapaTropa)); } catch (e) { availCache[vid] = {}; } } return availCache[vid]; };
-    const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, mur: 0, pend: 0, semorig: 0, dist: 0 };
+    const skip = { norep: 0, off: 0, red: 0, azul: 0, def: 0, mur: 0, pend: 0, semorig: 0, dist: 0, semsaque: 0 };
     // ===== Diagnóstico POR ORIGEM =====
     // O módulo é alvo-cêntrico: pra cada alvo ele varre as origens mais próximas e usa a primeira
     // que passa. Quando nenhuma passa, o contador `semorig` subia e o log dizia "acabou a
@@ -2379,10 +2379,10 @@
     // "por que esse alvo ficou sem ninguém?".
     const alvoDiag = [];
     const MOT_CURTO = { semCL: 'sem CL', reserva: 'reserva', semSpy: 'sem explorador',
-      semTpl: 'sem tropa do template', fakeSemTropa: 'sem tropa p/ o piso', fakeSemPontos: 'sem pontos', recusa: 'recusado' };
+      semTpl: 'sem tropa do template', semCavC: 'sem cav. p/ o saque', fakeSemTropa: 'sem tropa p/ o piso', fakeSemPontos: 'sem pontos', recusa: 'recusado' };
     const oReg = (vid, nome, campo) => {
       const o = oDiag[vid] || (oDiag[vid] = { nome: nome || vid, enviou: 0, semCL: 0, reserva: 0,
-        semSpy: 0, semTpl: 0, fakeSemPontos: 0, fakeSemTropa: 0, recusa: 0 });
+        semSpy: 0, semTpl: 0, semCavC: 0, fakeSemPontos: 0, fakeSemTropa: 0, recusa: 0 });
       o[campo]++;
       // Também entra na trilha DO ALVO da vez, pra tabela poder mostrar "tentei estas 3, recusadas
       // por isto" em vez de só um total agregado que não explica alvo nenhum.
@@ -2492,6 +2492,13 @@
       // C NÃO depende mais do ícone do assistente: ele reflete a aldeia ATUAL (CUR_VID), e com envio
       // pela origem mais próxima isso zerava o farm quando você abria numa aldeia DEF (sem CL). O envio
       // é feito por farm_from_report da origem escolhida; se ela não tiver tropa, o try/catch pula.
+      // ALVO COM SAQUE ESTIMADO ZERO. O C pede pro JOGO montar a tropa a partir do relatório; com
+      // saque 0 ele monta 0 unidades e responde "Não existem unidades suficientes" — sempre, não
+      // importa quanta cavalaria a origem tenha. Medido: as 3 recusas amostradas no log eram todas
+      // saque 0 contra aldeias com 118, 410 e 378 cavalarias livres.
+      // Com os mínimos de recurso em 0 (padrão), `0 >= 0` passava e o alvo ia direto pra recusa.
+      // Isto NÃO é o filtro de recurso mínimo: é o piso do próprio modo C.
+      if (mode === 'c' && sum <= 0) { skip.semsaque++; continue; }
       if (mode === 'c' && !(t.wood >= minW && t.stone >= minS && t.iron >= minI)) { skip.off++; continue; }   // C: só exige relatório (já garantido) + recurso ≥ mínimo
       // Escolhe a aldeia MAIS PRÓXIMA (dentro do alcance) com CL suficiente.
       const cands = myV.map((s) => ({ s: s, d: fieldDist(s.x, s.y, tx, ty) })).filter((o) => o.d <= maxDist).sort((a, b) => a.d - b.d);
@@ -2502,7 +2509,7 @@
       for (const c of cands) {
         // Origem que já recusou por falta de tropa neste ciclo: nem tenta.
         if (semTropaBlock[c.s.vid + '|' + mode]) { oReg(c.s.vid, c.s.name, 'semTpl'); continue; }
-        if (mode === 'c' && semTropaMin[c.s.vid] != null && estCL >= semTropaMin[c.s.vid]) { oReg(c.s.vid, c.s.name, 'semTpl'); continue; }
+        if (mode === 'c' && semTropaMin[c.s.vid] != null && estCL >= semTropaMin[c.s.vid]) { oReg(c.s.vid, c.s.name, 'semCavC'); continue; }
         // Origem reprovada no limite de fake: em vez de pular, manda quantidade CALCULADA que cumpre
         // o mínimo do mundo (fallback). Só pula de vez se não der pra calcular (sem pontos da aldeia).
         let useCalc = false;
@@ -2525,7 +2532,7 @@
         //
         // A reserva nunca teve nada a ver com isso: com reserva 0, `livre()` devolve o próprio
         // saldo e a comparação continua sendo a certa. O gate era um engano.
-        if (mode === 'c' && livre(avail, 'light') < estCL) { oReg(c.s.vid, c.s.name, resCL > 0 ? 'reserva' : 'semTpl'); continue; }
+        if (mode === 'c' && livre(avail, 'light') < estCL) { oReg(c.s.vid, c.s.name, resCL > 0 ? 'reserva' : 'semCavC'); continue; }
         // Modo dinâmico A/B manda {light: estCL, spy: 1}. Se a origem não tem isso (ex.: aldeia recém-noblada
         // sem CL), o servidor recusa e o log mentia "enviado". Pula pra próxima origem em vez de falso-positivo.
         if (dyn && mode !== 'c') {
@@ -2579,8 +2586,11 @@
           // Marca e não tenta de novo no ciclo — antes gastava uma requisição por alvo.
           // Falta de tropa: bloqueia a origem PRO CICLO e registra a divergência vs a pré-checagem.
           if (/unidades suficientes/i.test(em) && mode === 'c') {
+            // NÃO aprender de alvo com saque 0: ali a recusa não fala sobre a tropa da origem, e
+            // gravar a marca em estCL=1 bloquearia a aldeia pra TODO alvo seguinte (estCL >= 1
+            // sempre). Foi o que aconteceu na v11.179.0: 10 aldeias enviaram e 37 ficaram paradas.
             const w = semTropaMin[c.s.vid];
-            if (w == null || estCL < w) semTropaMin[c.s.vid] = estCL;
+            if (sum > 0 && (w == null || estCL < w)) semTropaMin[c.s.vid] = estCL;
             if (semTropaDiag.length < 3) {
               semTropaDiag.push(c.s.name + ' (C): alvo com ' + sum + ' de saque pede ~' + estCL
                 + ' cav. leve · eu li ' + (avail.light || 0) + ' na aldeia');
@@ -2664,6 +2674,7 @@
       ['reserva', 'CL/exploradores presos na reserva'],
       ['semSpy', 'sem explorador livre'],
       ['semTpl', 'sem a tropa que o template pede'],
+      ['semCavC', 'sem cavalaria leve pro saque estimado do alvo (modo C)'],
       ['fakeSemTropa', 'sem tropa pro complemento do piso de população'],
       ['fakeSemPontos', 'pontos da origem desconhecidos (piso não calculável)'],
       ['recusa', 'recusadas pelo servidor'],
@@ -2680,6 +2691,7 @@
     const parts = [];
     if (skip.pend) parts.push(skip.pend + ' já em rota');
     if (skip.semorig) parts.push(skip.semorig + ' sem origem c/ tropa');
+    if (skip.semsaque) parts.push(skip.semsaque + ' sem saque estimado (C)');
     if (skip.off) parts.push(skip.off + ' cor sem modo / C indisp.');
     if (skip.azul) parts.push(skip.azul + ' azul c/ muralha');
     if (skip.def) parts.push(skip.def + ' azul c/ defesa');

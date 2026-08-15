@@ -141,8 +141,19 @@
     });
     const txt = await res.text();
     let j = null; try { j = JSON.parse(txt); } catch (e) {}
-    if (!j || !j.response) throw new Error('resposta inesperada (' + (txt || '').slice(0, 100).replace(/\s+/g, ' ') + ')');
-    return j.response;
+    if (!j) throw new Error('resposta nao e JSON (' + (txt || '').slice(0, 100).replace(/\s+/g, ' ') + ')');
+    // ERRO EXPLICITO primeiro: o jogo devolve `error` com o motivo (requisito, recurso, fila).
+    if (j.error) throw new Error(String(j.error).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140));
+    // SUCESSO tem MAIS DE UMA FORMA. Além de `response`, o servidor responde com
+    // `current_research` — o fragmento HTML da pesquisa que acabou de comecar. So `response` era
+    // aceito, entao pesquisa que DEU CERTO virava "resposta inesperada" no log, o contador de
+    // iniciadas ficava zerado e o modulo parava de tentar as outras tropas daquela aldeia.
+    //
+    // Medido na conta: 3 aldeias (Infected Mushroom, Aura Vortex, Chapeleiro) com esse erro, todas
+    // com a pesquisa efetivamente em andamento no jogo.
+    if (j.response) return j.response;
+    if (j.current_research || j.research || j.success) return j.current_research || j.research || true;
+    throw new Error('resposta sem campo conhecido (' + Object.keys(j).join(',').slice(0, 80) + ')');
   }
   // Anda pela ordem de pesquisa do perfil; devolve o techId pesquisado agora, ou null se não fez nada
   // (já tudo pesquisado / falta prédio / já tem pesquisa em andamento nessa aldeia).

@@ -359,6 +359,7 @@
 
     const out = {}, tpls = config.build.templates || {};
     let usouGrupo = false;
+    const disputa = {};
     for (const id of Object.keys(tpls)) {
       const t = tpls[id];
       if (!t.grupo) continue;
@@ -367,8 +368,30 @@
       catch (e) { pushLog('Construções: erro no grupo do modelo "' + (t.name || id) + '": ' + (e.message || e), 'err', 'build'); continue; }
       usouGrupo = true;
       (vs || []).forEach((v) => {
-        out[String(v.vid)] = { tpl: id, name: v.name || v.coord || String(v.vid), coord: v.coord || null };
+        const k = String(v.vid);
+        // DISPUTA ENTRE MODELOS. Este laço sobrescreve: dois modelos que alcançam a mesma aldeia
+        // (mesmo grupo nos dois, ou grupos que se cruzam) faziam o ÚLTIMO vencer — e a ordem aqui é
+        // a ordem das chaves do objeto, que é ordem de criação dos modelos. Nada disso aparecia.
+        //
+        // Sintoma relatado pelo usuário: amarrar um grupo a um modelo novo "não fazia nada", e só
+        // funcionava depois de tirar o grupo do modelo antigo. A gravação sempre funcionou; o que
+        // faltava era o efeito, comido pelo modelo que vinha depois.
+        if (out[k] && out[k].tpl !== id) {
+          const perdeu = (tpls[out[k].tpl] || {}).name || out[k].tpl;
+          const ganhou = t.name || id;
+          const par = '"' + perdeu + '" perde pra "' + ganhou + '"';
+          disputa[par] = (disputa[par] || 0) + 1;
+        }
+        out[k] = { tpl: id, name: v.name || v.coord || String(v.vid), coord: v.coord || null };
       });
+    }
+    // A disputa sai ANTES do aviso de avulsa: é a causa mais provável de "mudei o grupo e não
+    // aconteceu nada", e sem ela o usuário culpa o painel.
+    const nDisputa = Object.values(disputa).reduce((s, n) => s + n, 0);
+    if (nDisputa) {
+      pushLog('Construções: ⚠ ' + nDisputa + ' aldeia(s) são alcançadas por MAIS DE UM modelo — os grupos se cruzam.'
+        + ' Quem vale é o último modelo criado: ' + Object.keys(disputa).map((d) => disputa[d] + '× ' + d).join(' · ')
+        + '. Tire o grupo de um dos modelos, ou ajuste os grupos no jogo pra não se sobreporem.', 'err', 'build');
     }
     // Ler grupo deixa o jogo com ele selecionado; volta pra "todos" pra nao afetar as outras telas.
     if (usouGrupo) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }

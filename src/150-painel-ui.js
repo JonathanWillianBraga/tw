@@ -1211,13 +1211,34 @@
         e.target.value = '';
         return;
       }
-      t.grupo = e.target.value || '';
+      const novoG = e.target.value || '';
+      // MESMO GRUPO EM DOIS MODELOS é o erro que fazia a mudança parecer travada: gravava, mas o
+      // outro modelo continuava reivindicando as mesmas aldeias e vencia no ciclo. A saída que o
+      // usuário achou sozinho — tirar o grupo do modelo antigo — vira a opção oferecida aqui.
+      if (novoG) {
+        const dono = Object.keys(config.build.templates).filter((id) => id !== _bldActiveProf
+          && String(config.build.templates[id].grupo || '') === String(novoG))[0];
+        if (dono) {
+          const nomeDono = config.build.templates[dono].name || dono;
+          if (!confirm('Este grupo já está no modelo "' + nomeDono + '".'
+            + '\n\nDois modelos no mesmo grupo disputam as mesmas aldeias e só um vale — é isso que faz a'
+            + ' mudança parecer que não pegou.'
+            + '\n\nOK = mover o grupo para "' + (t.name || _bldActiveProf) + '" (o outro fica sem grupo)'
+            + '\nCancelar = deixar como está')) { e.target.value = t.grupo || ''; return; }
+          config.build.templates[dono].grupo = '';
+          pushLog('Construções: grupo movido de "' + nomeDono + '" para "' + (t.name || _bldActiveProf)
+            + '" — "' + nomeDono + '" ficou SEM grupo e não vai atender aldeia nenhuma até receber outro.', 'ok', 'build');
+        }
+      }
+      t.grupo = novoG;
+      config.build.nextAt = 0;   // não espera o intervalo: reatribui no próximo tick
       save();
       pushLog('Construções: modelo "' + (t.name || _bldActiveProf) + '" '
         + (t.grupo ? 'aplicado ao grupo selecionado.' : 'desamarrado do grupo.'), 'ok', 'build');
       // Amarrar um modelo a um grupo é justamente quando as atribuições avulsas passam a
       // atropelar — o aviso tem que reaparecer na hora, não só no próximo ciclo.
       bldRenderAvulsas();
+      bldRenderTplSelect();   // o seletor de modelo mostra o grupo (v11.189.0): tem que acompanhar
     });
     document.getElementById('twmgr-bld-avulsas-limpar').addEventListener('click', bldLimparAvulsas);
     document.getElementById('twmgr-bld-stgroup').addEventListener('change', (e) => bldStatusFiltrar(e.target.value));

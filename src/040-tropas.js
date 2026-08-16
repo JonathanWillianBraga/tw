@@ -870,6 +870,12 @@
 
   async function getTropaTodasAldeias(forcar) {
     if (!forcar && _tropasCache && (Date.now() - _tropasAt) < TROPAS_TTL_MS) return _tropasCache;
+    // Sobrevive ao F5, com o MESMO TTL curto de 45s: nao passa a aceitar leitura mais velha do
+    // que ja aceitava em memoria, so deixa de refazer 1 requisicao por reload.
+    if (!forcar) {
+      const doDisco = cacheLer('tropas', TROPAS_TTL_MS);
+      if (doDisco && Object.keys(doDisco).length) { _tropasCache = doDisco; _tropasAt = Date.now(); return doDisco; }
+    }
     // Duas chamadas simultâneas (Saque e Muralha rodam em paralelo) esperam a MESMA leitura
     // em vez de abrirem duas.
     if (_tropasVoo) return _tropasVoo;
@@ -935,6 +941,7 @@
           out = await lerUma();
         }
         _tropasCache = out; _tropasAt = Date.now();
+        cacheGravar('tropas', out);
         return out;
       } finally { _tropasVoo = null; }
     })();

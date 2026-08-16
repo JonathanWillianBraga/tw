@@ -69,12 +69,18 @@
     return { avail: applyReservationsToAvail(vid, avail), popMax: popMax };
   }
   let _pointsCache = null;
+  const PONTOS_TTL_MS = 6 * 3600 * 1000;
   async function getVillagePoints() {
     if (_pointsCache) return _pointsCache;
+    // Ate a v11.199.0 isto nao tinha TTL nem disco: com auto-F5 de 2 min, o village.txt do mundo
+    // INTEIRO era rebaixado praticamente a cada reload. Pontuacao muda devagar; 6h basta.
+    const doDisco = cacheLer('pontos', PONTOS_TTL_MS);
+    if (doDisco && Object.keys(doDisco).length) { _pointsCache = doDisco; return doDisco; }
     const res = await fetch('/map/village.txt', { credentials: 'include' });
     const txt = await res.text();
     const map = {};
     txt.split('\n').forEach((line) => { const f = line.split(','); if (f.length >= 6) { const id = f[0], pts = parseInt(f[5], 10); if (id && !isNaN(pts)) map[id] = pts; } });
     _pointsCache = map;
+    cacheGravar('pontos', map);
     return map;
   }

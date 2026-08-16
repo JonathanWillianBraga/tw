@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.198.0
+// @version      11.199.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.198.0';
+  const VERSION = '11.199.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -973,6 +973,56 @@
   async function ocupado(fn) { _ocupadoAvulso++; try { return await fn(); } finally { _ocupadoAvulso--; } }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // ==================== CACHE QUE SOBREVIVE AO F5 ====================
+  // Regra do projeto: só o agendador de precisão (Central) e o Desviar precisam que a página NÃO
+  // recarregue — eles dependem de um instante exato. Todo o resto tem que aguentar um F5.
+  //
+  // O Saque já aguentava no que importa (não manda ataque em dobro: os carimbos de envio são
+  // gravados a cada 2s e os comandos em rota são relidos do jogo). O que não aguentava era o
+  // CUSTO: todo cache era de memória e morria no reload. Medido com auto-F5 de 2 min: ~25 s de
+  // preparação repagos numa janela de 120 s — 20% de desperdício, e a razão de o ciclo nunca
+  // alcançar o fim da lista de alvos.
+  //
+  // Persistir não cria risco novo de dado velho: cada cache JÁ tem TTL, e é o mesmo TTL que passa
+  // a valer entre reloads.
+  //
+  // Prefixo `twMgr` de propósito (o backup copia toda chave `twMgr*`). São dados descartáveis com
+  // TTL curto, então no pior caso chegam expirados na outra máquina.
+  const CACHE_MAX_BYTES = 2 * 1024 * 1024;   // acima disso não vale: o localStorage tem ~5MB no total
+  let _cacheAvisou = {};
+  function cacheLer(nome, ttlMs) {
+    try {
+      const raw = localStorage.getItem(KEY + '_cache_' + nome);
+      if (!raw) return null;
+      const o = JSON.parse(raw);
+      if (!o || typeof o.at !== 'number') return null;
+      if (Date.now() - o.at > ttlMs) return null;
+      return o.v;
+    } catch (e) { return null; }
+  }
+  function cacheGravar(nome, valor) {
+    try {
+      const s = JSON.stringify({ at: Date.now(), v: valor });
+      // Grande demais NÃO é erro — é motivo pra desistir deste cache e seguir com o de memória.
+      // Mas tem que aparecer: cache que some calado vira "por que isso ficou lento?" meses depois.
+      if (s.length > CACHE_MAX_BYTES) {
+        if (!_cacheAvisou[nome]) {
+          _cacheAvisou[nome] = 1;
+          pushLog('Cache "' + nome + '" tem ' + Math.round(s.length / 1024) + ' KB e não cabe no disco (teto '
+            + Math.round(CACHE_MAX_BYTES / 1024) + ' KB) — segue só em memória e será relido a cada F5.', 'err');
+        }
+        return false;
+      }
+      localStorage.setItem(KEY + '_cache_' + nome, s);
+      return true;
+    } catch (e) {
+      // Quota estourada por outra coisa: apaga este cache e segue. Nunca deixa o erro subir — cache
+      // é otimização, e otimização não pode derrubar o ciclo.
+      try { localStorage.removeItem(KEY + '_cache_' + nome); } catch (e2) {}
+      return false;
+    }
+  }
+
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
   function lockOther() { const l = readLock(); return !!(l && l.id !== TAB_ID && (Date.now() - l.ts) < 12000); }
   // Modo silêncio do motor `cmd` da Central. Vale pra TODAS as abas, inclusive a que gravou:
@@ -995,21 +1045,7 @@
   //      continuava martelando o servidor.
   // Chamar no topo de cada iteração: `if (devoParar('farm')) break;`
   // Renova a trava de brinde — quem está trabalhando é quem deve segurá-la.
-  // ===== SINAL DE VIDA DOS LAÇOS LONGOS =====
-  // `devoParar` é chamado no topo de CADA iteração dos laços longos (Saque, Muralha, Mapa,
-  // Mercado, Recrutar...). Então ele é, de graça, o lugar que sabe que existe um ciclo andando
-  // AGORA — sem precisar de flag ligada/desligada em dez lugares, que vaza quando o laço morre
-  // por exceção e passa a mentir "tem ciclo" pra sempre.
-  // É um CARIMBO DE TEMPO, não um booleano: expira sozinho. Laço que morreu para de renovar.
-  let _cicloAt = 0, _cicloMod = '';
-  const CICLO_VIVO_MS = 30000;
-  function marcarCiclo(mod) { _cicloAt = Date.now(); if (mod) _cicloMod = mod; }
-  // Devolve o nome do módulo em ciclo, ou '' — string vazia pra poder usar direto no if e ainda
-  // ter o que escrever no log.
-  function cicloEmAndamento() { return (Date.now() - _cicloAt) < CICLO_VIVO_MS ? (_cicloMod || 'um módulo') : ''; }
-
   function devoParar(mod) {
-    marcarCiclo(mod);
     if (mod) {
       const c = config[mod];
       if (c && c.running === false) return 'parado pelo usuário';
@@ -1902,11 +1938,19 @@
   async function getFarmTargetsCached(vid, forcar) {
     const agora = Date.now();
     if (!forcar && _farmAlvosCache && (agora - _farmAlvosAt) < FARM_ALVOS_TTL_MS) return _farmAlvosCache;
+    // Sobrevive ao F5: 3 a 6 páginas do assistente custavam 10-25 s e eram refeitas a cada reload.
+    // Mesmo TTL da memória, então não passa a aceitar lista mais velha do que já aceitava.
+    if (!forcar) {
+      const doDisco = cacheLer('alvos', FARM_ALVOS_TTL_MS);
+      if (doDisco && doDisco.length) { _farmAlvosCache = doDisco; _farmAlvosAt = agora; return doDisco; }
+    }
     // Se ja ha uma leitura em voo, espera ELA em vez de abrir outra: sem isto, dois modulos
     // que acordam juntos disparam duas leituras completas antes de qualquer cache existir.
     if (_farmAlvosVoo) return _farmAlvosVoo;
     _farmAlvosVoo = getFarmTargets(vid).then((r) => {
-      _farmAlvosCache = r; _farmAlvosAt = Date.now(); _farmAlvosVoo = null; return r;
+      _farmAlvosCache = r; _farmAlvosAt = Date.now(); _farmAlvosVoo = null;
+      cacheGravar('alvos', r);
+      return r;
     }, (e) => { _farmAlvosVoo = null; throw e; });
     return _farmAlvosVoo;
   }
@@ -4061,6 +4105,12 @@
 
   async function getTropaTodasAldeias(forcar) {
     if (!forcar && _tropasCache && (Date.now() - _tropasAt) < TROPAS_TTL_MS) return _tropasCache;
+    // Sobrevive ao F5, com o MESMO TTL curto de 45s: nao passa a aceitar leitura mais velha do
+    // que ja aceitava em memoria, so deixa de refazer 1 requisicao por reload.
+    if (!forcar) {
+      const doDisco = cacheLer('tropas', TROPAS_TTL_MS);
+      if (doDisco && Object.keys(doDisco).length) { _tropasCache = doDisco; _tropasAt = Date.now(); return doDisco; }
+    }
     // Duas chamadas simultâneas (Saque e Muralha rodam em paralelo) esperam a MESMA leitura
     // em vez de abrirem duas.
     if (_tropasVoo) return _tropasVoo;
@@ -4126,6 +4176,7 @@
           out = await lerUma();
         }
         _tropasCache = out; _tropasAt = Date.now();
+        cacheGravar('tropas', out);
         return out;
       } finally { _tropasVoo = null; }
     })();
@@ -4213,13 +4264,19 @@
     return { avail: applyReservationsToAvail(vid, avail), popMax: popMax };
   }
   let _pointsCache = null;
+  const PONTOS_TTL_MS = 6 * 3600 * 1000;
   async function getVillagePoints() {
     if (_pointsCache) return _pointsCache;
+    // Ate a v11.199.0 isto nao tinha TTL nem disco: com auto-F5 de 2 min, o village.txt do mundo
+    // INTEIRO era rebaixado praticamente a cada reload. Pontuacao muda devagar; 6h basta.
+    const doDisco = cacheLer('pontos', PONTOS_TTL_MS);
+    if (doDisco && Object.keys(doDisco).length) { _pointsCache = doDisco; return doDisco; }
     const res = await fetch('/map/village.txt', { credentials: 'include' });
     const txt = await res.text();
     const map = {};
     txt.split('\n').forEach((line) => { const f = line.split(','); if (f.length >= 6) { const id = f[0], pts = parseInt(f[5], 10); if (id && !isNaN(pts)) map[id] = pts; } });
     _pointsCache = map;
+    cacheGravar('pontos', map);
     return map;
   }
   // ==================== PALADINO (treino por XP) ====================
@@ -11691,6 +11748,13 @@
   async function getMapVillages(forceRefresh) {
     const now = Date.now();
     if (!forceRefresh && _mapVillagesCache && (now - _mapVillagesCacheAt < 6 * 3600 * 1000)) return _mapVillagesCache;
+    // Sobrevive ao F5 SE couber: esta lista tem o mundo inteiro com nomes e pode passar do teto
+    // do helper. Quando nao couber, ele registra e a leitura continua em memoria — o modulo
+    // funciona igual, so paga o download de novo.
+    if (!forceRefresh) {
+      const doDisco = cacheLer('mapa', 6 * 3600 * 1000);
+      if (doDisco && doDisco.length) { _mapVillagesCache = doDisco; _mapVillagesCacheAt = now; return doDisco; }
+    }
     const res = await fetch('/map/village.txt', { credentials: 'include' });
     const txt = await res.text();
     if (/^\s*<!doctype|^\s*<html/i.test(txt.slice(0, 60))) throw new Error('village.txt retornou HTML (sessão expirada ou bloqueio)');
@@ -11705,6 +11769,7 @@
       arr.push({ vid: vid, x: x, y: y, player: (f[4] || '0').trim(), points: isNaN(pts) ? 0 : pts, name: name });
     });
     _mapVillagesCache = arr; _mapVillagesCacheAt = now;
+    cacheGravar('mapa', arr);
     return arr;
   }
   function fieldDist(x1, y1, x2, y2) { return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2)); }
@@ -12672,10 +12737,6 @@
   // contra Bots" aparece e o watcher de DOM dispara o ntfy. NÃO recarrega se você está ativo, se outra
   // aba está no comando, ou se o bot-check já está na tela (deixa você resolver).
   let _reloadTimer = null, _lastActivity = Date.now();
-  // Quantas verificações seguidas o auto-F5 pode ceder a um ciclo longo antes de recarregar de
-  // qualquer jeito. Com reloadMin=2 isso é no máximo 10 min de bot-check sem ser detectado.
-  let _reloadAdiado = 0;
-  const RELOAD_MAX_ADIAMENTOS = 5;
   function _markActivity() { _lastActivity = Date.now(); }
   function maybeAutoReload() {
     try {
@@ -12690,27 +12751,20 @@
       // Mesma razão pra Central: recarregar no meio da escada de espera mata o timer, e
       // a retomada custa segundos que um trem de nobre não tem.
       if (ccJanelaCritica(60000)) { pushLog('Auto-F5 adiado: a Central tem disparo em menos de 1 min.', ''); return; }
-      // MESMA RAZÃO, e esta custava caro em silêncio: recarregar no meio de um ciclo longo MATA
-      // o ciclo. Medido no log do usuário com reloadMin=2 e 514 alvos no assistente: o Saque
-      // reiniciava a cada ~2 min, relia as 6 páginas do assistente (~25 s) e NUNCA chegava ao
-      // fim da lista — em 8 min de log não saiu uma única linha de "ciclo concluído". O saque
-      // parecia lento; na verdade ele estava sendo interrompido e recomeçado do zero.
-      // O Desviar e a Central já tinham essa proteção; o laço mais longo do script, não.
+      // E SÓ. Ciclo longo em andamento NÃO adia mais o F5 (a guarda existiu entre a v11.177.0 e a
+      // v11.199.0). Ela era contorno de não-resumibilidade: o ciclo morria no reload porque todo
+      // cache era de memória, e eu bloqueei o reload em vez de fazer o cache sobreviver.
       //
-      // O adiamento é LIMITADO de propósito. Se um ciclo estiver sempre em andamento, adiar pra
-      // sempre desligaria a detecção de bot-check em silêncio — trocaria um problema por outro
-      // pior, porque este aqui aparece no log e aquele não.
-      const cicMod = cicloEmAndamento();
-      if (cicMod) {
-        if (_reloadAdiado < RELOAD_MAX_ADIAMENTOS) {
-          _reloadAdiado++;
-          pushLog('Auto-F5 adiado (' + _reloadAdiado + '/' + RELOAD_MAX_ADIAMENTOS + '): ciclo do ' + cicMod + ' em andamento.', '');
-          return;
-        }
-        pushLog('Auto-F5: ciclo do ' + cicMod + ' em andamento há ' + RELOAD_MAX_ADIAMENTOS
-          + ' verificações seguidas — recarregando assim mesmo pra não perder o bot-check.', 'err');
-      }
-      _reloadAdiado = 0;
+      // O preço era alto e escondido: até 5 verificações adiadas = até 10 min sem detectar
+      // bot-check, justamente quando o usuário está AFK, que é a única situação em que o auto-F5
+      // serve pra alguma coisa.
+      //
+      // Agora os caches vivem no localStorage com o mesmo TTL, o reinício custa perto de zero, e o
+      // Saque nunca dependeu do reload pra estar correto — os carimbos de envio são gravados a
+      // cada 2s e os comandos em rota são relidos do jogo, então nada sai em dobro.
+      //
+      // Quem PRECISA travar o F5 é só quem depende de um instante exato: a Central e o Desviar,
+      // logo acima. Precisão de horário não sobrevive a reload por natureza.
       location.reload();
     } catch (e) {}
   }

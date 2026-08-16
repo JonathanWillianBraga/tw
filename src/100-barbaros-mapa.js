@@ -5,6 +5,13 @@
   async function getMapVillages(forceRefresh) {
     const now = Date.now();
     if (!forceRefresh && _mapVillagesCache && (now - _mapVillagesCacheAt < 6 * 3600 * 1000)) return _mapVillagesCache;
+    // Sobrevive ao F5 SE couber: esta lista tem o mundo inteiro com nomes e pode passar do teto
+    // do helper. Quando nao couber, ele registra e a leitura continua em memoria — o modulo
+    // funciona igual, so paga o download de novo.
+    if (!forceRefresh) {
+      const doDisco = cacheLer('mapa', 6 * 3600 * 1000);
+      if (doDisco && doDisco.length) { _mapVillagesCache = doDisco; _mapVillagesCacheAt = now; return doDisco; }
+    }
     const res = await fetch('/map/village.txt', { credentials: 'include' });
     const txt = await res.text();
     if (/^\s*<!doctype|^\s*<html/i.test(txt.slice(0, 60))) throw new Error('village.txt retornou HTML (sessão expirada ou bloqueio)');
@@ -19,6 +26,7 @@
       arr.push({ vid: vid, x: x, y: y, player: (f[4] || '0').trim(), points: isNaN(pts) ? 0 : pts, name: name });
     });
     _mapVillagesCache = arr; _mapVillagesCacheAt = now;
+    cacheGravar('mapa', arr);
     return arr;
   }
   function fieldDist(x1, y1, x2, y2) { return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2)); }

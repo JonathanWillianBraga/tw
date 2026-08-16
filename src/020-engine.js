@@ -822,11 +822,19 @@
   async function getFarmTargetsCached(vid, forcar) {
     const agora = Date.now();
     if (!forcar && _farmAlvosCache && (agora - _farmAlvosAt) < FARM_ALVOS_TTL_MS) return _farmAlvosCache;
+    // Sobrevive ao F5: 3 a 6 páginas do assistente custavam 10-25 s e eram refeitas a cada reload.
+    // Mesmo TTL da memória, então não passa a aceitar lista mais velha do que já aceitava.
+    if (!forcar) {
+      const doDisco = cacheLer('alvos', FARM_ALVOS_TTL_MS);
+      if (doDisco && doDisco.length) { _farmAlvosCache = doDisco; _farmAlvosAt = agora; return doDisco; }
+    }
     // Se ja ha uma leitura em voo, espera ELA em vez de abrir outra: sem isto, dois modulos
     // que acordam juntos disparam duas leituras completas antes de qualquer cache existir.
     if (_farmAlvosVoo) return _farmAlvosVoo;
     _farmAlvosVoo = getFarmTargets(vid).then((r) => {
-      _farmAlvosCache = r; _farmAlvosAt = Date.now(); _farmAlvosVoo = null; return r;
+      _farmAlvosCache = r; _farmAlvosAt = Date.now(); _farmAlvosVoo = null;
+      cacheGravar('alvos', r);
+      return r;
     }, (e) => { _farmAlvosVoo = null; throw e; });
     return _farmAlvosVoo;
   }

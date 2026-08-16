@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.198.0
+// @version      11.199.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.198.0';
+  const VERSION = '11.199.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -973,6 +973,56 @@
   async function ocupado(fn) { _ocupadoAvulso++; try { return await fn(); } finally { _ocupadoAvulso--; } }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // ==================== CACHE QUE SOBREVIVE AO F5 ====================
+  // Regra do projeto: só o agendador de precisão (Central) e o Desviar precisam que a página NÃO
+  // recarregue — eles dependem de um instante exato. Todo o resto tem que aguentar um F5.
+  //
+  // O Saque já aguentava no que importa (não manda ataque em dobro: os carimbos de envio são
+  // gravados a cada 2s e os comandos em rota são relidos do jogo). O que não aguentava era o
+  // CUSTO: todo cache era de memória e morria no reload. Medido com auto-F5 de 2 min: ~25 s de
+  // preparação repagos numa janela de 120 s — 20% de desperdício, e a razão de o ciclo nunca
+  // alcançar o fim da lista de alvos.
+  //
+  // Persistir não cria risco novo de dado velho: cada cache JÁ tem TTL, e é o mesmo TTL que passa
+  // a valer entre reloads.
+  //
+  // Prefixo `twMgr` de propósito (o backup copia toda chave `twMgr*`). São dados descartáveis com
+  // TTL curto, então no pior caso chegam expirados na outra máquina.
+  const CACHE_MAX_BYTES = 2 * 1024 * 1024;   // acima disso não vale: o localStorage tem ~5MB no total
+  let _cacheAvisou = {};
+  function cacheLer(nome, ttlMs) {
+    try {
+      const raw = localStorage.getItem(KEY + '_cache_' + nome);
+      if (!raw) return null;
+      const o = JSON.parse(raw);
+      if (!o || typeof o.at !== 'number') return null;
+      if (Date.now() - o.at > ttlMs) return null;
+      return o.v;
+    } catch (e) { return null; }
+  }
+  function cacheGravar(nome, valor) {
+    try {
+      const s = JSON.stringify({ at: Date.now(), v: valor });
+      // Grande demais NÃO é erro — é motivo pra desistir deste cache e seguir com o de memória.
+      // Mas tem que aparecer: cache que some calado vira "por que isso ficou lento?" meses depois.
+      if (s.length > CACHE_MAX_BYTES) {
+        if (!_cacheAvisou[nome]) {
+          _cacheAvisou[nome] = 1;
+          pushLog('Cache "' + nome + '" tem ' + Math.round(s.length / 1024) + ' KB e não cabe no disco (teto '
+            + Math.round(CACHE_MAX_BYTES / 1024) + ' KB) — segue só em memória e será relido a cada F5.', 'err');
+        }
+        return false;
+      }
+      localStorage.setItem(KEY + '_cache_' + nome, s);
+      return true;
+    } catch (e) {
+      // Quota estourada por outra coisa: apaga este cache e segue. Nunca deixa o erro subir — cache
+      // é otimização, e otimização não pode derrubar o ciclo.
+      try { localStorage.removeItem(KEY + '_cache_' + nome); } catch (e2) {}
+      return false;
+    }
+  }
+
   function readLock() { try { return JSON.parse(localStorage.getItem(LOCKKEY) || 'null'); } catch (e) { return null; } }
   function lockOther() { const l = readLock(); return !!(l && l.id !== TAB_ID && (Date.now() - l.ts) < 12000); }
   // Modo silêncio do motor `cmd` da Central. Vale pra TODAS as abas, inclusive a que gravou:
@@ -995,21 +1045,7 @@
   //      continuava martelando o servidor.
   // Chamar no topo de cada iteração: `if (devoParar('farm')) break;`
   // Renova a trava de brinde — quem está trabalhando é quem deve segurá-la.
-  // ===== SINAL DE VIDA DOS LAÇOS LONGOS =====
-  // `devoParar` é chamado no topo de CADA iteração dos laços longos (Saque, Muralha, Mapa,
-  // Mercado, Recrutar...). Então ele é, de graça, o lugar que sabe que existe um ciclo andando
-  // AGORA — sem precisar de flag ligada/desligada em dez lugares, que vaza quando o laço morre
-  // por exceção e passa a mentir "tem ciclo" pra sempre.
-  // É um CARIMBO DE TEMPO, não um booleano: expira sozinho. Laço que morreu para de renovar.
-  let _cicloAt = 0, _cicloMod = '';
-  const CICLO_VIVO_MS = 30000;
-  function marcarCiclo(mod) { _cicloAt = Date.now(); if (mod) _cicloMod = mod; }
-  // Devolve o nome do módulo em ciclo, ou '' — string vazia pra poder usar direto no if e ainda
-  // ter o que escrever no log.
-  function cicloEmAndamento() { return (Date.now() - _cicloAt) < CICLO_VIVO_MS ? (_cicloMod || 'um módulo') : ''; }
-
   function devoParar(mod) {
-    marcarCiclo(mod);
     if (mod) {
       const c = config[mod];
       if (c && c.running === false) return 'parado pelo usuário';

@@ -1328,6 +1328,8 @@
     return r;
   }
 
+  // Avisa UMA vez por ciclo que a trava de escolta esta ligada sem escolta no modelo.
+  let _nbAvisouEscoltaVazia = false;
   // Plano com UM modelo ja escolhido. Devolve { pronto, envios[], falta, motivo }.
   //   pronto  = ha ao menos 1 nobre pra mandar (parcial vale)
   //   envios  = [{vid, nome, coord, qtd, unidades, durSec}]
@@ -1421,6 +1423,41 @@
         if (vai > 0) unidades[u] = vai;
         if (vai < querem) curta.push(unitPt(u) + ' ' + vai + '/' + querem);
       });
+
+      // ESCOLTA MINIMA. Sem isto, "envio parcial vale" chegava ao extremo de mandar `{snob:1}`
+      // puro quando a origem nao tinha nenhuma tropa da escolta — e nobre sozinho morre pra
+      // qualquer defesa, inclusive milicia de barbara. Como a lealdade so cai se o ataque VENCER,
+      // um nobre pelado que morre e gasto irreversivel com efeito zero.
+      //
+      // A trava e por unidade: cada tropa da escolta precisa de pelo menos `escoltaMinPct` da
+      // cota do modelo. Origem que nao alcanca e PULADA, nao o alvo — a proxima mais proxima pode
+      // ter a tropa, e essa e a diferenca entre travar um alvo e escolher melhor a origem.
+      const minPct = Math.max(0, Math.min(100, config.noble.escoltaMinPct || 0));
+      if (minPct > 0) {
+        const exigidas = Object.keys(tpl.escolta || {}).filter((u) => (tpl.escolta[u] || 0) > 0);
+        if (!exigidas.length) {
+          // Trava ligada com escolta vazia no modelo nao protege nada: nao ha cota pra exigir.
+          // Avisa uma vez por ciclo em vez de fingir que esta protegendo.
+          if (!_nbAvisouEscoltaVazia) {
+            _nbAvisouEscoltaVazia = true;
+            pushLog('Noblar: "escolta mínima" está ligada (' + minPct + '%), mas o modelo "'
+              + (tpl.name || op.id) + '" está com a escolta VAZIA — não há cota a exigir, então a'
+              + ' trava não protege nada. Preencha a escolta do modelo.', 'err', 'noble');
+          }
+        } else {
+          const faltando = exigidas.filter((u) => {
+            const querem = tpl.escolta[u] || 0;
+            const piso = Math.ceil(querem * (minPct / 100));
+            return (unidades[u] || 0) < piso;
+          });
+          if (faltando.length) {
+            pushLog('Noblar: ' + o.nome + ' → ' + alvo.coord + ' PULADA — escolta abaixo do mínimo de '
+              + minPct + '% (' + faltando.map((u) => unitPt(u) + ' ' + (unidades[u] || 0) + '/'
+              + Math.ceil((tpl.escolta[u] || 0) * (minPct / 100))).join(', ') + '). Tento a próxima origem.', '', 'noble');
+            continue;
+          }
+        }
+      }
 
       // Duracao medida UMA vez por (aldeia, escolta): os comandos sao identicos, entao repetir o
       // fakePrepare seria requisicao jogada fora.
@@ -1846,6 +1883,7 @@
     try { await noblePosConquista(todas); }
     catch (e) { pushLog('Noblar (pós-conquista): ' + (e.message || e), 'err', 'noble'); }
 
+    _nbAvisouEscoltaVazia = false;   // aviso da escolta minima: uma vez por ciclo
     const cacheTropa = {};
     // Pool global: quanto de cada aldeia os alvos ANTERIORES desta rodada ja levaram. E o que
     // impede o mesmo nobre de aparecer no plano de dois alvos.
@@ -2844,6 +2882,7 @@
     if (g('twmgr-nb-posgrupo')) c.posGrupo = g('twmgr-nb-posgrupo').checked;
     // `posGrupos` não é lido aqui: o dropdown de checkbox grava direto no config quando você
     // marca (ver bindNobleGrupoDropdown). Ler de novo por cima aqui apagaria a escolha.
+    if (g('twmgr-nb-escmin')) c.escoltaMinPct = Math.max(0, Math.min(100, parseInt(g('twmgr-nb-escmin').value, 10) || 0));
     if (g('twmgr-nb-posrenom')) c.posRenomear = g('twmgr-nb-posrenom').checked;
     if (g('twmgr-nb-posnome')) c.posNomePadrao = String(g('twmgr-nb-posnome').value || '').trim().slice(0, 40);
     if (g('twmgr-nb-posband')) c.posBandeira = g('twmgr-nb-posband').checked;

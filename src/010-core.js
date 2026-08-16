@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.190.0
+// @version      11.195.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.190.0';
+  const VERSION = '11.195.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -286,14 +286,22 @@
   // Modelo de envio: o quanto se manda num alvo. `escolta` vai NO MESMO comando dos nobres
   // (confirmado pelo usuário) — nobre viaja na velocidade da unidade mais lenta do comando,
   // então separar escolta em outro ataque só serviria pra ela chegar antes e morrer sozinha.
+  // Escolta padrao 20 cavalarias leves, NAO vazia. Nobre sozinho morre pra qualquer defesa —
+  // inclusive milicia de barbara — e como a lealdade so cai se o ataque VENCER, nobre pelado que
+  // morre e gasto irreversivel com efeito zero. O padrao de fabrica vinha `{}`, entao quem nunca
+  // mexeu no modelo estava mandando nobre nu sem saber.
   const defNobleTpl = (name) => ({
-    name: name, nobres: 4, escolta: {}, maxHoras: 6, soNT: false,
+    name: name, nobres: 4, escolta: { light: 20 }, maxHoras: 6, soNT: false,
   });
   const defNoble = () => ({
     running: false, nextAt: 0, interval: 900,
     alvos: [], plano: [], planoAt: 0,
     maxHoras: 6, soNT: false,
     produzir: true,   // formar nobre quando faltar (NUNCA cunhar — decisão do usuário)
+    // Nobre sozinho morre pra qualquer defesa, e a lealdade so cai se o ataque VENCER —
+    // entao nobre pelado que morre e gasto irreversivel com efeito zero. 0 = desligado (o
+    // comportamento antigo, "envio parcial vale" ate o extremo).
+    escoltaMinPct: 100,   // exige a escolta INTEIRA do modelo (20 CL, pelo defNobleTpl)
     templates: { padrao: defNobleTpl('Padrão') },
     ordem: ['padrao'],   // prioridade dos modelos; alvo com tpl:'' segue esta ordem
     lerRelatorios: true,
@@ -761,6 +769,19 @@
     // perdê-lo só porque o campo virou array.
     if (!Array.isArray(c.noble.posGrupos)) {
       c.noble.posGrupos = c.noble.posGrupoId ? [String(c.noble.posGrupoId)] : [];
+    }
+    c.noble.escoltaMinPct = Math.max(0, Math.min(100, parseInt(c.noble.escoltaMinPct, 10) || 0));
+    // MIGRACAO UNICA. Mudar o default nao alcanca quem ja tem config salva — o valor gravado
+    // ganha, e o usuario continuaria mandando nobre pelado sem saber. Aqui o modelo com escolta
+    // VAZIA recebe 20 CL e a trava e ligada, uma vez so: o flag impede de voltar a mexer se
+    // depois voce esvaziar a escolta de proposito.
+    if (!c.noble._escolta20) {
+      c.noble._escolta20 = true;
+      Object.keys(c.noble.templates || {}).forEach((id) => {
+        const t = c.noble.templates[id];
+        if (t && (!t.escolta || !Object.keys(t.escolta).length)) t.escolta = { light: 20 };
+      });
+      if (!c.noble.escoltaMinPct) c.noble.escoltaMinPct = 100;
     }
     if (c.noble.posRenomear == null) c.noble.posRenomear = false;
     if (c.noble.posNomePadrao == null) c.noble.posNomePadrao = '';

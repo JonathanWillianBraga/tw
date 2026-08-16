@@ -324,7 +324,9 @@
   }
 
   function showTab(name) {
-    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'paladin', 'etiqueta', 'obra', 'apoios', 'log'].forEach((n) => {
+    // LISTA FIXA: aba nova precisa entrar AQUI também, senão o botão acende e o conteúdo nunca
+    // aparece — o div fica em display:none pra sempre. Foi o que aconteceu com 'rel' na v11.192.0.
+    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'paladin', 'etiqueta', 'obra', 'apoios', 'rel', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -391,7 +393,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + tabBtn('apoios', '🛡️', 'Apoios') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + tabBtn('apoios', '🛡️', 'Apoios') + tabBtn('rel', '💎', 'Relíquias') + '</div>' +
       // Telas de modelo: overlay DENTRO do painel, nao aba nova. Ficam fora do #twmgr-body pra
       // cobrir o painel inteiro (inclusive a barra de abas) enquanto abertas -- e uma tela cheia
       // de edicao, entao trocar de aba no meio nao faz sentido.
@@ -859,6 +861,10 @@
             '<div class="twmgr-fld" style="margin-top:9px"><span title="Por padrão, se a leva sai incompleta E há nobre em produção, ele segura pra mandar tudo junto — porque a lealdade regenera entre uma chegada e outra. Ligado, manda o que estiver pronto agora e completa nos ciclos seguintes. NÃO há risco de excesso: o que falta é recalculado todo ciclo pela lealdade prevista, que já desconta os nobres voando.">Enviar parcial sempre <span style="color:#8a7d6d">(não esperar fechar a leva)</span></span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-parcial" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Some o "segurando: +N em produção". Em troca, se demorar muito entre um nobre e outro, a lealdade regenera no meio e o primeiro rende menos.</div>' +
+            '<div class="twmgr-fld" style="margin-top:9px"><span title="Percentual da escolta do modelo que a aldeia de origem TEM que conseguir mandar. Abaixo disso ela é pulada e o módulo tenta a próxima origem mais perto. 0 = desligado (manda mesmo sem escolta nenhuma).">Escolta mínima <span style="color:#8a7d6d">(% da cota do modelo, 0=off)</span></span>' +
+              '<input id="twmgr-nb-escmin" class="twmgr-inp" type="number" min="0" max="100" step="5" value="0" style="width:66px"></div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Sem isto o módulo manda <b>nobre sozinho</b> quando a origem não tem a escolta — e nobre pelado morre pra qualquer defesa, até milícia de bárbara. Como a lealdade só cai se o ataque <b>vencer</b>, esse nobre é gasto sem volta e sem efeito.</div>' +
+            '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Pula a <b>origem</b>, não o alvo: a próxima mais perto pode ter a tropa. Só funciona se o modelo tiver escolta preenchida — com escolta vazia não há cota a exigir, e o log avisa.</div>' +
             '<div class="twmgr-fld" style="margin-top:9px"><span title="Por padrão a fila é serial: o alvo da vez trava os de trás até a lealdade prevista dele chegar a zero, pra reservar o nobre que ainda vai sair da Academia. Ligado, todo alvo é planejado no mesmo ciclo e pega o que sobrou — a ordem da fila segue dando a primeira escolha. Útil quando os alvos estão em regiões diferentes e não disputam os mesmos nobres.">Planejar todos os alvos <span style="color:#8a7d6d">(não travar a fila)</span></span>' +
               '<label class="twmgr-sw"><input id="twmgr-nb-paralelo" type="checkbox"><i></i></label></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Desligado, alvo de outra região fica em <b>Aguardando</b> mesmo tendo nobre perto dele. Ligado, ele é planejado — e se não achar nobre, diz <b>sem nobres</b> em vez de esconder o motivo.</div>' +
@@ -946,6 +952,12 @@
         sec('Aguardando recurso', '<div id="twmgr-ob-demand"></div>') +
         modLog('obra') +
       '</div>' +
+      '<div id="twmgr-tab-rel" style="display:none">' +
+        hint('💎 Onde equipar cada relíquia. Lê o inventário e as suas aldeias do próprio jogo — nada é fixo, então vale pra qualquer conta.') +
+        '<div class="twmgr-actions"><button id="twmgr-rel-ler" class="twmgr-btn twmgr-ghost" style="width:100%">↻ Analisar</button></div>' +
+        '<div id="twmgr-rel-corpo"></div>' +
+        modLog('rel') +
+      '</div>' +
       '<div id="twmgr-tab-apoios" style="display:none">' +
         hint('🛡️ O jogo só mostra tropa fora agrupada por <b>origem</b> — "a aldeia 001 tem 1999 lanças fora". Nunca por <b>destino</b>. Esta tela inverte: uma linha por aldeia que você está apoiando, com o total somado; clique pra ver quais aldeias suas mandaram. A leitura <b>fica guardada</b> e só é refeita quando você clica em <b>↻ Ler apoios</b> — ela custa uma requisição por aldeia sua com tropa fora.') +
         sec('Apoios enviados',
@@ -998,6 +1010,8 @@
     ['twmgr-cap-en', 'twmgr-cap-brw', 'twmgr-cap-ntfy', 'twmgr-cap-reload'].forEach((id) => document.getElementById(id).addEventListener('change', readCapCfg));
     document.getElementById('twmgr-cap-brw').addEventListener('change', async () => { if (document.getElementById('twmgr-cap-brw').checked) await ensureNotifyPermission(); });
     document.getElementById('twmgr-cap-test').addEventListener('click', testCaptchaNotif);
+    document.getElementById('twmgr-rel-ler').addEventListener('click', relAnalisar);
+    renderReliquias();
     document.getElementById('twmgr-bkp-exp').addEventListener('click', bkpExportar);
     document.getElementById('twmgr-bkp-imp').addEventListener('click', bkpImportar);
 
@@ -1308,8 +1322,10 @@
     document.getElementById('twmgr-nb-prod').checked = config.noble.produzir !== false;
     document.getElementById('twmgr-nb-paralelo').checked = !!config.noble.paralelo;
     document.getElementById('twmgr-nb-parcial').checked = !!config.noble.parcialSempre;
+    document.getElementById('twmgr-nb-escmin').value = config.noble.escoltaMinPct != null ? config.noble.escoltaMinPct : 0;
     ['twmgr-nb-nob', 'twmgr-nb-horas', 'twmgr-nb-nt', 'twmgr-nb-int', 'twmgr-nb-prod', 'twmgr-nb-rel',
      'twmgr-nb-auto', 'twmgr-nb-automax', 'twmgr-nb-lpa', 'twmgr-nb-regen', 'twmgr-nb-paralelo', 'twmgr-nb-parcial',
+     'twmgr-nb-escmin',
      // `twmgr-nb-posgid` saiu daqui: virou dropdown de checkbox, que grava no config sozinho.
      // Deixá-lo na lista faria o `change` de um checkbox rodar o readNobleCfg e reescrever por cima.
      'twmgr-nb-cunhar', 'twmgr-nb-cunhar-ate', 'twmgr-nb-cunhar-n', 'twmgr-nb-posgrupo',

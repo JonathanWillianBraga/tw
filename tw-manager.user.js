@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.197.0
+// @version      11.198.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.197.0';
+  const VERSION = '11.198.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5466,43 +5466,98 @@
     const bt = document.getElementById('twmgr-bld-aplicar-grp');
     if (!sel || !av) return;
     const t = config.build.templates[_bldActiveProf];
+    // Reaplicar o MESMO grupo é ação válida (recarimba as aldeias, adota quem entrou), então o
+    // botão nunca fica desligado por "não mudou nada".
+    if (bt) bt.style.opacity = t ? '1' : '.45';
+    if (!t) { av.textContent = 'Escolha um modelo primeiro.'; return; }
     const novo = sel.value || '';
-    const atual = t ? String(t.grupo || '') : '';
-    const mudou = String(novo) !== atual;
-    if (bt) bt.style.opacity = mudou ? '1' : '.45';
-    if (!t) { av.textContent = 'Escolha um modelo primeiro — o grupo é gravado no modelo.'; return; }
-    if (!mudou) { av.textContent = ''; return; }
     const gNome = novo ? ((_twGroupsCache || []).filter((g) => String(g.id) === String(novo))[0] || {}).name || novo : null;
-    if (!novo) { av.textContent = '▸ Clique em Aplicar para DESAMARRAR "' + (t.name || '') + '" do grupo (ele deixa de atender aldeias).'; return; }
-    // Se outro modelo também alcança esse grupo, diga AGORA quem vai perder — é a informação que
-    // faltava e que fazia a mudança parecer sem efeito.
-    const outro = Object.keys(config.build.templates).filter((id) => id !== _bldActiveProf
-      && String(config.build.templates[id].grupo || '') === String(novo))[0];
-    av.innerHTML = '▸ Clique em <b>Aplicar</b> para o grupo <b>' + esc(String(gNome)) + '</b> seguir o modelo <b>'
-      + esc(t.name || '') + '</b>'
-      + (outro ? '. O modelo <b>' + esc(config.build.templates[outro].name || outro) + '</b> está no mesmo grupo e passa a PERDER essas aldeias.' : '.');
+    if (!novo) {
+      av.textContent = '▸ Aplicar aqui DESAMARRA o modelo do grupo. As aldeias que já receberam continuam com ele.';
+      return;
+    }
+    av.innerHTML = '▸ <b>Aplicar</b> grava o modelo <b>' + esc(t.name || '') + '</b> em cada aldeia do grupo <b>'
+      + esc(String(gNome)) + '</b>, valendo sobre qualquer outro modelo. Aldeia que entrar no grupo depois também é adotada.';
   }
-  function bldAplicarGrupo() {
+  // O MODELO É APLICADO EM CADA ALDEIA. O grupo é só o jeito de fazer isso em massa.
+  //
+  // Era aqui que eu tinha entendido errado: `t.grupo` sozinho é um VÍNCULO VIVO, resolvido a cada
+  // ciclo, e quando dois modelos alcançavam a mesma aldeia um deles ganhava por critério invisível.
+  // O usuário não quer um vínculo disputado: quer que escolher o grupo e clicar em Aplicar deixe
+  // aquelas aldeias com aquele modelo, e que isso apareça no Status.
+  //
+  // Então Aplicar CARIMBA a atribuição em cada aldeia do grupo (`config.build.villages`), que é a
+  // atribuição por aldeia — e ela já vence qualquer vínculo de grupo no `bldResolverAldeias`. O
+  // efeito é imediato e não depende de quem ganha disputa nenhuma.
+  //
+  // `t.grupo` continua sendo gravado, mas com outro papel: aldeia que ENTRAR no grupo depois é
+  // adotada sozinha no ciclo seguinte. Carimbo = agora; vínculo = daqui pra frente.
+  let _bldAplicando = false;
+  async function bldAplicarGrupo() {
+    if (_bldAplicando) return;
     const sel = document.getElementById('twmgr-bld-tplgrp'); if (!sel) return;
     const t = config.build.templates[_bldActiveProf];
     if (!t) { alert('Escolha um modelo primeiro — o grupo é gravado no modelo.'); return; }
     const novo = sel.value || '';
-    if (String(novo) === String(t.grupo || '')) return;   // nada a fazer
     const gNome = novo ? ((_twGroupsCache || []).filter((g) => String(g.id) === String(novo))[0] || {}).name || novo : '';
-    if (!confirm(novo
-      ? ('Aplicar o modelo "' + (t.name || '') + '" ao grupo "' + gNome + '"?')
-      : ('Desamarrar o modelo "' + (t.name || '') + '" do grupo? Ele deixa de atender aldeias.'))) return;
-    t.grupo = novo;
-    // CARIMBO DE QUANDO FOI APLICADO. É ele que decide a disputa quando dois modelos alcançam a
-    // mesma aldeia: vence o aplicado MAIS RECENTEMENTE, que é o que o usuário acabou de mandar
-    // fazer. Antes vencia o modelo criado por último — ordem das chaves do objeto, invisível e
-    // imprevisível, e a razão de "mudei o grupo e não aconteceu nada".
-    t.grupoAt = Date.now();
-    config.build.nextAt = 0;   // não espera o intervalo: reatribui no próximo tick
-    save();
-    pushLog('Construções: modelo "' + (t.name || _bldActiveProf) + '" '
-      + (novo ? ('aplicado ao grupo "' + gNome + '" — ele passa a valer sobre qualquer outro modelo nas aldeias em comum.')
-              : 'desamarrado do grupo.'), 'ok', 'build');
+    const bt = document.getElementById('twmgr-bld-aplicar-grp');
+    if (!novo) {
+      if (!confirm('Desamarrar o modelo "' + (t.name || '') + '" do grupo?\n\n'
+        + 'As aldeias que JÁ receberam este modelo continuam com ele — só param de entrar aldeias novas.')) return;
+      t.grupo = ''; t.grupoAt = Date.now(); config.build.nextAt = 0; save();
+      pushLog('Construções: modelo "' + (t.name || '') + '" desamarrado do grupo. As aldeias já aplicadas seguem com ele.', 'ok', 'build');
+      fillBldTplGrupo(); bldRenderTplSelect(); bldGrpPreview(); bldRenderAvulsas(); bldRenderStatus();
+      return;
+    }
+    if (!confirm('Aplicar o modelo "' + (t.name || '') + '" a TODAS as aldeias do grupo "' + gNome + '"?\n\n'
+      + 'Cada aldeia do grupo passa a seguir este modelo, valendo sobre qualquer outro.\n'
+      + 'Aldeias que entrarem no grupo depois também serão adotadas.')) return;
+    _bldAplicando = true;
+    const rotulo = bt ? bt.textContent : '';
+    if (bt) { bt.textContent = 'Aplicando…'; bt.style.opacity = '.6'; }
+    try {
+      // Lê o grupo AGORA. Sem isso o carimbo seria feito sobre uma lista adivinhada, e aldeia de
+      // fora do grupo receberia modelo que ninguém pediu.
+      let vs = [];
+      try { vs = await getVillagesInGroup(novo); }
+      catch (e) {
+        pushLog('Construções: não consegui ler o grupo "' + gNome + '" (' + (e.message || e) + ') — NADA foi aplicado.', 'err', 'build');
+        alert('Não consegui ler as aldeias do grupo. Nada foi alterado.');
+        return;
+      }
+      if (!vs || !vs.length) {
+        pushLog('Construções: o grupo "' + gNome + '" está vazio — nada foi aplicado.', 'err', 'build');
+        alert('O grupo "' + gNome + '" não tem nenhuma aldeia. Nada foi alterado.');
+        return;
+      }
+      config.build.villages = config.build.villages || {};
+      let novos = 0, trocados = 0;
+      vs.forEach((v) => {
+        const k = String(v.vid);
+        const ant = config.build.villages[k];
+        if (!ant) novos++; else if (ant.tpl !== _bldActiveProf) trocados++;
+        // Preserva o que não é atribuição: `paused` é decisão do usuário sobre a aldeia, não sobre
+        // o modelo, e perdê-la aqui religaria construção que ele desligou de propósito.
+        config.build.villages[k] = {
+          tpl: _bldActiveProf,
+          paused: !!(ant && ant.paused),
+          name: v.name || (ant && ant.name) || v.coord || k,
+          coord: v.coord || (ant && ant.coord) || null,
+          via: 'grupo',        // marca de aplicação DELIBERADA em massa (ver o aviso de atropelo)
+          at: Date.now(),
+        };
+      });
+      t.grupo = novo;
+      t.grupoAt = Date.now();
+      config.build.nextAt = 0;   // não espera o intervalo: reatribui no próximo tick
+      save();
+      pushLog('Construções: modelo "' + (t.name || '') + '" aplicado a ' + vs.length + ' aldeia(s) do grupo "'
+        + gNome + '"' + (trocados ? (' — ' + trocados + ' trocaram de modelo') : '')
+        + (novos ? (', ' + novos + ' entraram na gestão agora') : '') + '.', 'ok', 'build');
+    } finally {
+      _bldAplicando = false;
+      if (bt) { bt.textContent = rotulo || 'Aplicar'; bt.style.opacity = '1'; }
+    }
     fillBldTplGrupo(); bldRenderTplSelect(); bldGrpPreview(); bldRenderAvulsas(); bldRenderStatus();
   }
   function fillBldTplGrupo() {
@@ -5753,7 +5808,11 @@
       const a = config.build.villages[vid];
       if (a.paused) { delete out[vid]; return; }        // pausada sai, mesmo vindo do grupo
       if (!config.build.templates[a.tpl]) return;
-      if (out[vid] && out[vid].tpl !== a.tpl) {
+      // `via: 'grupo'` = o usuário aplicou este modelo em massa, de propósito, clicando em Aplicar.
+      // Ele vencer o vínculo de OUTRO modelo é o comportamento pedido, não um acidente — avisar
+      // aqui encheria o log toda hora com "problema" que é a própria intenção. O aviso existe pra
+      // resíduo de config antiga, que é o caso sem essa marca.
+      if (out[vid] && out[vid].tpl !== a.tpl && a.via !== 'grupo') {
         const de = (config.build.templates[out[vid].tpl] || {}).name || out[vid].tpl;
         atropelou[de] = (atropelou[de] || 0) + 1;
         atropeloVids.push(vid);

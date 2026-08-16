@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.189.0
+// @version      11.190.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.189.0';
+  const VERSION = '11.190.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -2350,14 +2350,25 @@
     // memória antes do ciclo seguinte — então ele era rebaixado praticamente todo ciclo. Quem usa
     // só o C pagava um download do mundo inteiro pra calcular um limite de fake nunca consultado.
     const usaAB = Object.keys(M).some((k) => M[k] && (M[k].mode === 'a' || M[k].mode === 'b'));
-    if (!dyn && usaAB) { try { tpl = await cron('templates A/B', () => getFarmTemplates(CUR_VID)); } catch (e) { tpl = null; } }
+    // O motivo da falha NÃO pode ser descartado aqui. Sem ele, um erro de leitura (sessão caída,
+    // HTTP ruim, página curta) fica idêntico a "o parser rodou e não achou nada" — as duas coisas
+    // saíam como `A=? B=? · como achei: nada`, e a segunda manda investigar o parser enquanto a
+    // causa real é outra.
+    let tplErro = null;
+    if (!dyn && usaAB) {
+      try { tpl = await cron('templates A/B', () => getFarmTemplates(CUR_VID)); }
+      catch (e) { tpl = null; tplErro = String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 120); }
+    }
     if (!usaAB) pushLog('Saque: matriz só usa C — pulei os templates A/B e o download do village.txt (não seriam consultados).', '', 'farm');
     // Sem as unidades dos templates não dá pra saber se a origem tem tropa, e o ciclo cai no
     // "tenta e deixa o servidor recusar" — o que enche o log de recusa e gasta requisição à toa.
     if (!dyn && usaAB) {
       const nA = (tpl && tpl.unitsA) ? Object.keys(tpl.unitsA).length : 0;
       const nB = (tpl && tpl.unitsB) ? Object.keys(tpl.unitsB).length : 0;
-      if (!nA && !nB) pushLog('Saque: ⚠ não li as unidades dos templates A/B do assistente — sem pré-checagem de tropa. Espere muitas recusas de "unidades insuficientes". [ids: A=' + ((tpl && tpl.a) || '?') + ' B=' + ((tpl && tpl.b) || '?') + ' · como achei: ' + (((tpl && tpl.debug) || []).join(', ') || 'nada') + ']', 'err', 'farm');
+      if (tplErro) pushLog('Saque: ⚠ a LEITURA dos templates A/B falhou: ' + tplErro
+        + ' — o ciclo segue sem pré-checagem de tropa e você deve ver muitas recusas de "unidades'
+        + ' insuficientes". Não é o parser: a requisição não chegou a devolver a página.', 'err', 'farm');
+      else if (!nA && !nB) pushLog('Saque: ⚠ li a página do assistente mas não achei as unidades dos templates A/B — sem pré-checagem de tropa. Espere muitas recusas de "unidades insuficientes". [ids: A=' + ((tpl && tpl.a) || '?') + ' B=' + ((tpl && tpl.b) || '?') + ' · o que tentei: ' + (((tpl && tpl.debug) || []).join(', ') || 'nada') + ']', 'err', 'farm');
       else if (!nA || !nB) pushLog('Saque: ⚠ li as unidades de só um template (A=' + nA + ' unid., B=' + nB + ' unid.) — o outro fica sem pré-checagem.', 'err', 'farm');
     }
     // População de cada template + pontos das aldeias = dá pra saber ANTES quais origens são grandes

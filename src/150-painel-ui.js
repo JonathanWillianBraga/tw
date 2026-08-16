@@ -717,7 +717,9 @@
               '<a id="twmgr-bld-abrir-tpl" class="twmgr-btn twmgr-ghost" style="padding:5px 10px;white-space:nowrap">Gerenciar modelos</a>' +
             '</div>' +
             '<div class="twmgr-fld" style="margin-top:7px"><span title="Todas as aldeias deste grupo seguem este modelo">Aplicar ao grupo</span>' +
-              '<select id="twmgr-bld-tplgrp" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
+              '<select id="twmgr-bld-tplgrp" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select>' +
+              '<a id="twmgr-bld-aplicar-grp" class="twmgr-btn twmgr-ghost" style="padding:5px 10px;white-space:nowrap;margin-left:4px">Aplicar</a></div>' +
+            '<div id="twmgr-bld-grp-aviso" style="font-size:9px;color:#8a7d6d;margin-top:4px"></div>' +
             '<div id="twmgr-bld-plano-resumo" style="font-size:9px;color:#8a7d6d;margin-top:5px"></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Aldeia que entra no grupo no jogo entra na gestão <b>sozinha</b>, no ciclo seguinte — não precisa marcar nada aqui.</div>' +
             // Atribuição avulsa VENCE o grupo, e isso era invisível: o painel mostrava "Aplicar ao
@@ -1202,44 +1204,12 @@
     });
     // O modelo é amarrado ao GRUPO: mudar aqui muda quem o ciclo atende no próximo tick.
     document.getElementById('twmgr-bld-tplsel').addEventListener('change', (e) => bldSwitchProf(e.target.value));
-    document.getElementById('twmgr-bld-tplgrp').addEventListener('change', (e) => {
-      const t = config.build.templates[_bldActiveProf];
-      if (!t) {
-        // Sem modelo escolhido nao ha onde gravar o grupo. Antes isso falhava CALADO e parecia
-        // que o painel tinha ignorado o clique.
-        alert('Escolha um modelo primeiro — o grupo é gravado no modelo.');
-        e.target.value = '';
-        return;
-      }
-      const novoG = e.target.value || '';
-      // MESMO GRUPO EM DOIS MODELOS é o erro que fazia a mudança parecer travada: gravava, mas o
-      // outro modelo continuava reivindicando as mesmas aldeias e vencia no ciclo. A saída que o
-      // usuário achou sozinho — tirar o grupo do modelo antigo — vira a opção oferecida aqui.
-      if (novoG) {
-        const dono = Object.keys(config.build.templates).filter((id) => id !== _bldActiveProf
-          && String(config.build.templates[id].grupo || '') === String(novoG))[0];
-        if (dono) {
-          const nomeDono = config.build.templates[dono].name || dono;
-          if (!confirm('Este grupo já está no modelo "' + nomeDono + '".'
-            + '\n\nDois modelos no mesmo grupo disputam as mesmas aldeias e só um vale — é isso que faz a'
-            + ' mudança parecer que não pegou.'
-            + '\n\nOK = mover o grupo para "' + (t.name || _bldActiveProf) + '" (o outro fica sem grupo)'
-            + '\nCancelar = deixar como está')) { e.target.value = t.grupo || ''; return; }
-          config.build.templates[dono].grupo = '';
-          pushLog('Construções: grupo movido de "' + nomeDono + '" para "' + (t.name || _bldActiveProf)
-            + '" — "' + nomeDono + '" ficou SEM grupo e não vai atender aldeia nenhuma até receber outro.', 'ok', 'build');
-        }
-      }
-      t.grupo = novoG;
-      config.build.nextAt = 0;   // não espera o intervalo: reatribui no próximo tick
-      save();
-      pushLog('Construções: modelo "' + (t.name || _bldActiveProf) + '" '
-        + (t.grupo ? 'aplicado ao grupo selecionado.' : 'desamarrado do grupo.'), 'ok', 'build');
-      // Amarrar um modelo a um grupo é justamente quando as atribuições avulsas passam a
-      // atropelar — o aviso tem que reaparecer na hora, não só no próximo ciclo.
-      bldRenderAvulsas();
-      bldRenderTplSelect();   // o seletor de modelo mostra o grupo (v11.189.0): tem que acompanhar
-    });
+    // MEXER NO SELECT NÃO GRAVA NADA. Antes gravava no `change`, e amarrar um grupo — que muda o
+    // que dezenas de aldeias vão construir — acontecia sem confirmação, às vezes por rolagem do
+    // mouse sobre o campo. Agora o select só PROPÕE; quem grava é o botão Aplicar.
+    document.getElementById('twmgr-bld-tplgrp').addEventListener('change', bldGrpPreview);
+    document.getElementById('twmgr-bld-aplicar-grp').addEventListener('click', bldAplicarGrupo);
+    // (o corpo dos dois vive em 080-edificios.js, junto do resto do módulo)
     document.getElementById('twmgr-bld-avulsas-limpar').addEventListener('click', bldLimparAvulsas);
     document.getElementById('twmgr-bld-stgroup').addEventListener('change', (e) => bldStatusFiltrar(e.target.value));
     document.getElementById('twmgr-bld-st-reload').addEventListener('click', bldAtualizarStatus);
@@ -1252,6 +1222,7 @@
     bldRenderTplSelect();
     bldSwitchProf(_bldActiveProf);
     fillBldTplGrupo();
+    bldGrpPreview();   // estado inicial do botao Aplicar (apagado enquanto nada mudou)
     bldRenderAvulsas();
     bldRenderStatus();
     // ---- Pesquisa ----

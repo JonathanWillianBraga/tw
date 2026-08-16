@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.196.0
+// @version      11.197.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.196.0';
+  const VERSION = '11.197.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5456,6 +5456,55 @@
     return null;
   }
   // Select de grupo do MODELO ativo: todas as aldeias do grupo passam a seguir esse modelo.
+  // ===== Aplicar modelo a um grupo (o select PROPÕE, o botão GRAVA) =====
+  // Amarrar um grupo muda o que dezenas de aldeias vão construir. Antes isso acontecia no `change`
+  // do select — sem confirmação, e às vezes por rolagem do mouse sobre o campo. Agora existe um
+  // passo explícito, e o aviso abaixo do campo diz o que vai acontecer ANTES de acontecer.
+  function bldGrpPreview() {
+    const sel = document.getElementById('twmgr-bld-tplgrp');
+    const av = document.getElementById('twmgr-bld-grp-aviso');
+    const bt = document.getElementById('twmgr-bld-aplicar-grp');
+    if (!sel || !av) return;
+    const t = config.build.templates[_bldActiveProf];
+    const novo = sel.value || '';
+    const atual = t ? String(t.grupo || '') : '';
+    const mudou = String(novo) !== atual;
+    if (bt) bt.style.opacity = mudou ? '1' : '.45';
+    if (!t) { av.textContent = 'Escolha um modelo primeiro — o grupo é gravado no modelo.'; return; }
+    if (!mudou) { av.textContent = ''; return; }
+    const gNome = novo ? ((_twGroupsCache || []).filter((g) => String(g.id) === String(novo))[0] || {}).name || novo : null;
+    if (!novo) { av.textContent = '▸ Clique em Aplicar para DESAMARRAR "' + (t.name || '') + '" do grupo (ele deixa de atender aldeias).'; return; }
+    // Se outro modelo também alcança esse grupo, diga AGORA quem vai perder — é a informação que
+    // faltava e que fazia a mudança parecer sem efeito.
+    const outro = Object.keys(config.build.templates).filter((id) => id !== _bldActiveProf
+      && String(config.build.templates[id].grupo || '') === String(novo))[0];
+    av.innerHTML = '▸ Clique em <b>Aplicar</b> para o grupo <b>' + esc(String(gNome)) + '</b> seguir o modelo <b>'
+      + esc(t.name || '') + '</b>'
+      + (outro ? '. O modelo <b>' + esc(config.build.templates[outro].name || outro) + '</b> está no mesmo grupo e passa a PERDER essas aldeias.' : '.');
+  }
+  function bldAplicarGrupo() {
+    const sel = document.getElementById('twmgr-bld-tplgrp'); if (!sel) return;
+    const t = config.build.templates[_bldActiveProf];
+    if (!t) { alert('Escolha um modelo primeiro — o grupo é gravado no modelo.'); return; }
+    const novo = sel.value || '';
+    if (String(novo) === String(t.grupo || '')) return;   // nada a fazer
+    const gNome = novo ? ((_twGroupsCache || []).filter((g) => String(g.id) === String(novo))[0] || {}).name || novo : '';
+    if (!confirm(novo
+      ? ('Aplicar o modelo "' + (t.name || '') + '" ao grupo "' + gNome + '"?')
+      : ('Desamarrar o modelo "' + (t.name || '') + '" do grupo? Ele deixa de atender aldeias.'))) return;
+    t.grupo = novo;
+    // CARIMBO DE QUANDO FOI APLICADO. É ele que decide a disputa quando dois modelos alcançam a
+    // mesma aldeia: vence o aplicado MAIS RECENTEMENTE, que é o que o usuário acabou de mandar
+    // fazer. Antes vencia o modelo criado por último — ordem das chaves do objeto, invisível e
+    // imprevisível, e a razão de "mudei o grupo e não aconteceu nada".
+    t.grupoAt = Date.now();
+    config.build.nextAt = 0;   // não espera o intervalo: reatribui no próximo tick
+    save();
+    pushLog('Construções: modelo "' + (t.name || _bldActiveProf) + '" '
+      + (novo ? ('aplicado ao grupo "' + gNome + '" — ele passa a valer sobre qualquer outro modelo nas aldeias em comum.')
+              : 'desamarrado do grupo.'), 'ok', 'build');
+    fillBldTplGrupo(); bldRenderTplSelect(); bldGrpPreview(); bldRenderAvulsas(); bldRenderStatus();
+  }
   function fillBldTplGrupo() {
     const sel = document.getElementById('twmgr-bld-tplgrp'); if (!sel) return;
     const t = config.build.templates[_bldActiveProf];
@@ -5647,7 +5696,20 @@
     const out = {}, tpls = config.build.templates || {};
     let usouGrupo = false;
     const disputa = {};
-    for (const id of Object.keys(tpls)) {
+    // ORDEM DE PRECEDÊNCIA, explícita. Este laço sobrescreve, então quem é processado por ÚLTIMO
+    // vence as aldeias em comum. Antes a ordem era `Object.keys`, ou seja ordem de CRIAÇÃO dos
+    // modelos — invisível, imprevisível, e a causa de "amarrei o grupo ao modelo novo e não
+    // aconteceu nada".
+    //
+    // Agora ordena pelo carimbo de quando o grupo foi APLICADO: vence o mais recente, que é o que
+    // o usuário acabou de mandar fazer. Modelo antigo sem carimbo vale 0 e fica no começo, então
+    // config já existente não muda de comportamento sozinha — só perde para o que for aplicado
+    // depois, que é exatamente a regra pedida.
+    const ordem = Object.keys(tpls)
+      .map((id, i) => ({ id: id, i: i, at: parseInt(tpls[id].grupoAt, 10) || 0 }))
+      .sort((a, b) => (a.at - b.at) || (a.i - b.i));
+    for (const o of ordem) {
+      const id = o.id;
       const t = tpls[id];
       if (!t.grupo) continue;
       let vs = [];
@@ -5676,9 +5738,9 @@
     // aconteceu nada", e sem ela o usuário culpa o painel.
     const nDisputa = Object.values(disputa).reduce((s, n) => s + n, 0);
     if (nDisputa) {
-      pushLog('Construções: ⚠ ' + nDisputa + ' aldeia(s) são alcançadas por MAIS DE UM modelo — os grupos se cruzam.'
-        + ' Quem vale é o último modelo criado: ' + Object.keys(disputa).map((d) => disputa[d] + '× ' + d).join(' · ')
-        + '. Tire o grupo de um dos modelos, ou ajuste os grupos no jogo pra não se sobreporem.', 'err', 'build');
+      pushLog('Construções: ' + nDisputa + ' aldeia(s) são alcançadas por mais de um modelo — os grupos se cruzam.'
+        + ' Vale o aplicado mais recentemente: ' + Object.keys(disputa).map((d) => disputa[d] + '× ' + d).join(' · ')
+        + '. Pra mudar, escolha o grupo no modelo que deve valer e clique em Aplicar.', '', 'build');
     }
     // Ler grupo deixa o jogo com ele selecionado; volta pra "todos" pra nao afetar as outras telas.
     if (usouGrupo) { try { await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0', { credentials: 'include' }); } catch (e) {} }
@@ -6007,6 +6069,7 @@
     if (sp) sp.value = bldTpl().storagePct != null ? bldTpl().storagePct : 0;
     renderBuildPlan();
     fillBldTplGrupo();   // o grupo e por MODELO, entao acompanha a troca
+    bldGrpPreview();     // e o aviso/botao tem que refletir o modelo novo, nao o anterior
   }
   function bldResetDefault() {
     const t = bldTpl(); if (!t) return;
@@ -13629,7 +13692,9 @@
               '<a id="twmgr-bld-abrir-tpl" class="twmgr-btn twmgr-ghost" style="padding:5px 10px;white-space:nowrap">Gerenciar modelos</a>' +
             '</div>' +
             '<div class="twmgr-fld" style="margin-top:7px"><span title="Todas as aldeias deste grupo seguem este modelo">Aplicar ao grupo</span>' +
-              '<select id="twmgr-bld-tplgrp" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select></div>' +
+              '<select id="twmgr-bld-tplgrp" class="twmgr-inp" style="flex:0 0 150px;width:150px"></select>' +
+              '<a id="twmgr-bld-aplicar-grp" class="twmgr-btn twmgr-ghost" style="padding:5px 10px;white-space:nowrap;margin-left:4px">Aplicar</a></div>' +
+            '<div id="twmgr-bld-grp-aviso" style="font-size:9px;color:#8a7d6d;margin-top:4px"></div>' +
             '<div id="twmgr-bld-plano-resumo" style="font-size:9px;color:#8a7d6d;margin-top:5px"></div>' +
             '<div style="font-size:9px;color:#8a7d6d;margin-top:5px">Aldeia que entra no grupo no jogo entra na gestão <b>sozinha</b>, no ciclo seguinte — não precisa marcar nada aqui.</div>' +
             // Atribuição avulsa VENCE o grupo, e isso era invisível: o painel mostrava "Aplicar ao
@@ -14114,44 +14179,12 @@
     });
     // O modelo é amarrado ao GRUPO: mudar aqui muda quem o ciclo atende no próximo tick.
     document.getElementById('twmgr-bld-tplsel').addEventListener('change', (e) => bldSwitchProf(e.target.value));
-    document.getElementById('twmgr-bld-tplgrp').addEventListener('change', (e) => {
-      const t = config.build.templates[_bldActiveProf];
-      if (!t) {
-        // Sem modelo escolhido nao ha onde gravar o grupo. Antes isso falhava CALADO e parecia
-        // que o painel tinha ignorado o clique.
-        alert('Escolha um modelo primeiro — o grupo é gravado no modelo.');
-        e.target.value = '';
-        return;
-      }
-      const novoG = e.target.value || '';
-      // MESMO GRUPO EM DOIS MODELOS é o erro que fazia a mudança parecer travada: gravava, mas o
-      // outro modelo continuava reivindicando as mesmas aldeias e vencia no ciclo. A saída que o
-      // usuário achou sozinho — tirar o grupo do modelo antigo — vira a opção oferecida aqui.
-      if (novoG) {
-        const dono = Object.keys(config.build.templates).filter((id) => id !== _bldActiveProf
-          && String(config.build.templates[id].grupo || '') === String(novoG))[0];
-        if (dono) {
-          const nomeDono = config.build.templates[dono].name || dono;
-          if (!confirm('Este grupo já está no modelo "' + nomeDono + '".'
-            + '\n\nDois modelos no mesmo grupo disputam as mesmas aldeias e só um vale — é isso que faz a'
-            + ' mudança parecer que não pegou.'
-            + '\n\nOK = mover o grupo para "' + (t.name || _bldActiveProf) + '" (o outro fica sem grupo)'
-            + '\nCancelar = deixar como está')) { e.target.value = t.grupo || ''; return; }
-          config.build.templates[dono].grupo = '';
-          pushLog('Construções: grupo movido de "' + nomeDono + '" para "' + (t.name || _bldActiveProf)
-            + '" — "' + nomeDono + '" ficou SEM grupo e não vai atender aldeia nenhuma até receber outro.', 'ok', 'build');
-        }
-      }
-      t.grupo = novoG;
-      config.build.nextAt = 0;   // não espera o intervalo: reatribui no próximo tick
-      save();
-      pushLog('Construções: modelo "' + (t.name || _bldActiveProf) + '" '
-        + (t.grupo ? 'aplicado ao grupo selecionado.' : 'desamarrado do grupo.'), 'ok', 'build');
-      // Amarrar um modelo a um grupo é justamente quando as atribuições avulsas passam a
-      // atropelar — o aviso tem que reaparecer na hora, não só no próximo ciclo.
-      bldRenderAvulsas();
-      bldRenderTplSelect();   // o seletor de modelo mostra o grupo (v11.189.0): tem que acompanhar
-    });
+    // MEXER NO SELECT NÃO GRAVA NADA. Antes gravava no `change`, e amarrar um grupo — que muda o
+    // que dezenas de aldeias vão construir — acontecia sem confirmação, às vezes por rolagem do
+    // mouse sobre o campo. Agora o select só PROPÕE; quem grava é o botão Aplicar.
+    document.getElementById('twmgr-bld-tplgrp').addEventListener('change', bldGrpPreview);
+    document.getElementById('twmgr-bld-aplicar-grp').addEventListener('click', bldAplicarGrupo);
+    // (o corpo dos dois vive em 080-edificios.js, junto do resto do módulo)
     document.getElementById('twmgr-bld-avulsas-limpar').addEventListener('click', bldLimparAvulsas);
     document.getElementById('twmgr-bld-stgroup').addEventListener('change', (e) => bldStatusFiltrar(e.target.value));
     document.getElementById('twmgr-bld-st-reload').addEventListener('click', bldAtualizarStatus);
@@ -14164,6 +14197,7 @@
     bldRenderTplSelect();
     bldSwitchProf(_bldActiveProf);
     fillBldTplGrupo();
+    bldGrpPreview();   // estado inicial do botao Aplicar (apagado enquanto nada mudou)
     bldRenderAvulsas();
     bldRenderStatus();
     // ---- Pesquisa ----

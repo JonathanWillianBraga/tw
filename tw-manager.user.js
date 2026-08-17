@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.200.0
+// @version      11.201.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.200.0';
+  const VERSION = '11.201.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -994,7 +994,7 @@
   //
   // Quem chama PRECISA carimbar o cache de memória com esse `at` original. Carimbar com Date.now()
   // faz o TTL recomeçar a cada leitura de disco, e com auto-F5 de 1 min isso significa um dado de
-  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.200.0 introduziu
+  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.201.0 introduziu
   // nos três caches de uma vez.
   function cacheLerBruto(nome, ttlMs) {
     try {
@@ -2357,9 +2357,15 @@
       finally { const e = _crono[nome] || (_crono[nome] = { n: 0, ms: 0 }); e.n++; e.ms += Date.now() - t0; }
     };
     // Envolvem as chamadas sem mudar a assinatura: o laço continua lendo igual.
-    const _cSendAttack = (...a) => cron('envio', () => sendAttack(...a));
-    const _cSendFarmB = (...a) => cron('envio', () => sendFarmB(...a));
-    const _cSendFarmC = (...a) => cron('envio', () => sendFarmC(...a));
+    // Rotulos SEPARADOS por caminho. Os tres custam coisas bem diferentes e sair tudo como
+    // 'envio' escondia justamente a pergunta 'por que 2 segundos por saque?':
+    //   assistente C   = 1 requisicao, resposta JSON curta
+    //   assistente A/B = 1 requisicao, resposta JSON curta
+    //   praca          = DUAS requisicoes (confirmar + mandar), e as duas devolvem pagina HTML
+    //                    inteira. E o caminho do complemento de piso de fake.
+    const _cSendAttack = (...a) => cron('envio pela praca (2 req.)', () => sendAttack(...a));
+    const _cSendFarmB = (...a) => cron('envio pelo assistente A/B', () => sendFarmB(...a));
+    const _cSendFarmC = (...a) => cron('envio pelo assistente C', () => sendFarmC(...a));
     const _cSleep = (ms) => cron('pausa entre envios', () => sleep(ms));
     if ((config.farm.nextAt || 0) > now) { scheduleFarm(); return; }
     const cfg = config.farm;
@@ -2550,7 +2556,7 @@
     const errReasons = {};     // motivo -> quantas vezes (pra saber POR QUE recusou, não só quantas)
     // Barra de progresso do ciclo: UMA linha de log que se atualiza conforme percorre os alvos e, no
     // fim, vira o extrato. Throttle de 400ms pra não redesenhar o log a cada aldeia.
-    let _barAt = 0;
+    let _barAt = 0, _parcialAt = now;
     if (eligible.length) setFarmProg(farmProgHTML(0, eligible.length, 'mapeados ' + eligible.length + ' alvo(s)'));
     const tickBar = (done, force) => {
       if (!eligible.length) return;
@@ -2563,6 +2569,15 @@
       const pare = devoParar('farm');
       if (pare) { pushLog('Saque: ciclo interrompido — ' + pare + ' (' + idx + '/' + eligible.length + ' alvos percorridos).', '', 'farm'); break; }
       tickBar(idx);   // idx = quantos JÁ terminaram
+      // PARCIAL NO LOG, a cada 60s. O resumo do fim do ciclo so existe se o ciclo TERMINAR, e com
+      // auto-F5 curto ele nao termina — o usuario ficava sem nenhum numero, mesmo com centenas de
+      // saques saindo. Esta linha e a unica prova de trabalho que sobrevive a um reload no meio.
+      if (Date.now() - _parcialAt > 60000) {
+        _parcialAt = Date.now();
+        pushLog('Saque: parcial — ' + count + ' enviado(s), ' + idx + '/' + eligible.length
+          + ' alvos percorridos em ' + Math.round((Date.now() - now) / 1000) + 's'
+          + (errs ? (' · ' + errs + ' recusa(s)') : '') + '.', '', 'farm');
+      }
       const cm = (t.coord || '').match(/(\d+)\|(\d+)/); if (!cm) continue;
       const tx = +cm[1], ty = +cm[2];
       // Blacklist do módulo Mapa. É o que dá efeito prático à lista: sem isto, marcar uma

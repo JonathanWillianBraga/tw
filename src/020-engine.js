@@ -823,10 +823,19 @@
     const agora = Date.now();
     if (!forcar && _farmAlvosCache && (agora - _farmAlvosAt) < FARM_ALVOS_TTL_MS) return _farmAlvosCache;
     // Sobrevive ao F5: 3 a 6 páginas do assistente custavam 10-25 s e eram refeitas a cada reload.
-    // Mesmo TTL da memória, então não passa a aceitar lista mais velha do que já aceitava.
-    if (!forcar) {
-      const doDisco = cacheLer('alvos', FARM_ALVOS_TTL_MS);
-      if (doDisco && doDisco.length) { _farmAlvosCache = doDisco; _farmAlvosAt = agora; return doDisco; }
+    //
+    // O `forcar` NÃO pula o disco quando a memória está vazia. `forcar` existe pra não reaproveitar
+    // a lista do ciclo ANTERIOR — mas memória vazia significa que a página acabou de carregar, e aí
+    // a cópia em disco é a continuação do MESMO ciclo, não sobra do anterior.
+    //
+    // Sem esta distinção o Saque relia 6 páginas a cada reload: medido na conta do usuário, com
+    // auto-F5 de 1 min, 6 leituras completas do assistente em 11 minutos e nenhum ciclo concluído.
+    //
+    // `_farmAlvosAt` recebe o `at` GRAVADO, não agora: carimbar com agora faria o TTL recomeçar a
+    // cada reload e a lista viveria indefinidamente parecendo nova.
+    if (!forcar || !_farmAlvosCache) {
+      const o = cacheLerBruto('alvos', FARM_ALVOS_TTL_MS);
+      if (o && o.v && o.v.length) { _farmAlvosCache = o.v; _farmAlvosAt = o.at; return o.v; }
     }
     // Se ja ha uma leitura em voo, espera ELA em vez de abrir outra: sem isto, dois modulos
     // que acordam juntos disparam duas leituras completas antes de qualquer cache existir.

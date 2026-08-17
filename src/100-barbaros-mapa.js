@@ -9,8 +9,9 @@
     // do helper. Quando nao couber, ele registra e a leitura continua em memoria — o modulo
     // funciona igual, so paga o download de novo.
     if (!forceRefresh) {
-      const doDisco = cacheLer('mapa', 6 * 3600 * 1000);
-      if (doDisco && doDisco.length) { _mapVillagesCache = doDisco; _mapVillagesCacheAt = now; return doDisco; }
+      // Idade gravada, nao agora - senao o TTL de 6h recomeca a cada reload e nunca expira.
+      const o = cacheLerBruto('mapa', 6 * 3600 * 1000);
+      if (o && o.v && o.v.length) { _mapVillagesCache = o.v; _mapVillagesCacheAt = o.at; return o.v; }
     }
     const res = await fetch('/map/village.txt', { credentials: 'include' });
     const txt = await res.text();

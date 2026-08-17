@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.199.0
+// @version      11.200.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.199.0';
+  const VERSION = '11.200.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -990,16 +990,23 @@
   // TTL curto, então no pior caso chegam expirados na outra máquina.
   const CACHE_MAX_BYTES = 2 * 1024 * 1024;   // acima disso não vale: o localStorage tem ~5MB no total
   let _cacheAvisou = {};
-  function cacheLer(nome, ttlMs) {
+  // Devolve { v, at } — o `at` é a hora em que o dado foi LIDO DO SERVIDOR, não agora.
+  //
+  // Quem chama PRECISA carimbar o cache de memória com esse `at` original. Carimbar com Date.now()
+  // faz o TTL recomeçar a cada leitura de disco, e com auto-F5 de 1 min isso significa um dado de
+  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.200.0 introduziu
+  // nos três caches de uma vez.
+  function cacheLerBruto(nome, ttlMs) {
     try {
       const raw = localStorage.getItem(KEY + '_cache_' + nome);
       if (!raw) return null;
       const o = JSON.parse(raw);
       if (!o || typeof o.at !== 'number') return null;
       if (Date.now() - o.at > ttlMs) return null;
-      return o.v;
+      return o;
     } catch (e) { return null; }
   }
+  function cacheLer(nome, ttlMs) { const o = cacheLerBruto(nome, ttlMs); return o ? o.v : null; }
   function cacheGravar(nome, valor) {
     try {
       const s = JSON.stringify({ at: Date.now(), v: valor });

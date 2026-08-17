@@ -873,8 +873,11 @@
     // Sobrevive ao F5, com o MESMO TTL curto de 45s: nao passa a aceitar leitura mais velha do
     // que ja aceitava em memoria, so deixa de refazer 1 requisicao por reload.
     if (!forcar) {
-      const doDisco = cacheLer('tropas', TROPAS_TTL_MS);
-      if (doDisco && Object.keys(doDisco).length) { _tropasCache = doDisco; _tropasAt = Date.now(); return doDisco; }
+      // Idade GRAVADA, nao agora: com auto-F5 de 1 min, carimbar com agora faria o TTL de 45s
+      // recomecar a cada reload, e uma leitura de tropa de horas atras pareceria sempre fresca.
+      // Tropa velha nao da erro: da envio de aldeia que ja gastou a cavalaria.
+      const o = cacheLerBruto('tropas', TROPAS_TTL_MS);
+      if (o && o.v && Object.keys(o.v).length) { _tropasCache = o.v; _tropasAt = o.at; return o.v; }
     }
     // Duas chamadas simultâneas (Saque e Muralha rodam em paralelo) esperam a MESMA leitura
     // em vez de abrirem duas.

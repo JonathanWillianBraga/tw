@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.199.0
+// @version      11.200.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.199.0';
+  const VERSION = '11.200.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -990,16 +990,23 @@
   // TTL curto, então no pior caso chegam expirados na outra máquina.
   const CACHE_MAX_BYTES = 2 * 1024 * 1024;   // acima disso não vale: o localStorage tem ~5MB no total
   let _cacheAvisou = {};
-  function cacheLer(nome, ttlMs) {
+  // Devolve { v, at } — o `at` é a hora em que o dado foi LIDO DO SERVIDOR, não agora.
+  //
+  // Quem chama PRECISA carimbar o cache de memória com esse `at` original. Carimbar com Date.now()
+  // faz o TTL recomeçar a cada leitura de disco, e com auto-F5 de 1 min isso significa um dado de
+  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.200.0 introduziu
+  // nos três caches de uma vez.
+  function cacheLerBruto(nome, ttlMs) {
     try {
       const raw = localStorage.getItem(KEY + '_cache_' + nome);
       if (!raw) return null;
       const o = JSON.parse(raw);
       if (!o || typeof o.at !== 'number') return null;
       if (Date.now() - o.at > ttlMs) return null;
-      return o.v;
+      return o;
     } catch (e) { return null; }
   }
+  function cacheLer(nome, ttlMs) { const o = cacheLerBruto(nome, ttlMs); return o ? o.v : null; }
   function cacheGravar(nome, valor) {
     try {
       const s = JSON.stringify({ at: Date.now(), v: valor });
@@ -1939,10 +1946,19 @@
     const agora = Date.now();
     if (!forcar && _farmAlvosCache && (agora - _farmAlvosAt) < FARM_ALVOS_TTL_MS) return _farmAlvosCache;
     // Sobrevive ao F5: 3 a 6 páginas do assistente custavam 10-25 s e eram refeitas a cada reload.
-    // Mesmo TTL da memória, então não passa a aceitar lista mais velha do que já aceitava.
-    if (!forcar) {
-      const doDisco = cacheLer('alvos', FARM_ALVOS_TTL_MS);
-      if (doDisco && doDisco.length) { _farmAlvosCache = doDisco; _farmAlvosAt = agora; return doDisco; }
+    //
+    // O `forcar` NÃO pula o disco quando a memória está vazia. `forcar` existe pra não reaproveitar
+    // a lista do ciclo ANTERIOR — mas memória vazia significa que a página acabou de carregar, e aí
+    // a cópia em disco é a continuação do MESMO ciclo, não sobra do anterior.
+    //
+    // Sem esta distinção o Saque relia 6 páginas a cada reload: medido na conta do usuário, com
+    // auto-F5 de 1 min, 6 leituras completas do assistente em 11 minutos e nenhum ciclo concluído.
+    //
+    // `_farmAlvosAt` recebe o `at` GRAVADO, não agora: carimbar com agora faria o TTL recomeçar a
+    // cada reload e a lista viveria indefinidamente parecendo nova.
+    if (!forcar || !_farmAlvosCache) {
+      const o = cacheLerBruto('alvos', FARM_ALVOS_TTL_MS);
+      if (o && o.v && o.v.length) { _farmAlvosCache = o.v; _farmAlvosAt = o.at; return o.v; }
     }
     // Se ja ha uma leitura em voo, espera ELA em vez de abrir outra: sem isto, dois modulos
     // que acordam juntos disparam duas leituras completas antes de qualquer cache existir.
@@ -4108,8 +4124,11 @@
     // Sobrevive ao F5, com o MESMO TTL curto de 45s: nao passa a aceitar leitura mais velha do
     // que ja aceitava em memoria, so deixa de refazer 1 requisicao por reload.
     if (!forcar) {
-      const doDisco = cacheLer('tropas', TROPAS_TTL_MS);
-      if (doDisco && Object.keys(doDisco).length) { _tropasCache = doDisco; _tropasAt = Date.now(); return doDisco; }
+      // Idade GRAVADA, nao agora: com auto-F5 de 1 min, carimbar com agora faria o TTL de 45s
+      // recomecar a cada reload, e uma leitura de tropa de horas atras pareceria sempre fresca.
+      // Tropa velha nao da erro: da envio de aldeia que ja gastou a cavalaria.
+      const o = cacheLerBruto('tropas', TROPAS_TTL_MS);
+      if (o && o.v && Object.keys(o.v).length) { _tropasCache = o.v; _tropasAt = o.at; return o.v; }
     }
     // Duas chamadas simultâneas (Saque e Muralha rodam em paralelo) esperam a MESMA leitura
     // em vez de abrirem duas.
@@ -11752,8 +11771,9 @@
     // do helper. Quando nao couber, ele registra e a leitura continua em memoria — o modulo
     // funciona igual, so paga o download de novo.
     if (!forceRefresh) {
-      const doDisco = cacheLer('mapa', 6 * 3600 * 1000);
-      if (doDisco && doDisco.length) { _mapVillagesCache = doDisco; _mapVillagesCacheAt = now; return doDisco; }
+      // Idade gravada, nao agora - senao o TTL de 6h recomeca a cada reload e nunca expira.
+      const o = cacheLerBruto('mapa', 6 * 3600 * 1000);
+      if (o && o.v && o.v.length) { _mapVillagesCache = o.v; _mapVillagesCacheAt = o.at; return o.v; }
     }
     const res = await fetch('/map/village.txt', { credentials: 'include' });
     const txt = await res.text();

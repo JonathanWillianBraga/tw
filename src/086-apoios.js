@@ -303,7 +303,14 @@
   // foi a releitura da praça — é por isso que a confirmação por efeito não é opcional aqui.
   //
   // Um POST por aldeia de ORIGEM: os awayId pertencem à praça dela.
-  const _apSelLinha = {};                      // awayId -> marcado?
+  // CHAVE DA SELECAO: destino + aldeia de ORIGEM.
+  //
+  // Era o awayId, e isso amarrava a tela a um id que so a praca publica. Quando a listagem
+  // passou a vir da aba Apoios (v11.203.0), que nao traz esse id, TODOS os checkboxes nasceram
+  // desabilitados e a retirada ficou impossivel. Coord+vid vem de qualquer fonte, e o awayId
+  // passa a ser resolvido so na hora de retirar, por quem precisa dele.
+  function apChave(coord, vid) { return coord + '#' + vid; }
+  const _apSelLinha = {};                      // coord#vid -> marcado?
   const _apSelUnid = {};                       // coord destino -> {unidade: volta?}
   const _apPref = {};                          // vid -> colunas marcadas no servidor
 
@@ -532,7 +539,7 @@
     if (!d) throw new Error('destino ' + coord + ' não está na leitura atual');
     const sel = apoiosUnidSel(coord, Object.keys(d.total));
     if (!sel.length) throw new Error('nenhuma unidade marcada — nada a retirar');
-    const marcadas = d.origens.filter((o) => _apSelLinha[o.awayId]);
+    const marcadas = d.origens.filter((o) => _apSelLinha[apChave(coord, o.vid)]);
     if (!marcadas.length) throw new Error('nenhum apoio marcado');
 
     // Caminho rápido: a tela do destino resolve TODAS as origens de uma vez.
@@ -540,7 +547,7 @@
     if (d.destId) {
       const atendidas = await apoiosRetirarDestino(d.destId, marcadas, sel);
       atendidas.forEach((v) => { jaFeitas[v] = 1; });
-      marcadas.forEach((o) => { if (jaFeitas[o.vid]) delete _apSelLinha[o.awayId]; });
+      marcadas.forEach((o) => { if (jaFeitas[o.vid]) delete _apSelLinha[apChave(coord, o.vid)]; });
       if (atendidas.length) apoiosPodar(coord, atendidas, sel);
     }
     const sobra = marcadas.filter((o) => !jaFeitas[o.vid]);
@@ -558,23 +565,40 @@
       + ' — retirando pela praça de cada um.', '', 'apoios');
     const porOrigem = {};
     let totalTropa = 0;
-    sobra.forEach((o) => {
-      if (!o.awayId) throw new Error('não li o id do apoio vindo de ' + (o.nome || o.coord)
-        + ' — sem ele eu não sei o que estou mandando voltar');
+    // O awayId NAO vem da listagem: a aba Apoios nao publica esse id, so a praca. Entao ele e
+    // resolvido AQUI, e so pra quem sobrou — que e a minoria. Antes de ler, libera as colunas
+    // das unidades pedidas: a praca esconde a LINHA inteira do destino quando nenhuma unidade
+    // dele esta marcada na preferencia de conta (foi isso que escondia 16 dos 21 destinos).
+    for (const o of sobra) {
       const ped = apoiosPedido(o, sel);
       const soma = apoiosSoma(ped);
-      if (!soma) return;                       // marcado mas com tudo zerado: nada a fazer
+      if (!soma) continue;                     // marcado mas com tudo zerado: nada a fazer
+      let awayId = null;
+      try {
+        await apoiosPatchColunas(o.vid, Object.keys(ped));
+        const itens = await apoiosDetalhe(o.vid);
+        const it = itens.filter((x) => x.coord === coord)[0];
+        awayId = it ? it.awayId : null;
+      } catch (e) {
+        throw new Error('nao consegui ler a praca de ' + (o.nome || o.coord) + ' pra achar o id do'
+          + ' apoio (' + (e.message || e) + ')');
+      }
+      if (!awayId) {
+        throw new Error('a praca de ' + (o.nome || o.coord) + ' nao lista o apoio em ' + coord
+          + ' — sem o id eu nao sei o que estou mandando voltar');
+      }
       totalTropa += soma;
       (porOrigem[o.vid] || (porOrigem[o.vid] = [])).push(
-        { awayId: o.awayId, unidades: ped, antes: o.tropas });
-    });
+        { awayId: awayId, chave: apChave(coord, o.vid), unidades: ped, antes: o.tropas });
+      await sleep(150);
+    }
     const vids = Object.keys(porOrigem);
     if (!vids.length) return marcadas.length - sobra.length;
     let ok = 0;
     for (const vid of vids) {
       await apoiosRetirarDe(vid, porOrigem[vid]);
       ok += porOrigem[vid].length;
-      porOrigem[vid].forEach((pd) => { delete _apSelLinha[pd.awayId]; });
+      porOrigem[vid].forEach((pd) => { delete _apSelLinha[pd.chave]; });
       apoiosPodar(coord, [vid], sel);
       await sleep(200);
     }
@@ -649,19 +673,19 @@
       const selU = apoiosUnidSel(d.coord, uDest);
       const filhos = d.origens.map((o) =>
         '<div class="twmgr-ap-orig">'
-        + '<span><input type="checkbox" class="twmgr-ap-cb" data-away="' + esc(o.awayId || '')
-        + '" data-coord="' + esc(d.coord) + '"' + (_apSelLinha[o.awayId] ? ' checked' : '')
-        + (o.awayId ? '' : ' disabled title="não li o id deste apoio"') + '> '
+        + '<span><input type="checkbox" class="twmgr-ap-cb" data-vid="' + esc(o.vid || '')
+        + '" data-coord="' + esc(d.coord) + '"'
+        + (_apSelLinha[apChave(d.coord, o.vid)] ? ' checked' : '') + '> '
         + esc(o.nome || o.coord)
         + '<span class="twmgr-ap-coord">' + esc(o.coord) + '</span>'
         + (o.dist ? '<span class="twmgr-ap-dist">' + esc(o.dist) + '</span>' : '') + '</span>'
         // Na linha marcada, o que NÃO vai voltar aparece apagado. A prévia fica onde a decisão
         // está, em vez de obrigar a conferir a escolha de unidade num segundo lugar.
-        + (_apSelLinha[o.awayId] ? apoiosLinhaPrevia(o, unidades, selU) : apoiosLinhaTropas(o.tropas, unidades))
+        + (_apSelLinha[apChave(d.coord, o.vid)] ? apoiosLinhaPrevia(o, unidades, selU) : apoiosLinhaTropas(o.tropas, unidades))
         + '</div>').join('');
       // A barra de ação: quais unidades voltam (padrão: todas) e o botão. Só aparece expandido,
       // pra não haver botão de mover tropa a um clique de distância numa lista fechada.
-      const marcadas = d.origens.filter((o) => _apSelLinha[o.awayId]).length;
+      const marcadas = d.origens.filter((o) => _apSelLinha[apChave(d.coord, o.vid)]).length;
       const acoes = '<div class="twmgr-ap-acoes" data-coord="' + esc(d.coord) + '">'
         + '<span class="twmgr-ap-lbl">voltam</span>'
         + uDest.map((u) => '<span class="twmgr-ap-u' + (selU.indexOf(u) >= 0 ? ' on' : '')
@@ -707,8 +731,8 @@
         // 1. marcar/desmarcar um apoio
         const cb = t.closest('.twmgr-ap-cb');
         if (cb) {
-          const id = cb.getAttribute('data-away');
-          if (id) { if (cb.checked) _apSelLinha[id] = 1; else delete _apSelLinha[id]; }
+          const k = apChave(cb.getAttribute('data-coord'), cb.getAttribute('data-vid'));
+          if (cb.checked) _apSelLinha[k] = 1; else delete _apSelLinha[k];
           apoiosRender();
           return;
         }
@@ -729,10 +753,9 @@
         if (todos) {
           const c = todos.getAttribute('data-coord');
           const d = _apCache.lista.filter((x) => x.coord === c)[0];
-          const cheio = d.origens.every((o) => _apSelLinha[o.awayId]);
+          const cheio = d.origens.every((o) => _apSelLinha[apChave(c, o.vid)]);
           d.origens.forEach((o) => {
-            if (!o.awayId) return;
-            if (cheio) delete _apSelLinha[o.awayId]; else _apSelLinha[o.awayId] = 1;
+            if (cheio) delete _apSelLinha[apChave(c, o.vid)]; else _apSelLinha[apChave(c, o.vid)] = 1;
           });
           apoiosRender();
           return;
@@ -742,7 +765,7 @@
         if (go) {
           const c = go.getAttribute('data-coord');
           const d = _apCache.lista.filter((x) => x.coord === c)[0];
-          const marc = d.origens.filter((o) => _apSelLinha[o.awayId]);
+          const marc = d.origens.filter((o) => _apSelLinha[apChave(c, o.vid)]);
           // Soma o que EXATAMENTE vai voltar, por unidade. O usuário confirma o número que ele
           // vai ver mudar no jogo — não uma descrição do que pedi.
           const selUn = apoiosUnidSel(c, Object.keys(d.total));

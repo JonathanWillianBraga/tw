@@ -47,39 +47,6 @@
     return us;
   }
 
-  // Passo 1: quem tem tropa fora. Devolve [{vid, nome, coord}].
-  //
-  // Só quem TEM: ler as 44 que têm em vez das 221 que existem é o que torna a tela viável.
-  async function apoiosOrigens() {
-    const r = await fetch('/game.php?village=' + CUR_VID
-      + '&screen=overview_villages&mode=units&type=away&group=0&page=-1', { credentials: 'include', cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao listar as aldeias com tropa fora');
-    const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
-    const tab = doc.querySelector('#units_table');
-    if (!tab) throw new Error('não achei a tabela de tropas — a tela do jogo mudou?');
-    const out = [];
-    tab.querySelectorAll('tr').forEach((tr) => {
-      const tds = tr.querySelectorAll('td');
-      if (tds.length < 5) return;
-      // A última célula é o link "Tropas"; as do meio são os números.
-      let algum = false;
-      for (let i = 2; i < tds.length - 1; i++) {
-        if ((parseInt((tds[i].textContent || '').replace(/\D/g, ''), 10) || 0) > 0) { algum = true; break; }
-      }
-      if (!algum) return;
-      const link = Array.prototype.slice.call(tr.querySelectorAll('a'))
-        .map((a) => a.getAttribute('href') || '')
-        .filter((h) => /place&mode=units/.test(h))[0];
-      const mv = link && link.match(/village=(\d+)/);
-      if (!mv) return;
-      const txt = (tds[0].textContent || '').replace(/\s+/g, ' ').trim();
-      const mc = txt.match(/(\d{2,3})\|(\d{2,3})/);
-      out.push({ vid: mv[1], nome: txt.replace(/\s*\(\d{2,3}\|\d{2,3}\).*$/, '').trim(),
-                 coord: mc ? (mc[1] + '|' + mc[2]) : '' });
-    });
-    return out;
-  }
-
   // O destino vem como "050 MALUQUINHO (-=MeNiNo MaLuQuInHo=-) (731|590) K57" — nome, dono e
   // coordenada juntos.
   //
@@ -147,34 +114,102 @@
     return out;
   }
 
+  // O destino na aba Apoios vem como 'nome (449|614) K64 (Darthvaeder [H300!])' — o dono vem
+  // DEPOIS da coordenada, ao contrario da praca, onde vem antes. Parser proprio por isso: reusar
+  // o da praca devolvia dono vazio em toda linha.
+  function apoiosParseDestinoDetalhe(txt) {
+    const t = (txt || '').replace(/\s+/g, ' ').trim();
+    const mc = t.match(/\((\d{2,3})\|(\d{2,3})\)/);
+    if (!mc) return null;
+    const coord = mc[1] + '|' + mc[2];
+    const nome = t.slice(0, mc.index).trim();
+    const depois = t.slice(mc.index + mc[0].length);
+    const md = depois.match(/\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*$/);
+    return { coord: coord, dono: md ? md[1].trim() : '', nome: nome };
+  }
+
+  // Passo 1+2 numa requisicao so: a aba 'Apoios' do jogo (type=away_detail) ja traz origem,
+  // destino, distancia e unidades juntos.
+  //
+  // POR QUE A FONTE MUDOU. A praca (#units_away) so lista os destinos que tem alguma das unidades
+  // MARCADAS na preferencia de conta (patch_away_unit_checkboxes) — a mesma preferencia que ja nos
+  // mordeu na retirada. Medido na conta: com a preferencia em [pesada, paladino], a origem 480|576
+  // mostrava 1 destino na praca e 5 aqui; no total, 5 destinos contra os 21 reais, com 46 origens
+  // lidas e ZERO falhas. O modulo lia corretamente uma tela incompleta — o pior tipo de defeito,
+  // porque nada no log parece errado.
+  //
+  // De quebra: 1 requisicao no lugar de 1 por origem (46 nesta conta).
+  //
+  // ESTRUTURA: a linha de ORIGEM tem .quickedit-vn[data-id]; as linhas seguintes, sem quickedit,
+  // sao os destinos dela. Marcador estrutural de proposito — 'Na Aldeia' e texto traduzido.
+  async function apoiosLerTudo() {
+    const r = await fetch('/game.php?village=' + CUR_VID
+      + '&screen=overview_villages&mode=units&type=away_detail&group=0&page=-1',
+      { credentials: 'include', cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao ler a aba Apoios');
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+    const tab = doc.querySelector('#units_table');
+    if (!tab) throw new Error('nao achei a tabela da aba Apoios — a tela do jogo mudou?');
+    const unidades = apoiosUnidadesDe(tab);
+    if (!unidades.length) throw new Error('nao consegui ler as unidades do cabecalho da aba Apoios');
+    const porDestino = {}, usadas = {};
+    let origem = null, nOrig = 0;
+    tab.querySelectorAll('tr').forEach((tr) => {
+      const tds = tr.querySelectorAll('td');
+      if (tds.length < unidades.length + 2) return;
+      const c0 = (tds[0].textContent || '').replace(/\s+/g, ' ').trim();
+      const q = tr.querySelector('.quickedit-vn[data-id]');
+      if (q) {
+        const m = c0.match(/(\d{2,3})\|(\d{2,3})/);
+        origem = { vid: q.getAttribute('data-id'),
+                   nome: c0.replace(/\s*\(\d{2,3}\|\d{2,3}\).*$/, '').trim(),
+                   coord: m ? (m[1] + '|' + m[2]) : '' };
+        nOrig++;
+        return;
+      }
+      if (!origem) return;                       // linha solta antes de qualquer origem
+      const alvo = apoiosParseDestinoDetalhe(c0);
+      if (!alvo) return;
+      const tropas = {};
+      let total = 0;
+      for (let i = 0; i < unidades.length; i++) {
+        const cel = tds[2 + i];
+        if (!cel) throw new Error('a aba Apoios tem menos colunas que o cabecalho');
+        const n = parseInt((cel.textContent || '').replace(/\D/g, ''), 10) || 0;
+        if (n > 0) { tropas[unidades[i]] = n; total += n; }
+      }
+      if (!total) return;
+      const lk = Array.prototype.slice.call(tr.querySelectorAll('a'))
+        .map((a) => a.getAttribute('href') || '').filter((h) => /screen=info_village/.test(h))[0];
+      const mid = lk && lk.match(/[?&]id=(\d+)/);
+      const d = porDestino[alvo.coord] || (porDestino[alvo.coord] = {
+        coord: alvo.coord, dono: alvo.dono, nome: alvo.nome,
+        destId: mid ? mid[1] : null, total: {}, origens: [] });
+      if (!d.destId && mid) d.destId = mid[1];
+      // awayId fica null: a retirada em bloco le o dela na tela do DESTINO (apoiosDestinoLer),
+      // entao a listagem nao precisa dele.
+      d.origens.push({ vid: origem.vid, nome: origem.nome, coord: origem.coord,
+                       dist: (tds[1].textContent || '').trim(), awayId: null, tropas: tropas });
+      Object.keys(tropas).forEach((u) => { d.total[u] = (d.total[u] || 0) + tropas[u]; usadas[u] = 1; });
+    });
+    return { porDestino: porDestino, unidades: Object.keys(usadas), origens: nOrig };
+  }
   // Passo 3: inverter. De "origem → destinos" para "destino → origens".
   async function apoiosMontar(forcar, aoAndar) {
     if (!forcar && _apCache) return _apCache;   // sem expiração: quem decide reler e o usuario
     if (_apLendo) throw new Error('já estou lendo os apoios — espere terminar');
     _apLendo = true;
     try {
-      const origens = await apoiosOrigens();
-      const porDestino = {};
+      // UMA requisicao. O caminho antigo lia a praca de cada origem (46 nesta conta) e ainda
+      // devolvia menos destino, porque a praca e filtrada pela preferencia de colunas da conta.
+      if (aoAndar) aoAndar(0, 1, 'lendo a aba Apoios');
+      const det = await apoiosLerTudo();
+      if (aoAndar) aoAndar(1, 1, det.origens + ' origem(ns)');
+      const porDestino = det.porDestino;
       const unidades = {};
-      let lidas = 0, falhas = 0;
-      for (const o of origens) {
-        if (aoAndar) aoAndar(++lidas, origens.length, o.nome);
-        let itens = [];
-        try { itens = await apoiosDetalhe(o.vid); }
-        catch (e) { falhas++; pushLog('Apoios: não li ' + (o.nome || o.vid) + ' (' + (e.message || e) + ').', 'err', 'apoios'); }
-        itens.forEach((it) => {
-          const d = porDestino[it.coord] || (porDestino[it.coord] = {
-            coord: it.coord, dono: it.dono, nome: it.nome, destId: it.destId, total: {}, origens: [] });
-          if (!d.destId) d.destId = it.destId;
-          d.origens.push({ vid: o.vid, nome: o.nome, coord: o.coord,
-                           dist: it.dist, awayId: it.awayId, tropas: it.tropas });
-          Object.keys(it.tropas).forEach((u) => {
-            d.total[u] = (d.total[u] || 0) + it.tropas[u];
-            unidades[u] = 1;
-          });
-        });
-        await sleep(200);                      // o 429 desta conta é GLOBAL; não vale correr
-      }
+      det.unidades.forEach((u) => { unidades[u] = 1; });
+      const origens = { length: det.origens };
+      const falhas = 0;
       const lista = Object.keys(porDestino).map((k) => porDestino[k]);
       // Ordena pelo volume: a aldeia com mais tropa é a que interessa primeiro.
       lista.sort((a, b) => apoiosSoma(b.total) - apoiosSoma(a.total));

@@ -889,8 +889,13 @@
         // bot-check, de tela em outro modo, de servidor com soluço; e sem distinguir não dá pra
         // consertar. Custa nada e é a diferença entre um log e um diagnóstico.
         const lerUma = async () => {
+          // `group=0` FIXO. A tela overview_villages e STATEFUL por grupo no servidor: quem le com
+          // `&group=X` deixa X selecionado pra conta inteira, e a proxima leitura SEM o parametro
+          // herda o filtro. Medido ao vivo: 71 aldeias sem filtro, 27 depois que outro modulo leu o
+          // grupo [bb]. O Saque enxergaria 27 de 71 e trataria as outras 44 como sem tropa - sem erro,
+          // sem log, so aldeia que nunca envia.
           const res = await fetch('/game.php?village=' + CUR_VID
-            + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
+            + '&screen=overview_villages&mode=units&type=own_home&group=0&page=-1', { credentials: 'include' });
           const html = await res.text();
           if (!res.ok) throw new Error('HTTP ' + res.status + ' (' + html.length + ' bytes)');
           const doc = new DOMParser().parseFromString(html, 'text/html');

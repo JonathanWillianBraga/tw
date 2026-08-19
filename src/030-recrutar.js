@@ -1,6 +1,6 @@
   // ==================== RECRUTAR ====================
   async function getGroups() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&page=-1', { credentials: 'include' });
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0&page=-1', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     // TIPO do grupo, numa passada à parte. O próprio jogo marca com `data-group-type`
     // (`static` / `dynamic` / `all`) nesta mesma página — não precisa de requisição extra nem de

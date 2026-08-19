@@ -1008,7 +1008,7 @@
 
   // Lê a tela de comandos (só ataques): coords com ataque nosso em rota (p/ não empilhar) + nº de ATAQUES DE SAQUE em rota (ícone de farm) p/ o card.
   async function getPendingAttack() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=attack&page=-1', { credentials: 'include' });
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=attack&group=0&page=-1', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const coords = new Set(); let saques = 0; const farmCoords = new Set();
     // POR ORIGEM: a 2ª coluna é a aldeia de onde o comando saiu ("Josh (453|596) K54"). Sem isso
@@ -1035,7 +1035,7 @@
   // Ataques VOLTANDO. Mesma tela dos comandos, outro `type` — uma requisição, e é o número que
   // responde "quanta tropa está no caminho de casa" sem abrir aldeia por aldeia.
   async function getReturningAttack() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=return&page=-1', { credentials: 'include' });
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=return&group=0&page=-1', { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     let total = 0, saques = 0;
@@ -1060,7 +1060,7 @@
   // pelo ícone do cabeçalho, não por posição fixa: mundo com 10 unidades e mundo com 12 têm
   // colunas diferentes, e contar na mão quebraria num deles.
   async function getHomeUnitsAll() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=home&page=-1', { credentials: 'include' });
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=home&group=0&page=-1', { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const idx = {};

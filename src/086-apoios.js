@@ -52,7 +52,7 @@
   // Só quem TEM: ler as 44 que têm em vez das 221 que existem é o que torna a tela viável.
   async function apoiosOrigens() {
     const r = await fetch('/game.php?village=' + CUR_VID
-      + '&screen=overview_villages&mode=units&type=away&page=-1', { credentials: 'include', cache: 'no-store' });
+      + '&screen=overview_villages&mode=units&type=away&group=0&page=-1', { credentials: 'include', cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status + ' ao listar as aldeias com tropa fora');
     const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
     const tab = doc.querySelector('#units_table');

@@ -723,7 +723,7 @@
   const PACOTES_PCT = [1, 2, 5, 10, 15, 20, 25, 30];
   async function lerRecursosTodasAldeias() {
     const res = await fetch('/game.php?village=' + CUR_VID
-      + '&screen=overview_villages&mode=prod&page=-1', { credentials: 'include' });
+      + '&screen=overview_villages&mode=prod&group=0&page=-1', { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const tb = doc.querySelector('#production_table') || doc.querySelector('table.overview_table');

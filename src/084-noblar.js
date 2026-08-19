@@ -153,7 +153,7 @@
   async function nobleAcademias(forcar) {
     if (!forcar && _nbAcadCache && (Date.now() - _nbAcadAt) < 300000) return _nbAcadCache;
     const res = await fetch('/game.php?village=' + CUR_VID
-      + '&screen=overview_villages&mode=buildings&page=-1', { credentials: 'include' });
+      + '&screen=overview_villages&mode=buildings&group=0&page=-1', { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const tb = doc.querySelector('#buildings_table') || doc.querySelector('table.overview_table');
@@ -743,7 +743,7 @@
   }
   async function nobleComandosNoJogo() {
     const res = await fetch('/game.php?village=' + CUR_VID
-      + '&screen=overview_villages&mode=commands&type=outgoing&page=-1', { credentials: 'include' });
+      + '&screen=overview_villages&mode=commands&type=outgoing&group=0&page=-1', { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const out = {};

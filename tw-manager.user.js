@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.201.0
+// @version      11.202.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.201.0';
+  const VERSION = '11.202.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -994,7 +994,7 @@
   //
   // Quem chama PRECISA carimbar o cache de memória com esse `at` original. Carimbar com Date.now()
   // faz o TTL recomeçar a cada leitura de disco, e com auto-F5 de 1 min isso significa um dado de
-  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.201.0 introduziu
+  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.202.0 introduziu
   // nos três caches de uma vez.
   function cacheLerBruto(nome, ttlMs) {
     try {
@@ -2131,7 +2131,7 @@
 
   // Lê a tela de comandos (só ataques): coords com ataque nosso em rota (p/ não empilhar) + nº de ATAQUES DE SAQUE em rota (ícone de farm) p/ o card.
   async function getPendingAttack() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=attack&page=-1', { credentials: 'include' });
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=attack&group=0&page=-1', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const coords = new Set(); let saques = 0; const farmCoords = new Set();
     // POR ORIGEM: a 2ª coluna é a aldeia de onde o comando saiu ("Josh (453|596) K54"). Sem isso
@@ -2158,7 +2158,7 @@
   // Ataques VOLTANDO. Mesma tela dos comandos, outro `type` — uma requisição, e é o número que
   // responde "quanta tropa está no caminho de casa" sem abrir aldeia por aldeia.
   async function getReturningAttack() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=return&page=-1', { credentials: 'include' });
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=commands&type=return&group=0&page=-1', { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     let total = 0, saques = 0;
@@ -2183,7 +2183,7 @@
   // pelo ícone do cabeçalho, não por posição fixa: mundo com 10 unidades e mundo com 12 têm
   // colunas diferentes, e contar na mão quebraria num deles.
   async function getHomeUnitsAll() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=home&page=-1', { credentials: 'include' });
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=home&group=0&page=-1', { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const idx = {};
@@ -3175,7 +3175,7 @@
 
   // ==================== RECRUTAR ====================
   async function getGroups() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&page=-1', { credentials: 'include' });
+    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=combined&group=0&page=-1', { credentials: 'include' });
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     // TIPO do grupo, numa passada à parte. O próprio jogo marca com `data-group-type`
     // (`static` / `dynamic` / `all`) nesta mesma página — não precisa de requisição extra nem de
@@ -4155,8 +4155,13 @@
         // bot-check, de tela em outro modo, de servidor com soluço; e sem distinguir não dá pra
         // consertar. Custa nada e é a diferença entre um log e um diagnóstico.
         const lerUma = async () => {
+          // `group=0` FIXO. A tela overview_villages e STATEFUL por grupo no servidor: quem le com
+          // `&group=X` deixa X selecionado pra conta inteira, e a proxima leitura SEM o parametro
+          // herda o filtro. Medido ao vivo: 71 aldeias sem filtro, 27 depois que outro modulo leu o
+          // grupo [bb]. O Saque enxergaria 27 de 71 e trataria as outras 44 como sem tropa - sem erro,
+          // sem log, so aldeia que nunca envia.
           const res = await fetch('/game.php?village=' + CUR_VID
-            + '&screen=overview_villages&mode=units&type=own_home&page=-1', { credentials: 'include' });
+            + '&screen=overview_villages&mode=units&type=own_home&group=0&page=-1', { credentials: 'include' });
           const html = await res.text();
           if (!res.ok) throw new Error('HTTP ' + res.status + ' (' + html.length + ' bytes)');
           const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -5288,7 +5293,7 @@
   const PACOTES_PCT = [1, 2, 5, 10, 15, 20, 25, 30];
   async function lerRecursosTodasAldeias() {
     const res = await fetch('/game.php?village=' + CUR_VID
-      + '&screen=overview_villages&mode=prod&page=-1', { credentials: 'include' });
+      + '&screen=overview_villages&mode=prod&group=0&page=-1', { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const tb = doc.querySelector('#production_table') || doc.querySelector('table.overview_table');
@@ -7144,7 +7149,7 @@
   async function nobleAcademias(forcar) {
     if (!forcar && _nbAcadCache && (Date.now() - _nbAcadAt) < 300000) return _nbAcadCache;
     const res = await fetch('/game.php?village=' + CUR_VID
-      + '&screen=overview_villages&mode=buildings&page=-1', { credentials: 'include' });
+      + '&screen=overview_villages&mode=buildings&group=0&page=-1', { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const tb = doc.querySelector('#buildings_table') || doc.querySelector('table.overview_table');
@@ -7734,7 +7739,7 @@
   }
   async function nobleComandosNoJogo() {
     const res = await fetch('/game.php?village=' + CUR_VID
-      + '&screen=overview_villages&mode=commands&type=outgoing&page=-1', { credentials: 'include' });
+      + '&screen=overview_villages&mode=commands&type=outgoing&group=0&page=-1', { credentials: 'include' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
     const out = {};
@@ -10224,7 +10229,7 @@
   // Só quem TEM: ler as 44 que têm em vez das 221 que existem é o que torna a tela viável.
   async function apoiosOrigens() {
     const r = await fetch('/game.php?village=' + CUR_VID
-      + '&screen=overview_villages&mode=units&type=away&page=-1', { credentials: 'include', cache: 'no-store' });
+      + '&screen=overview_villages&mode=units&type=away&group=0&page=-1', { credentials: 'include', cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status + ' ao listar as aldeias com tropa fora');
     const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
     const tab = doc.querySelector('#units_table');

@@ -1162,6 +1162,7 @@
       { id: 'op',      ico: '🎯', rot: 'Operação', hint: 'Um alvo por vez: escolha as aldeias, crie ondas (cada nova entra 100ms depois da anterior), ordene e calibre os horários. Depois passe pro próximo alvo.' },
       { id: 'fake',    ico: '🎭', rot: 'Fake',    hint: 'Vários alvos de uma vez; o alvo único acima é ignorado.' },
       { id: 'massa',   ico: '🚚', rot: 'Apoio massa', hint: 'Apoio das origens marcadas pro(s) alvo(s), disparado AGORA (não agenda). Em cada unidade: número, 50% ou tudo.' },
+      { id: 'atkm',    ico: '💥', rot: 'Ataque em massa', hint: 'Cole os alvos, escolha o grupo de origens e a tropa. Eu distribuo minimizando a maior viagem, voce confere a lista e valida.' },
       { id: 'blz',     ico: '🛡', rot: 'Blindagem',  hint: 'Lê a tabela de pedidos do tópico da tribo, desconta o que já foi entregue, divide a SUA defesa entre os pedidos e dispara AGORA. No fim monta as linhas pra você colar no fórum.' },
     ];
     function ccTipo() { return (config.cmd && config.cmd.tipo) || 'attack'; }
@@ -1830,162 +1831,179 @@
 
 
 
-    // Arma o plano INTEIRO. O botao 'Armar comando' la embaixo arma so o alvo ATIVO — heranca do
-    // fluxo de um alvo por vez, e a razao de o usuario ver 'so 1 alvo agendado' depois de montar
-    // 31. Aqui percorre todos, trocando o ativo, e devolve o placar.
+    // ==================== ATAQUE EM MASSA ====================
+    // Bater num jogador inteiro: cola os alvos, escolhe o grupo de origens, a hora de chegada e a
+    // tropa. O modulo calcula QUEM ataca QUEM, mostra a lista pra conferencia, aceita troca manual
+    // e so agenda quando voce valida.
     //
-    // O ccOpArmarAtivo reporta pelo mesmo callback tanto sucesso quanto recusa; o que separa os
-    // dois e a COR (sucesso manda '#2e7d3a' ou '#a2643a', recusa nao manda nada). Por isso o
-    // callback abaixo olha o segundo argumento em vez do texto.
-    function ccOpPlanoArmarTodos() {
-      const cc = ccOpCfg();
-      if (!cc.alvos.length) { alert('Monte o plano primeiro (botao Distribuir).'); return; }
-      const ondas = cc.alvos.reduce((t, a) => t + (a.ondas || []).length, 0);
-      if (!confirm('Armar os ' + cc.alvos.length + ' alvo(s) do plano — ' + ondas + ' comando(s)?'
-        + '\n\nEles vao pra fila com o horario calculado. Nada sai antes da hora.')) return;
-      const antes = cc.ativo;
-      let ok = 0; const recusados = [];
-      cc.alvos.slice().forEach((a) => {
-        cc.ativo = a.id;
-        let recusa = null;
-        ccOpArmarAtivo((txt, cor) => { if (!cor) recusa = txt; });
-        if (recusa) recusados.push((a.coord || '?') + ': ' + recusa); else ok++;
-      });
-      cc.ativo = antes; save(); ccOpRender();
-      const el = document.getElementById('cc-op-plano-aplicado');
-      const resumo = ok + ' de ' + cc.alvos.length + ' alvo(s) armado(s)'
-        + (recusados.length ? ' · ' + recusados.length + ' recusado(s)' : '');
-      if (el) { el.textContent = (recusados.length ? '\u26a0 ' : '\u2714 ') + resumo; el.style.color = recusados.length ? '#a2643a' : '#2e7d3a'; }
-      pushLog('Operacao: ' + resumo + (recusados.length ? ' — ' + recusados.slice(0, 4).join(' | ') : '') + '.',
-        recusados.length ? 'err' : 'ok', 'cmd');
+    // O numero de ataques NAO e perguntado: e o numero de origens do grupo. Com 12 origens e 10
+    // alvos saem 12 ataques — cada alvo recebe pelo menos um, e os 2 que sobram vao onde custam
+    // menos viagem. Perguntar "quantos ataques" era uma decisao que o proprio dado ja responde, e
+    // foi o que mais confundiu nas tentativas anteriores deste recurso.
+    //
+    // CRITERIO: minimiza a MAIOR distancia do plano (atribuicao de gargalo, ccPlanoResolver).
+    // Todo mundo sai o mais tarde possivel, encurtando a janela em que o alvo ve os incomings.
+    let _ccAtkmGrupoSet = null;
+    function ccAtkmCfg() {
+      const c = (config.cmd.atkm = config.cmd.atkm || {});
+      if (c.tropas == null) c.tropas = {};
+      if (!Array.isArray(c.pares)) c.pares = [];
+      return c;
     }
-    // Caixinhas de tropa do plano: uma por unidade do mundo. Aceita numero ou 'tudo'.
-    function ccOpPlanoTropasRender() {
-      const box = document.getElementById('cc-op-plano-tropas'); if (!box) return;
-      const guard = (config.cmd.op && config.cmd.op.planoTropas) || {};
+    function ccAtkmTropasRender() {
+      const box = document.getElementById('cc-atkm-tropas'); if (!box) return;
+      const c = ccAtkmCfg();
       const lista = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
       const rotU = {}; UNITS.forEach(([u, n]) => { rotU[u] = n; });
       box.innerHTML = lista.filter((u) => u !== 'militia').map((u) =>
-        '<label class=\"twmgr-ucell\" title=\"' + esc(rotU[u] || u) + '\">' + unitIcon(u, rotU[u] || u) +
-        '<input class=\"cc-op-plano-u twmgr-uinp\" data-u=\"' + u + '\" style=\"width:46px\" placeholder=\"0\" value=\"' +
-        esc(String(guard[u] == null ? '' : guard[u])) + '\"></label>').join('');
-      box.querySelectorAll('.cc-op-plano-u').forEach((el) => {
+        '<label class="twmgr-ucell" title="' + esc(rotU[u] || u) + ' — numero ou a palavra tudo">' + unitIcon(u, rotU[u] || u) +
+        '<input class="cc-atkm-u twmgr-uinp" data-u="' + u + '" style="width:48px" placeholder="0" value="' +
+        esc(String(c.tropas[u] == null ? '' : c.tropas[u])) + '"></label>').join('');
+      box.querySelectorAll('.cc-atkm-u').forEach((el) => {
         el.addEventListener('change', () => {
-          const cc = ccOpCfg();
-          cc.planoTropas = cc.planoTropas || {};
+          const cc = ccAtkmCfg();
           const v = (el.value || '').trim();
-          if (!v) delete cc.planoTropas[el.getAttribute('data-u')];
-          else cc.planoTropas[el.getAttribute('data-u')] = v;
-          save();
+          if (!v) delete cc.tropas[el.getAttribute('data-u')]; else cc.tropas[el.getAttribute('data-u')] = v;
+          save(); ccAtkmTabela();
         });
       });
     }
-
-    // Aplica a mesma receita em TODAS as ondas de TODOS os alvos do plano.
-    //
-    // 'tudo' e resolvido POR ALDEIA, com o disponivel dela — nao existe um numero unico que sirva
-    // pra dezenas de origens diferentes. O disponivel ja desconta a reserva do Coordenado e o que
-    // outras ondas do proprio plano comprometeram.
-    function ccOpPlanoAplicarTropas() {
-      const cc = ccOpCfg();
-      const receita = cc.planoTropas || {};
-      const unids = Object.keys(receita).filter((u) => String(receita[u]).trim() !== '');
-      if (!unids.length) { alert('Preencha pelo menos uma unidade — numero ou a palavra tudo.'); return; }
-      if (!cc.alvos.length) { alert('Monte o plano primeiro (botao Distribuir).'); return; }
-      // Zera antes: senao o 'disponivel' ja conta o que estas mesmas ondas comprometeram e a
-      // segunda aplicacao devolveria menos que a primeira, sem motivo visivel.
-      cc.alvos.forEach((a) => (a.ondas || []).forEach((o) => { o.amounts = {}; }));
-      let ondas = 0;
-      cc.alvos.forEach((a) => (a.ondas || []).forEach((o) => {
-        const disp = ccOpDisponivel(o.vid);
-        const am = {};
-        unids.forEach((u) => {
-          const bruto = String(receita[u]).trim().toLowerCase();
-          const n = (bruto === 'tudo' || bruto === 'max') ? (disp[u] || 0)
-            : Math.min(parseInt(bruto, 10) || 0, disp[u] || 0);
-          if (n > 0) am[u] = n;
-        });
-        o.amounts = am; o.tipo = 'attack';
-        if (Object.keys(am).length) ondas++;
-      }));
-      save(); ccOpRender();
-      const soma = {};
-      cc.alvos.forEach((a) => (a.ondas || []).forEach((o) => Object.keys(o.amounts || {}).forEach((u) => {
-        soma[u] = (soma[u] || 0) + o.amounts[u]; })));
-      const txt = Object.keys(soma).map((u) => fmtN(soma[u]) + ' ' + u).join(' · ');
-      const el = document.getElementById('cc-op-plano-aplicado');
-      if (el) el.textContent = '\u2714 ' + ondas + ' onda(s): ' + txt;
-      pushLog('Operacao: receita aplicada em ' + ondas + ' onda(s) — ' + txt + '.', 'ok', 'cmd');
+    // Tropa de UMA origem a partir da receita. "tudo" e resolvido com o disponivel DELA — nao
+    // existe numero unico que sirva pra dezenas de aldeias diferentes.
+    function ccAtkmAmounts(vid) {
+      const receita = ccAtkmCfg().tropas || {};
+      const disp = ccOpDisponivel(vid);
+      const am = {};
+      Object.keys(receita).forEach((u) => {
+        const bruto = String(receita[u]).trim().toLowerCase();
+        if (!bruto) return;
+        const n = (bruto === 'tudo' || bruto === 'max') ? (disp[u] || 0)
+          : Math.min(parseInt(bruto, 10) || 0, disp[u] || 0);
+        if (n > 0) am[u] = n;
+      });
+      return am;
     }
-    // Lê o formulário, resolve e materializa um alvo da Operação por coordenada.
-    function ccOpPlanoDistribuir() {
-      const txt = (document.getElementById('cc-op-plano-alvos') || {}).value || '';
-      const coords = [];
+    function ccAtkmPool() {
+      const gid = (document.getElementById('cc-atkm-grupo') || {}).value || '';
+      let pool = CCVILAS.filter((v) => v.x != null);
+      if (gid && _ccAtkmGrupoSet) pool = pool.filter((v) => _ccAtkmGrupoSet.has(String(v.vid)));
+      return pool;
+    }
+    function ccAtkmCoords() {
+      const txt = (document.getElementById('cc-atkm-alvos') || {}).value || '';
+      const out = [];
       (txt.match(/\d{1,3}\s*\|\s*\d{1,3}/g) || []).forEach((c) => {
         const k = c.replace(/\s+/g, '');
-        if (coords.indexOf(k) < 0) coords.push(k);
+        if (out.indexOf(k) < 0) out.push(k);
       });
-      if (!coords.length) { alert('Cole pelo menos uma coordenada de alvo.'); return; }
-      // O campo e POR ALVO. Era 'no total' e confundia: com 31 alvos e '1' digitado, o plano
-      // cobria UM alvo. Por alvo e a unidade em que se pensa o ataque.
-      const qtdPorAlvo = Math.max(1, parseInt((document.getElementById('cc-op-plano-n') || {}).value, 10) || 1);
-      const N = qtdPorAlvo * coords.length;
-      const chegada = (document.getElementById('cc-op-plano-chegada') || {}).value || '';
-      if (!chegada) { alert('Escolha a hora de chegada — é ela que faz todos baterem juntos.'); return; }
-      const gid = (document.getElementById('cc-op-plano-grupo') || {}).value || '';
-      let pool = CCVILAS.filter((v) => v.x != null);
-      if (gid && _ccOpPlanoGrupoSet) pool = pool.filter((v) => _ccOpPlanoGrupoSet.has(String(v.vid)));
-      if (!pool.length) { alert('Nenhuma aldeia de origem nesse grupo.'); return; }
-      if (N > pool.length) {
-        if (!confirm(N + ' ataques com apenas ' + pool.length + ' aldeia(s) de origem.\n\n'
-          + 'Algumas vão mandar mais de um comando — o que é normal num trem, mas some tropa da mesma aldeia.\n\nSeguir?')) return;
-      }
-      const alvos = coords.map((c) => { const p = ccCoordParse(c); return { coord: c, x: +p.x, y: +p.y }; });
-      const origens = pool.map((v) => ({ vid: String(v.vid), nome: v.nome || v.coord, x: v.x, y: v.y,
-        d: alvos.map((t) => fieldDist(v.x, v.y, t.x, t.y)) }));
-      const sol = ccPlanoResolver(origens, alvos, N);
-      if (!sol) { alert('Não consegui montar o plano com esses números. Reduza os ataques ou aumente o grupo de origens.'); return; }
-      const c = ccOpCfg();
-      if (c.alvos.length && !confirm('Isto SUBSTITUI os ' + c.alvos.length + ' alvo(s) que já estão na Operação.\n\nSeguir?')) return;
-      // Um alvo da Operação por coordenada, já com as ondas.
-      const porAlvo = {};
-      sol.pares.forEach((p) => { (porAlvo[p.tj] || (porAlvo[p.tj] = [])).push(origens[p.oi]); });
-      const novos = [];
-      alvos.forEach((t, j) => {
-        const orgs = porAlvo[j] || [];
-        if (!orgs.length) return;
-        const a = { id: genId(), coord: t.coord, chegadaLocal: chegada, vids: {}, ondas: [] };
-        orgs.forEach((o) => {
-          a.vids[o.vid] = 1;
-          a.ondas.push({ id: genId(), vid: o.vid, tipo: 'attack', amounts: {}, offsetMs: null });
-        });
-        novos.push(a);
-      });
-      c.alvos = novos;
-      c.ativo = novos.length ? novos[0].id : null;
-      save(); ccOpRender();
-      const semOrigem = alvos.length - novos.length;
-      pushLog('Operação: plano montado — ' + N + ' ataque(s) em ' + novos.length + ' alvo(s), maior distância '
-        + sol.teto.toFixed(1) + ' campos'
-        + (semOrigem ? (' · ' + semOrigem + ' alvo(s) ficaram SEM origem') : '')
-        + '. Agora escolha as tropas em cada alvo (passo 3).', 'ok', 'cmd');
+      return out;
     }
-
-    // Prévia: quantos alvos, quantos por alvo, e a maior distância — antes de mexer em nada.
-    let _ccOpPlanoGrupoSet = null;
-    function ccOpPlanoPrevia() {
-      const el = document.getElementById('cc-op-plano-previa'); if (!el) return;
-      const txt = (document.getElementById('cc-op-plano-alvos') || {}).value || '';
-      const coords = Array.from(new Set((txt.match(/\d{1,3}\s*\|\s*\d{1,3}/g) || []).map((c) => c.replace(/\s+/g, ''))));
-      const N = parseInt((document.getElementById('cc-op-plano-n') || {}).value, 10) || 0;   // por alvo
-      if (!coords.length || N < 1) { el.innerHTML = ''; return; }
-      const gid = (document.getElementById('cc-op-plano-grupo') || {}).value || '';
-      let pool = CCVILAS.filter((v) => v.x != null);
-      if (gid && _ccOpPlanoGrupoSet) pool = pool.filter((v) => _ccOpPlanoGrupoSet.has(String(v.vid)));
-      const total = N * coords.length;
-      el.innerHTML = coords.length + ' alvo(s) × ' + N + ' ataque(s) = <b>' + total + '</b> comando(s) · '
-        + pool.length + ' origem(ns) no grupo'
-        + (total > pool.length ? ' <b style="color:#a2643a">(origens de menos — alguma manda mais de um)</b>' : '');
+    function ccAtkmChegadaMs() {
+      const v = (document.getElementById('cc-atkm-chegada') || {}).value || '';
+      if (!v) return null;
+      const t = new Date(v).getTime();
+      return isNaN(t) ? null : t;
+    }
+    function ccAtkmCalcular() {
+      const coords = ccAtkmCoords();
+      if (!coords.length) { alert('Cole pelo menos uma coordenada de alvo.'); return; }
+      const pool = ccAtkmPool();
+      if (!pool.length) { alert('Nenhuma aldeia de origem nesse grupo.'); return; }
+      const alvos = coords.map((c) => { const p = ccCoordParse(c); return { coord: c, x: +p.x, y: +p.y }; });
+      const origens = pool.map((v) => ({ vid: String(v.vid), x: v.x, y: v.y,
+        d: alvos.map((t) => fieldDist(v.x, v.y, t.x, t.y)) }));
+      // N = uma saida por origem. E a regra que dispensa o campo "quantos ataques".
+      const sol = ccPlanoResolver(origens, alvos, origens.length);
+      if (!sol) { alert('Nao consegui montar a distribuicao. Confira as coordenadas.'); return; }
+      const c = ccAtkmCfg();
+      c.pares = sol.pares.map((p) => ({ vid: origens[p.oi].vid, coord: alvos[p.tj].coord }));
+      save(); ccAtkmTabela();
+    }
+    // A tabela e o ponto de conferencia: origem, alvo, distancia e HORA DE SAIDA calculada com a
+    // tropa real daquela origem. Trocar o alvo de uma linha recalcula na hora.
+    function ccAtkmTabela() {
+      const box = document.getElementById('cc-atkm-tabela'); if (!box) return;
+      const c = ccAtkmCfg();
+      const bt = document.getElementById('cc-atkm-validar');
+      const av = document.getElementById('cc-atkm-aviso');
+      if (!c.pares.length) {
+        box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— calcule a distribuicao pra ver a lista —</div>';
+        if (bt) bt.style.display = 'none';
+        if (av) av.innerHTML = '';
+        return;
+      }
+      const coords = ccAtkmCoords();
+      const chegaMs = ccAtkmChegadaMs();
+      const porAlvo = {}; c.pares.forEach((p) => { porAlvo[p.coord] = (porAlvo[p.coord] || 0) + 1; });
+      const sais = [];
+      box.innerHTML = c.pares.map((p, i) => {
+        const v = CCVILAS.find((z) => String(z.vid) === String(p.vid));
+        const t = ccCoordParse(p.coord);
+        const am = ccAtkmAmounts(p.vid);
+        const dist = (v && t) ? fieldDist(v.x, v.y, +t.x, +t.y) : null;
+        const viagem = (v && t && Object.keys(am).length) ? ccTempoViagemMs(v.x, v.y, +t.x, +t.y, am) : null;
+        const sai = (chegaMs && viagem != null) ? (chegaMs - viagem) : null;
+        if (sai != null) sais.push(sai);
+        const tarde = sai != null && sai <= srvNowP();
+        return '<div style="display:grid;grid-template-columns:20px 1fr 12px 96px 44px 60px;gap:4px;align-items:center;'
+          + 'font-size:10px;padding:2px 4px;border-bottom:1px solid rgba(0,0,0,.06)">'
+          + '<span style="color:#8a7d6d">' + (i + 1) + '</span>'
+          + '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#584526">'
+            + esc((v && (v.nome || v.coord)) || p.vid) + '</span>'
+          + '<span style="color:#c9bda8">&rsaquo;</span>'
+          + '<select class="cc-atkm-troca twmgr-inp" data-i="' + i + '" style="font-size:9px;padding:1px">'
+          + coords.map((k) => '<option value="' + esc(k) + '"' + (k === p.coord ? ' selected' : '') + '>' + esc(k)
+              + ' (' + (porAlvo[k] || 0) + ')</option>').join('')
+          + '</select>'
+          + '<span style="color:#8a7d6d;text-align:right">' + (dist == null ? '—' : dist.toFixed(1) + 'c') + '</span>'
+          + '<span style="text-align:right;color:' + (tarde ? '#c0483a' : '#2e7d3a') + '">'
+            + (sai == null ? '—' : srvClockMs(sai)) + '</span>'
+          + '</div>';
+      }).join('');
+      const semTropa = c.pares.filter((p) => !Object.keys(ccAtkmAmounts(p.vid)).length).length;
+      if (av) {
+        av.innerHTML = c.pares.length + ' comando(s) em ' + Object.keys(porAlvo).length + ' alvo(s)'
+          + (sais.length ? (' · saidas de <b>' + srvClockMs(Math.min.apply(null, sais)) + '</b> a <b>'
+              + srvClockMs(Math.max.apply(null, sais)) + '</b>') : '')
+          + (semTropa ? (' · <b style="color:#c0483a">' + semTropa + ' sem tropa</b>') : '');
+      }
+      box.querySelectorAll('.cc-atkm-troca').forEach((el) => {
+        el.addEventListener('change', () => {
+          ccAtkmCfg().pares[parseInt(el.getAttribute('data-i'), 10)].coord = el.value;
+          save(); ccAtkmTabela();
+        });
+      });
+      if (bt) { bt.style.display = ''; bt.textContent = '✔ Validar e agendar ' + c.pares.length + ' comando(s)'; }
+    }
+    function ccAtkmValidar() {
+      const c = ccAtkmCfg();
+      if (!c.pares.length) { alert('Calcule a distribuicao primeiro.'); return; }
+      const chegaMs = ccAtkmChegadaMs();
+      if (!chegaMs) { alert('Defina a hora de chegada.'); return; }
+      if (chegaMs <= srvNowP()) { alert('Esse horario ja passou.'); return; }
+      const prontos = [], pulados = [];
+      c.pares.forEach((p) => {
+        const v = CCVILAS.find((z) => String(z.vid) === String(p.vid));
+        const t = ccCoordParse(p.coord);
+        if (!v || !t) { pulados.push(p.coord + ' (aldeia ou alvo invalido)'); return; }
+        const am = ccAtkmAmounts(p.vid);
+        if (!Object.keys(am).length) { pulados.push((v.nome || v.coord) + ' (sem tropa)'); return; }
+        const vi = ccTempoViagemMs(v.x, v.y, +t.x, +t.y, am);
+        if (vi == null) { pulados.push((v.nome || v.coord) + ' (nao calculei a viagem)'); return; }
+        // Saida no passado nao vira comando: seria agendar algo que o motor nunca consegue mandar.
+        if (chegaMs - vi <= srvNowP()) { pulados.push((v.nome || v.coord) + ' -> ' + p.coord + ' (saida ja passou)'); return; }
+        prontos.push({ v: v, t: t, am: am });
+      });
+      if (!prontos.length) { alert('Nada a agendar.\n\n' + pulados.join('\n')); return; }
+      if (!confirm('Agendar ' + prontos.length + ' comando(s), todos chegando ' + srvClockMs(chegaMs) + '?'
+        + (pulados.length ? ('\n\n' + pulados.length + ' pulado(s):\n' + pulados.slice(0, 8).join('\n')) : ''))) return;
+      prontos.forEach((p) => { cmdAdicionar('attack', p.t.x, p.t.y, p.am, chegaMs, p.v.vid); });
+      save();
+      pushLog('Ataque em massa: ' + prontos.length + ' comando(s) agendado(s) pra ' + srvClockMs(chegaMs)
+        + (pulados.length ? (' · ' + pulados.length + ' pulado(s)') : '') + '.', 'ok', 'cmd');
+      const av = document.getElementById('cc-atkm-aviso');
+      if (av) av.innerHTML = '✔ <b>' + prontos.length + '</b> comando(s) na fila'
+        + (pulados.length ? (' · ' + pulados.length + ' pulado(s)') : '');
     }
 
     function ccOpAlvoNovo() {
@@ -2179,13 +2197,14 @@
         grupos.map((g) => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('');
       sel.value = cur;
       if (cur) ccOpAplicarFiltroGrupo();
-      // Mesmo conteudo no seletor do Plano em massa: e a mesma pergunta (de quais aldeias posso
-      // partir), so que aplicada ao plano inteiro em vez de a um alvo.
-      const selP = document.getElementById('cc-op-plano-grupo');
-      if (selP) {
-        const curP = selP.value;
-        selP.innerHTML = sel.innerHTML;
-        selP.value = curP || '';
+      // Mesmo conteudo no seletor do Ataque em massa.
+      const selA = document.getElementById('cc-atkm-grupo');
+      if (selA) {
+        const curA = selA.value;
+        selA.innerHTML = sel.innerHTML;
+        selA.value = curA || '';
+        const el = document.getElementById('cc-atkm-pool');
+        if (el) el.textContent = ccAtkmPool().length + ' aldeia(s)';
       }
     }
 
@@ -4526,31 +4545,6 @@
         // OPERAÇÃO: um alvo por vez (o alvo é o container). Dentro dele, as aldeias
         // participantes e uma LISTA ORDENADA de ondas com horário calibrável.
         '<div id="cc-op-cfg" style="display:none">' +
-          // PLANO EM MASSA: cria os alvos de uma vez. Fica ANTES do seletor de alvo porque e ele
-          // que popula esse seletor — a ordem na tela e a ordem de uso.
-          '<div style="border:1px solid #ece4d8;border-radius:6px;padding:6px;margin-bottom:7px;background:#fbf7ee">' +
-            '<div style="font-size:10px;color:#6f6153;margin-bottom:4px"><b>Plano em massa</b> — cole as aldeias do alvo, diga quantos ataques no total e a hora de chegada. Eu reparto as suas origens.</div>' +
-            '<textarea id="cc-op-plano-alvos" class="twmgr-inp" style="width:100%;height:44px;font-size:10px" placeholder="454|598 465|597 468|595 470|593 …"></textarea>' +
-            '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:4px">' +
-              '<span style="font-size:10px;color:#6f6153">Ataques <b>por alvo</b></span>' +
-              '<input id="cc-op-plano-n" class="twmgr-inp" type="number" min="1" value="1" style="width:52px;font-size:10px;padding:1px">' +
-              '<span style="font-size:10px;color:#6f6153">Chegada</span>' +
-              '<input id="cc-op-plano-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:190px;font-size:10px;padding:1px">' +
-              '<span style="font-size:10px;color:#6f6153">Origens</span>' +
-              '<select id="cc-op-plano-grupo" class="twmgr-inp" style="width:110px;font-size:10px;padding:1px"><option value="">todas</option></select>' +
-              '<button id="cc-op-plano-go" class="twmgr-btn twmgr-go" style="padding:2px 10px;font-size:10px">Distribuir</button>' +
-            '</div>' +
-            '<div id="cc-op-plano-previa" style="font-size:10px;color:#a2643a;margin-top:4px"></div>' +
-            // Tropa de uma vez pro plano inteiro. Sem isto, montar 31 alvos ainda custa 31
-            // visitas ao passo 3 — a parte que fazia o recurso parecer complicado.
-            '<div style="border-top:1px solid #ece4d8;margin-top:6px;padding-top:5px">' +
-              '<div style="font-size:10px;color:#6f6153;margin-bottom:3px">Tropas de <b>cada</b> ataque — numero ou <b>tudo</b>:</div>' +
-              '<div id="cc-op-plano-tropas" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"></div>' +
-              '<button id="cc-op-plano-aplicar" class="twmgr-btn twmgr-ghost" style="padding:2px 10px;font-size:10px;margin-top:4px">Aplicar em todas as ondas</button>' +
-              '<button id="cc-op-plano-armar" class="twmgr-btn twmgr-go" style="padding:2px 10px;font-size:10px;margin-top:4px;margin-left:6px">▶ Armar TODOS os alvos</button>' +
-              '<span id="cc-op-plano-aplicado" style="font-size:10px;color:#2e7d3a;margin-left:6px"></span>' +
-            '</div>' +
-          '</div>' +
           '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:5px">' +
             // "Alvos" no plural de propósito: é o seletor de QUAL alvo você está montando, e
             // não pode se confundir com o passo "1. Alvo" logo abaixo, que edita os dados dele.
@@ -4605,6 +4599,24 @@
           '<div id="cc-op-nav" style="display:flex;align-items:center;gap:6px;margin-top:8px"></div>' +
         '</div>' +
           // Apoio em massa: aparece só quando a aba 🚚 está ativa. Usa as origens marcadas abaixo.
+          // ATAQUE EM MASSA: fluxo proprio de 5 campos, sem etapas.
+          '<div id="cc-atkm-cfg" style="display:none">' +
+            '<div style="font-size:10px;color:#6f6153;margin-bottom:2px"><b>1.</b> Aldeias do alvo</div>' +
+            '<textarea id="cc-atkm-alvos" class="twmgr-inp" style="width:100%;height:48px;font-size:10px" placeholder="454|598 465|597 468|595 …"></textarea>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:5px">' +
+              '<span style="font-size:10px;color:#6f6153"><b>2.</b> Origens</span>' +
+              '<select id="cc-atkm-grupo" class="twmgr-inp" style="width:130px;font-size:10px;padding:1px"><option value="">todas</option></select>' +
+              '<span id="cc-atkm-pool" style="font-size:10px;color:#8a7d6d"></span>' +
+              '<span style="font-size:10px;color:#6f6153;margin-left:6px"><b>3.</b> Chegada</span>' +
+              '<input id="cc-atkm-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:190px;font-size:10px;padding:1px">' +
+            '</div>' +
+            '<div style="font-size:10px;color:#6f6153;margin:6px 0 2px"><b>4.</b> Tropa de cada ataque <span style="color:#8a7d6d">(numero ou a palavra <b>tudo</b>)</span></div>' +
+            '<div id="cc-atkm-tropas" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"></div>' +
+            '<button id="cc-atkm-calc" class="twmgr-btn twmgr-go" style="padding:3px 12px;font-size:10px;margin-top:6px">Calcular distribuicao</button>' +
+            '<div id="cc-atkm-aviso" style="font-size:10px;color:#a2643a;margin-top:5px"></div>' +
+            '<div id="cc-atkm-tabela" style="height:260px;min-height:80px;resize:vertical;overflow-y:auto;background:#ffffff;border:1px solid #ece4d8;border-radius:6px;margin-top:4px"></div>' +
+            '<button id="cc-atkm-validar" class="twmgr-btn twmgr-go" style="width:100%;margin-top:6px;display:none"></button>' +
+          '</div>' +
           '<div id="cc-massa-cfg" style="display:none">' +
             '<label style="font-size:10px;display:block">Alvo(s) <span style="color:#584526">(um por linha)</span></label>' +
             '<textarea id="cc-massa-alvos" class="twmgr-inp" style="width:100%;height:36px;font-size:10px" placeholder="500|600"></textarea>' +
@@ -4854,28 +4866,26 @@
         ccOpCfg().grupo = e.target.value; save(); ccOpAplicarFiltroGrupo();
       });
       ccOpCarregarGrupos();
-      // ---- Plano em massa ----
-      ccOpPlanoTropasRender();
-      const arP = document.getElementById('cc-op-plano-armar');
-      if (arP) arP.addEventListener('click', () => { keepAwake(true); ccOpPlanoArmarTodos(); });
-      const apP = document.getElementById('cc-op-plano-aplicar');
-      if (apP) apP.addEventListener('click', ccOpPlanoAplicarTropas);
-      const goP = document.getElementById('cc-op-plano-go');
-      if (goP) goP.addEventListener('click', ccOpPlanoDistribuir);
-      ['cc-op-plano-alvos', 'cc-op-plano-n'].forEach((id) => {
-        const el = document.getElementById(id);
-        if (el) el.addEventListener('input', ccOpPlanoPrevia);
-      });
-      const selPG = document.getElementById('cc-op-plano-grupo');
-      if (selPG) selPG.addEventListener('change', async (e) => {
-        const gid = e.target.value;
-        _ccOpPlanoGrupoSet = null;
-        if (gid) {
-          try { _ccOpPlanoGrupoSet = new Set((await getVillagesInGroup(gid)).map((v) => String(v.vid))); }
-          catch (err) { pushLog('Operacao: nao li o grupo do plano (' + (err.message || err) + ') — usando todas as aldeias.', 'err', 'cmd'); }
+      // ---- Ataque em massa ----
+      const aC = document.getElementById('cc-atkm-calc');
+      if (aC) aC.addEventListener('click', ccAtkmCalcular);
+      const aV = document.getElementById('cc-atkm-validar');
+      if (aV) aV.addEventListener('click', () => { keepAwake(true); ccAtkmValidar(); });
+      const aCh = document.getElementById('cc-atkm-chegada');
+      if (aCh) aCh.addEventListener('change', ccAtkmTabela);
+      const aAl = document.getElementById('cc-atkm-alvos');
+      if (aAl) aAl.addEventListener('input', () => { ccAtkmTabela(); });
+      const aG = document.getElementById('cc-atkm-grupo');
+      if (aG) aG.addEventListener('change', async (e) => {
+        _ccAtkmGrupoSet = null;
+        if (e.target.value) {
+          try { _ccAtkmGrupoSet = new Set((await getVillagesInGroup(e.target.value)).map((v) => String(v.vid))); }
+          catch (err) { pushLog('Ataque em massa: nao li o grupo (' + (err.message || err) + ') — usando todas.', 'err', 'cmd'); }
         }
-        ccOpPlanoPrevia();
+        const el = document.getElementById('cc-atkm-pool');
+        if (el) el.textContent = ccAtkmPool().length + ' aldeia(s)';
       });
+      // ---- Plano em massa ----
       ccPontosCarregar();   // pontos das aldeias: alimentam o piso de população na conferência
       document.getElementById('cc-op-coord').addEventListener('change', (e) => {
         const a = ccOpAtivo(); if (!a) return;
@@ -4954,18 +4964,24 @@
         // A Blindagem se comporta como a massa: tem UI própria, dispara na hora (nada de armar) e
         // reaproveita a lista de Origens de baixo pra saber de quais aldeias pode tirar defesa.
         const massa = (tipo === 'massa'), op = (tipo === 'op'), blz = (tipo === 'blz');
+        // Ataque em massa tem UI propria e completa: esconde tropas, origens, alvo unico,
+        // chegada e o botao Armar. Nada de fora dele participa.
+        const atkm = (tipo === 'atkm');
+        const acfg = document.getElementById('cc-atkm-cfg');
+        if (acfg) acfg.style.display = atkm ? 'block' : 'none';
+        if (atkm) { ccAtkmTropasRender(); ccAtkmTabela(); }
         const mcfg = document.getElementById('cc-massa-cfg'); if (mcfg) mcfg.style.display = massa ? 'block' : 'none';
         const ocfg = document.getElementById('cc-op-cfg'); if (ocfg) ocfg.style.display = op ? 'block' : 'none';
         const bcfg = document.getElementById('cc-blz-cfg'); if (bcfg) bcfg.style.display = blz ? 'block' : 'none';
         if (blz) ccBlzRender();
-        const tsec = document.getElementById('cc-tropas-sec'); if (tsec) tsec.style.display = (massa || op || blz) ? 'none' : 'block';
-        const osec = document.getElementById('cc-origens-sec'); if (osec) osec.style.display = op ? 'none' : 'block';
-        const arow = document.getElementById('cc-armar-row'); if (arow) arow.style.display = (massa || blz) ? 'none' : 'flex';
+        const tsec = document.getElementById('cc-tropas-sec'); if (tsec) tsec.style.display = (massa || op || blz || atkm) ? 'none' : 'block';
+        const osec = document.getElementById('cc-origens-sec'); if (osec) osec.style.display = (op || atkm) ? 'none' : 'block';
+        const arow = document.getElementById('cc-armar-row'); if (arow) arow.style.display = (massa || blz || atkm) ? 'none' : 'flex';
         // O campo de alvo único não serve pro fake (tem lista própria) nem pra Operação (o alvo
         // é do bloco). Antes ficavam só apagados e continuavam ali em cima, confundindo — agora
         // somem de vez.
         // A Blindagem também não usa o alvo único: os alvos são as aldeias da tabela da tribo.
-        const semAlvoGlobal = (tipo === 'fake' || op || blz);
+        const semAlvoGlobal = (tipo === 'fake' || op || blz || atkm);
         const rAlvo = document.getElementById('cc-row-alvo');
         if (rAlvo) rAlvo.style.display = semAlvoGlobal ? 'none' : 'flex';
         // Chegada: a Operação tem a dela na etapa 1, então some. Já o Fake NÃO tem campo próprio
@@ -4974,7 +4990,7 @@
         const rCheg = document.getElementById('cc-row-chegada');
         if (rCheg) {
           // Blindagem não marca horário: o apoio sai assim que você manda, sem agendar.
-          rCheg.style.display = (op || blz) ? 'none' : 'flex';
+          rCheg.style.display = (op || blz || atkm) ? 'none' : 'flex';
           const destino = document.getElementById((tipo === 'fake') ? 'cc-fake-chegada-slot' : 'cc-chegada-slot');
           if (destino && rCheg.parentElement !== destino) destino.appendChild(rCheg);
         }

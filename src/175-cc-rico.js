@@ -1828,6 +1828,65 @@
       return achado;
     }
 
+
+    // Caixinhas de tropa do plano: uma por unidade do mundo. Aceita numero ou 'tudo'.
+    function ccOpPlanoTropasRender() {
+      const box = document.getElementById('cc-op-plano-tropas'); if (!box) return;
+      const guard = (config.cmd.op && config.cmd.op.planoTropas) || {};
+      const lista = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
+      const rotU = {}; UNITS.forEach(([u, n]) => { rotU[u] = n; });
+      box.innerHTML = lista.filter((u) => u !== 'militia').map((u) =>
+        '<label class=\"twmgr-ucell\" title=\"' + esc(rotU[u] || u) + '\">' + unitIcon(u, rotU[u] || u) +
+        '<input class=\"cc-op-plano-u twmgr-uinp\" data-u=\"' + u + '\" style=\"width:46px\" placeholder=\"0\" value=\"' +
+        esc(String(guard[u] == null ? '' : guard[u])) + '\"></label>').join('');
+      box.querySelectorAll('.cc-op-plano-u').forEach((el) => {
+        el.addEventListener('change', () => {
+          const cc = ccOpCfg();
+          cc.planoTropas = cc.planoTropas || {};
+          const v = (el.value || '').trim();
+          if (!v) delete cc.planoTropas[el.getAttribute('data-u')];
+          else cc.planoTropas[el.getAttribute('data-u')] = v;
+          save();
+        });
+      });
+    }
+
+    // Aplica a mesma receita em TODAS as ondas de TODOS os alvos do plano.
+    //
+    // 'tudo' e resolvido POR ALDEIA, com o disponivel dela — nao existe um numero unico que sirva
+    // pra dezenas de origens diferentes. O disponivel ja desconta a reserva do Coordenado e o que
+    // outras ondas do proprio plano comprometeram.
+    function ccOpPlanoAplicarTropas() {
+      const cc = ccOpCfg();
+      const receita = cc.planoTropas || {};
+      const unids = Object.keys(receita).filter((u) => String(receita[u]).trim() !== '');
+      if (!unids.length) { alert('Preencha pelo menos uma unidade — numero ou a palavra tudo.'); return; }
+      if (!cc.alvos.length) { alert('Monte o plano primeiro (botao Distribuir).'); return; }
+      // Zera antes: senao o 'disponivel' ja conta o que estas mesmas ondas comprometeram e a
+      // segunda aplicacao devolveria menos que a primeira, sem motivo visivel.
+      cc.alvos.forEach((a) => (a.ondas || []).forEach((o) => { o.amounts = {}; }));
+      let ondas = 0;
+      cc.alvos.forEach((a) => (a.ondas || []).forEach((o) => {
+        const disp = ccOpDisponivel(o.vid);
+        const am = {};
+        unids.forEach((u) => {
+          const bruto = String(receita[u]).trim().toLowerCase();
+          const n = (bruto === 'tudo' || bruto === 'max') ? (disp[u] || 0)
+            : Math.min(parseInt(bruto, 10) || 0, disp[u] || 0);
+          if (n > 0) am[u] = n;
+        });
+        o.amounts = am; o.tipo = 'attack';
+        if (Object.keys(am).length) ondas++;
+      }));
+      save(); ccOpRender();
+      const soma = {};
+      cc.alvos.forEach((a) => (a.ondas || []).forEach((o) => Object.keys(o.amounts || {}).forEach((u) => {
+        soma[u] = (soma[u] || 0) + o.amounts[u]; })));
+      const txt = Object.keys(soma).map((u) => fmtN(soma[u]) + ' ' + u).join(' · ');
+      const el = document.getElementById('cc-op-plano-aplicado');
+      if (el) el.textContent = '\u2714 ' + ondas + ' onda(s): ' + txt;
+      pushLog('Operacao: receita aplicada em ' + ondas + ' onda(s) — ' + txt + '.', 'ok', 'cmd');
+    }
     // Lê o formulário, resolve e materializa um alvo da Operação por coordenada.
     function ccOpPlanoDistribuir() {
       const txt = (document.getElementById('cc-op-plano-alvos') || {}).value || '';
@@ -1837,7 +1896,10 @@
         if (coords.indexOf(k) < 0) coords.push(k);
       });
       if (!coords.length) { alert('Cole pelo menos uma coordenada de alvo.'); return; }
-      const N = Math.max(1, parseInt((document.getElementById('cc-op-plano-n') || {}).value, 10) || 0);
+      // O campo e POR ALVO. Era 'no total' e confundia: com 31 alvos e '1' digitado, o plano
+      // cobria UM alvo. Por alvo e a unidade em que se pensa o ataque.
+      const qtdPorAlvo = Math.max(1, parseInt((document.getElementById('cc-op-plano-n') || {}).value, 10) || 1);
+      const N = qtdPorAlvo * coords.length;
       const chegada = (document.getElementById('cc-op-plano-chegada') || {}).value || '';
       if (!chegada) { alert('Escolha a hora de chegada — é ela que faz todos baterem juntos.'); return; }
       const gid = (document.getElementById('cc-op-plano-grupo') || {}).value || '';
@@ -1885,16 +1947,15 @@
       const el = document.getElementById('cc-op-plano-previa'); if (!el) return;
       const txt = (document.getElementById('cc-op-plano-alvos') || {}).value || '';
       const coords = Array.from(new Set((txt.match(/\d{1,3}\s*\|\s*\d{1,3}/g) || []).map((c) => c.replace(/\s+/g, ''))));
-      const N = parseInt((document.getElementById('cc-op-plano-n') || {}).value, 10) || 0;
+      const N = parseInt((document.getElementById('cc-op-plano-n') || {}).value, 10) || 0;   // por alvo
       if (!coords.length || N < 1) { el.innerHTML = ''; return; }
       const gid = (document.getElementById('cc-op-plano-grupo') || {}).value || '';
       let pool = CCVILAS.filter((v) => v.x != null);
       if (gid && _ccOpPlanoGrupoSet) pool = pool.filter((v) => _ccOpPlanoGrupoSet.has(String(v.vid)));
-      const base = Math.floor(N / coords.length), extra = N % coords.length;
-      el.innerHTML = coords.length + ' alvo(s) · ' + N + ' ataque(s) — '
-        + (extra ? (base + ' ou ' + (base + 1)) : String(base)) + ' por alvo · '
-        + pool.length + ' origem(ns) no pool'
-        + (N > pool.length ? ' <b style="color:#a2643a">(origens de menos: alguma vai mandar mais de um)</b>' : '');
+      const total = N * coords.length;
+      el.innerHTML = coords.length + ' alvo(s) × ' + N + ' ataque(s) = <b>' + total + '</b> comando(s) · '
+        + pool.length + ' origem(ns) no grupo'
+        + (total > pool.length ? ' <b style="color:#a2643a">(origens de menos — alguma manda mais de um)</b>' : '');
     }
 
     function ccOpAlvoNovo() {
@@ -4441,8 +4502,8 @@
             '<div style="font-size:10px;color:#6f6153;margin-bottom:4px"><b>Plano em massa</b> — cole as aldeias do alvo, diga quantos ataques no total e a hora de chegada. Eu reparto as suas origens.</div>' +
             '<textarea id="cc-op-plano-alvos" class="twmgr-inp" style="width:100%;height:44px;font-size:10px" placeholder="454|598 465|597 468|595 470|593 …"></textarea>' +
             '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:4px">' +
-              '<span style="font-size:10px;color:#6f6153">Ataques no total</span>' +
-              '<input id="cc-op-plano-n" class="twmgr-inp" type="number" min="1" style="width:64px;font-size:10px;padding:1px">' +
+              '<span style="font-size:10px;color:#6f6153">Ataques <b>por alvo</b></span>' +
+              '<input id="cc-op-plano-n" class="twmgr-inp" type="number" min="1" value="1" style="width:52px;font-size:10px;padding:1px">' +
               '<span style="font-size:10px;color:#6f6153">Chegada</span>' +
               '<input id="cc-op-plano-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:190px;font-size:10px;padding:1px">' +
               '<span style="font-size:10px;color:#6f6153">Origens</span>' +
@@ -4450,6 +4511,14 @@
               '<button id="cc-op-plano-go" class="twmgr-btn twmgr-go" style="padding:2px 10px;font-size:10px">Distribuir</button>' +
             '</div>' +
             '<div id="cc-op-plano-previa" style="font-size:10px;color:#a2643a;margin-top:4px"></div>' +
+            // Tropa de uma vez pro plano inteiro. Sem isto, montar 31 alvos ainda custa 31
+            // visitas ao passo 3 — a parte que fazia o recurso parecer complicado.
+            '<div style="border-top:1px solid #ece4d8;margin-top:6px;padding-top:5px">' +
+              '<div style="font-size:10px;color:#6f6153;margin-bottom:3px">Tropas de <b>cada</b> ataque — numero ou <b>tudo</b>:</div>' +
+              '<div id="cc-op-plano-tropas" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"></div>' +
+              '<button id="cc-op-plano-aplicar" class="twmgr-btn twmgr-ghost" style="padding:2px 10px;font-size:10px;margin-top:4px">Aplicar em todas as ondas</button>' +
+              '<span id="cc-op-plano-aplicado" style="font-size:10px;color:#2e7d3a;margin-left:6px"></span>' +
+            '</div>' +
           '</div>' +
           '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:5px">' +
             // "Alvos" no plural de propósito: é o seletor de QUAL alvo você está montando, e
@@ -4755,6 +4824,9 @@
       });
       ccOpCarregarGrupos();
       // ---- Plano em massa ----
+      ccOpPlanoTropasRender();
+      const apP = document.getElementById('cc-op-plano-aplicar');
+      if (apP) apP.addEventListener('click', ccOpPlanoAplicarTropas);
       const goP = document.getElementById('cc-op-plano-go');
       if (goP) goP.addEventListener('click', ccOpPlanoDistribuir);
       ['cc-op-plano-alvos', 'cc-op-plano-n'].forEach((id) => {

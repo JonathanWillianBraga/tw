@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.211.0
+// @version      11.212.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.211.0';
+  const VERSION = '11.212.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -1001,7 +1001,7 @@
   //
   // Quem chama PRECISA carimbar o cache de memória com esse `at` original. Carimbar com Date.now()
   // faz o TTL recomeçar a cada leitura de disco, e com auto-F5 de 1 min isso significa um dado de
-  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.211.0 introduziu
+  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.212.0 introduziu
   // nos três caches de uma vez.
   function cacheLerBruto(nome, ttlMs) {
     try {
@@ -15177,6 +15177,10 @@
     }
     if (pend && pend.state === 'scheduled') return;   // já saiu de casa; o retorno manda agora
     if (!pend) {
+      // Cada remarcacao criava um pendente novo e os falhados ficavam pra sempre: a conta do
+      // usuario tinha 7 do mesmo alvo. Limpa os falhados desta aldeia antes de criar o proximo.
+      config.desviar.pending = (config.desviar.pending || []).filter((x) =>
+        !(x.coordOrigem === coord && x.state === 'failed'));
       pend = { id: 'd' + Date.now() + Math.random().toString(36).slice(2, 6),
                vid: String(plano.vid), coordOrigem: coord, supportVid: '', supportCoord: '',
                cmdId: '', sendAt: plano.sendAt, cancelAt: plano.cancelAt,
@@ -15224,7 +15228,20 @@
         const n = (state.avail && state.avail[u]) || 0;
         if (n > 0) amounts[u] = n;
       });
-      if (!Object.keys(amounts).length) throw new Error('sem tropas em casa pra desviar');
+      if (!Object.keys(amounts).length) {
+        // Nao ha o que mandar — mas o MOTIVO muda tudo, e a mensagem antiga dizia so 'sem tropas'
+        // e ainda emendava 'a tropa esta em casa e o ataque vem ai', que e o contrario do que
+        // acabou de ser medido. Aldeia vazia nao e perigo: o ataque bate no vazio de qualquer
+        // jeito. Perigo e ter tropa em casa e ela nao sair.
+        const emCasa = [];
+        UNITS.forEach(([u, rot]) => { const n = (state.avail && state.avail[u]) || 0; if (n > 0) emCasa.push(fmtN(n) + ' ' + rot); });
+        if (!emCasa.length) throw new Error('VAZIA: a aldeia nao tem tropa nenhuma em casa — nada a desviar, o ataque ja bate no vazio');
+        const guardadas = [];
+        if (config.desviar.keepSpy) guardadas.push('exploradores');
+        if (config.desviar.keepKnight) guardadas.push('paladino');
+        throw new Error('so ha ' + emCasa.join(', ') + ' em casa, e ' + (guardadas.join(' e ') || 'as regras de guarda')
+          + ' estao configurados pra ficar — desligue no painel do Desviar se quiser que saiam');
+      }
 
       const durSeg = await sendAttack(pend.vid, dx, dy, amounts, 'support');
       await sleep(700);   // dá tempo do server registrar o cmd
@@ -15252,7 +15269,11 @@
     } catch (e) {
       pend.state = 'failed'; pend.err = e.message || String(e); save();
       // Falhar AQUI significa que a tropa continua em casa e o ataque vai bater nela.
-      pushLog('🚨 DESVIO NÃO SAIU — ' + pend.coordOrigem + ': ' + pend.err + '. A tropa está em casa e o ataque vem aí.', 'err', 'desv');
+      // Aldeia vazia nao merece alarme: nao ha tropa pra perder. O alarme e pra quando havia
+      // tropa e ela ficou.
+      const vazia = /^VAZIA:/.test(pend.err || '');
+      pushLog((vazia ? '🚡 Desvio ' : '🚨 DESVIO NÃO SAIU — ') + pend.coordOrigem + ': ' + String(pend.err).replace(/^VAZIA: /, '')
+        + (vazia ? '.' : '. A tropa está em casa e o ataque vem aí.'), vazia ? '' : 'err', 'desv');
       if (config.captcha && config.captcha.enabled) { try { fireCaptchaNotification('desvio-nao-saiu/' + pend.coordOrigem, true); } catch (e2) {} }
       desviarRefreshRowStates();
       throw e;

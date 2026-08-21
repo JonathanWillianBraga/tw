@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.209.0
+// @version      11.210.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.209.0';
+  const VERSION = '11.210.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -994,7 +994,7 @@
   //
   // Quem chama PRECISA carimbar o cache de memória com esse `at` original. Carimbar com Date.now()
   // faz o TTL recomeçar a cada leitura de disco, e com auto-F5 de 1 min isso significa um dado de
-  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.209.0 introduziu
+  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.210.0 introduziu
   // nos três caches de uma vez.
   function cacheLerBruto(nome, ttlMs) {
     try {
@@ -15254,8 +15254,16 @@
       const marcado = desviarMarcado(coord, arriveMs);
       const pend = desviarPendenteDe(coord)
         || (config.desviar.pending || []).find((p) => p.coordOrigem === coord && (p.state === 'canceled' || p.state === 'failed'));
-      if (!marcado && !pend) { tr.style.background = ''; btn.textContent = '🔄 Desviar'; btn.disabled = false; return; }
-      const st = pend ? pend.state : 'marked';
+      // O pendente atende UMA leva, nao a aldeia inteira. Sem este recorte, toda linha da mesma
+      // aldeia herdava o rotulo do plano: ataque das 15:21 aparecia como 'sai 02:08:32' junto com
+      // os das 02:09, dando a entender que estava coberto quando nao estava.
+      const naLeva = !!pend && pend.ultimoAtaque != null
+        && arriveMs <= pend.ultimoAtaque
+        && (pend.primeiroAtaque == null || arriveMs >= pend.primeiroAtaque);
+      if (!marcado && !naLeva) { tr.style.background = ''; btn.textContent = '🔄 Desviar'; btn.disabled = false; return; }
+      // Marcado mas fora da leva ativa = espera a vez: mostra so 'marcado', sem horario, porque o
+      // horario dele ainda nao existe.
+      const st = naLeva ? pend.state : 'marked';
       tr.style.background = DESV_ROW_COLORS[st] || '';
       // O rótulo mostra o PLANO da aldeia inteira: várias linhas marcadas compartilham uma só saída.
       btn.textContent = {

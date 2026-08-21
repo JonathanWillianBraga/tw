@@ -394,8 +394,16 @@
       const marcado = desviarMarcado(coord, arriveMs);
       const pend = desviarPendenteDe(coord)
         || (config.desviar.pending || []).find((p) => p.coordOrigem === coord && (p.state === 'canceled' || p.state === 'failed'));
-      if (!marcado && !pend) { tr.style.background = ''; btn.textContent = '🔄 Desviar'; btn.disabled = false; return; }
-      const st = pend ? pend.state : 'marked';
+      // O pendente atende UMA leva, nao a aldeia inteira. Sem este recorte, toda linha da mesma
+      // aldeia herdava o rotulo do plano: ataque das 15:21 aparecia como 'sai 02:08:32' junto com
+      // os das 02:09, dando a entender que estava coberto quando nao estava.
+      const naLeva = !!pend && pend.ultimoAtaque != null
+        && arriveMs <= pend.ultimoAtaque
+        && (pend.primeiroAtaque == null || arriveMs >= pend.primeiroAtaque);
+      if (!marcado && !naLeva) { tr.style.background = ''; btn.textContent = '🔄 Desviar'; btn.disabled = false; return; }
+      // Marcado mas fora da leva ativa = espera a vez: mostra so 'marcado', sem horario, porque o
+      // horario dele ainda nao existe.
+      const st = naLeva ? pend.state : 'marked';
       tr.style.background = DESV_ROW_COLORS[st] || '';
       // O rótulo mostra o PLANO da aldeia inteira: várias linhas marcadas compartilham uma só saída.
       btn.textContent = {

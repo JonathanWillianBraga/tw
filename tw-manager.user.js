@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.210.0
+// @version      11.211.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.210.0';
+  const VERSION = '11.211.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -389,7 +389,12 @@
     keepSpy: true,        // deixar exploradores em casa (pra farmar/monitorar)
     keepKnight: false,    // deixar paladino
     sendBeforeMs: 30000,  // sair de casa N ms ANTES do primeiro ataque marcado
-    cancelOffsetMs: 5000, // cancelar N ms APÓS o ÚLTIMO ataque marcado
+    cancelOffsetMs: 5000, // cancelar N ms APÓS o ÚLTIMO ataque da leva
+    janelaMs: 60000,      // ataques a menos disso um do outro já entram na mesma leva
+    // Folga entre a tropa POUSAR em casa e o próximo ataque bater. Se a volta cair dentro dessa
+    // margem, o ataque seguinte entra na leva e o cancelamento espera por ele — voltar 10s antes
+    // de um ataque é o mesmo que não ter desviado.
+    margemVoltaMs: 60000,
     // Ataques marcados pra desviar. Marcar NÃO envia: o envio é agendado.
     // [{ id, coord, vid, arriveAt }]
     marks: [],
@@ -920,6 +925,8 @@
     if (c.desviar.keepSpy == null) c.desviar.keepSpy = true;
     if (c.desviar.keepKnight == null) c.desviar.keepKnight = false;
     if (c.desviar.cancelOffsetMs == null) c.desviar.cancelOffsetMs = 5000;
+    if (c.desviar.janelaMs == null) c.desviar.janelaMs = 60000;
+    if (c.desviar.margemVoltaMs == null) c.desviar.margemVoltaMs = 60000;
     if (!Array.isArray(c.desviar.pending)) c.desviar.pending = [];
     if (!c.mapUi) c.mapUi = defMapUi();
     if (typeof c.mapUi.collapsed !== 'boolean') c.mapUi.collapsed = false;
@@ -994,7 +1001,7 @@
   //
   // Quem chama PRECISA carimbar o cache de memória com esse `at` original. Carimbar com Date.now()
   // faz o TTL recomeçar a cada leitura de disco, e com auto-F5 de 1 min isso significa um dado de
-  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.210.0 introduziu
+  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.211.0 introduziu
   // nos três caches de uma vez.
   function cacheLerBruto(nome, ttlMs) {
     try {
@@ -15103,11 +15110,32 @@
   function desviarLevas(coord) {
     const ms = desviarMarcas(coord);
     if (!ms.length) return [];
+    const antes = config.desviar.sendBeforeMs || 30000;
+    const off = config.desviar.cancelOffsetMs || 5000;
     const jan = config.desviar.janelaMs || 60000;
+    // Folga exigida entre a tropa POUSAR em casa e o proximo ataque bater.
+    const margem = config.desviar.margemVoltaMs || 60000;
     const levas = [[ms[0]]];
     for (let i = 1; i < ms.length; i++) {
-      const ant = levas[levas.length - 1];
-      if (ms[i].arriveAt - ant[ant.length - 1].arriveAt <= jan) ant.push(ms[i]);
+      const cur = levas[levas.length - 1];
+      const saida = cur[0].arriveAt - antes;
+      const ultimo = cur[cur.length - 1].arriveAt;
+      // Cancelar devolve a tropa gastando o MESMO tempo que ela ja voou: ela pousa em casa em
+      // 2*cancelamento - saida.
+      const volta = 2 * (ultimo + off) - saida;
+      const prox = ms[i].arriveAt;
+      // DUAS razoes pra entrar na mesma leva:
+      //   1. esta colado (dentro da janela) — o caso obvio;
+      //   2. a VOLTA cairia perto demais do proximo ataque. Voltar 10 segundos antes de um ataque
+      //      bater e o mesmo que nao ter desviado — a tropa esta em casa na hora errada. Entao a
+      //      leva se estica ate a tropa poder pousar com folga.
+      // Caso real do usuario: leva terminando 02:10:15, cancelamento 02:10:20, tropa em casa
+      // 02:12:08 — e um ataque as 02:11:52. Pela janela de 1 min ele era leva separada e o desvio
+      // dele falharia (a tropa ainda estaria no ar as 02:11:22, hora de sair). Pela folga da
+      // volta ele entra na leva, e o cancelamento espera por ele.
+      const colado = (prox - ultimo) <= jan;
+      const voltaApertada = volta > (prox - margem);
+      if (colado || voltaApertada) cur.push(ms[i]);
       else levas.push([ms[i]]);
     }
     return levas;

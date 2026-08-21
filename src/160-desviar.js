@@ -243,11 +243,32 @@
   function desviarLevas(coord) {
     const ms = desviarMarcas(coord);
     if (!ms.length) return [];
+    const antes = config.desviar.sendBeforeMs || 30000;
+    const off = config.desviar.cancelOffsetMs || 5000;
     const jan = config.desviar.janelaMs || 60000;
+    // Folga exigida entre a tropa POUSAR em casa e o proximo ataque bater.
+    const margem = config.desviar.margemVoltaMs || 60000;
     const levas = [[ms[0]]];
     for (let i = 1; i < ms.length; i++) {
-      const ant = levas[levas.length - 1];
-      if (ms[i].arriveAt - ant[ant.length - 1].arriveAt <= jan) ant.push(ms[i]);
+      const cur = levas[levas.length - 1];
+      const saida = cur[0].arriveAt - antes;
+      const ultimo = cur[cur.length - 1].arriveAt;
+      // Cancelar devolve a tropa gastando o MESMO tempo que ela ja voou: ela pousa em casa em
+      // 2*cancelamento - saida.
+      const volta = 2 * (ultimo + off) - saida;
+      const prox = ms[i].arriveAt;
+      // DUAS razoes pra entrar na mesma leva:
+      //   1. esta colado (dentro da janela) — o caso obvio;
+      //   2. a VOLTA cairia perto demais do proximo ataque. Voltar 10 segundos antes de um ataque
+      //      bater e o mesmo que nao ter desviado — a tropa esta em casa na hora errada. Entao a
+      //      leva se estica ate a tropa poder pousar com folga.
+      // Caso real do usuario: leva terminando 02:10:15, cancelamento 02:10:20, tropa em casa
+      // 02:12:08 — e um ataque as 02:11:52. Pela janela de 1 min ele era leva separada e o desvio
+      // dele falharia (a tropa ainda estaria no ar as 02:11:22, hora de sair). Pela folga da
+      // volta ele entra na leva, e o cancelamento espera por ele.
+      const colado = (prox - ultimo) <= jan;
+      const voltaApertada = volta > (prox - margem);
+      if (colado || voltaApertada) cur.push(ms[i]);
       else levas.push([ms[i]]);
     }
     return levas;

@@ -98,6 +98,18 @@
   // página de erro quando o id/token não serve ou o comando já pousou. O log dizia "Desvio OK" e
   // o exército continuava fora de casa. Agora só devolve sucesso se o comando sumiu da lista.
   async function cancelCommand(vid, cmdId) {
+    // ANTES de tentar: se o comando ja sumiu, ele NAO foi cancelado — ele POUSOU. Some da lista
+    // nos dois casos, e a verificacao por efeito la embaixo ('sumiu = cancelado') dava sucesso
+    // pra tropa que na verdade ficou estacionada na vizinha. Era o defeito que fazia o modulo
+    // dizer 'Desvio OK' com o exercito fora de casa.
+    try {
+      if (!(await comandoAindaExiste(vid, cmdId))) {
+        throw new Error('o apoio ja pousou na vizinha — nao da mais pra cancelar; retire a tropa pela tela de Apoios');
+      }
+    } catch (e) {
+      // Falha de LEITURA nao pode virar 'pousou': segue e tenta cancelar do mesmo jeito.
+      if (/ja pousou/.test(e.message || '')) throw e;
+    }
     const tentativas = [
       () => fetch('/game.php?village=' + vid + '&screen=info_command&id=' + cmdId + '&action=cancel&h=' + window.game_data.csrf,
         { credentials: 'include', cache: 'no-store', redirect: 'follow' }),
@@ -162,8 +174,20 @@
         cur.state = 'canceled'; cur.err = ''; cur.cancelTent = 0;
       } catch (e) { cur.state = 'failed'; cur.err = e.message || String(e); }
       if (cur.state === 'canceled') {
+        // A leva acabou: tira as marcas dela e arma a proxima, se houver. Sem isto, marcar tres
+        // levas so desviaria a primeira — as marcas seguintes ficariam sem plano.
+        const de = cur.primeiroAtaque, ate = cur.ultimoAtaque;
+        if (de != null && ate != null) {
+          config.desviar.marks = (config.desviar.marks || []).filter((m) =>
+            !(m.coord === cur.coordOrigem && m.arriveAt >= de && m.arriveAt <= ate));
+        }
         save();
         pushLog('🚨 Desvio OK — tropa voltando (aldeia ' + cur.vid + ', comando ' + cur.cmdId + ').', 'ok', 'desv');
+        const resto = desviarMarcas(cur.coordOrigem).length;
+        if (resto) {
+          pushLog('🚨 Desvio ' + cur.coordOrigem + ': ainda ha ' + resto + ' ataque(s) marcado(s) — armando a proxima leva.', '', 'desv');
+          desviarReplanejar(cur.coordOrigem);
+        }
         desviarRefreshRowStates();
         return;
       }
@@ -203,17 +227,49 @@
   function desviarMarcas(coord) {
     return (config.desviar.marks || []).filter((m) => m.coord === coord).sort((a, b) => a.arriveAt - b.arriveAt);
   }
-  function desviarPlanoDe(coord) {
+  // ---- Agrupamento por LEVA -------------------------------------------------------------
+  // Um desvio atende uma LEVA de ataques, nao todos os marcados. Ataques a menos de `janelaMs`
+  // um do outro entram na mesma leva; um intervalo maior comeca leva nova, com saida e volta
+  // proprias.
+  //
+  // Antes o plano ia do PRIMEIRO ao ULTIMO ataque marcado, por mais distantes que fossem. Com
+  // ataques as 10:00 e as 10:40 isso mandava a tropa sair 09:59:30 e so voltar 10:40:05 — 40
+  // minutos fora, e o apoio POUSAVA na vizinha muito antes disso. Comando que pousou nao se
+  // cancela, entao a tropa ficava estacionada fora e o modulo achava que tinha dado certo.
+  //
+  // Com a leva, a janela entre sair e voltar fica em ~95s no pior caso, e qualquer vizinha esta
+  // a minutos de distancia — o apoio ainda esta voando na hora de cancelar, que e a unica
+  // situacao em que cancelar devolve a tropa.
+  function desviarLevas(coord) {
     const ms = desviarMarcas(coord);
-    if (!ms.length) return null;
+    if (!ms.length) return [];
+    const jan = config.desviar.janelaMs || 60000;
+    const levas = [[ms[0]]];
+    for (let i = 1; i < ms.length; i++) {
+      const ant = levas[levas.length - 1];
+      if (ms[i].arriveAt - ant[ant.length - 1].arriveAt <= jan) ant.push(ms[i]);
+      else levas.push([ms[i]]);
+    }
+    return levas;
+  }
+  function desviarPlanoDe(coord) {
+    const levas = desviarLevas(coord);
+    if (!levas.length) return null;
+    const agora = serverNow();
+    const antes = config.desviar.sendBeforeMs || 30000;
+    // A leva atendida e a proxima cuja saida ainda da tempo. Leva cuja hora de sair ja passou
+    // ha mais de um minuto e caso perdido: insistir nela seguraria as seguintes.
+    const leva = levas.find((l) => (l[0].arriveAt - antes) > (agora - 60000));
+    if (!leva) return null;
     return {
       coord: coord,
-      vid: ms[0].vid,
-      primeiro: ms[0].arriveAt,
-      ultimo: ms[ms.length - 1].arriveAt,
-      qtd: ms.length,
-      sendAt: ms[0].arriveAt - (config.desviar.sendBeforeMs || 30000),
-      cancelAt: ms[ms.length - 1].arriveAt + (config.desviar.cancelOffsetMs || 5000),
+      vid: leva[0].vid,
+      primeiro: leva[0].arriveAt,
+      ultimo: leva[leva.length - 1].arriveAt,
+      qtd: leva.length,
+      levas: levas.length,
+      sendAt: leva[0].arriveAt - antes,
+      cancelAt: leva[leva.length - 1].arriveAt + (config.desviar.cancelOffsetMs || 5000),
     };
   }
   function desviarPendenteDe(coord) {
@@ -236,10 +292,11 @@
       pend = { id: 'd' + Date.now() + Math.random().toString(36).slice(2, 6),
                vid: String(plano.vid), coordOrigem: coord, supportVid: '', supportCoord: '',
                cmdId: '', sendAt: plano.sendAt, cancelAt: plano.cancelAt,
-               ultimoAtaque: plano.ultimo, state: 'waiting', err: '' };
+               primeiroAtaque: plano.primeiro, ultimoAtaque: plano.ultimo, state: 'waiting', err: '' };
       config.desviar.pending.push(pend);
     } else {
-      pend.sendAt = plano.sendAt; pend.cancelAt = plano.cancelAt; pend.ultimoAtaque = plano.ultimo;
+      pend.sendAt = plano.sendAt; pend.cancelAt = plano.cancelAt;
+      pend.primeiroAtaque = plano.primeiro; pend.ultimoAtaque = plano.ultimo;
     }
     save();
     const falta = pend.sendAt - serverNow();
@@ -250,7 +307,8 @@
       return;
     }
     desvAgendar(pend.id, Math.max(0, falta), () => { desviarExecutarSaida(pend.id); });
-    pushLog('🚨 Desvio ' + coord + ' armado: ' + plano.qtd + ' ataque(s) marcado(s) · sai às '
+    pushLog('🚨 Desvio ' + coord + ' armado: leva de ' + plano.qtd + ' ataque(s)'
+      + (plano.levas > 1 ? (' (1ª de ' + plano.levas + ' levas)') : '') + ' · sai às '
       + new Date(pend.sendAt).toLocaleTimeString() + ' · volta às ' + new Date(pend.cancelAt).toLocaleTimeString(), 'ok', 'desv');
     desviarRefreshRowStates();
   }

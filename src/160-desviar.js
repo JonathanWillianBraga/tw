@@ -98,37 +98,42 @@
   // página de erro quando o id/token não serve ou o comando já pousou. O log dizia "Desvio OK" e
   // o exército continuava fora de casa. Agora só devolve sucesso se o comando sumiu da lista.
   async function cancelCommand(vid, cmdId) {
-    // ANTES de tentar: se o comando ja sumiu, ele NAO foi cancelado — ele POUSOU. Some da lista
-    // nos dois casos, e a verificacao por efeito la embaixo ('sumiu = cancelado') dava sucesso
-    // pra tropa que na verdade ficou estacionada na vizinha. Era o defeito que fazia o modulo
-    // dizer 'Desvio OK' com o exercito fora de casa.
-    try {
-      if (!(await comandoAindaExiste(vid, cmdId))) {
-        throw new Error('o apoio ja pousou na vizinha — nao da mais pra cancelar; retire a tropa pela tela de Apoios');
-      }
-    } catch (e) {
-      // Falha de LEITURA nao pode virar 'pousou': segue e tenta cancelar do mesmo jeito.
-      if (/ja pousou/.test(e.message || '')) throw e;
-    }
+    // ENDERECO CAPTURADO DO JOGO, nao deduzido.
+    //
+    //   /game.php?village=<vid>&screen=place&action=cancel&id=<cmd>&h=<csrf>
+    //
+    // Ate a v11.212.0 isto usava `screen=info_command&action=cancel`. Aquela tela responde HTTP
+    // 200 e NAO CANCELA NADA. Medido na conta: 6 tentativas seguidas, todas com 'o comando
+    // continua na lista', ate o usuario cancelar na mao — com a tropa fora o tempo todo.
+    //
+    // Pra capturar o certo foi preciso um comando FRESCO: o mundo so mostra o link de cancelar
+    // dentro de `command_cancel_time` (600s aqui), entao nenhum comando antigo da conta exibia o
+    // link, nem na tela renderizada. Mandei 1 explorador, li o href que o jogo montou e cancelei
+    // por ele — o comando sumiu da praca.
+    const url = '/game.php?village=' + vid + '&screen=place&action=cancel&id=' + cmdId
+      + '&h=' + window.game_data.csrf;
     const tentativas = [
-      () => fetch('/game.php?village=' + vid + '&screen=info_command&id=' + cmdId + '&action=cancel&h=' + window.game_data.csrf,
-        { credentials: 'include', cache: 'no-store', redirect: 'follow' }),
-      () => { const p = new URLSearchParams(); p.set('h', window.game_data.csrf);
-        return fetch('/game.php?village=' + vid + '&screen=info_command&id=' + cmdId + '&action=cancel',
-          { method: 'POST', credentials: 'include', body: p.toString() }); },
+      () => fetch(url, { credentials: 'include', cache: 'no-store', redirect: 'follow' }),
+      () => { const b = new URLSearchParams(); b.set('id', String(cmdId)); b.set('h', window.game_data.csrf);
+        return fetch('/game.php?village=' + vid + '&screen=place&action=cancel',
+          { method: 'POST', credentials: 'include', cache: 'no-store',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: b.toString() }); },
     ];
     let ultimoErro = '';
     for (const tentar of tentativas) {
       try { await tentar(); } catch (e) { ultimoErro = String(e.message || e); continue; }
-      await sleep(700);   // o servidor precisa registrar antes da releitura
-      try {
-        if (!(await comandoAindaExiste(vid, cmdId))) return true;   // sumiu = cancelado de verdade
-        ultimoErro = 'o comando continua na lista';
-      } catch (e) { ultimoErro = String(e.message || e); }
+      // O servidor demora a refletir. Com 700ms a releitura ainda trazia o comando; confere duas
+      // vezes antes de declarar falha, senao um cancelamento BOM vira retentativa e alarme falso.
+      for (let k = 0; k < 2; k++) {
+        await sleep(1500);
+        try {
+          if (!(await comandoAindaExiste(vid, cmdId))) return true;   // sumiu = cancelado
+          ultimoErro = 'o comando continua na lista';
+        } catch (e) { ultimoErro = String(e.message || e); }
+      }
     }
-    throw new Error('não consegui confirmar o cancelamento (' + (ultimoErro || 'motivo desconhecido') + ')');
+    throw new Error('nao consegui confirmar o cancelamento (' + (ultimoErro || 'motivo desconhecido') + ')');
   }
-
   // ---- Agendamento robusto (padrão observado no Nexus) --------------------------------------
   // setTimeout longo não é confiável: o navegador estrangula o timer quando a aba vai pro fundo e
   // o disparo escorrega — pode ser em minutos. Corta em blocos de 30s e reagenda; o último bloco é

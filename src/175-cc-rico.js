@@ -1829,6 +1829,36 @@
     }
 
 
+
+    // Arma o plano INTEIRO. O botao 'Armar comando' la embaixo arma so o alvo ATIVO — heranca do
+    // fluxo de um alvo por vez, e a razao de o usuario ver 'so 1 alvo agendado' depois de montar
+    // 31. Aqui percorre todos, trocando o ativo, e devolve o placar.
+    //
+    // O ccOpArmarAtivo reporta pelo mesmo callback tanto sucesso quanto recusa; o que separa os
+    // dois e a COR (sucesso manda '#2e7d3a' ou '#a2643a', recusa nao manda nada). Por isso o
+    // callback abaixo olha o segundo argumento em vez do texto.
+    function ccOpPlanoArmarTodos() {
+      const cc = ccOpCfg();
+      if (!cc.alvos.length) { alert('Monte o plano primeiro (botao Distribuir).'); return; }
+      const ondas = cc.alvos.reduce((t, a) => t + (a.ondas || []).length, 0);
+      if (!confirm('Armar os ' + cc.alvos.length + ' alvo(s) do plano — ' + ondas + ' comando(s)?'
+        + '\n\nEles vao pra fila com o horario calculado. Nada sai antes da hora.')) return;
+      const antes = cc.ativo;
+      let ok = 0; const recusados = [];
+      cc.alvos.slice().forEach((a) => {
+        cc.ativo = a.id;
+        let recusa = null;
+        ccOpArmarAtivo((txt, cor) => { if (!cor) recusa = txt; });
+        if (recusa) recusados.push((a.coord || '?') + ': ' + recusa); else ok++;
+      });
+      cc.ativo = antes; save(); ccOpRender();
+      const el = document.getElementById('cc-op-plano-aplicado');
+      const resumo = ok + ' de ' + cc.alvos.length + ' alvo(s) armado(s)'
+        + (recusados.length ? ' · ' + recusados.length + ' recusado(s)' : '');
+      if (el) { el.textContent = (recusados.length ? '\u26a0 ' : '\u2714 ') + resumo; el.style.color = recusados.length ? '#a2643a' : '#2e7d3a'; }
+      pushLog('Operacao: ' + resumo + (recusados.length ? ' — ' + recusados.slice(0, 4).join(' | ') : '') + '.',
+        recusados.length ? 'err' : 'ok', 'cmd');
+    }
     // Caixinhas de tropa do plano: uma por unidade do mundo. Aceita numero ou 'tudo'.
     function ccOpPlanoTropasRender() {
       const box = document.getElementById('cc-op-plano-tropas'); if (!box) return;
@@ -4517,6 +4547,7 @@
               '<div style="font-size:10px;color:#6f6153;margin-bottom:3px">Tropas de <b>cada</b> ataque — numero ou <b>tudo</b>:</div>' +
               '<div id="cc-op-plano-tropas" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"></div>' +
               '<button id="cc-op-plano-aplicar" class="twmgr-btn twmgr-ghost" style="padding:2px 10px;font-size:10px;margin-top:4px">Aplicar em todas as ondas</button>' +
+              '<button id="cc-op-plano-armar" class="twmgr-btn twmgr-go" style="padding:2px 10px;font-size:10px;margin-top:4px;margin-left:6px">▶ Armar TODOS os alvos</button>' +
               '<span id="cc-op-plano-aplicado" style="font-size:10px;color:#2e7d3a;margin-left:6px"></span>' +
             '</div>' +
           '</div>' +
@@ -4825,6 +4856,8 @@
       ccOpCarregarGrupos();
       // ---- Plano em massa ----
       ccOpPlanoTropasRender();
+      const arP = document.getElementById('cc-op-plano-armar');
+      if (arP) arP.addEventListener('click', () => { keepAwake(true); ccOpPlanoArmarTodos(); });
       const apP = document.getElementById('cc-op-plano-aplicar');
       if (apP) apP.addEventListener('click', ccOpPlanoAplicarTropas);
       const goP = document.getElementById('cc-op-plano-go');

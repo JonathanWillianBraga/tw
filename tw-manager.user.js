@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.204.0
+// @version      11.205.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.204.0';
+  const VERSION = '11.205.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -994,7 +994,7 @@
   //
   // Quem chama PRECISA carimbar o cache de memória com esse `at` original. Carimbar com Date.now()
   // faz o TTL recomeçar a cada leitura de disco, e com auto-F5 de 1 min isso significa um dado de
-  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.204.0 introduziu
+  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.205.0 introduziu
   // nos três caches de uma vez.
   function cacheLerBruto(nome, ttlMs) {
     try {
@@ -17719,6 +17719,197 @@
       const c = ccOpCfg();
       return c.alvos.find((a) => a.id === c.ativo) || c.alvos[0] || null;
     }
+    // ==================== PLANO EM MASSA (vários alvos de uma vez) ====================
+    // O fluxo normal da Operação é UM alvo por vez. Para bater num jogador inteiro isso vira
+    // trabalho manual repetido: N coordenadas, N vezes escolher origens.
+    //
+    // Aqui você cola as coordenadas, diz quantos ataques no TOTAL e a hora de chegada; o módulo
+    // reparte as suas aldeias entre os alvos e materializa um alvo da Operação para cada
+    // coordenada, já com as ondas criadas. As tropas continuam no passo 3, alvo a alvo.
+    //
+    // CRITÉRIO: minimiza a MAIOR distância do plano inteiro (atribuição de gargalo). Como a
+    // viagem é distância × constante, a atribuição que minimiza a maior distância é a mesma que
+    // minimiza a maior viagem — então dá pra planejar antes de escolher tropa. Na prática isso
+    // faz todo mundo sair o mais TARDE possível, encurtando a janela em que o inimigo vê o
+    // incoming. Guloso por proximidade não serve: a origem que uma aldeia "rouba" empurra outra
+    // pra uma distância muito pior, e é justamente a pior que define a hora de saída.
+    //
+    // Reparte parelho: cada alvo recebe floor(N/alvos) ataques garantidos, e as sobras (N % alvos)
+    // vão pra onde couber melhor — no máximo uma a mais por alvo.
+
+    // Fluxo máximo em grafo pequeno (dezenas de nós). Ford-Fulkerson com BFS: simples de ler e
+    // sobra desempenho pro tamanho aqui.
+    // Fluxo maximo em grafo pequeno (dezenas de nos). Ford-Fulkerson com BFS.
+    //
+    // Aceita um residual de entrada e um LIMITE de fluxo novo. E isso que permite rodar em duas
+    // fases sem perder a garantia da primeira: a fase A satura o minimo por alvo, e a fase B
+    // CONTINUA do residual dela em vez de recomecar. Recomecando, o otimizador achava 3/3/1 onde
+    // o certo era 3/2/2 — total certo, reparticao errada.
+    function ccFluxo(nNos, arestas, s, t, capIn, limite) {
+      const cap = capIn || {}, adj = [];
+      for (let i = 0; i < nNos; i++) adj.push([]);
+      const ch = (a, b) => a + ':' + b;
+      const vistos = {};
+      arestas.forEach(([a, b, c]) => {
+        if (!vistos[ch(a, b)]) { vistos[ch(a, b)] = 1; adj[a].push(b); adj[b].push(a); }
+        cap[ch(a, b)] = (cap[ch(a, b)] || 0) + c;
+        if (cap[ch(b, a)] == null) cap[ch(b, a)] = 0;
+      });
+      // Reconstroi a adjacencia a partir do residual herdado tambem, senao a fase B nao enxerga
+      // os caminhos de volta abertos pela fase A.
+      Object.keys(cap).forEach((k) => {
+        const [a, b] = k.split(':').map(Number);
+        if (adj[a].indexOf(b) < 0) adj[a].push(b);
+        if (adj[b].indexOf(a) < 0) adj[b].push(a);
+      });
+      let total = 0;
+      const teto = (limite == null) ? Infinity : limite;
+      while (total < teto) {
+        const pai = new Array(nNos).fill(-1);
+        pai[s] = s;
+        const fila = [s];
+        while (fila.length) {
+          const u = fila.shift();
+          for (const v of adj[u]) if (pai[v] === -1 && (cap[ch(u, v)] || 0) > 0) { pai[v] = u; fila.push(v); }
+        }
+        if (pai[t] === -1) break;
+        let f = teto - total;
+        for (let v = t; v !== s; v = pai[v]) f = Math.min(f, cap[ch(pai[v], v)]);
+        for (let v = t; v !== s; v = pai[v]) { cap[ch(pai[v], v)] -= f; cap[ch(v, pai[v])] = (cap[ch(v, pai[v])] || 0) + f; }
+        total += f;
+      }
+      return { total: total, cap: cap };
+    }
+
+    // Tenta montar o plano com teto de distancia D. Devolve os pares (origem, alvo) ou null.
+    function ccPlanoTenta(origens, alvos, N, capO, D) {
+      const T = alvos.length, O = origens.length;
+      const base = Math.floor(N / T), extra = N - base * T;
+      const S = 0, DR = O + T + 1, nNos = O + T + 2;
+      const arestas = [];
+      for (let i = 0; i < O; i++) arestas.push([S, 1 + i, capO]);
+      for (let i = 0; i < O; i++) {
+        for (let j = 0; j < T; j++) {
+          // capO e nao 1: a mesma aldeia pode mandar mais de uma onda no MESMO alvo, que e o
+          // caso normal de trem. Com 1, plano de 20 ataques em 3 alvos com 6 origens era
+          // declarado impossivel sem ser.
+          if (origens[i].d[j] <= D) arestas.push([1 + i, O + 1 + j, capO]);
+        }
+      }
+      // Fase A: o minimo garantido por alvo.
+      let cap = {}, feito = 0;
+      if (base > 0) {
+        const rA = ccFluxo(nNos, arestas.concat(alvos.map((_, j) => [O + 1 + j, DR, base])), S, DR, cap, base * T);
+        if (rA.total < base * T) return null;
+        cap = rA.cap; feito = rA.total;
+      } else {
+        ccFluxo(nNos, arestas, S, DR, cap, 0);
+      }
+      // Fase B: CONTINUA do residual, com 1 de folga por alvo, ate fechar N.
+      if (extra > 0) {
+        const rB = ccFluxo(nNos, alvos.map((_, j) => [O + 1 + j, DR, 1]), S, DR, cap, extra);
+        if (rB.total < extra) return null;
+        cap = rB.cap; feito += rB.total;
+      }
+      if (feito < N) return null;
+      // Le a atribuicao do residual: o que voltou na aresta reversa e o fluxo que passou.
+      const pares = [];
+      for (let i = 0; i < O; i++) {
+        for (let j = 0; j < T; j++) {
+          const usado = cap[(O + 1 + j) + ':' + (1 + i)] || 0;
+          for (let k = 0; k < usado; k++) pares.push({ oi: i, tj: j, d: origens[i].d[j] });
+        }
+      }
+      return pares.length >= N ? pares.slice(0, N) : null;
+    }
+    // Busca binária na lista de distâncias possíveis: o menor teto que ainda fecha o plano.
+    function ccPlanoResolver(origens, alvos, N) {
+      const O = origens.length;
+      if (!O || !alvos.length || N < 1) return null;
+      const capO = Math.ceil(N / O);
+      const todas = [];
+      origens.forEach((o) => o.d.forEach((v) => todas.push(v)));
+      const ds = Array.from(new Set(todas)).sort((a, b) => a - b);
+      let lo = 0, hi = ds.length - 1, achado = null;
+      // Sem solução nem com o teto máximo: não adianta buscar.
+      if (!ccPlanoTenta(origens, alvos, N, capO, ds[hi])) return null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const r = ccPlanoTenta(origens, alvos, N, capO, ds[mid]);
+        if (r) { achado = { pares: r, teto: ds[mid] }; hi = mid - 1; } else lo = mid + 1;
+      }
+      return achado;
+    }
+
+    // Lê o formulário, resolve e materializa um alvo da Operação por coordenada.
+    function ccOpPlanoDistribuir() {
+      const txt = (document.getElementById('cc-op-plano-alvos') || {}).value || '';
+      const coords = [];
+      (txt.match(/\d{1,3}\s*\|\s*\d{1,3}/g) || []).forEach((c) => {
+        const k = c.replace(/\s+/g, '');
+        if (coords.indexOf(k) < 0) coords.push(k);
+      });
+      if (!coords.length) { alert('Cole pelo menos uma coordenada de alvo.'); return; }
+      const N = Math.max(1, parseInt((document.getElementById('cc-op-plano-n') || {}).value, 10) || 0);
+      const chegada = (document.getElementById('cc-op-plano-chegada') || {}).value || '';
+      if (!chegada) { alert('Escolha a hora de chegada — é ela que faz todos baterem juntos.'); return; }
+      const gid = (document.getElementById('cc-op-plano-grupo') || {}).value || '';
+      let pool = CCVILAS.filter((v) => v.x != null);
+      if (gid && _ccOpPlanoGrupoSet) pool = pool.filter((v) => _ccOpPlanoGrupoSet.has(String(v.vid)));
+      if (!pool.length) { alert('Nenhuma aldeia de origem nesse grupo.'); return; }
+      if (N > pool.length) {
+        if (!confirm(N + ' ataques com apenas ' + pool.length + ' aldeia(s) de origem.\n\n'
+          + 'Algumas vão mandar mais de um comando — o que é normal num trem, mas some tropa da mesma aldeia.\n\nSeguir?')) return;
+      }
+      const alvos = coords.map((c) => { const p = ccCoordParse(c); return { coord: c, x: +p.x, y: +p.y }; });
+      const origens = pool.map((v) => ({ vid: String(v.vid), nome: v.nome || v.coord, x: v.x, y: v.y,
+        d: alvos.map((t) => fieldDist(v.x, v.y, t.x, t.y)) }));
+      const sol = ccPlanoResolver(origens, alvos, N);
+      if (!sol) { alert('Não consegui montar o plano com esses números. Reduza os ataques ou aumente o grupo de origens.'); return; }
+      const c = ccOpCfg();
+      if (c.alvos.length && !confirm('Isto SUBSTITUI os ' + c.alvos.length + ' alvo(s) que já estão na Operação.\n\nSeguir?')) return;
+      // Um alvo da Operação por coordenada, já com as ondas.
+      const porAlvo = {};
+      sol.pares.forEach((p) => { (porAlvo[p.tj] || (porAlvo[p.tj] = [])).push(origens[p.oi]); });
+      const novos = [];
+      alvos.forEach((t, j) => {
+        const orgs = porAlvo[j] || [];
+        if (!orgs.length) return;
+        const a = { id: genId(), coord: t.coord, chegadaLocal: chegada, vids: {}, ondas: [] };
+        orgs.forEach((o) => {
+          a.vids[o.vid] = 1;
+          a.ondas.push({ id: genId(), vid: o.vid, tipo: 'attack', amounts: {}, offsetMs: null });
+        });
+        novos.push(a);
+      });
+      c.alvos = novos;
+      c.ativo = novos.length ? novos[0].id : null;
+      save(); ccOpRender();
+      const semOrigem = alvos.length - novos.length;
+      pushLog('Operação: plano montado — ' + N + ' ataque(s) em ' + novos.length + ' alvo(s), maior distância '
+        + sol.teto.toFixed(1) + ' campos'
+        + (semOrigem ? (' · ' + semOrigem + ' alvo(s) ficaram SEM origem') : '')
+        + '. Agora escolha as tropas em cada alvo (passo 3).', 'ok', 'cmd');
+    }
+
+    // Prévia: quantos alvos, quantos por alvo, e a maior distância — antes de mexer em nada.
+    let _ccOpPlanoGrupoSet = null;
+    function ccOpPlanoPrevia() {
+      const el = document.getElementById('cc-op-plano-previa'); if (!el) return;
+      const txt = (document.getElementById('cc-op-plano-alvos') || {}).value || '';
+      const coords = Array.from(new Set((txt.match(/\d{1,3}\s*\|\s*\d{1,3}/g) || []).map((c) => c.replace(/\s+/g, ''))));
+      const N = parseInt((document.getElementById('cc-op-plano-n') || {}).value, 10) || 0;
+      if (!coords.length || N < 1) { el.innerHTML = ''; return; }
+      const gid = (document.getElementById('cc-op-plano-grupo') || {}).value || '';
+      let pool = CCVILAS.filter((v) => v.x != null);
+      if (gid && _ccOpPlanoGrupoSet) pool = pool.filter((v) => _ccOpPlanoGrupoSet.has(String(v.vid)));
+      const base = Math.floor(N / coords.length), extra = N % coords.length;
+      el.innerHTML = coords.length + ' alvo(s) · ' + N + ' ataque(s) — '
+        + (extra ? (base + ' ou ' + (base + 1)) : String(base)) + ' por alvo · '
+        + pool.length + ' origem(ns) no pool'
+        + (N > pool.length ? ' <b style="color:#a2643a">(origens de menos: alguma vai mandar mais de um)</b>' : '');
+    }
+
     function ccOpAlvoNovo() {
       const c = ccOpCfg();
       const a = { id: genId(), coord: '', chegadaLocal: '', vids: {}, ondas: [] };
@@ -17910,6 +18101,14 @@
         grupos.map((g) => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('');
       sel.value = cur;
       if (cur) ccOpAplicarFiltroGrupo();
+      // Mesmo conteudo no seletor do Plano em massa: e a mesma pergunta (de quais aldeias posso
+      // partir), so que aplicada ao plano inteiro em vez de a um alvo.
+      const selP = document.getElementById('cc-op-plano-grupo');
+      if (selP) {
+        const curP = selP.value;
+        selP.innerHTML = sel.innerHTML;
+        selP.value = curP || '';
+      }
     }
 
     // Tropa disponível de uma aldeia PRA OPERAÇÃO: total (casa+fora+trânsito — inclui o que
@@ -20249,6 +20448,22 @@
         // OPERAÇÃO: um alvo por vez (o alvo é o container). Dentro dele, as aldeias
         // participantes e uma LISTA ORDENADA de ondas com horário calibrável.
         '<div id="cc-op-cfg" style="display:none">' +
+          // PLANO EM MASSA: cria os alvos de uma vez. Fica ANTES do seletor de alvo porque e ele
+          // que popula esse seletor — a ordem na tela e a ordem de uso.
+          '<div style="border:1px solid #ece4d8;border-radius:6px;padding:6px;margin-bottom:7px;background:#fbf7ee">' +
+            '<div style="font-size:10px;color:#6f6153;margin-bottom:4px"><b>Plano em massa</b> — cole as aldeias do alvo, diga quantos ataques no total e a hora de chegada. Eu reparto as suas origens.</div>' +
+            '<textarea id="cc-op-plano-alvos" class="twmgr-inp" style="width:100%;height:44px;font-size:10px" placeholder="454|598 465|597 468|595 470|593 …"></textarea>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:4px">' +
+              '<span style="font-size:10px;color:#6f6153">Ataques no total</span>' +
+              '<input id="cc-op-plano-n" class="twmgr-inp" type="number" min="1" style="width:64px;font-size:10px;padding:1px">' +
+              '<span style="font-size:10px;color:#6f6153">Chegada</span>' +
+              '<input id="cc-op-plano-chegada" class="twmgr-inp" type="datetime-local" step="0.001" style="width:190px;font-size:10px;padding:1px">' +
+              '<span style="font-size:10px;color:#6f6153">Origens</span>' +
+              '<select id="cc-op-plano-grupo" class="twmgr-inp" style="width:110px;font-size:10px;padding:1px"><option value="">todas</option></select>' +
+              '<button id="cc-op-plano-go" class="twmgr-btn twmgr-go" style="padding:2px 10px;font-size:10px">Distribuir</button>' +
+            '</div>' +
+            '<div id="cc-op-plano-previa" style="font-size:10px;color:#a2643a;margin-top:4px"></div>' +
+          '</div>' +
           '<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:5px">' +
             // "Alvos" no plural de propósito: é o seletor de QUAL alvo você está montando, e
             // não pode se confundir com o passo "1. Alvo" logo abaixo, que edita os dados dele.
@@ -20552,6 +20767,23 @@
         ccOpCfg().grupo = e.target.value; save(); ccOpAplicarFiltroGrupo();
       });
       ccOpCarregarGrupos();
+      // ---- Plano em massa ----
+      const goP = document.getElementById('cc-op-plano-go');
+      if (goP) goP.addEventListener('click', ccOpPlanoDistribuir);
+      ['cc-op-plano-alvos', 'cc-op-plano-n'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('input', ccOpPlanoPrevia);
+      });
+      const selPG = document.getElementById('cc-op-plano-grupo');
+      if (selPG) selPG.addEventListener('change', async (e) => {
+        const gid = e.target.value;
+        _ccOpPlanoGrupoSet = null;
+        if (gid) {
+          try { _ccOpPlanoGrupoSet = new Set((await getVillagesInGroup(gid)).map((v) => String(v.vid))); }
+          catch (err) { pushLog('Operacao: nao li o grupo do plano (' + (err.message || err) + ') — usando todas as aldeias.', 'err', 'cmd'); }
+        }
+        ccOpPlanoPrevia();
+      });
       ccPontosCarregar();   // pontos das aldeias: alimentam o piso de população na conferência
       document.getElementById('cc-op-coord').addEventListener('change', (e) => {
         const a = ccOpAtivo(); if (!a) return;

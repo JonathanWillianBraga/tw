@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.216.0
+// @version      11.217.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.216.0';
+  const VERSION = '11.217.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -1001,7 +1001,7 @@
   //
   // Quem chama PRECISA carimbar o cache de memória com esse `at` original. Carimbar com Date.now()
   // faz o TTL recomeçar a cada leitura de disco, e com auto-F5 de 1 min isso significa um dado de
-  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.216.0 introduziu
+  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.217.0 introduziu
   // nos três caches de uma vez.
   function cacheLerBruto(nome, ttlMs) {
     try {
@@ -11454,7 +11454,19 @@
     const livres = (t.match(/Espa[çc]o livre/gi) || []).length;
     const travados = (t.match(/Obtenha\s+(\d+)\s+aldeias/gi) || [])
       .map((s) => parseInt((s.match(/\d+/) || [])[0], 10)).filter((n) => n).sort((a, b) => a - b);
-    return { livres: livres, proximosLimiares: travados };
+    // TOTAL DE ESPACOS PELA ESTRUTURA, nao por aritmetica.
+    //
+    // Antes o total era `livres + reliquias com village_id`, e isso dava 12 numa conta de 10.
+    // O erro: nem toda reliquia equipada ocupa espaco — as que passam do limite ficam em
+    // "Reliquias Inativas" e continuam com village_id. Medido: 10 elementos .relic-slot, 1
+    // travado (90 aldeias), 4 livres => 9 desbloqueados e 5 ativas, enquanto o inventario
+    // reportava 8 equipadas. As 3 de diferenca eram inativas.
+    //
+    // Contar o elemento resolve na origem: o jogo desenha um .relic-slot por espaco, travado ou
+    // nao. Se a tela mudar e o seletor sumir, cai na conta antiga em vez de devolver zero.
+    const nSlots = doc.querySelectorAll('.relic-slot').length;
+    const desbloqueados = nSlots ? Math.max(0, nSlots - travados.length) : 0;
+    return { livres: livres, proximosLimiares: travados, total: nSlots, desbloqueados: desbloqueados };
   }
 
   // Unidade e percentual de um stat. A unidade vem do ÍCONE (`.../unit_spear.webp`), não do texto:
@@ -11661,20 +11673,26 @@
         try { _relGrupoSet = new Set((await getVillagesInGroup(cfgR.grupo)).map((v) => String(v.vid))); }
         catch (e) { pushLog('Reliquias: nao li o grupo priorizado (' + (e.message || e) + ') - seguindo sem prioridade.', 'err', 'rel'); }
       }
-      // Espaços TOTAIS = livres + já ocupadas. O jogo só mostra os livres e os travados.
       const equipadas = inv.filter((r) => r.village_id).length;
-      const espacos = esp.livres + equipadas;
+      // Espacos que valem = os DESBLOQUEADOS lidos da tela. Só cai na soma antiga se o seletor
+      // de slot nao existir mais — e ai o numero pode inflar por reliquia inativa, entao o
+      // relatorio avisa.
+      const espacos = esp.desbloqueados || (esp.livres + equipadas);
+      const ativas = esp.desbloqueados ? Math.max(0, esp.desbloqueados - esp.livres) : equipadas;
+      const inativas = Math.max(0, equipadas - ativas);
       _relDados = {
         at: Date.now(), inv: inv, vilas: vilas, tropas: tropas,
         espacos: espacos, livres: esp.livres, proximosLimiares: esp.proximosLimiares,
+        totalSlots: esp.total || 0, ativas: ativas, inativas: inativas,
         equipadasAval: relAvaliarEquipadas(inv, vilas, tropas),
         plano: _relPropos ? relSugerir(inv, vilas, tropas, espacos) : [],
         fusoes: relFusoes(inv),
         semTropa: !Object.keys(tropas).length,
       };
       renderReliquias();
-      pushLog('Relíquias: ' + inv.length + ' no inventário, ' + equipadas + ' equipada(s), '
-        + esp.livres + ' espaço(s) livre(s).', 'ok', 'rel');
+      pushLog('Relíquias: ' + inv.length + ' no inventário · ' + espacos + ' espaço(s) desbloqueado(s)'
+        + ' (' + ativas + ' em uso, ' + esp.livres + ' livre(s))'
+        + (inativas ? (' · ' + inativas + ' equipada(s) INATIVA(S), além do limite') : '') + '.', 'ok', 'rel');
     } catch (e) {
       pushLog('Relíquias: ' + (e.message || e), 'err', 'rel');
       const box = document.getElementById('twmgr-rel-corpo');
@@ -11695,6 +11713,7 @@
     const cab = '<div class="twmgr-bld-sum">'
       + '<span class="twmgr-chip"><b>' + D.inv.length + '</b> relíquias</span>'
       + '<span class="twmgr-chip"><b>' + D.espacos + '</b> espaços</span>'
+      + (D.inativas ? '<span class="twmgr-chip" style="color:#b03030"><b>' + D.inativas + '</b> equipada(s) INATIVA(S)</span>' : '')
       + '<span class="twmgr-chip"><b>' + D.livres + '</b> livre(s)</span>'
       + '<span class="twmgr-chip"><b>' + D.vilas.length + '</b> aldeias</span>'
       + (D.proximosLimiares.length ? '<span class="twmgr-chip">próximo espaço com <b>' + D.proximosLimiares[0] + '</b> aldeias</span>' : '')

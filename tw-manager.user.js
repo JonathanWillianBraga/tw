@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.217.0
+// @version      11.218.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.217.0';
+  const VERSION = '11.218.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -11457,7 +11457,7 @@
     // TOTAL DE ESPACOS PELA ESTRUTURA, nao por aritmetica.
     //
     // Antes o total era `livres + reliquias com village_id`, e isso dava 12 numa conta de 10.
-    // O erro: nem toda reliquia equipada ocupa espaco — as que passam do limite ficam em
+    // O erro: nem toda reliquia equipada ocupa espaco — as que estao em cooldown ficam em
     // "Reliquias Inativas" e continuam com village_id. Medido: 10 elementos .relic-slot, 1
     // travado (90 aldeias), 4 livres => 9 desbloqueados e 5 ativas, enquanto o inventario
     // reportava 8 equipadas. As 3 de diferenca eram inativas.
@@ -11556,6 +11556,16 @@
   function relDisponivel(r) {
     return !r.locked_state && !r.inactive_until && !r.trade_offer_id;
   }
+  // POR QUE uma reliquia ficou de fora. Some da lista era o comportamento antigo, e isso faz o
+  // usuario procurar no inventario uma reliquia que o modulo escondeu sem dizer nada. O caso
+  // comum e o cooldown: mover uma reliquia trava ela por 24h, e nesse periodo o jogo recusa
+  // qualquer movimento — propor posicao pra ela seria propor algo impossivel.
+  function relMotivoBloqueio(r) {
+    if (r.trade_offer_id) return 'anunciada em troca';
+    if (r.inactive_until) return 'em cooldown, faltam ' + String(r.inactive_until);
+    if (r.locked_state) return 'bloqueada pelo jogo';
+    return null;
+  }
 
   // ===== Sugestão de alocação =====
   // Sem teto de empilhamento cada relíquia é independente, então NÃO é cobertura máxima: é
@@ -11610,10 +11620,16 @@
         if (!melhor || c.valor > melhor.valor) melhor = { v: v, valor: c.valor, cobre: c.cobre };
       });
       return {
-        // Relíquia equipada ALÉM do limite de espaços fica `inactive_until` — ela está numa
-        // aldeia mas não dá bônus nenhum. Medido: 13 com village_id e só 6 ativas. Sem separar
-        // isso a tabela sugeriria mover uma peça que já não está fazendo efeito.
+        // `inactive_until` é COOLDOWN, não excesso de espaço — eu tinha diagnosticado errado.
+        // Mover uma relíquia trava ela por 24h: ela continua com village_id, some dos espaços
+        // ativos e cai na seção "Relíquias Inativas" com um relógio regressivo. Medido logo
+        // depois de uma troca: 9 espaços desbloqueados, 6 ocupados, 9 com village_id — as 3 de
+        // diferença tinham 17:36:54, 10:50:15 e 9:35:22 pra voltar.
+        //
+        // Consequência prática: nesse período o jogo RECUSA mover a peça. Propor posição pra ela
+        // seria propor algo impossível, então ela fica fora do plano até o relógio zerar.
         inativa: !!r.inactive_until,
+        faltaCooldown: r.inactive_until ? String(r.inactive_until) : '',
         r: r, atual: atual, valorHoje: hoje.valor, cobreHoje: hoje.cobre,
         melhorVila: melhor ? melhor.v : null, melhorValor: melhor ? melhor.valor : 0,
         melhorCobre: melhor ? melhor.cobre : 0,
@@ -11692,7 +11708,7 @@
       renderReliquias();
       pushLog('Relíquias: ' + inv.length + ' no inventário · ' + espacos + ' espaço(s) desbloqueado(s)'
         + ' (' + ativas + ' em uso, ' + esp.livres + ' livre(s))'
-        + (inativas ? (' · ' + inativas + ' equipada(s) INATIVA(S), além do limite') : '') + '.', 'ok', 'rel');
+        + (inativas ? (' · ' + inativas + ' equipada(s) em COOLDOWN de 24h') : '') + '.', 'ok', 'rel');
     } catch (e) {
       pushLog('Relíquias: ' + (e.message || e), 'err', 'rel');
       const box = document.getElementById('twmgr-rel-corpo');
@@ -11713,7 +11729,7 @@
     const cab = '<div class="twmgr-bld-sum">'
       + '<span class="twmgr-chip"><b>' + D.inv.length + '</b> relíquias</span>'
       + '<span class="twmgr-chip"><b>' + D.espacos + '</b> espaços</span>'
-      + (D.inativas ? '<span class="twmgr-chip" style="color:#b03030"><b>' + D.inativas + '</b> equipada(s) INATIVA(S)</span>' : '')
+      + (D.inativas ? '<span class="twmgr-chip" style="color:#b03030"><b>' + D.inativas + '</b> em cooldown</span>' : '')
       + '<span class="twmgr-chip"><b>' + D.livres + '</b> livre(s)</span>'
       + '<span class="twmgr-chip"><b>' + D.vilas.length + '</b> aldeias</span>'
       + (D.proximosLimiares.length ? '<span class="twmgr-chip">próximo espaço com <b>' + D.proximosLimiares[0] + '</b> aldeias</span>' : '')
@@ -11732,7 +11748,8 @@
           const vale = x.ganho > 0 && x.melhorVila && x.melhorVila.coord !== (x.atual && x.atual.coord);
           return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">'
             + '<td><b>' + esc(x.r.name || '') + '</b><div class="sub">' + esc(relNomeQual(x.r.quality)) + ' · alcance ' + (x.r.range || '?')
-              + (x.inativa ? ' · <span style="color:#b03030">INATIVA (além do limite de espaços)</span>' : '') + '</div></td>'
+              + (x.inativa ? ' · <span style="color:#b03030">EM COOLDOWN'
+                  + (x.faltaCooldown ? (' — faltam ' + esc(x.faltaCooldown)) : '') + '</span>' : '') + '</div></td>'
             + '<td>' + esc(x.atual ? x.atual.nome : '?') + '<div class="sub">' + esc(x.atual ? x.atual.coord : '') + '</div></td>'
             + '<td' + (x.cobreHoje === 0 ? ' style="color:#b03030;font-weight:700"' : '') + '>' + x.cobreHoje + '</td>'
             + '<td>' + (vale ? '<b style="color:#3f8f52">' + esc(x.melhorVila.nome) + '</b><div class="sub">' + esc(x.melhorVila.coord) + '</div>'
@@ -11786,7 +11803,7 @@
         + '<span style="font-size:9px"><a id="twmgr-rel-todas" style="cursor:pointer;color:#2e7d3a">marcar todas</a> - '
           + '<a id="twmgr-rel-nenhuma" style="cursor:pointer;color:#c0483a">limpar</a></span>'
       + '</div>'
-      + '<div style="max-height:150px;overflow-y:auto;background:#fff;border:1px solid #ece4d8;border-radius:5px;padding:3px">'
+      + '<div style="max-height:170px;overflow-y:auto;background:#fff;border:1px solid #ece4d8;border-radius:5px;padding:3px">'
         + (usaveisR.length ? usaveisR.map((r) =>
             '<label style="display:flex;gap:5px;align-items:center;font-size:10px;padding:1px 3px;cursor:pointer">'
             + '<input type="checkbox" class="twmgr-rel-cb" data-id="' + esc(String(r.id)) + '"' + (cR.usar[r.id] ? ' checked' : '') + '>'
@@ -11794,6 +11811,14 @@
             + '<span style="color:#8a7d6d">' + esc(relNomeQual(r.quality)) + ' - alcance ' + (r.range || '?')
             + (r.village_id ? ' - equipada' : '') + '</span></label>').join('')
           : '<div style="color:#8a7d6d;font-size:10px;padding:4px">nenhuma reliquia disponivel</div>')
+        // Bloqueadas aparecem DESABILITADAS com o motivo, em vez de sumir. Some da lista faz o
+        // usuario procurar no inventario uma reliquia que o modulo escondeu calado.
+        + D.inv.filter((r) => !relDisponivel(r)).map((r) =>
+            '<label style="display:flex;gap:5px;align-items:center;font-size:10px;padding:1px 3px;opacity:.55" '
+            + 'title="nao entra no plano enquanto estiver assim">'
+            + '<input type="checkbox" disabled>'
+            + '<b>' + esc(r.name || '') + '</b>'
+            + '<span style="color:#b5651d">' + esc(relMotivoBloqueio(r) || 'indisponivel') + '</span></label>').join('')
       + '</div>'
       + '<button id="twmgr-rel-propor" class="twmgr-btn twmgr-go" style="width:100%;margin-top:6px;padding:3px">'
         + '🎯 Propor localizacao</button>'

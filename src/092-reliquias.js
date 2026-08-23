@@ -229,6 +229,10 @@
   }
 
   // ===== Ciclo =====
+  // O plano so e montado quando o usuario clica em Propor localizacao. Analisar apenas LE (o que
+  // e barato e sem consequencia); propor e a etapa em que ele ja escolheu as reliquias e quer a
+  // resposta. Separar as duas evita a leitura devolver um plano feito com selecao antiga.
+  let _relPropos = false;
   let _relDados = null;
   async function relAnalisar() {
     const btn = document.getElementById('twmgr-rel-ler');
@@ -260,7 +264,7 @@
         at: Date.now(), inv: inv, vilas: vilas, tropas: tropas,
         espacos: espacos, livres: esp.livres, proximosLimiares: esp.proximosLimiares,
         equipadasAval: relAvaliarEquipadas(inv, vilas, tropas),
-        plano: relSugerir(inv, vilas, tropas, espacos),
+        plano: _relPropos ? relSugerir(inv, vilas, tropas, espacos) : [],
         fusoes: relFusoes(inv),
         semTropa: !Object.keys(tropas).length,
       };
@@ -316,7 +320,9 @@
                 : '—') + '</td></tr>';
         }).join('') + '</tbody></table>';
     // --- plano ---
-    const tPl = !D.plano.length ? '<div class="twmgr-hint">Sem sugestão — nenhuma relíquia disponível.</div>'
+    const tPl = !_relPropos
+      ? '<div class="twmgr-hint">Marque as relíquias que quer usar e clique em <b>🎯 Propor localização</b>.</div>'
+      : !D.plano.length ? '<div class="twmgr-hint">Sem sugestão — nenhuma relíquia selecionada está disponível.</div>'
       : '<table class="twmgr-bld-tab"><thead><tr><th style="width:22px">#</th><th>Relíquia</th><th>Aldeia</th>'
         + '<th style="width:44px">cobre</th><th style="width:56px">valor</th></tr></thead><tbody>'
         + D.plano.map((p, i) => '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">'
@@ -365,7 +371,10 @@
             + '<span style="color:#8a7d6d">' + esc(relNomeQual(r.quality)) + ' - alcance ' + (r.range || '?')
             + (r.village_id ? ' - equipada' : '') + '</span></label>').join('')
           : '<div style="color:#8a7d6d;font-size:10px;padding:4px">nenhuma reliquia disponivel</div>')
-      + '</div></div>';
+      + '</div>'
+      + '<button id="twmgr-rel-propor" class="twmgr-btn twmgr-go" style="width:100%;margin-top:6px;padding:3px">'
+        + '🎯 Propor localizacao</button>'
+      + '</div>';
     box.innerHTML = cab + aviso + ctl
       + '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:9px 0 3px">Equipadas — vale mover?</div>' + tEq
       + '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:11px 0 3px">Melhor alocação pros ' + D.espacos + ' espaços</div>' + tPl
@@ -410,6 +419,8 @@
       (_relDados ? _relDados.inv.filter(relDisponivel) : []).forEach((r) => { cc.usar[r.id] = 1; });
       save(); relRecalcular();
     };
+    const propor = document.getElementById('twmgr-rel-propor');
+    if (propor) propor.onclick = () => { _relPropos = true; relRecalcular(); };
     const nenhuma = document.getElementById('twmgr-rel-nenhuma');
     if (nenhuma) nenhuma.onclick = () => { relCfg().usar = {}; save(); relRecalcular(); };
     const g = document.getElementById('twmgr-rel-grupo');

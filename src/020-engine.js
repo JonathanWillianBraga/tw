@@ -452,12 +452,59 @@
     return null;
   }
 
+  // A COLETA EM MASSA É PAGINADA — 50 ALDEIAS POR PÁGINA.
+  //
+  // A tela sempre respondeu, sempre trouxe JSON válido e nunca reclamou de nada; ela só entregava
+  // as 50 primeiras aldeias e o módulo tratava isso como "todas". Quem tem menos de 50 aldeias
+  // nunca viu o defeito. Medido na conta: página 0 = 50, página 1 = 31, página 2 = vazia,
+  // 81 no total e ZERO repetidas entre as páginas.
+  //
+  // `&page=-1` NÃO funciona aqui (devolve 50), e `&count=1000` também não — o truque que serve
+  // no `overview_villages` não vale nesta tela. Só paginando mesmo.
+  //
+  // O tamanho de página não é fixado em 50: para quando a página vem vazia ou menor que a
+  // primeira. Se um dia o jogo mudar pra 25 ou 100, isto continua correto. O teto de 40 páginas
+  // (2.000 aldeias) existe só pra um bug de paginação não virar laço infinito.
+  const SCAV_MAX_PAGINAS = 40;
+  async function scavLerPaginas() {
+    const vistos = {};
+    const arr = [];
+    let htmlPrimeira = '';
+    let tamPrimeira = 0;
+    for (let pg = 0; pg < SCAV_MAX_PAGINAS; pg++) {
+      const r = await fetch('/game.php?village=' + CUR_VID + '&screen=place&mode=scavenge_mass&page=' + pg,
+        { credentials: 'include' });
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' na página ' + pg + ' da coleta');
+      const h = await r.text();
+      if (!pg) htmlPrimeira = h;
+      const mm = h.match(/\[\{"village_id":[\s\S]*?\}\]/);
+      if (!mm) { if (!pg) throw new Error('dados de coleta em massa não encontrados'); break; }
+      let lote; try { lote = JSON.parse(mm[0]); } catch (e) {
+        if (!pg) throw new Error('falha ao ler dados de coleta');
+        break;
+      }
+      if (!lote.length) break;
+      // Repetição é o sinal de que a paginação parou de andar. Sem esta guarda, uma tela que
+      // ignora o `page` devolveria as mesmas 50 aldeias 40 vezes.
+      let novas = 0;
+      lote.forEach((v) => {
+        const k = String(v.village_id);
+        if (vistos[k]) return;
+        vistos[k] = 1; novas++; arr.push(v);
+      });
+      if (!novas) break;
+      if (!pg) tamPrimeira = lote.length;
+      // Página menor que a primeira = última página. Evita uma requisição a mais só pra
+      // descobrir que acabou.
+      if (lote.length < tamPrimeira) break;
+    }
+    return { arr: arr, html: htmlPrimeira };
+  }
+
   async function getAllScavengeState() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=place&mode=scavenge_mass', { credentials: 'include' });
-    const html = await res.text();
-    const m = html.match(/\[\{"village_id":[\s\S]*?\}\]/);
-    if (!m) throw new Error('dados de coleta em massa não encontrados');
-    let arr; try { arr = JSON.parse(m[0]); } catch (e) { throw new Error('falha ao ler dados de coleta'); }
+    const pag = await scavLerPaginas();
+    const html = pag.html;
+    const arr = pag.arr;
     const out = arr.map((v) => {
       const carryFactor = parseFloat(v.unit_carry_factor) || 1;
       const home = v.unit_counts_home || {};

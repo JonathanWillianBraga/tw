@@ -164,11 +164,9 @@
   // inteira, não só as unidades de coleta. Ler de lá custa 1 requisição; ler aldeia por
   // aldeia custaria 43. É a leitura em massa que estava pendente da auditoria de terça.
   async function mapEspioesEmCasa() {
-    const res = await fetch('/game.php?village=' + CUR_VID + '&screen=place&mode=scavenge_mass', { credentials: 'include' });
-    const html = await res.text();
-    const m = html.match(/\[\{"village_id":[\s\S]*?\}\]/);
-    if (!m) throw new Error('não achei os dados de coleta em massa');
-    const arr = JSON.parse(m[0]);
+    // Paginado, 50 por página — ver o comentário em `scavLerPaginas`. Aqui o efeito era mais
+    // silencioso ainda: as aldeias da página 2 em diante simplesmente não tinham explorador.
+    const arr = (await scavLerPaginas()).arr;
     const out = {};
     arr.forEach((v) => {
       const bruto = parseInt((v.unit_counts_home || {}).spy, 10) || 0;

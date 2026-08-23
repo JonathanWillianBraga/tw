@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.215.0
+// @version      11.216.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.215.0';
+  const VERSION = '11.216.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -1001,7 +1001,7 @@
   //
   // Quem chama PRECISA carimbar o cache de memória com esse `at` original. Carimbar com Date.now()
   // faz o TTL recomeçar a cada leitura de disco, e com auto-F5 de 1 min isso significa um dado de
-  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.215.0 introduziu
+  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.216.0 introduziu
   // nos três caches de uma vez.
   function cacheLerBruto(nome, ttlMs) {
     try {
@@ -11555,14 +11555,24 @@
     const sel = relCfg().usar || {};
     const algumaMarcada = Object.keys(sel).some((k) => sel[k]);
     const usaveis = inv.filter(relDisponivel).filter((r) => !algumaMarcada || sel[r.id]);
+    // TODOS os pares (reliquia, aldeia), nao so o melhor de cada reliquia.
+    //
+    // Guardar so o melhor parecia economia e era um defeito: como cada aldeia recebe UMA
+    // reliquia, quando varias apontam pro mesmo lugar todas menos uma sao descartadas — em vez
+    // de caírem pra segunda opcao delas.
+    //
+    // No criterio de rendimento isso ficava escondido, porque cada tipo de tropa puxa pra uma
+    // aldeia diferente. No criterio de alcance a densidade e a mesma pra todas, entao quase
+    // todas queriam a aldeia mais central. Medido na conta: 12 espacos e o plano saia com DUAS
+    // reliquias, cobertura somada 37. Com todos os pares: 12 reliquias, cobertura 143.
+    //
+    // Custo: 16 reliquias x 80 aldeias = 1.280 pares. E nada.
     const pares = [];
     usaveis.forEach((r) => {
-      let melhor = null;
       vilas.forEach((v) => {
         const c = relValor(r, v, vilas, tropas);
-        if (!melhor || c.valor > melhor.valor) melhor = { r: r, v: v, valor: c.valor, cobre: c.cobre };
+        if (c.valor > 0) pares.push({ r: r, v: v, valor: c.valor, cobre: c.cobre });
       });
-      if (melhor && melhor.valor > 0) pares.push(melhor);
     });
     pares.sort((a, b) => b.valor - a.valor);
     const plano = [], vilaUsada = {}, relUsada = {};

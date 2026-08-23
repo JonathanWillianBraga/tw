@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.213.0
+// @version      11.214.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.213.0';
+  const VERSION = '11.214.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -1001,7 +1001,7 @@
   //
   // Quem chama PRECISA carimbar o cache de memória com esse `at` original. Carimbar com Date.now()
   // faz o TTL recomeçar a cada leitura de disco, e com auto-F5 de 1 min isso significa um dado de
-  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.213.0 introduziu
+  // horas atrás parecendo sempre fresco — silenciosamente. Foi o defeito que a v11.214.0 introduziu
   // nos três caches de uma vez.
   function cacheLerBruto(nome, ttlMs) {
     try {
@@ -11479,6 +11479,26 @@
     return out.filter((s) => s.pct > 0);
   }
 
+  // ===== Preferencias do usuario =====
+  //   usar    : quais reliquias entram no plano (vazio = todas as disponiveis)
+  //   grupo   : grupo de aldeias a priorizar (id do jogo) — pesa mais na conta
+  //   pesoGrupo: quanto a aldeia do grupo vale a mais
+  //   objetivo: 'valor' (pondera pela tropa que existe na aldeia) ou 'aldeias' (conta cabeca)
+  function relCfg() {
+    const c = (config.rel = config.rel || {});
+    if (!c.usar) c.usar = {};
+    if (c.grupo == null) c.grupo = '';
+    if (c.pesoGrupo == null) c.pesoGrupo = 3;
+    if (!c.objetivo) c.objetivo = 'valor';
+    return c;
+  }
+  let _relGrupoSet = null;   // vids do grupo priorizado, carregado sob demanda
+  function relPeso(v) {
+    const c = relCfg();
+    if (!c.grupo || !_relGrupoSet) return 1;
+    return _relGrupoSet.has(String(v.vid)) ? Math.max(1, c.pesoGrupo) : 1;
+  }
+
   function relDist(a, b) { return Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)); }
   // Aldeias MINHAS dentro do raio, sem contar a própria — é a mesma definição do "Outras aldeias
   // afetadas" que o jogo mostra, e foi contra ela que a métrica foi validada.
@@ -11499,11 +11519,22 @@
   function relValor(r, vila, vilas, tropas) {
     const alvos = [vila].concat(relCobertura(vila, r.range || 0, vilas));
     const stats = relStats(r);
+    const objetivo = relCfg().objetivo;
     let total = 0;
     alvos.forEach((a) => {
+      const peso = relPeso(a);
+      if (objetivo === 'aldeias') {
+        // Objetivo 'maximo de aldeias': cada aldeia coberta vale 1 (x prioridade do grupo),
+        // independente da tropa que ela tem. E o que responde 'onde alcanco mais aldeias',
+        // pergunta diferente de 'onde rendo mais' — uma reliquia de cavalaria pesada cobrindo 12
+        // aldeias sem cavalaria pesada ganha aqui e perde no outro criterio, e as duas leituras
+        // estao certas pra objetivos diferentes.
+        total += peso;
+        return;
+      }
       const t = tropas[String(a.vid)] || {};
       stats.forEach((s) => {
-        total += s.pct * (s.unidade ? (t[s.unidade] || 0) : REL_PESO_GENERICO);
+        total += peso * s.pct * (s.unidade ? (t[s.unidade] || 0) : REL_PESO_GENERICO);
       });
     });
     return { valor: Math.round(total), cobre: alvos.length - 1, alvos: alvos };
@@ -11519,7 +11550,11 @@
   // atribuição. Com N espaços, escolhe os N melhores pares (relíquia, aldeia) com aldeias
   // distintas — uma relíquia por aldeia, que é o que os dados do jogo mostram.
   function relSugerir(inv, vilas, tropas, espacos) {
-    const usaveis = inv.filter(relDisponivel);
+    // Sem nada marcado, entram todas as disponiveis — assim o modulo continua util sem
+    // configuracao, e marcar vira um filtro, nao um pre-requisito.
+    const sel = relCfg().usar || {};
+    const algumaMarcada = Object.keys(sel).some((k) => sel[k]);
+    const usaveis = inv.filter(relDisponivel).filter((r) => !algumaMarcada || sel[r.id]);
     const pares = [];
     usaveis.forEach((r) => {
       let melhor = null;
@@ -11603,6 +11638,15 @@
       });
       let tropas = {};
       try { tropas = await getHomeUnitsAll(); } catch (e) { tropas = {}; }
+      // Grupo priorizado: resolvido AGORA, antes de qualquer conta de valor. Se ficasse pra
+      // depois, a primeira analise sairia sem prioridade e a segunda com ela — mesmo botao,
+      // resultado diferente.
+      _relGrupoSet = null;
+      const cfgR = relCfg();
+      if (cfgR.grupo) {
+        try { _relGrupoSet = new Set((await getVillagesInGroup(cfgR.grupo)).map((v) => String(v.vid))); }
+        catch (e) { pushLog('Reliquias: nao li o grupo priorizado (' + (e.message || e) + ') - seguindo sem prioridade.', 'err', 'rel'); }
+      }
       // Espaços TOTAIS = livres + já ocupadas. O jogo só mostra os livres e os travados.
       const equipadas = inv.filter((r) => r.village_id).length;
       const espacos = esp.livres + equipadas;
@@ -11685,7 +11729,38 @@
         + (f.mesmaQualidade.length ? '<div style="font-size:9px;color:#6f6153;margin:6px 0 3px">Só mesma qualidade → sobe de qualidade com <b>tipo aleatório</b>:</div>'
           + '<div class="twmgr-bld-sum">' + f.mesmaQualidade.map((x) =>
             '<span class="twmgr-chip">' + esc(relNomeQual(x.qual)) + ': até <b>' + x.fusoes + '</b>× (tem ' + x.n + ')</span>').join('') + '</div>' : '');
-    box.innerHTML = cab + aviso
+    // --- controles: o que usar, o que priorizar, e o que otimizar ---
+    const cR = relCfg();
+    const usaveisR = D.inv.filter(relDisponivel);
+    const nMarc = Object.keys(cR.usar || {}).filter((k) => cR.usar[k]).length;
+    const ctl = '<div style="border:1px solid #ece4d8;border-radius:6px;padding:6px;margin:8px 0;background:#fbf7ee">'
+      + '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:10px">'
+        + '<span style="color:#6f6153">Otimizar</span>'
+        + '<select id="twmgr-rel-obj" class="twmgr-inp" style="width:200px;font-size:10px;padding:1px">'
+          + '<option value="valor"' + (cR.objetivo === 'valor' ? ' selected' : '') + '>rendimento (pondera pela tropa)</option>'
+          + '<option value="aldeias"' + (cR.objetivo === 'aldeias' ? ' selected' : '') + '>alcance (numero de aldeias)</option>'
+        + '</select>'
+        + '<span style="color:#6f6153;margin-left:4px">Priorizar grupo</span>'
+        + '<select id="twmgr-rel-grupo" class="twmgr-inp" style="width:120px;font-size:10px;padding:1px"><option value="">nenhum</option></select>'
+        + '<span style="color:#6f6153">peso</span>'
+        + '<input id="twmgr-rel-peso" class="twmgr-inp" type="number" min="1" max="20" value="' + cR.pesoGrupo + '" style="width:44px;font-size:10px;padding:1px">'
+      + '</div>'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 2px">'
+        + '<span style="font-size:10px;color:#6f6153">Reliquias no plano <span style="color:#8a7d6d">('
+          + (nMarc ? (nMarc + ' marcada(s)') : 'nenhuma marcada = usa todas') + ')</span></span>'
+        + '<span style="font-size:9px"><a id="twmgr-rel-todas" style="cursor:pointer;color:#2e7d3a">marcar todas</a> - '
+          + '<a id="twmgr-rel-nenhuma" style="cursor:pointer;color:#c0483a">limpar</a></span>'
+      + '</div>'
+      + '<div style="max-height:150px;overflow-y:auto;background:#fff;border:1px solid #ece4d8;border-radius:5px;padding:3px">'
+        + (usaveisR.length ? usaveisR.map((r) =>
+            '<label style="display:flex;gap:5px;align-items:center;font-size:10px;padding:1px 3px;cursor:pointer">'
+            + '<input type="checkbox" class="twmgr-rel-cb" data-id="' + esc(String(r.id)) + '"' + (cR.usar[r.id] ? ' checked' : '') + '>'
+            + '<b>' + esc(r.name || '') + '</b>'
+            + '<span style="color:#8a7d6d">' + esc(relNomeQual(r.quality)) + ' - alcance ' + (r.range || '?')
+            + (r.village_id ? ' - equipada' : '') + '</span></label>').join('')
+          : '<div style="color:#8a7d6d;font-size:10px;padding:4px">nenhuma reliquia disponivel</div>')
+      + '</div></div>';
+    box.innerHTML = cab + aviso + ctl
       + '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:9px 0 3px">Equipadas — vale mover?</div>' + tEq
       + '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:11px 0 3px">Melhor alocação pros ' + D.espacos + ' espaços</div>' + tPl
       + '<div style="font-size:10px;color:#8b5426;font-weight:600;margin:11px 0 3px">Fusões possíveis</div>' + tFu
@@ -11693,6 +11768,53 @@
       + 'Efeito que não é de tropa (produção, recrutamento) entra com peso fixo. Serve pra comparar opções entre si, não é "% de ganho".</div>'
       + '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Distância <b>euclidiana</b>, conferida contra o "Outras aldeias afetadas" que o próprio jogo publica. '
       + 'O módulo <b>não equipa nada</b>: mover tem cooldown de remoção, então a decisão é sua.</div>';
+    relLigarControles();
+  }
+
+  // Refaz o plano com os dados JA LIDOS. Mudar peso ou selecao nao precisa reler o jogo — e o que
+  // deixa mexer nos controles e ver o efeito na hora, em vez de esperar uma releitura inteira.
+  // Trocar o GRUPO e a excecao: os membros vem do servidor, entao ali relê.
+  function relRecalcular() {
+    if (!_relDados) return;
+    const D = _relDados;
+    D.equipadasAval = relAvaliarEquipadas(D.inv, D.vilas, D.tropas);
+    D.plano = relSugerir(D.inv, D.vilas, D.tropas, D.espacos);
+    renderReliquias();
+  }
+  function relLigarControles() {
+    const c = relCfg();
+    const obj = document.getElementById('twmgr-rel-obj');
+    if (obj) obj.onchange = () => { relCfg().objetivo = obj.value; save(); relRecalcular(); };
+    const peso = document.getElementById('twmgr-rel-peso');
+    if (peso) peso.onchange = () => {
+      relCfg().pesoGrupo = Math.max(1, Math.min(20, parseInt(peso.value, 10) || 3));
+      save(); relRecalcular();
+    };
+    document.querySelectorAll('.twmgr-rel-cb').forEach((el) => {
+      el.onchange = () => {
+        const cc = relCfg();
+        if (el.checked) cc.usar[el.getAttribute('data-id')] = 1;
+        else delete cc.usar[el.getAttribute('data-id')];
+        save(); relRecalcular();
+      };
+    });
+    const todas = document.getElementById('twmgr-rel-todas');
+    if (todas) todas.onclick = () => {
+      const cc = relCfg();
+      (_relDados ? _relDados.inv.filter(relDisponivel) : []).forEach((r) => { cc.usar[r.id] = 1; });
+      save(); relRecalcular();
+    };
+    const nenhuma = document.getElementById('twmgr-rel-nenhuma');
+    if (nenhuma) nenhuma.onclick = () => { relCfg().usar = {}; save(); relRecalcular(); };
+    const g = document.getElementById('twmgr-rel-grupo');
+    if (g && !g.dataset.pronto) {
+      g.dataset.pronto = '1';
+      getGroups().then((gs) => {
+        g.innerHTML = '<option value="">nenhum</option>' + gs.map((x) =>
+          '<option value="' + x.id + '"' + (String(c.grupo) === String(x.id) ? ' selected' : '') + '>' + esc(x.name) + '</option>').join('');
+      }).catch(() => {});
+      g.onchange = () => { relCfg().grupo = g.value; save(); relAnalisar(); };
+    }
   }
   // ==================== ASSISTENTE DE SAQUE: TEMPLATE B ====================
   // Descobre o template_id do B (e as unidades) direto do am_farm; envia via o endpoint

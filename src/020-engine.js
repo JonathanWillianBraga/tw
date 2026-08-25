@@ -729,7 +729,45 @@
     return base;
   }
 
-  async function sendMassScavenge(reqs) {
+  // UM POST NÃO COMPORTA A CONTA INTEIRA.
+  //
+  // Depois que a leitura passou a enxergar as 81 aldeias (antes parava nas 50 da primeira
+  // página), o envio começou a voltar "Um erro interno ocorreu" com um ID de suporte — nunca
+  // uma mensagem de regra do jogo. Erro interno com payload grande é assinatura de limite de
+  // formulário do servidor, não de jogada inválida: o PHP para de aceitar variáveis passado um
+  // teto (o padrão da linguagem é 1.000) e o resto do POST chega truncado.
+  //
+  // A conta bate. Cada esquadrão manda 4 campos fixos + 1 por tipo de tropa, então ~8 a 11
+  // variáveis. Com 50 aldeias dava algo perto de 800 e passava; com 81 estoura.
+  //
+  // A própria interface do jogo nunca manda mais que uma página por vez — o lote é o
+  // comportamento normal da tela, não uma gambiarra nossa.
+  const SCAV_MAX_VARS_POST = 700;
+  const SCAV_MAX_REQS_POST = 40;
+
+  function scavVarsDoPedido(r) {
+    let n = 4;   // village_id, carry_max, option_id, use_premium
+    Object.keys(r.units || {}).forEach((u) => { if (r.units[u] > 0) n++; });
+    return n;
+  }
+
+  // Divide em lotes que caibam. Um esquadrão nunca é partido entre dois POSTs: metade de um
+  // pedido é o tipo de coisa que o servidor aceita e executa errado.
+  function scavLotes(reqs) {
+    const lotes = [];
+    let atual = [], vars = 1;   // o 'h' do csrf conta
+    reqs.forEach((r) => {
+      const v = scavVarsDoPedido(r);
+      if (atual.length && (atual.length >= SCAV_MAX_REQS_POST || vars + v > SCAV_MAX_VARS_POST)) {
+        lotes.push(atual); atual = []; vars = 1;
+      }
+      atual.push(r); vars += v;
+    });
+    if (atual.length) lotes.push(atual);
+    return lotes;
+  }
+
+  async function scavEnviarLote(reqs) {
     const b = new URLSearchParams();
     reqs.forEach((r, k) => {
       const p = 'squad_requests[' + k + ']';
@@ -745,6 +783,19 @@
     let j = null; try { j = JSON.parse(txt); } catch (e) {}
     if (j && j.error) throw new Error(Array.isArray(j.error) ? j.error.join('; ') : String(j.error));
     return true;
+  }
+
+  // Devolve o que REALMENTE foi aceito, em vez de estourar tudo no primeiro tropeço. Um lote que
+  // falha não pode apagar os que já partiram: marcar como enviado o que não partiu faz a aldeia
+  // ficar parada até o próximo ciclo, e dizer que falhou o que partiu faz o ciclo reenviar.
+  async function sendMassScavenge(reqs) {
+    const lotes = scavLotes(reqs);
+    const enviados = [], erros = [];
+    for (let i = 0; i < lotes.length; i++) {
+      try { await scavEnviarLote(lotes[i]); lotes[i].forEach((r) => enviados.push(r)); }
+      catch (e) { erros.push({ n: lotes[i].length, msg: (e && e.message) || String(e) }); }
+    }
+    return { enviados: enviados, erros: erros, lotes: lotes.length };
   }
 
   // Duração REAL de cada nível de coleta antes de enviar, lida direto da tela de coleta da aldeia
@@ -839,9 +890,14 @@
     let sent = false;
     if (reqs.length) {
       try {
-        await sendMassScavenge(reqs);
-        reqs.forEach((r) => { activeSet[r.vid] = 1; pushLog('Coleta: ' + r.name + ' → nível ' + r.optionId + ' (' + Object.entries(r.units).map(([u, c]) => c + ' ' + u).join(', ') + ')', 'ok', 'scav'); });
-        pushLog('Coleta: ' + reqs.length + ' esquadrão(ões) enviado(s).', 'ok', 'scav'); sent = true;
+        const rr = await sendMassScavenge(reqs);
+        rr.enviados.forEach((r) => { activeSet[r.vid] = 1; pushLog('Coleta: ' + r.name + ' → nível ' + r.optionId + ' (' + Object.entries(r.units).map(([u, c]) => c + ' ' + u).join(', ') + ')', 'ok', 'scav'); });
+        if (rr.enviados.length) {
+          pushLog('Coleta: ' + rr.enviados.length + ' esquadrão(ões) enviado(s)'
+            + (rr.lotes > 1 ? (' em ' + rr.lotes + ' lote(s)') : '') + '.', 'ok', 'scav');
+          sent = true;
+        }
+        rr.erros.forEach((x) => pushLog('Coleta: um lote de ' + x.n + ' esquadrão(ões) falhou (' + x.msg + ').', 'err', 'scav'));
       } catch (e) { pushLog('Coleta: envio em massa falhou (' + (e.message || e) + ').', 'err', 'scav'); }
     }
     config.scav.stats = config.scav.stats || {};

@@ -48,7 +48,7 @@ e esquecer de buildar, todo mundo continua recebendo a versão velha.
 - **Prefixos de 3 dígitos com folga** (`010`, `020`, … `180`) pra caber inserção
   futura sem quebrar a ordem.
 - **Exceção — ilha isolada:** o Centro de Comando rico é **embrulhado numa IIFE aninhada
-  própria**, que **abre em `171-cc-nucleo.js` e fecha em `177-cc-painel.js`**. Nenhum arquivo
+  própria**, que **abre em `171-cc-nucleo.js` e fecha em `178-cc-painel.js`**. Nenhum arquivo
   do meio abre ou fecha chave de IIFE — os sete formam UM escopo léxico só. Os ~465 nomes
   internos (`cc*`/`cmd*`) ficam presos ali e NÃO colidem com o resto; os helpers do escopo
   externo entram por closure.
@@ -111,5 +111,6 @@ Chaves de módulo (`wall`, `map`) seguem valendo em `config`, `refreshCards` e `
 | `174-cc-atkmassa` | CC: aba Ataque em massa (`ccAtkm*`) |
 | `175-cc-apoiomassa` | CC: aba Apoio em massa (`ccMassa*`) |
 | `176-cc-blindagem` | CC: aba Blindagem da tribo (`ccBlz*`) |
-| `177-cc-painel` | CC: monta o HTML, injeta nas telas, e **FECHA a ilha** |
+| `177-cc-calibrar` | CC: calibracao do agendador (`ccCalib*`) — mede o lead real com comando de verdade e cancela em seguida |
+| `178-cc-painel` | CC: monta o HTML, injeta nas telas, e **FECHA a ilha** |
 | `180-centro-comando` | motor de precisão `cc*` + bootstrap + fecha a IIFE |

@@ -1,6 +1,6 @@
   // ==================== CENTRO DE COMANDO — PAINEL: monta o HTML, injeta nas telas do jogo, e FECHA a ilha ====================
   // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
-  // 171-cc-nucleo.js e FECHA em 177-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // 171-cc-nucleo.js e FECHA em 178-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
   // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
   // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
   // primeiro justamente por isso.
@@ -37,6 +37,20 @@
           '<span title="Se os comandos chegam ADIANTADOS, aumente. Se atrasados, use negativo. Some ao viés que o sistema mede sozinho.">Atrasar chegada <input id="cc-atraso" class="twmgr-inp" type="number" step="10" style="width:60px;font-size:10px;padding:1px">ms</span>' +
           '<span style="color:#584526">(+ = mais tarde)</span>' +
           '<span id="cc-vies" style="margin-left:auto"></span>' +
+        '</div>' +
+        // CALIBRACAO (177-cc-calibrar). Fica no topo, colada no ajuste de precisao, porque as
+        // duas mexem no MESMO numero: o `Atrasar chegada` e a correcao manual, isto aqui e a
+        // medida. Ver o vies ao lado do botao que o mede e o que impede o usuario de ficar
+        // chutando o ajuste manual sem nunca ter medido nada.
+        '<div style="font-size:10px;border:1px solid #e6dcc9;border-radius:6px;padding:6px;margin-bottom:8px;background:#fffdf8">' +
+          '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+            '<b style="color:#a2643a">🎯 Calibração do agendador</b>' +
+            '<button id="cc-calib-go" class="twmgr-btn" style="font-size:10px;padding:1px 8px" ' +
+              'title="Manda comandos REAIS (1 explorador numa bárbara), mede a chegada que o servidor carimbou e cancela cada um em seguida.">Calibrar agora</button>' +
+            '<span style="color:#8a7d6d">amostras <input id="cc-calib-n" class="twmgr-inp" type="number" min="1" max="6" value="3" style="width:38px;font-size:10px;padding:1px"></span>' +
+          '</div>' +
+          '<div id="cc-calib-estado" style="margin-top:4px;line-height:1.45"></div>' +
+          '<div id="cc-calib-msg" style="margin-top:3px;color:#6f6153"></div>' +
         '</div>' +
         row('Alvo',
           '<input id="cc-alvo" class="twmgr-inp" style="width:130px;font-variant-numeric:tabular-nums" placeholder="478|586">' +
@@ -477,6 +491,16 @@
       passoEl.addEventListener('change', () => {
         config.cmd.passoMs = Math.max(1, parseInt(passoEl.value, 10) || 50); save(); ccRender();
       });
+      // Calibração: mede o lead de verdade (ver 177-cc-calibrar). `keepAwake` porque a rodada
+      // dura minutos e o navegador estrangula timer de aba escondida — sem isso a medição sai
+      // contaminada por contenção de thread, que é justamente o que ela NÃO quer medir.
+      const calibGo = document.getElementById('cc-calib-go');
+      if (calibGo) calibGo.addEventListener('click', () => {
+        const nEl = document.getElementById('cc-calib-n');
+        keepAwake(true);
+        ccCalibIniciar(parseInt(nEl && nEl.value, 10) || 3);
+      });
+      ccCalibRender();
       // Ajuste manual de saída. O campo é "atrasar chegada" (intuitivo): positivo = chega mais
       // tarde, então guardo o NEGATIVO em ajusteMs (que soma ao lead = adianta a saída).
       const atrasoEl = document.getElementById('cc-atraso');

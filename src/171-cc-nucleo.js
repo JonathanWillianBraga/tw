@@ -5,7 +5,7 @@
   // getAllVillages, fakePrepare, fieldDist, getMapVillages, UNITS, config, IMG_BASE...).
   // Traz copia so do que o v11 nao tem: FREEZEKEY, NETLAT, defCmd, MODELOS_PADRAO, srvClockMs,
   // netProbe. Estado proprio em config.cmd (coexiste com config.cc do v11).
-  // SPLIT v11.224.0: esta IIFE ABRE aqui e FECHA em 177-cc-painel.js.
+  // SPLIT v11.224.0: esta IIFE ABRE aqui e FECHA em 178-cc-painel.js.
   (function () {
     'use strict';
     const FREEZEKEY = KEY + '_freeze';   // modo silêncio, compartilhado entre abas
@@ -760,6 +760,12 @@
           if (!melhor) return;
         }
         href = melhor.href;
+        // Guarda o ID do comando no jogo. O casamento acima e a parte dificil (onda, irmaos,
+        // exclusividade por tempo) e ja foi feita aqui — quem precisar do comando depois nao
+        // deveria refazer essa logica. Quem precisa hoje: a CALIBRACAO (177-cc-calibrar), que
+        // cancela o proprio comando de teste assim que mede, pra nao deixar tropa na estrada.
+        const _mid = String(href).match(/[?&]id=(\d+)/);
+        if (_mid) { c.cmdId = _mid[1]; }
         const d2 = new DOMParser().parseFromString(await (await fetch(href, { credentials: 'include' })).text(), 'text/html');
         const p = parseChegadaDetalhe(d2.body.textContent || '');
         if (!p) {
@@ -824,6 +830,11 @@
           k.biasMs = Math.max(-1500, Math.min(1500,
             Math.round((k.biasMs || 0) + (erroMs - ALVO_ATRASO_MS) * alpha)));
           k.n = (k.n || 0) + 1;
+          // AMOSTRAS CRUAS, alem da media. Um vies sozinho e um numero sem incerteza: nao da
+          // pra saber se +40ms significa "sempre +40" ou "as vezes -200, as vezes +280". Pra
+          // decidir se da pra confiar num snipe, o que importa e a DISPERSAO. Guarda as 12
+          // ultimas e deixa a tela mostrar a faixa real.
+          k.amostras = (k.amostras || []).concat([Math.round(erroMs)]).slice(-12);
         } else {
           pushLog('📏 ' + c.x + '|' + c.y + ': a chegada veio SEM milésimos, então esta amostra não '
             + 'calibra nada (o sinal seria quantizado em 1s). Ligue os milésimos nas configurações '
@@ -845,6 +856,12 @@
       // a varredura nunca roda justamente no estado em que ela é necessária: fila só de
       // enviados. Foi o que aconteceu no teste ao vivo — `medirApos` venceu e nada rodou.
       ccVarrerMedicoes();
+      // Cancelamento dos comandos de CALIBRACAO (177-cc-calibrar). Fica aqui, junto da
+      // medicao, e pelo mesmo motivo dela: um setTimeout em closure morre no F5 e na troca de
+      // aba — e aqui morrer significa tropa parada na estrada. Tambem vem ANTES do early
+      // return de fila vazia, porque o comando de calibracao ja saiu de `pendentes` quando
+      // chega a hora de cancelar.
+      ccCalibVarrer();
       const pend = cmdPendentes();
       if (!pend.length) {
         if (SILENCE.on) silenceOff();

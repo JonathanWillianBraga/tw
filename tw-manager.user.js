@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.223.0
+// @version      11.224.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.223.0';
+  const VERSION = '11.224.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -16559,6 +16559,7 @@
   // getAllVillages, fakePrepare, fieldDist, getMapVillages, UNITS, config, IMG_BASE...).
   // Traz copia so do que o v11 nao tem: FREEZEKEY, NETLAT, defCmd, MODELOS_PADRAO, srvClockMs,
   // netProbe. Estado proprio em config.cmd (coexiste com config.cc do v11).
+  // SPLIT v11.224.0: esta IIFE ABRE aqui e FECHA em 177-cc-painel.js.
   (function () {
     'use strict';
     const FREEZEKEY = KEY + '_freeze';   // modo silêncio, compartilhado entre abas
@@ -17708,6 +17709,17 @@
       });
       return out;
     }
+  // ==================== CENTRO DE COMANDO — PRACA: superficie COMPARTILHADA (origens, tropas, previa, fila, comandos do jogo) ====================
+  // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
+  // 171-cc-nucleo.js e FECHA em 177-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
+  // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
+  // primeiro justamente por isso.
+  //
+  // Cortado de 175-cc-rico.js (5297 linhas numa ilha so) na v11.224.0. O corte foi por NOME de
+  // funcao, nao por comentario de secao: era comum uma funcao de uma aba morar fisicamente
+  // dentro do bloco de outra (ccMassaEnviar vivia dentro da secao da Blindagem), que e
+  // exatamente como "mexer numa aba quebrava a outra".
 
     // ==================== CENTRO DE COMANDO (praça de reunião) ====================
     const CC_TIPOS = [
@@ -18241,26 +18253,6 @@
       const m = String(raw || '').match(/(\d{1,3})\s*[|\s.,;:-]\s*(\d{1,3})/);
       return m ? { x: m[1], y: m[2], coord: m[1] + '|' + m[2] } : null;
     }
-
-    // ==================== OPERAÇÃO ====================
-    // O ALVO é o container: cada um tem coordenada, horário de chegada da 1ª onda e uma
-    // LISTA ORDENADA de ondas. Cada onda é uma aldeia + tropas digitadas à mão.
-    //
-    // Defasagem: só ondas DA MESMA ALDEIA precisam de espaçamento entre si (é o mesmo
-    // jogo/conta enviando mais de um comando — nuke e trem de nobre, por exemplo). Ondas de
-    // aldeias diferentes têm a viagem calculada cada uma pela sua origem, então todas miram
-    // o horário de chegada normal (o mesmo, ou o calibrado à mão), sem gap artificial entre
-    // elas. "Dividir" quebra uma onda em N da MESMA aldeia — essas sim saem espaçadas.
-    function ccOpCfg() {
-      const c = (config.cmd.op = config.cmd.op || { gapMs: 100, ativo: null, grupo: '', alvos: [] });
-      if (c.gapMs == null) c.gapMs = 100;
-      if (!Array.isArray(c.alvos)) c.alvos = [];
-      return c;
-    }
-    function ccOpAtivo() {
-      const c = ccOpCfg();
-      return c.alvos.find((a) => a.id === c.ativo) || c.alvos[0] || null;
-    }
     // ==================== PLANO EM MASSA (vários alvos de uma vez) ====================
     // O fluxo normal da Operação é UM alvo por vez. Para bater num jogador inteiro isso vira
     // trabalho manual repetido: N coordenadas, N vezes escolher origens.
@@ -18398,180 +18390,6 @@
     // CRITERIO: minimiza a MAIOR distancia do plano (atribuicao de gargalo, ccPlanoResolver).
     // Todo mundo sai o mais tarde possivel, encurtando a janela em que o alvo ve os incomings.
     let _ccAtkmGrupoSet = null;
-    function ccAtkmCfg() {
-      const c = (config.cmd.atkm = config.cmd.atkm || {});
-      if (c.tropas == null) c.tropas = {};
-      if (!Array.isArray(c.pares)) c.pares = [];
-      return c;
-    }
-    function ccAtkmTropasRender() {
-      const box = document.getElementById('cc-atkm-tropas'); if (!box) return;
-      const c = ccAtkmCfg();
-      const lista = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
-      const rotU = {}; UNITS.forEach(([u, n]) => { rotU[u] = n; });
-      box.innerHTML = lista.filter((u) => u !== 'militia').map((u) =>
-        '<label class="twmgr-ucell" title="' + esc(rotU[u] || u) + ' — numero ou a palavra tudo">' + unitIcon(u, rotU[u] || u) +
-        '<input class="cc-atkm-u twmgr-uinp" data-u="' + u + '" style="width:48px" placeholder="0" value="' +
-        esc(String(c.tropas[u] == null ? '' : c.tropas[u])) + '"></label>').join('');
-      box.querySelectorAll('.cc-atkm-u').forEach((el) => {
-        el.addEventListener('change', () => {
-          const cc = ccAtkmCfg();
-          const v = (el.value || '').trim();
-          if (!v) delete cc.tropas[el.getAttribute('data-u')]; else cc.tropas[el.getAttribute('data-u')] = v;
-          save(); ccAtkmTabela();
-        });
-      });
-    }
-    // Tropa de UMA origem a partir da receita. "tudo" e resolvido com o disponivel DELA — nao
-    // existe numero unico que sirva pra dezenas de aldeias diferentes.
-    function ccAtkmAmounts(vid) {
-      const receita = ccAtkmCfg().tropas || {};
-      const disp = ccOpDisponivel(vid);
-      const am = {};
-      Object.keys(receita).forEach((u) => {
-        const bruto = String(receita[u]).trim().toLowerCase();
-        if (!bruto) return;
-        const n = (bruto === 'tudo' || bruto === 'max') ? (disp[u] || 0)
-          : Math.min(parseInt(bruto, 10) || 0, disp[u] || 0);
-        if (n > 0) am[u] = n;
-      });
-      return am;
-    }
-    function ccAtkmPool() {
-      const gid = (document.getElementById('cc-atkm-grupo') || {}).value || '';
-      let pool = CCVILAS.filter((v) => v.x != null);
-      if (gid && _ccAtkmGrupoSet) pool = pool.filter((v) => _ccAtkmGrupoSet.has(String(v.vid)));
-      return pool;
-    }
-    function ccAtkmCoords() {
-      const txt = (document.getElementById('cc-atkm-alvos') || {}).value || '';
-      const out = [];
-      (txt.match(/\d{1,3}\s*\|\s*\d{1,3}/g) || []).forEach((c) => {
-        const k = c.replace(/\s+/g, '');
-        if (out.indexOf(k) < 0) out.push(k);
-      });
-      return out;
-    }
-    function ccAtkmChegadaMs() {
-      const v = (document.getElementById('cc-atkm-chegada') || {}).value || '';
-      if (!v) return null;
-      const t = new Date(v).getTime();
-      return isNaN(t) ? null : t;
-    }
-    function ccAtkmCalcular() {
-      const coords = ccAtkmCoords();
-      if (!coords.length) { alert('Cole pelo menos uma coordenada de alvo.'); return; }
-      const pool = ccAtkmPool();
-      if (!pool.length) { alert('Nenhuma aldeia de origem nesse grupo.'); return; }
-      const alvos = coords.map((c) => { const p = ccCoordParse(c); return { coord: c, x: +p.x, y: +p.y }; });
-      const origens = pool.map((v) => ({ vid: String(v.vid), x: v.x, y: v.y,
-        d: alvos.map((t) => fieldDist(v.x, v.y, t.x, t.y)) }));
-      // N = uma saida por origem. E a regra que dispensa o campo "quantos ataques".
-      const sol = ccPlanoResolver(origens, alvos, origens.length);
-      if (!sol) { alert('Nao consegui montar a distribuicao. Confira as coordenadas.'); return; }
-      const c = ccAtkmCfg();
-      c.pares = sol.pares.map((p) => ({ vid: origens[p.oi].vid, coord: alvos[p.tj].coord }));
-      save(); ccAtkmTabela();
-    }
-    // A tabela e o ponto de conferencia: origem, alvo, distancia e HORA DE SAIDA calculada com a
-    // tropa real daquela origem. Trocar o alvo de uma linha recalcula na hora.
-    function ccAtkmTabela() {
-      const box = document.getElementById('cc-atkm-tabela'); if (!box) return;
-      const c = ccAtkmCfg();
-      const bt = document.getElementById('cc-atkm-validar');
-      const av = document.getElementById('cc-atkm-aviso');
-      if (!c.pares.length) {
-        box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— calcule a distribuicao pra ver a lista —</div>';
-        if (bt) bt.style.display = 'none';
-        if (av) av.innerHTML = '';
-        return;
-      }
-      const coords = ccAtkmCoords();
-      const chegaMs = ccAtkmChegadaMs();
-      const porAlvo = {}; c.pares.forEach((p) => { porAlvo[p.coord] = (porAlvo[p.coord] || 0) + 1; });
-      const sais = [];
-      box.innerHTML = c.pares.map((p, i) => {
-        const v = CCVILAS.find((z) => String(z.vid) === String(p.vid));
-        const t = ccCoordParse(p.coord);
-        const am = ccAtkmAmounts(p.vid);
-        const dist = (v && t) ? fieldDist(v.x, v.y, +t.x, +t.y) : null;
-        const viagem = (v && t && Object.keys(am).length) ? ccTempoViagemMs(v.x, v.y, +t.x, +t.y, am) : null;
-        const sai = (chegaMs && viagem != null) ? (chegaMs - viagem) : null;
-        if (sai != null) sais.push(sai);
-        const tarde = sai != null && sai <= srvNowP();
-        return '<div style="display:grid;grid-template-columns:20px 1fr 12px 96px 44px 60px;gap:4px;align-items:center;'
-          + 'font-size:10px;padding:2px 4px;border-bottom:1px solid rgba(0,0,0,.06)">'
-          + '<span style="color:#8a7d6d">' + (i + 1) + '</span>'
-          + '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#584526">'
-            + esc((v && (v.nome || v.coord)) || p.vid) + '</span>'
-          + '<span style="color:#c9bda8">&rsaquo;</span>'
-          + '<select class="cc-atkm-troca twmgr-inp" data-i="' + i + '" style="font-size:9px;padding:1px">'
-          + coords.map((k) => '<option value="' + esc(k) + '"' + (k === p.coord ? ' selected' : '') + '>' + esc(k)
-              + ' (' + (porAlvo[k] || 0) + ')</option>').join('')
-          + '</select>'
-          + '<span style="color:#8a7d6d;text-align:right">' + (dist == null ? '—' : dist.toFixed(1) + 'c') + '</span>'
-          + '<span style="text-align:right;color:' + (tarde ? '#c0483a' : '#2e7d3a') + '">'
-            + (sai == null ? '—' : srvClockMs(sai)) + '</span>'
-          + '</div>';
-      }).join('');
-      const semTropa = c.pares.filter((p) => !Object.keys(ccAtkmAmounts(p.vid)).length).length;
-      if (av) {
-        av.innerHTML = c.pares.length + ' comando(s) em ' + Object.keys(porAlvo).length + ' alvo(s)'
-          + (sais.length ? (' · saidas de <b>' + srvClockMs(Math.min.apply(null, sais)) + '</b> a <b>'
-              + srvClockMs(Math.max.apply(null, sais)) + '</b>') : '')
-          + (semTropa ? (' · <b style="color:#c0483a">' + semTropa + ' sem tropa</b>') : '');
-      }
-      box.querySelectorAll('.cc-atkm-troca').forEach((el) => {
-        el.addEventListener('change', () => {
-          ccAtkmCfg().pares[parseInt(el.getAttribute('data-i'), 10)].coord = el.value;
-          save(); ccAtkmTabela();
-        });
-      });
-      if (bt) { bt.style.display = ''; bt.textContent = '✔ Validar e agendar ' + c.pares.length + ' comando(s)'; }
-    }
-    function ccAtkmValidar() {
-      const c = ccAtkmCfg();
-      if (!c.pares.length) { alert('Calcule a distribuicao primeiro.'); return; }
-      const chegaMs = ccAtkmChegadaMs();
-      if (!chegaMs) { alert('Defina a hora de chegada.'); return; }
-      if (chegaMs <= srvNowP()) { alert('Esse horario ja passou.'); return; }
-      const prontos = [], pulados = [];
-      c.pares.forEach((p) => {
-        const v = CCVILAS.find((z) => String(z.vid) === String(p.vid));
-        const t = ccCoordParse(p.coord);
-        if (!v || !t) { pulados.push(p.coord + ' (aldeia ou alvo invalido)'); return; }
-        const am = ccAtkmAmounts(p.vid);
-        if (!Object.keys(am).length) { pulados.push((v.nome || v.coord) + ' (sem tropa)'); return; }
-        const vi = ccTempoViagemMs(v.x, v.y, +t.x, +t.y, am);
-        if (vi == null) { pulados.push((v.nome || v.coord) + ' (nao calculei a viagem)'); return; }
-        // Saida no passado nao vira comando: seria agendar algo que o motor nunca consegue mandar.
-        if (chegaMs - vi <= srvNowP()) { pulados.push((v.nome || v.coord) + ' -> ' + p.coord + ' (saida ja passou)'); return; }
-        prontos.push({ v: v, t: t, am: am });
-      });
-      if (!prontos.length) { alert('Nada a agendar.\n\n' + pulados.join('\n')); return; }
-      if (!confirm('Agendar ' + prontos.length + ' comando(s), todos chegando ' + srvClockMs(chegaMs) + '?'
-        + (pulados.length ? ('\n\n' + pulados.length + ' pulado(s):\n' + pulados.slice(0, 8).join('\n')) : ''))) return;
-      prontos.forEach((p) => { cmdAdicionar('attack', p.t.x, p.t.y, p.am, chegaMs, p.v.vid); });
-      save();
-      pushLog('Ataque em massa: ' + prontos.length + ' comando(s) agendado(s) pra ' + srvClockMs(chegaMs)
-        + (pulados.length ? (' · ' + pulados.length + ' pulado(s)') : '') + '.', 'ok', 'cmd');
-      const av = document.getElementById('cc-atkm-aviso');
-      if (av) av.innerHTML = '✔ <b>' + prontos.length + '</b> comando(s) na fila'
-        + (pulados.length ? (' · ' + pulados.length + ' pulado(s)') : '');
-    }
-
-    function ccOpAlvoNovo() {
-      const c = ccOpCfg();
-      const a = { id: genId(), coord: '', chegadaLocal: '', vids: {}, ondas: [] };
-      c.alvos.push(a); c.ativo = a.id; save(); ccOpRender();
-    }
-    function ccOpAlvoDel() {
-      const c = ccOpCfg(), a = ccOpAtivo(); if (!a) return;
-      c.alvos = c.alvos.filter((z) => z.id !== a.id);
-      c.ativo = c.alvos.length ? c.alvos[0].id : null;
-      save(); ccOpRender();
-    }
-    function ccOpChegadaBase(a) { return a ? arrivalToServerMs(a.chegadaLocal || '') || 0 : 0; }
 
     // ---- Etapas da Operação ----
     // O formulário corrido pedia tudo de uma vez (alvo, horário, gap, aldeias, ondas, tropa),
@@ -18583,504 +18401,9 @@
       { n: 2, rot: 'Origens', dica: 'quais das suas aldeias participam deste alvo' },
       { n: 3, rot: 'Tropas', dica: 'o que cada onda leva, e o horário fino de cada uma' },
     ];
-    function ccOpEtapaAtual() {
-      const a = ccOpAtivo(); if (!a) return 1;
-      const n = parseInt(a.etapa, 10);
-      return (n >= 1 && n <= 3) ? n : 1;
-    }
-    // Cada etapa depende do que a anterior produziu: sem coordenada a lista de origens não tem
-    // como ordenar por distância, e sem horário de chegada a etapa 3 calcularia a saída a partir
-    // do nada. Por isso avançar é validado — e é a mesma checagem que apaga o passo na trilha.
-    function ccOpBloqueio(n) {
-      const a = ccOpAtivo();
-      if (!a) return 'Crie um alvo primeiro.';
-      if (n >= 2) {
-        if (!ccCoordParse(a.coord)) return 'Preencha a coordenada do alvo (ex.: 478|586).';
-        if (!ccOpChegadaBase(a)) return 'Escolha quando a 1ª onda deve chegar.';
-      }
-      if (n >= 3 && !Object.keys(a.vids || {}).length) return 'Marque ao menos uma aldeia de origem.';
-      return null;
-    }
-    function ccOpAviso(t) { const el = document.getElementById('cc-op-aviso'); if (el) el.textContent = t || ''; }
-    function ccOpIrEtapa(n) {
-      const a = ccOpAtivo(); if (!a) return;
-      const alvo = Math.max(1, Math.min(CC_OP_ETAPAS.length, n));
-      // Voltar nunca é bloqueado — só avançar.
-      if (alvo > ccOpEtapaAtual()) {
-        const b = ccOpBloqueio(alvo);
-        if (b) { ccOpAviso(b); return; }
-      }
-      a.etapa = alvo; save(); ccOpRender();
-    }
-    function ccOpRenderEtapas() {
-      const cab = document.getElementById('cc-op-passos');
-      const nav = document.getElementById('cc-op-nav');
-      if (!cab || !nav) return;
-      const at = ccOpEtapaAtual();
-      CC_OP_ETAPAS.forEach((e) => {
-        const el = document.getElementById('cc-op-e' + e.n);
-        if (el) el.style.display = (e.n === at) ? 'block' : 'none';
-      });
-      cab.innerHTML = CC_OP_ETAPAS.map((e) => {
-        const atual = (e.n === at);
-        const liberada = atual || e.n < at || !ccOpBloqueio(e.n);
-        return '<a data-op-etapa="' + e.n + '" title="' + esc(e.dica) + '" style="cursor:' + (liberada ? 'pointer' : 'default') +
-          ';color:' + (atual ? '#8b5426' : liberada ? '#2e7d3a' : '#b7ab99') +
-          ';font-weight:' + (atual ? '700' : '400') +
-          ';background:' + (atual ? '#fdf6e8' : 'transparent') +
-          ';border:1px solid ' + (atual ? '#c9a35a' : 'transparent') +
-          ';border-radius:10px;padding:2px 9px;text-decoration:none;white-space:nowrap">' +
-          (e.n < at ? '✓' : e.n) + '. ' + esc(e.rot) + '</a>';
-      }).join('<span style="color:#c9bda8">›</span>');
-      cab.querySelectorAll('[data-op-etapa]').forEach((el) => el.onclick = (ev) => {
-        ev.preventDefault(); ccOpIrEtapa(parseInt(el.getAttribute('data-op-etapa'), 10));
-      });
-      const prox = CC_OP_ETAPAS.find((e) => e.n === at + 1);
-      // Verde = pode seguir. É o sinal de "já preenchi o que precisava aqui" sem precisar ler
-      // texto nenhum; cinza com o motivo no title = ainda falta algo nesta etapa.
-      const trava = prox ? ccOpBloqueio(prox.n) : null;
-      nav.innerHTML =
-        (at > 1 ? '<button id="cc-op-voltar" class="twmgr-btn twmgr-ghost" style="padding:3px 12px;font-size:10px">← Voltar</button>' : '<span></span>') +
-        '<span id="cc-op-aviso" style="font-size:9px;color:#c0483a;flex:1;text-align:center;padding:0 6px"></span>' +
-        (prox ? '<button id="cc-op-avancar" class="twmgr-btn ' + (trava ? 'twmgr-ghost' : 'twmgr-go') + '" ' +
-          'style="padding:3px 12px;font-size:10px"' + (trava ? ' title="' + esc(trava) + '"' : '') + '>' +
-          esc(prox.rot) + ' →</button>' : '<span></span>');
-      const bv = document.getElementById('cc-op-voltar'); if (bv) bv.onclick = () => ccOpIrEtapa(at - 1);
-      const ba = document.getElementById('cc-op-avancar'); if (ba) ba.onclick = () => ccOpIrEtapa(at + 1);
-      // Armar só na última etapa: nas outras ele mandaria um alvo pela metade (sem tropa definida).
-      const arow = document.getElementById('cc-armar-row');
-      if (arow && ccTipo() === 'op') arow.style.display = (at === CC_OP_ETAPAS.length) ? 'flex' : 'none';
-    }
-    function ccOpOndaAdd(vid) {
-      const a = ccOpAtivo(); if (!a) return;
-      a.ondas.push({ id: genId(), vid: String(vid), tipo: 'attack', amounts: {}, offsetMs: null });
-      save(); ccOpRender();
-    }
-    function ccOpOndaMover(id, d) {
-      const a = ccOpAtivo(); if (!a) return;
-      const i = a.ondas.findIndex((z) => z.id === id), j = i + d;
-      if (i < 0 || j < 0 || j >= a.ondas.length) return;
-      a.ondas.splice(j, 0, a.ondas.splice(i, 1)[0]);
-      // Reordenou: os horários calibrados à mão perdem o sentido — tudo volta pro automático.
-      a.ondas.forEach((z) => { z.offsetMs = null; });
-      save(); ccOpRender();
-    }
-    // Quebra uma onda em N ondas da MESMA aldeia. Por padrão divide a tropa igualmente (resto
-    // pras primeiras); cada uma fica com seus próprios campos, editáveis livremente depois —
-    // "dividir" é só o ponto de partida, não uma amarra.
-    function ccOpOndaDividir(id, n) {
-      const a = ccOpAtivo(); if (!a) return;
-      const i = a.ondas.findIndex((z) => z.id === id); if (i < 0) return;
-      const o = a.ondas[i];
-      n = Math.max(2, Math.min(20, parseInt(n, 10) || 2));
-      const partes = [];
-      for (let k = 0; k < n; k++) {
-        const amounts = {};
-        Object.keys(o.amounts || {}).forEach((u) => {
-          const tot = o.amounts[u], base = Math.floor(tot / n), resto = tot % n;
-          const q = base + (k < resto ? 1 : 0);
-          if (q > 0) amounts[u] = q;
-        });
-        partes.push({ id: genId(), vid: o.vid, tipo: o.tipo, amounts: amounts, offsetMs: null });
-      }
-      a.ondas.splice(i, 1, ...partes);
-      save(); ccOpRender();
-    }
-    // "Tudo" (mesma ideia do apoio em massa do jogo): preenche com o MÁXIMO disponível.
-    // filtroU presente = só aquela unidade (checkbox de coluna); ausente = todas.
-    // Processa as ondas NA ORDEM da lista — a 1ª onda de uma aldeia pega o disponível
-    // primeiro, a 2ª (se houver) fica com o que sobrar, igual aconteceria mandando na mão.
-    function ccOpAplicarTudo(a, filtroU) {
-      const listaU = filtroU ? [filtroU] : (CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]));
-      (a.ondas || []).forEach((o) => {
-        const dispBase = ccOpDisponivel(o.vid);
-        o.amounts = o.amounts || {};
-        listaU.forEach((u) => {
-          const meu = o.amounts[u] || 0;
-          const teto = (dispBase[u] || 0) + meu;
-          if (teto > 0) o.amounts[u] = teto; else delete o.amounts[u];
-        });
-      });
-      save(); ccOpRender();
-    }
-    // "Tudo" só de UMA onda (uma aldeia só) — todas as unidades dela.
-    function ccOpOndaTudo(id) {
-      const a = ccOpAtivo(); if (!a) return;
-      const o = a.ondas.find((z) => z.id === id); if (!o) return;
-      const dispBase = ccOpDisponivel(o.vid);
-      const listaU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
-      o.amounts = o.amounts || {};
-      listaU.forEach((u) => {
-        const meu = o.amounts[u] || 0;
-        const teto = (dispBase[u] || 0) + meu;
-        if (teto > 0) o.amounts[u] = teto; else delete o.amounts[u];
-      });
-      save(); ccOpRender();
-    }
-    // Offset efetivo de CADA onda: automático = posição entre as ondas DA MESMA aldeia (gap
-    // ms entre a 1ª, 2ª, 3ª... dela); calibrado à mão sobrescreve. Ondas de aldeias diferentes
-    // começam todas em offset 0 (o horário de chegada normal do alvo).
-    function ccOpCalcularOffsets(a) {
-      const gap = ccOpCfg().gapMs, cont = {}, map = {};
-      (a.ondas || []).forEach((o) => {
-        const n = cont[o.vid] || 0; cont[o.vid] = n + 1;
-        map[o.id] = (o.offsetMs != null) ? o.offsetMs : n * gap;
-      });
-      return map;
-    }
 
     // ---- Filtro de grupo na lista de aldeias da Operação (independente do filtro do Ataque/Apoio) ----
     let _ccOpGrupoVidsSet = null;
-    async function ccOpAplicarFiltroGrupo() {
-      const gid = ccOpCfg().grupo || '';
-      if (!gid) { _ccOpGrupoVidsSet = null; ccOpRender(); return; }
-      try {
-        const vs = await getVillagesInGroup(gid);
-        _ccOpGrupoVidsSet = new Set(vs.map((x) => String(x.vid)));
-      } catch (e) {
-        _ccOpGrupoVidsSet = null;
-        pushLog('Operação: não consegui filtrar pelo grupo (' + (e.message || e) + ').', 'err', 'cmd');
-      }
-      ccOpRender();
-    }
-    async function ccOpCarregarGrupos() {
-      const sel = document.getElementById('cc-op-grupo'); if (!sel) return;
-      let grupos = []; try { grupos = await getGroups(); } catch (e) { /* sem grupos: fica só "Todas" */ }
-      const cur = ccOpCfg().grupo || '';
-      sel.innerHTML = '<option value="">Todas as aldeias</option>' +
-        grupos.map((g) => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('');
-      sel.value = cur;
-      if (cur) ccOpAplicarFiltroGrupo();
-      // Mesmo conteudo no seletor do Ataque em massa.
-      const selA = document.getElementById('cc-atkm-grupo');
-      if (selA) {
-        const curA = selA.value;
-        selA.innerHTML = sel.innerHTML;
-        selA.value = curA || '';
-        const el = document.getElementById('cc-atkm-pool');
-        if (el) el.textContent = ccAtkmPool().length + ' aldeia(s)';
-      }
-    }
-
-    // Tropa disponível de uma aldeia PRA OPERAÇÃO: total (casa+fora+trânsito — inclui o que
-    // está saqueando/farmando, que volta sozinho) MENOS o que está apoiando outra aldeia
-    // agora (fora) MENOS o que o Coordenado já reservou (config.reservations, escrito só por
-    // ele) MENOS o que a própria Operação já comprometeu em QUALQUER onda, de QUALQUER alvo
-    // (senão dava pra "gastar" a mesma tropa duas vezes só trocando de aba/alvo).
-    function ccOpComprometidoTudo(vid) {
-      const acc = {};
-      ccOpCfg().alvos.forEach((al) => (al.ondas || []).forEach((o) => {
-        if (String(o.vid) !== String(vid)) return;
-        Object.keys(o.amounts || {}).forEach((u) => { acc[u] = (acc[u] || 0) + (o.amounts[u] || 0); });
-      }));
-      return acc;
-    }
-    function ccOpDisponivel(vid) {
-      const v = CCVILAS.find((z) => String(z.vid) === String(vid));
-      if (!v) return {};
-      const minhas = v.minhas || v.avail || {};
-      const fora = v.fora || {};
-      const resPlanner = (config.reservations || {})[String(vid)] || {};
-      const resOp = ccOpComprometidoTudo(vid);
-      const out = {};
-      (CC_UNIDADES_MUNDO || UNITS.map((u) => u[0])).forEach((u) => {
-        out[u] = Math.max(0, (minhas[u] || 0) - (fora[u] || 0) - (resPlanner[u] || 0) - (resOp[u] || 0));
-      });
-      return out;
-    }
-    // Resumo por aldeia: soma o que ela manda em TODAS as ondas DESTE alvo e compara com o
-    // que ainda sobrava pra ela na Operação inteira (incluindo o que ESTA onda já usa, senão
-    // toda aldeia com onda pareceria estourada consigo mesma).
-    function ccOpResumo(a) {
-      const porVid = {};
-      (a.ondas || []).forEach((o) => {
-        const acc = (porVid[o.vid] = porVid[o.vid] || {});
-        Object.keys(o.amounts || {}).forEach((u) => { acc[u] = (acc[u] || 0) + (o.amounts[u] || 0); });
-      });
-      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
-      const linhas = [];
-      Object.keys(porVid).forEach((vid) => {
-        const v = CCVILAS.find((z) => String(z.vid) === String(vid));
-        const nome = v ? ((v.nome ? v.nome + ' ' : '') + (v.coord || vid)) : vid;
-        const minhas = (v && v.minhas) || {};
-        const fora = (v && v.fora) || {};
-        const resPlanner = (config.reservations || {})[String(vid)] || {};
-        // "sobra" = total menos apoio-fora menos Coordenado menos TODAS as ondas da Operação
-        // que NÃO são de nenhum alvo (ou seja, o compromisso já soma este alvo também).
-        const compTudo = ccOpComprometidoTudo(vid);
-        const falta = Object.keys(porVid[vid]).filter((u) => {
-          const tetoTotal = Math.max(0, (minhas[u] || 0) - (fora[u] || 0) - (resPlanner[u] || 0));
-          return compTudo[u] > tetoTotal;
-        });
-        const tot = Object.keys(porVid[vid]).reduce((s, u) => s + porVid[vid][u], 0);
-        linhas.push('<span style="color:' + (falta.length ? '#c0483a' : '#6f6153') + '" title="' +
-          esc(falta.length ? 'falta: ' + falta.map((u) => rot[u] || u).join(', ') : 'cabe no estoque') + '">' +
-          esc(nome) + ' ' + fmtN(tot) + (falta.length ? ' ⚠' : '') + '</span>');
-      });
-      return linhas.join(' · ');
-    }
-    function ccOpRender() {
-      const cfg = ccOpCfg();
-      const sel = document.getElementById('cc-op-sel'); if (!sel) return;
-      const a = ccOpAtivo();
-      if (a) cfg.ativo = a.id;
-      sel.innerHTML = cfg.alvos.length
-        ? cfg.alvos.map((z, i) => '<option value="' + z.id + '">' + esc(z.coord || ('alvo ' + (i + 1) + ' (sem coord)')) + ' · ' + (z.ondas || []).length + ' onda(s)</option>').join('')
-        : '<option value="">— nenhum alvo —</option>';
-      if (a) sel.value = a.id;
-      const gapEl = document.getElementById('cc-op-gap'); if (gapEl) gapEl.value = cfg.gapMs;
-      const coordEl = document.getElementById('cc-op-coord'); if (coordEl) coordEl.value = a ? (a.coord || '') : '';
-      const chEl = document.getElementById('cc-op-chegada'); if (chEl) chEl.value = a ? (a.chegadaLocal || '') : '';
-      const tremEl = document.getElementById('cc-op-trem'); if (tremEl) tremEl.checked = !!(a && a.trem);
-      // Antes do return de "sem alvo": a trilha/navegação tem que aparecer mesmo sem alvo criado.
-      ccOpRenderEtapas();
-
-      const boxV = document.getElementById('cc-op-vilas');
-      const boxO = document.getElementById('cc-op-ondas');
-      const boxR = document.getElementById('cc-op-resumo');
-      if (!a) {
-        if (boxV) boxV.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— crie um alvo pra começar —</div>';
-        if (boxO) boxO.innerHTML = '';
-        if (boxR) boxR.innerHTML = '';
-        return;
-      }
-      // ---- aldeias participantes ----
-      const alvoP = ccCoordParse(a.coord);
-      const rotUn = {}; UNITS.forEach(([u, n]) => { rotUn[u] = n; });
-      const listaU0 = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
-      let vilas = CCVILAS.slice();
-      if (_ccOpGrupoVidsSet) vilas = vilas.filter((v) => _ccOpGrupoVidsSet.has(String(v.vid)));
-      vilas.sort((x, y) => {
-        const dx = (alvoP && x.x != null) ? fieldDist(x.x, x.y, +alvoP.x, +alvoP.y) : 1e9;
-        const dy = (alvoP && y.x != null) ? fieldDist(y.x, y.y, +alvoP.x, +alvoP.y) : 1e9;
-        return dx - dy;
-      });
-      boxV.innerHTML = vilas.map((v) => {
-        const on = !!a.vids[v.vid];
-        const d = (alvoP && v.x != null) ? fieldDist(v.x, v.y, +alvoP.x, +alvoP.y) : null;
-        const n = (a.ondas || []).filter((o) => String(o.vid) === String(v.vid)).length;
-        const disp = ccOpDisponivel(v.vid);
-        const tropas = listaU0.filter((u) => disp[u] > 0)
-          .map((u) => '<span title="' + esc(rotUn[u] || u) + ' — sobra pra novos compromissos">' + unitIcon(u, rotUn[u] || u) + fmtN(disp[u]) + '</span>').join(' ');
-        return '<div style="padding:2px 5px;border-bottom:1px solid rgba(0,0,0,.05);font-size:10px">' +
-          '<div style="display:grid;grid-template-columns:18px 1fr 52px 62px;gap:6px;align-items:center">' +
-            '<input type="checkbox" class="cc-op-v" data-vid="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
-            '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' +
-              (v.nome ? '<b style="color:#584526">' + esc(v.nome) + '</b> ' : '') +
-              '<span style="color:#a2643a">' + esc(v.coord || v.vid) + '</span>' +
-              (n ? '<span style="color:#8a7d6d"> · ' + n + ' onda(s)</span>' : '') + '</span>' +
-            '<span style="color:#8a7d6d">' + (d == null ? '—' : d.toFixed(1) + ' c') + '</span>' +
-            (on ? '<a class="cc-op-add-onda" data-vid="' + v.vid + '" href="#" style="color:#2e7d3a;font-size:9px">+ onda</a>' : '<span></span>') +
-          '</div>' +
-          (tropas ? '<div style="margin:1px 0 0 24px;line-height:1.5">' + tropas + '</div>' : '') +
-        '</div>';
-      }).join('') || '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma aldeia —</div>';
-      boxV.querySelectorAll('.cc-op-v').forEach((el) => el.onchange = () => {
-        const vid = el.getAttribute('data-vid');
-        if (el.checked) { a.vids[vid] = true; if (!(a.ondas || []).some((o) => String(o.vid) === String(vid))) ccOpOndaAdd(vid); }
-        else { delete a.vids[vid]; a.ondas = a.ondas.filter((o) => String(o.vid) !== String(vid)); }
-        save(); ccOpRender();
-      });
-      boxV.querySelectorAll('.cc-op-add-onda').forEach((el) => el.onclick = (ev) => {
-        ev.preventDefault(); ccOpOndaAdd(el.getAttribute('data-vid'));
-      });
-
-      // ---- ondas (a lista ordenada) ----
-      const base = ccOpChegadaBase(a);
-      const offsets = ccOpCalcularOffsets(a);
-      const listaU = ccUnidadesUI();
-      // Uma "coluna" por unidade, igual ao apoio em massa do jogo: marcar preenche aquela
-      // tropa com o máximo em TODAS as ondas de uma vez. Some se não há onda pra preencher.
-      const colsBox = document.getElementById('cc-op-tudo-cols');
-      if (colsBox) {
-        colsBox.style.display = (a.ondas || []).length ? 'block' : 'none';
-        // Mesma largura de célula (48px) e mesmo recuo (23px) das caixas de tropa abaixo, pra
-        // cada checkbox cair na vertical exata da coluna que ele preenche.
-        colsBox.innerHTML =
-          '<div style="color:#8a7d6d;margin-bottom:2px">tudo por tropa ' +
-            '<span style="color:#b3a794">— marca a coluna e preenche em todas as ondas</span></div>' +
-          '<div style="display:flex;flex-wrap:wrap;gap:3px;margin-left:23px">' + listaU.map(([u, rot]) =>
-            '<label style="display:flex;flex-direction:column;align-items:center;gap:2px;width:48px;padding:0;cursor:pointer" ' +
-              'title="preenche ' + esc(rot) + ' com o máximo em todas as ondas">' +
-              unitIcon(u, rot) + '<input type="checkbox" class="cc-op-tudo-col" data-u="' + u + '"></label>').join('') +
-          '</div>';
-        colsBox.querySelectorAll('.cc-op-tudo-col').forEach((el) => el.onclick = () => ccOpAplicarTudo(a, el.getAttribute('data-u')));
-      }
-      boxO.innerHTML = (a.ondas || []).length ? a.ondas.map((o, i) => {
-        const v = CCVILAS.find((z) => String(z.vid) === String(o.vid));
-        const nome = v ? ((v.nome ? v.nome + ' ' : '') + (v.coord || o.vid)) : o.vid;
-        const chega = base ? base + offsets[o.id] : 0;
-        const manual = (o.offsetMs != null);
-        // Saída: pela unidade mais lenta DESTA onda, na distância real origem→alvo.
-        const tViagem = (v && v.x != null && alvoP) ? ccTempoViagemMs(v.x, v.y, alvoP.x, alvoP.y, o.amounts) : null;
-        const sai = (chega && tViagem != null) ? chega - tViagem : null;
-        // Disponível pra ESTA caixa = sobra geral + o que esta própria onda já usa dessa unidade
-        // (senão a onda pareceria não poder nem manter o que ela mesma já tem).
-        const dispBase = ccOpDisponivel(o.vid);
-        const campos = listaU.map(([u, rot]) => {
-          const meu = (o.amounts && o.amounts[u]) || 0;
-          const disp = (dispBase[u] || 0) + meu;
-          return '<label class="twmgr-ucell' + (disp > 0 ? '' : ' vazia') + '" title="' + esc(rot) + ' — sobra ' + fmtN(disp) + ' pra esta onda">' +
-            unitIcon(u, rot) +
-            '<input class="cc-op-amt twmgr-uinp" data-id="' + o.id + '" data-u="' + u + '" type="number" min="0" placeholder="0" ' +
-              'value="' + (meu || '') + '">' +
-            '<span class="twmgr-uqt">' + fmtN(disp) + '</span>' +
-          '</label>';
-        }).join('');
-        return '<div style="border-bottom:1px solid rgba(0,0,0,.07);padding:4px 5px">' +
-          '<div style="display:grid;grid-template-columns:22px 1fr 74px 92px 46px;gap:5px;align-items:center;font-size:10px">' +
-            // Número da onda como medalhinha: numa lista longa é o que dá o senso de ordem.
-            '<span style="display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;' +
-              'border-radius:50%;background:#f2e8d5;color:#8b5426;font-weight:700;font-size:9px">' + (i + 1) + '</span>' +
-            '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#584526">' + esc(nome) + '</span>' +
-            '<select class="cc-op-tipo twmgr-inp" data-id="' + o.id + '" style="font-size:9px;padding:2px 3px !important">' +
-              '<option value="attack"' + (o.tipo !== 'support' ? ' selected' : '') + '>⚔ ataque</option>' +
-              '<option value="support"' + (o.tipo === 'support' ? ' selected' : '') + '>🛡 apoio</option></select>' +
-            '<input class="cc-op-chega" data-id="' + o.id + '" value="' + (chega ? srvClockMs(chega) : '') + '" placeholder="—" ' +
-              'title="horário de chegada desta onda; edite pra calibrar" ' +
-              'style="width:100%;border:1px solid ' + (manual ? '#c9a35a' : '#ddd2c0') + ';border-radius:6px;padding:3px 2px;' +
-              'background:' + (manual ? '#fffaf0' : '#fff') + ';text-align:center;font-size:10px;outline:none;' +
-              'color:' + (manual ? '#8b5426' : '#2e7d3a') + ';font-weight:' + (manual ? '700' : '400') + '">' +
-            '<span style="text-align:right;white-space:nowrap">' +
-              '<a class="cc-op-up" data-id="' + o.id + '" href="#" style="color:#a2643a;text-decoration:none" title="subir">▲</a> ' +
-              '<a class="cc-op-dn" data-id="' + o.id + '" href="#" style="color:#a2643a;text-decoration:none" title="descer">▼</a> ' +
-              '<a class="cc-op-rm" data-id="' + o.id + '" href="#" style="color:#c0483a;text-decoration:none" title="remover">✕</a></span>' +
-          '</div>' +
-          // Informação à esquerda, ações à direita — antes "sai" e os dois botões corriam juntos
-          // na mesma frase, e o dado mais importante da linha se perdia no meio dos links.
-          '<div style="display:flex;align-items:center;gap:5px;margin:3px 0 0 27px;font-size:9px;color:#8a7d6d">' +
-            '<span>sai <b style="color:' + (sai ? '#2e7d3a' : '#8a7d6d') + '">' + (sai ? srvClockMs(sai) : '—') + '</b>' +
-              (tViagem == null ? ' <span style="color:#a2643a">— digite a tropa pra calcular</span>' : '') + '</span>' +
-            '<span style="flex:1"></span>' +
-            '<a class="cc-op-onda-tudo" data-id="' + o.id + '" href="#" style="color:#2e7d3a;text-decoration:none" title="preenche todas as tropas desta aldeia com o máximo disponível">🧺 tudo</a>' +
-            '<span style="color:#d8cdb8">|</span>' +
-            '<a class="cc-op-div" data-id="' + o.id + '" href="#" style="color:#2e7d3a;text-decoration:none" title="quebra esta onda em N ondas iguais, da mesma aldeia">✂ dividir em</a>' +
-            '<input class="cc-op-divn" data-id="' + o.id + '" type="number" min="2" max="20" value="2" ' +
-              'style="width:34px;border:1px solid #ddd2c0;border-radius:6px;padding:2px 1px;background:#fff;color:#463b30;text-align:center;font-size:9px;outline:none">' +
-          '</div>' +
-          '<div style="display:flex;flex-wrap:wrap;gap:3px;margin:4px 0 0 23px">' + campos + '</div>' +
-        '</div>';
-      }).join('') : '<div style="color:#8a7d6d;padding:6px;font-size:10px">— volte em <b>Origens</b> e marque uma aldeia pra criar a 1ª onda —</div>';
-
-      boxO.querySelectorAll('.cc-op-amt').forEach((el) => el.onchange = () => {
-        const o = a.ondas.find((z) => z.id === el.getAttribute('data-id')); if (!o) return;
-        const n = parseInt(el.value, 10) || 0;
-        o.amounts = o.amounts || {};
-        if (n > 0) o.amounts[el.getAttribute('data-u')] = n; else delete o.amounts[el.getAttribute('data-u')];
-        save(); ccOpRender();   // reflete no "sai" (unidade mais lenta pode mudar) e nos totais
-      });
-      boxO.querySelectorAll('.cc-op-tipo').forEach((el) => el.onchange = () => {
-        const o = a.ondas.find((z) => z.id === el.getAttribute('data-id')); if (!o) return;
-        o.tipo = el.value; save();
-      });
-      // Calibrar: digitar HH:MM:SS.mmm fixa o offset desta onda (deixa de seguir o gap).
-      boxO.querySelectorAll('.cc-op-chega').forEach((el) => el.onchange = () => {
-        const o = a.ondas.find((z) => z.id === el.getAttribute('data-id')); if (!o || !base) return;
-        const m = (el.value || '').match(/(\d{1,2}):(\d{2}):(\d{2})(?:[.,:](\d{1,3}))?/);
-        if (!m) { ccOpRender(); return; }
-        const d = new Date(base - wallToServerOffset());
-        d.setHours(+m[1], +m[2], +m[3], m[4] ? +(m[4] + '00').slice(0, 3) : 0);
-        o.offsetMs = Math.round((d.getTime() + wallToServerOffset()) - base);
-        save(); ccOpRender();
-      });
-      boxO.querySelectorAll('.cc-op-up').forEach((el) => el.onclick = (ev) => { ev.preventDefault(); ccOpOndaMover(el.getAttribute('data-id'), -1); });
-      boxO.querySelectorAll('.cc-op-dn').forEach((el) => el.onclick = (ev) => { ev.preventDefault(); ccOpOndaMover(el.getAttribute('data-id'), 1); });
-      boxO.querySelectorAll('.cc-op-rm').forEach((el) => el.onclick = (ev) => {
-        ev.preventDefault();
-        a.ondas = a.ondas.filter((z) => z.id !== el.getAttribute('data-id'));
-        save(); ccOpRender();
-      });
-      boxO.querySelectorAll('.cc-op-div').forEach((el) => el.onclick = (ev) => {
-        ev.preventDefault();
-        const id = el.getAttribute('data-id');
-        const nEl = boxO.querySelector('.cc-op-divn[data-id="' + id + '"]');
-        ccOpOndaDividir(id, nEl ? nEl.value : 2);
-      });
-      boxO.querySelectorAll('.cc-op-onda-tudo').forEach((el) => el.onclick = (ev) => {
-        ev.preventDefault(); ccOpOndaTudo(el.getAttribute('data-id'));
-      });
-      if (boxR) boxR.innerHTML = ccOpResumo(a);
-    }
-    // Arma TODAS as ondas do alvo ativo, cada uma com o seu horário. O disparo em si é o
-    // mesmo motor de precisão dos comandos avulsos — cmdAdicionar entrega pro cmdTick.
-    function ccOpArmarAtivo(dizer) {
-      const a = ccOpAtivo();
-      if (!a) return dizer('Crie um alvo primeiro.');
-      const alvoP = ccCoordParse(a.coord);
-      if (!alvoP) return dizer('Alvo inválido. Use 478|586.');
-      if (!(a.ondas || []).length) return dizer('Nenhuma onda neste alvo.');
-      let base = ccOpChegadaBase(a);
-      if (!ccModoJa() && !base) return dizer('Defina o horário de chegada da 1ª onda — ou marque "sair o quanto antes".');
-      const apoio = a.ondas.some((o) => o.tipo === 'support');
-      if (apoio && !config.cmd.suporteOkAt) {
-        return dizer('Tem onda de apoio, mas o parâmetro de apoio ainda não foi confirmado neste mundo.');
-      }
-      const offsets = ccOpCalcularOffsets(a);
-      // No modo "quanto antes" a base não vem do campo: é a mais cedo em que NENHUMA onda perde
-      // a saída. Cada onda tem o seu offset e a sua viagem, então a restrição é
-      // base >= saidaJa + viagem_i - offset_i; a base é o maior desses. Preserva a defasagem
-      // entre as ondas, que é o ponto da Operação — só antecipa o conjunto todo.
-      if (ccModoJa()) {
-        const saida = ccSaidaJaMs();
-        let minBase = 0;
-        a.ondas.forEach((o) => {
-          const v = CCVILAS.find((z) => String(z.vid) === String(o.vid));
-          if (!v || v.x == null) return;
-          const am = {};
-          Object.keys(o.amounts || {}).forEach((u) => { if (o.amounts[u] > 0) am[u] = o.amounts[u]; });
-          if (!Object.keys(am).length) return;
-          const t = ccTempoViagemMs(v.x, v.y, alvoP.x, alvoP.y, am);
-          if (t == null) return;
-          const precisa = saida + t - (offsets[o.id] || 0);
-          if (precisa > minBase) minBase = precisa;
-        });
-        if (!minBase) return dizer('Não consegui calcular a viagem de nenhuma onda.');
-        base = minBase;
-      }
-      let armados = 0, tremes = 0; const pulados = [];
-      // Prepara as ondas válidas mantendo a ordem da lista (é a ordem de chegada).
-      const prontas = [];
-      a.ondas.forEach((o, i) => {
-        const rotO = 'onda ' + (i + 1);
-        const v = CCVILAS.find((z) => String(z.vid) === String(o.vid));
-        if (!v) { pulados.push(rotO + ' (aldeia sumiu)'); return; }
-        const amounts = {};
-        Object.keys(o.amounts || {}).forEach((u) => { if (o.amounts[u] > 0) amounts[u] = o.amounts[u]; });
-        if (!Object.keys(amounts).length) { pulados.push(rotO + ' (sem tropa)'); return; }
-        const chega = base + offsets[o.id];
-        const t = (v.x != null) ? ccTempoViagemMs(v.x, v.y, alvoP.x, alvoP.y, amounts) : null;
-        if (t != null && (chega - t) <= srvNowP()) { pulados.push(rotO + ' (longe demais)'); return; }
-        prontas.push({ o: o, v: v, amounts: amounts, chega: chega, tipo: o.tipo === 'support' ? 'support' : 'attack' });
-      });
-      if (a.trem) {
-        // Trem: ondas de ATAQUE da mesma origem viram UM comando, enviado num POST só pelo
-        // recurso nativo do jogo. Some a corrida por tropa entre elas (o jogo aloca as N de uma
-        // vez) e o espaçamento passa a ser o mínimo do servidor — que é o que um NT quer.
-        // Apoio fica de fora: o formato train[] é do formulário de ataque.
-        const grupos = {};
-        prontas.forEach((p) => {
-          if (p.tipo !== 'attack') { cmdAdicionar(p.tipo, alvoP.x, alvoP.y, p.amounts, p.chega, p.v.vid); armados++; return; }
-          (grupos[String(p.v.vid)] = grupos[String(p.v.vid)] || []).push(p);
-        });
-        Object.keys(grupos).forEach((vid) => {
-          const g = grupos[vid];
-          // A chegada do trem é a da PRIMEIRA onda dele: todas saem juntas, então o horário das
-          // demais deixa de ser controlável — o servidor é quem espaça.
-          const extras = g.slice(1).map((p) => p.amounts);
-          cmdAdicionar('attack', alvoP.x, alvoP.y, g[0].amounts, g[0].chega, vid, extras);
-          armados += g.length;
-          if (extras.length) tremes++;
-        });
-      } else {
-        prontas.forEach((p) => { cmdAdicionar(p.tipo, alvoP.x, alvoP.y, p.amounts, p.chega, p.v.vid); armados++; });
-      }
-      if (!_ccPrevia) { ccHistAdd(alvoP.coord); ccHistRender(); save(); }
-      if (!armados) return dizer('Nada armado. ' + (pulados.length ? pulados.join(', ') : ''));
-      dizer(armados + ' onda(s) armada(s) → ' + alvoP.coord + ', a 1ª chegando ' + srvClockMs(base) +
-            (tremes ? ' · ' + tremes + ' trem(ns) num POST só' : '') +
-            (pulados.length ? ' · pulada(s): ' + pulados.join(', ') : ''),
-            pulados.length ? '#a2643a' : '#2e7d3a');
-    }
 
     function ccPreviaFake() {
       const el = document.getElementById('cc-fake-previa'); if (!el) return;
@@ -19274,58 +18597,6 @@
       if (!v || v.x == null) return 0;
       return ccTempoViagemMs(v.x, v.y, +c.x, +c.y, c.amounts) || 0;
     }
-    // ---- Apoio em massa ----
-    // Grade de unidades: um campo por unidade do mundo. Aceita número, "50%" ou "tudo".
-    function ccMassaUnidades() {
-      const cont = document.getElementById('cc-massa-unidades'); if (!cont) return;
-      const listaU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]).filter((u) => u !== 'snob');
-      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
-      const antes = {};
-      cont.querySelectorAll('.cc-massa-u').forEach((el) => { antes[el.getAttribute('data-u')] = el.value; });
-      cont.innerHTML = listaU.map((u) =>
-        '<label style="display:flex;align-items:center;gap:3px;font-size:10px" title="' + esc(rot[u] || u) + '">' +
-          unitIcon(u, rot[u] || u) +
-          '<input class="cc-massa-u twmgr-inp" data-u="' + u + '" value="' + esc(antes[u] || '') + '" style="width:50px;font-size:10px;padding:1px" placeholder="0">' +
-        '</label>').join('');
-    }
-    // Lê a especificação digitada: {unidade: {mode:'all'|'pct'|'qty', val}}
-    function ccMassaSpec() {
-      const spec = {};
-      document.querySelectorAll('.cc-massa-u').forEach((el) => {
-        const u = el.getAttribute('data-u');
-        const raw = (el.value || '').trim().toLowerCase();
-        if (!raw) return;
-        if (/^(tudo|todas|todos|all|max|\*)$/.test(raw)) spec[u] = { mode: 'all' };
-        else if (/%$/.test(raw)) { const p = parseFloat(raw.replace(',', '.')); if (p > 0) spec[u] = { mode: 'pct', val: p }; }
-        else { const q = parseInt(raw.replace(/\D/g, ''), 10); if (q > 0) spec[u] = { mode: 'qty', val: q }; }
-      });
-      return spec;
-    }
-    // Resolve a spec contra o disponível de UMA aldeia -> {unidade: contagem}
-    function ccMassaResolver(spec, avail) {
-      const a = {};
-      Object.keys(spec).forEach((u) => {
-        const have = (avail && avail[u]) || 0;
-        if (!have) return;
-        const s = spec[u];
-        let n = s.mode === 'all' ? have : s.mode === 'pct' ? Math.floor(have * s.val / 100) : Math.min(s.val, have);
-        if (n > 0) a[u] = n;
-      });
-      return a;
-    }
-    // Divide um conjunto de tropas em N partes (resto vai pras primeiras).
-    function ccMassaDividir(amounts, n) {
-      const partes = Array.from({ length: n }, () => ({}));
-      Object.keys(amounts).forEach((u) => {
-        const base = Math.floor(amounts[u] / n);
-        let resto = amounts[u] - base * n;
-        for (let i = 0; i < n; i++) {
-          const q = base + (resto > 0 ? 1 : 0); if (resto > 0) resto--;
-          if (q > 0) partes[i][u] = q;
-        }
-      });
-      return partes;
-    }
     // ==================== BLINDAGEM DA TRIBO ====================
     // Lê o tópico do fórum onde a tribo publica os pedidos de defesa e monta, do lado de cá, a
     // divisão da SUA defesa entre eles. Três coisas foram medidas no tópico real (br143 #90) e
@@ -19356,512 +18627,6 @@
       const todas = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
       if (ccTipo() !== 'blz') return todas;
       return todas.filter((u) => CC_UNIDADES_DEF.indexOf(u) >= 0);
-    }
-    // Datas do fórum: "hoje às 14:04", "ontem às 23:03", "em 07.08.2026 às 15:16" e a variante
-    // sem ano "em 07.08. às 15:16". Devolve ms, ou 0 quando não reconhece — 0 nunca é tratado
-    // como "recente", então a dúvida sempre cai pro lado seguro.
-    function ccBlzData(txt) {
-      const t = (txt || '').replace(/\s+/g, ' ').trim();
-      const hm = t.match(/(\d{1,2}):(\d{2})/);
-      if (!hm) return 0;
-      const h = +hm[1], mi = +hm[2];
-      const dm = t.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})?/);
-      const d = new Date();
-      if (dm) {
-        d.setFullYear(dm[3] ? +dm[3] : d.getFullYear(), (+dm[2]) - 1, +dm[1]);
-      } else if (/\bontem\b/i.test(t)) {
-        d.setDate(d.getDate() - 1);
-      } else if (!/\bhoje\b/i.test(t)) {
-        return 0;                                        // formato desconhecido: não arrisca
-      }
-      d.setHours(h, mi, 0, 0);
-      return d.getTime();
-    }
-    // Número de uma célula da tabela. Vazio, `✅` ou qualquer coisa sem dígito = 0.
-    function ccBlzNum(td) {
-      if (!td) return 0;
-      const s = (td.textContent || '').replace(/\D/g, '');
-      return s ? parseInt(s, 10) : 0;
-    }
-    // Linha de entrega: `num/lanc/esp/0/cp/0`. Tolera linha curta — no tópico real apareceu
-    // `14/1000/0/0/0` com 5 campos em vez de 6. Posição manda: nunca "compacta" os zeros, senão
-    // um 0 a menos faria a cavalaria virar espadachim.
-    function ccBlzLinha(txt) {
-      const m = (txt || '').trim().match(/^(\d{1,3})((?:\s*\/\s*\d+){2,6})\s*$/);
-      if (!m) return null;
-      // m[2] começa com a barra, então o split deixa um vazio na frente — o slice(1) tira. Sem
-      // ele TUDO anda uma casa e o lanceiro viraria zero.
-      const n = m[2].split('/').slice(1).map((s) => parseInt(s.trim(), 10) || 0);
-      return { num: +m[1], spear: n[0] || 0, sword: n[1] || 0, heavy: n[3] || 0 };
-    }
-    function ccBlzParse(doc) {
-      const posts = [].slice.call(doc.querySelectorAll('div.post'));
-      if (!posts.length) throw new Error('não achei nenhum post — a URL aponta pro tópico certo?');
-      // A tabela mora no PRIMEIRO post que tenha uma com ícone de unidade no cabeçalho. Procurar
-      // por ícone (e não pela posição) aguenta a tribo fixar outro post no topo.
-      let tabela = null, postTabela = null;
-      for (const p of posts) {
-        const t = [].slice.call(p.querySelectorAll('table'))
-          .find((x) => x.querySelector('tr img[src*="unit_"]') && !x.querySelector('table'));
-        if (t) { tabela = t; postTabela = p; break; }
-      }
-      if (!tabela) throw new Error('não achei a tabela de pedidos (nenhuma com ícone de unidade)');
-      const linhas = [].slice.call(tabela.querySelectorAll('tr'));
-      const cab = [].slice.call(linhas[0].children);
-      const col = {};
-      cab.forEach((c, i) => {
-        const im = c.querySelector('img');
-        const u = im && ((im.getAttribute('src') || '').match(/unit_([a-z]+)\./) || [])[1];
-        if (u && BLZ_UNITS.indexOf(u) >= 0 && col[u] == null) col[u] = i;
-      });
-      if (col.spear == null) throw new Error('a tabela não tem coluna de lanceiro');
-      const pedidos = [];
-      linhas.slice(1).forEach((tr) => {
-        const tds = [].slice.call(tr.children);
-        if (tds.length < 2) return;
-        const num = parseInt((tds[0].textContent || '').replace(/\D/g, ''), 10);
-        if (!num) return;
-        const m = (tds[1].textContent || '').replace(/\s+/g, ' ').match(/^(.*?)\((\d{1,3})\|(\d{1,3})\)/);
-        if (!m) return;
-        const pede = {};
-        BLZ_UNITS.forEach((u) => { pede[u] = col[u] != null ? ccBlzNum(tds[col[u]]) : 0; });
-        pedidos.push({ num: num, nome: m[1].trim(), coord: m[2] + '|' + m[3],
-                       x: +m[2], y: +m[3], pede: pede });
-      });
-      // Quando a tabela foi editada pela última vez. Sem rodapé de edição vale a data do post.
-      const rodape = (postTabela.innerText || '').split('\n').filter((l) => /Editado/i.test(l))[0];
-      const cabTab = (postTabela.querySelector('.postheader_left') || {}).innerText || '';
-      const editadoEm = ccBlzData(rodape) || ccBlzData(cabTab);
-      // Entregas: todo post que NÃO é o da tabela, uma linha por pedido atendido.
-      const entregas = [];
-      posts.forEach((p) => {
-        if (p === postTabela) return;
-        const hdr = (p.querySelector('.postheader_left') || {}).innerText || '';
-        const at = ccBlzData(hdr);
-        const autor = (hdr.replace(/\s+/g, ' ').match(/^(.*?)\s+(?:em|hoje|ontem)\b/) || [])[1] || '?';
-        (p.innerText || '').split('\n').forEach((l) => {
-          const e = ccBlzLinha(l);
-          if (!e) return;
-          e.autor = autor.trim(); e.at = at;
-          // A regra combinada: só conta quem postou DEPOIS da última edição da tabela.
-          e.posEdicao = !!(at && editadoEm && at >= editadoEm);
-          entregas.push(e);
-        });
-      });
-      return { pedidos: pedidos, entregas: entregas, editadoEm: editadoEm };
-    }
-    async function ccBlzBuscar() {
-      const b = config.cmd.blz;
-      const url = ((document.getElementById('cc-blz-url') || {}).value || '').trim();
-      if (!url) throw new Error('cole a URL do tópico da tribo');
-      b.url = url;
-      const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-      const r = ccBlzParse(doc);
-      b.pedidos = r.pedidos; b.entregas = r.entregas; b.editadoEm = r.editadoEm;
-      b.lidoEm = Date.now();
-      // Pedido que sumiu da tabela leva junto o plano e a trava dele: manter viraria envio pra
-      // um número que hoje é outra aldeia — exatamente o problema da renumeração.
-      const vivos = {}; r.pedidos.forEach((p) => { vivos[p.num] = 1; });
-      Object.keys(b.plano).forEach((k) => { if (!vivos[k]) delete b.plano[k]; });
-      Object.keys(b.enviados).forEach((k) => { if (!vivos[k]) delete b.enviados[k]; });
-      // Pedido que sumiu sai da seleção; pedido NOVO entra marcado, pra a tabela recém-buscada
-      // já vir pronta pra dividir em vez de exigir 8 cliques antes de qualquer coisa acontecer.
-      b.alvosSel = b.alvosSel || {};
-      Object.keys(b.alvosSel).forEach((k) => { if (!vivos[k]) delete b.alvosSel[k]; });
-      r.pedidos.forEach((p) => { if (b.alvosSel[p.num] === undefined) b.alvosSel[p.num] = true; });
-      save();
-      return r;
-    }
-    // Quanto ainda falta em cada pedido: o pedido menos o que a tribo já entregou (só as entregas
-    // válidas) menos o que ESTE módulo já mandou nesta rodada.
-    function ccBlzEntregue(num) {
-      const b = config.cmd.blz;
-      const t = { spear: 0, sword: 0, heavy: 0 };
-      b.entregas.forEach((e) => {
-        if (e.num !== num || !e.posEdicao) return;
-        BLZ_UNITS.forEach((u) => { t[u] += e[u] || 0; });
-      });
-      return t;
-    }
-    function ccBlzFalta(p) {
-      const ent = ccBlzEntregue(p.num);
-      const meu = ccBlzMeuTotal(p.num);
-      const f = {};
-      BLZ_UNITS.forEach((u) => { f[u] = Math.max(0, (p.pede[u] || 0) - (ent[u] || 0) - (meu[u] || 0)); });
-      return f;
-    }
-    // O que EU já aloquei pra este pedido (soma do plano em todas as minhas aldeias).
-    function ccBlzMeuTotal(num) {
-      const linha = (config.cmd.blz.plano || {})[num] || {};
-      const t = { spear: 0, sword: 0, heavy: 0 };
-      Object.keys(linha).forEach((vid) => {
-        BLZ_UNITS.forEach((u) => { t[u] += (linha[vid] || {})[u] || 0; });
-      });
-      return t;
-    }
-    // Quanto sobra numa aldeia depois da reserva de casa e do que o plano já comprometeu nela.
-    //
-    // O estoque vem de `v.avail`, que SEGUE o seletor de fonte da lista de Origens: com "na
-    // aldeia agora" é só o que está parado aqui; com "suas próprias" entra também o que está
-    // fora apoiando e o que está voltando. Quem manda é a escolha do usuário.
-    //
-    // Vale saber o que cada uma significa na hora de enviar: em "suas próprias" a divisão conta
-    // tropa que ainda não chegou, então o envio daquela linha vai sair menor (ou falhar) até ela
-    // pousar em casa. É útil pra montar o plano agora e disparar quando a tropa voltar; não é
-    // útil pra mandar tudo de uma vez.
-    function ccBlzLivre(v) {
-      const b = config.cmd.blz;
-      const usado = { spear: 0, sword: 0, heavy: 0 };
-      Object.keys(b.plano).forEach((num) => {
-        const q = (b.plano[num] || {})[v.vid]; if (!q) return;
-        BLZ_UNITS.forEach((u) => { usado[u] += q[u] || 0; });
-      });
-      const estoque = v.avail || {};
-      const livre = {};
-      BLZ_UNITS.forEach((u) => {
-        livre[u] = Math.max(0, (estoque[u] || 0) - (b.reserva[u] || 0) - usado[u]);
-      });
-      return livre;
-    }
-    // Orçamento de UMA aldeia pra rodada inteira: o teto que o usuário definiu em "por aldeia",
-    // limitado ao que ela realmente tem livre. Campo vazio = sem teto, entra o disponível todo
-    // (que é como era antes desta opção existir).
-    //
-    // SÓ NÚMERO ABSOLUTO. A porcentagem existiu na v11.138.0 e saiu: com a fonte de tropa e a
-    // reserva no meio, "50%" tinha três bases plausíveis (estoque, livre, ou o que falta) e o
-    // resultado não batia com o que o usuário esperava. Número resolve o mesmo caso sem ambiguidade.
-    function ccBlzOrcamento(v) {
-      const b = config.cmd.blz, spec = b.porAldeia || {}, livre = ccBlzLivre(v);
-      // O que o plano JÁ tirou desta aldeia. O teto é da rodada inteira, então precisa descontar
-      // isso — senão ele se renovaria a cada passada e "50 lanceiros" viraria 50 por passada.
-      const usado = { spear: 0, sword: 0, heavy: 0 };
-      Object.keys(b.plano || {}).forEach((num) => {
-        const q = (b.plano[num] || {})[v.vid]; if (!q) return;
-        BLZ_UNITS.forEach((u) => { usado[u] += q[u] || 0; });
-      });
-      const out = {};
-      BLZ_UNITS.forEach((u) => {
-        const q = parseInt(String(spec[u] == null ? '' : spec[u]).replace(/\D/g, ''), 10);
-        const teto = (q > 0) ? q : Infinity;   // vazio, zero ou lixo = sem teto
-        const resta = (teto === Infinity) ? Infinity : Math.max(0, teto - usado[u]);
-        out[u] = Math.max(0, Math.min(resta, livre[u] || 0));
-      });
-      return out;
-    }
-    // Pedidos que entram na divisão. Nenhum marcado = todos (senão o primeiro uso da tela, com a
-    // seleção vazia, não distribuiria nada e pareceria quebrado).
-    function ccBlzPedidosAtivos() {
-      const b = config.cmd.blz, sel = b.alvosSel || {};
-      return (b.pedidos || []).filter((p) => sel[p.num]);
-    }
-    // ---- A sugestão ----
-    // Guloso por DISTÂNCIA: percorre todos os pares (aldeia, pedido) do mais perto pro mais longe
-    // e vai preenchendo. Defesa que chega tarde não defende, então proximidade é o critério que
-    // importa — e o guloso por distância dá, pra cada aldeia, o pedido mais perto que ainda
-    // precisa dela. Não mexe no que você já editou à mão: só soma em cima do que falta.
-    function ccBlzSugerir() {
-      const b = config.cmd.blz;
-      const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid] && v.x != null);
-      if (!marcadas.length) return { erro: 'marque as origens na lista de Origens, abaixo' };
-      if (!b.pedidos.length) return { erro: 'busque a tabela do tópico primeiro' };
-      const dist = (v, p) => Math.sqrt(Math.pow(v.x - p.x, 2) + Math.pow(v.y - p.y, 2));
-      const por = (par) => {
-        b.plano[par.p.num] = b.plano[par.p.num] || {};
-        const atual = b.plano[par.p.num][par.v.vid] || {};
-        BLZ_UNITS.forEach((u) => { if (par.q[u]) atual[u] = (atual[u] || 0) + par.q[u]; });
-        b.plano[par.p.num][par.v.vid] = atual;
-      };
-      let alocado = 0;
-      // ---- Passada 1: PROPORCIONAL ----
-      // O guloso puro (só distância) despejava a aldeia inteira no pedido mais perto e deixava os
-      // outros zerados — a tribo recebia tudo num lugar só. Aqui cada aldeia reparte o que tem
-      // entre TODOS os pedidos, na proporção do que cada um ainda precisa: pedido que falta o
-      // dobro recebe o dobro. As proporções são calculadas UMA vez, sobre a foto inicial, senão
-      // cada alocação mexeria no denominador e a divisão deixaria de ser proporcional.
-      const ativos = ccBlzPedidosAtivos();
-      if (!ativos.length) return { erro: 'nenhum pedido selecionado' };
-      const falta0 = {}; const totalFalta = { spear: 0, sword: 0, heavy: 0 };
-      ativos.forEach((p) => {
-        falta0[p.num] = ccBlzFalta(p);
-        BLZ_UNITS.forEach((u) => { totalFalta[u] += falta0[p.num][u] || 0; });
-      });
-      marcadas.forEach((v) => {
-        // `orc0` é o teto DA RODADA pra esta aldeia (o "por aldeia"); `usadoV` é o que ela já
-        // cedeu nesta passada. Sem esse par, o teto valeria por pedido em vez de por aldeia — uma
-        // aldeia com "50 lanceiros" mandaria 50 pra cada um dos 8 pedidos.
-        const orc0 = ccBlzOrcamento(v);
-        const usadoV = { spear: 0, sword: 0, heavy: 0 };
-        ativos.forEach((p) => {
-          const q = {}; let soma = 0;
-          const livreAgora = ccBlzLivre(v);        // desce a cada alocação desta mesma aldeia
-          BLZ_UNITS.forEach((u) => {
-            if (!totalFalta[u]) return;
-            const cota = Math.floor((orc0[u] || 0) * (falta0[p.num][u] || 0) / totalFalta[u]);
-            // O `ccBlzFalta` aqui é o TETO DO PEDIDO: nunca sai mais do que ainda falta nele.
-            const n = Math.min(cota, ccBlzFalta(p)[u] || 0, livreAgora[u] || 0,
-                               Math.max(0, (orc0[u] || 0) - usadoV[u]));
-            if (n > 0) { q[u] = n; soma += n; usadoV[u] += n; }
-          });
-          if (!soma) return;
-          por({ v: v, p: p, q: q }); alocado += soma;
-        });
-      });
-      // ---- Passada 2: SOBRA ----
-      // O piso da divisão e os pedidos que ficaram menores que a cota deixam resto. Ele vai pelo
-      // guloso de distância — aqui concentrar não é problema, é o que sobrou.
-      const pares = [];
-      marcadas.forEach((v) => ativos.forEach((p) => pares.push({ v: v, p: p, d: dist(v, p) })));
-      pares.sort((a, c) => a.d - c.d);
-      pares.forEach((par) => {
-        const falta = ccBlzFalta(par.p), livre = ccBlzLivre(par.v);
-        // O teto "por aldeia" vale aqui também: ccBlzOrcamento já desconta o que o plano
-        // comprometeu (via ccBlzLivre), então o que sobra dele é o resto do orçamento.
-        const orc = ccBlzOrcamento(par.v);
-        const q = {}; let soma = 0;
-        BLZ_UNITS.forEach((u) => {
-          const n = Math.min(falta[u] || 0, livre[u] || 0, orc[u] || 0);
-          if (n > 0) { q[u] = n; soma += n; }
-        });
-        if (!soma) return;
-        par.q = q; por(par); alocado += soma;
-      });
-      save();
-      // Espalhar tem um preço: cada par (aldeia, pedido) vira UM comando de apoio. Com muitas
-      // origens marcadas isso vira dezenas de envios, e é melhor você saber disso antes de clicar
-      // em Enviar do que descobrir no meio.
-      let envios = 0;
-      Object.keys(b.plano).forEach((n) => { envios += Object.keys(b.plano[n] || {}).length; });
-      return { alocado: alocado, envios: envios };
-    }
-    // O texto do fórum. Uma linha por pedido, agregando todas as MINHAS aldeias — a tribo quer
-    // saber quanto chegou, não de onde saiu. Os dois zeros fixos são as colunas ❌ da tabela.
-    function ccBlzTexto(soEnviados) {
-      const b = config.cmd.blz;
-      const linhas = [];
-      b.pedidos.forEach((p) => {
-        const linha = (b.plano || {})[p.num] || {};
-        const t = { spear: 0, sword: 0, heavy: 0 };
-        Object.keys(linha).forEach((vid) => {
-          if (soEnviados && !((b.enviados[p.num] || {})[vid])) return;
-          BLZ_UNITS.forEach((u) => { t[u] += (linha[vid] || {})[u] || 0; });
-        });
-        if (!(t.spear + t.sword + t.heavy)) return;
-        linhas.push(p.num + '/' + t.spear + '/' + t.sword + '/0/' + t.heavy + '/0');
-      });
-      return linhas.join('\n');
-    }
-    // ---- Envio ----
-    // Grava a trava ANTES de passar pro próximo e resposta ambígua conta como enviada. Apoio que
-    // sai duas vezes esvazia a aldeia de defesa em dobro, e não tem desfazer — na dúvida, o
-    // barato é você conferir na tela de comandos, não o script reenviar.
-    async function ccBlzEnviar() {
-      const b = config.cmd.blz;
-      const msg = document.getElementById('cc-blz-msg');
-      const diz = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c0483a'; } };
-      if (!config.cmd.suporteOkAt) return diz('O apoio ainda não foi verificado neste mundo — deixe a praça aberta alguns segundos e tente de novo.');
-      const tarefas = [];
-      b.pedidos.forEach((p) => {
-        const linha = b.plano[p.num] || {};
-        Object.keys(linha).forEach((vid) => {
-          if ((b.enviados[p.num] || {})[vid]) return;             // já saiu
-          const q = linha[vid] || {};
-          const amounts = {};
-          BLZ_UNITS.forEach((u) => { if (q[u] > 0) amounts[u] = q[u]; });
-          if (!Object.keys(amounts).length) return;
-          const v = CCVILAS.find((z) => String(z.vid) === String(vid));
-          if (!v) return;
-          tarefas.push({ p: p, v: v, amounts: amounts });
-        });
-      });
-      if (!tarefas.length) return diz('Nada pendente pra enviar — sugira a divisão ou preencha à mão.');
-      // Menos perigoso que o Apoio em massa (aqui a tropa esta escrita numero a numero no plano, na
-      // tela, e `b.enviados` impede reenvio), mas ainda e tropa saindo AGORA em lote. Pergunta antes,
-      // pelo mesmo padrao do resto do arquivo.
-      const nPed = Object.keys(tarefas.reduce((m, t) => { m[t.p.num] = 1; return m; }, {})).length;
-      if (!confirm('Enviar ' + tarefas.length + ' apoio(s) AGORA, cobrindo ' + nPed + ' pedido(s) da blindagem?\n\n'
-        + 'Sai na hora, não agenda.')) { diz('Cancelado — nada foi enviado.', '#6f6153'); return; }
-      diz('Enviando ' + tarefas.length + ' apoio(s)… (não feche a praça)', '#6f6153');
-      let ok = 0, falhas = 0;
-      for (const t of tarefas) {
-        const slots = BLZ_UNITS.map((u) => t.amounts[u] || 0).join('/');
-        try {
-          const prep = await cmdPrepare(t.v.vid, t.p.x, t.p.y, t.amounts, 'support');
-          await cmdFire(prep);
-          b.enviados[t.p.num] = b.enviados[t.p.num] || {};
-          b.enviados[t.p.num][t.v.vid] = Date.now(); save();
-          ok++;
-          pushLog('🛡 Blindagem #' + t.p.num + ': ' + (t.v.coord || t.v.vid) + ' → ' + t.p.coord + ' (' + slots + ')', 'ok', 'cmd');
-        } catch (e) {
-          const em = String(e.message || e);
-          if (/^ambiguo:/i.test(em)) {
-            b.enviados[t.p.num] = b.enviados[t.p.num] || {};
-            b.enviados[t.p.num][t.v.vid] = Date.now(); save();
-            pushLog('🛡 Blindagem #' + t.p.num + ' (' + (t.v.coord || t.v.vid) + '): resposta ambígua, pode ter saído. Marquei como enviada — confira nos comandos antes de repetir.', '', 'cmd');
-          } else {
-            falhas++;
-            pushLog('🛡 Blindagem #' + t.p.num + ' (' + (t.v.coord || t.v.vid) + ') FALHOU: ' + em, 'err', 'cmd');
-          }
-        }
-        await sleep(200);
-      }
-      diz(ok + ' apoio(s) enviado(s)' + (falhas ? ' · ' + falhas + ' falha(s)' : '') + '. O texto do fórum está abaixo.',
-          falhas ? '#a2643a' : '#2e7d3a');
-      ccBlzRender();
-    }
-    function ccBlzRender() {
-      const box = document.getElementById('cc-blz-lista'); if (!box) return;
-      const b = config.cmd.blz;
-      const inp = document.getElementById('cc-blz-url');
-      if (inp && !inp.value) inp.value = b.url || '';
-      BLZ_UNITS.forEach((u) => {
-        const el = document.getElementById('cc-blz-res-' + u);
-        if (el && el.value === '') el.value = b.reserva[u] || 0;
-        const pa = document.getElementById('cc-blz-pa-' + u);
-        if (pa && pa.value === '') pa.value = (b.porAldeia || {})[u] || '';
-      });
-      if (!b.pedidos.length) {
-        box.innerHTML = '<div style="color:#8a7d6d;font-size:10px;padding:6px;text-align:center">— sem pedidos. Cole a URL do tópico e clique Buscar. —</div>';
-        const t0 = document.getElementById('cc-blz-texto'); if (t0) t0.value = '';
-        return;
-      }
-      const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid] && v.x != null);
-      const velhas = b.entregas.filter((e) => !e.posEdicao).length;
-      let h = '<div style="font-size:9px;color:#8a7d6d;margin-bottom:4px">' +
-        b.pedidos.length + ' pedido(s) · tabela editada ' +
-        (b.editadoEm ? new Date(b.editadoEm).toLocaleString('pt-BR') : '(data não lida)') +
-        (velhas ? ' · <b style="color:#a2643a">' + velhas + ' entrega(s) anteriores à edição ignoradas</b> — a tribo renumera os pedidos' : '') +
-        '</div>';
-      // Duas colunas de números e só. "pede" e "já veio" viraram tooltip da linha: eles explicam
-      // de onde o "falta" saiu, mas não são o que se olha pra decidir — o que decide é quanto
-      // ainda falta e quanto eu estou mandando. A marca escolhe quem entra na divisão.
-      // A seleção é EXPLÍCITA. Antes valia "nenhum marcado = todos", e o resultado era que
-      // desmarcar a última voltava a marcar todas — clicar não mudava nada na tela. Agora a
-      // lista nasce com tudo marcado (semeada na busca e aqui, pra quem já tinha tabela) e o
-      // que está gravado é a verdade.
-      const sel = b.alvosSel || (b.alvosSel = {});
-      if (!Object.keys(sel).length && b.pedidos.length) {
-        b.pedidos.forEach((p) => { sel[p.num] = true; });
-        save();
-      }
-      const nSel = b.pedidos.filter((p) => sel[p.num]).length;
-      const trio = (o) => BLZ_UNITS.map((u) => (o[u] || 0) > 0
-        ? unitIcon(u, BLZ_ROT[u]) + fmtN(o[u]) : '').filter(Boolean).join(' ') || '—';
-      h += '<table style="width:100%;font-size:10px;border-collapse:collapse">' +
-        '<tr style="color:#8a7d6d;text-align:left">' +
-        '<th style="width:16px"><input type="checkbox" id="cc-blz-todos" title="marcar/desmarcar todos"' + (nSel === b.pedidos.length ? ' checked' : '') + '></th>' +
-        '<th style="width:16px">#</th><th>aldeia</th>' +
-        '<th style="width:34%">falta</th><th style="width:34%">eu mando</th></tr>';
-      b.pedidos.forEach((p) => {
-        const ent = ccBlzEntregue(p.num), falta = ccBlzFalta(p), meu = ccBlzMeuTotal(p.num);
-        const zerado = !(falta.spear + falta.sword + falta.heavy);
-        const nMinhas = Object.keys((b.plano[p.num] || {})).length;
-        const nEnv = Object.keys((b.enviados[p.num] || {})).length;
-        const marcado = !!sel[p.num];
-        const tip = 'pedido: ' + BLZ_UNITS.map((u) => (p.pede[u] || 0) + ' ' + BLZ_ROT[u]).join(', ')
-          + '\njá entregue pela tribo: ' + BLZ_UNITS.map((u) => (ent[u] || 0)).join('/');
-        h += '<tr style="border-top:1px solid #efe7d8' + (zerado ? ';opacity:.5' : '') + '" title="' + esc(tip) + '">' +
-          '<td><input type="checkbox" class="cc-blz-sel" data-num="' + p.num + '"' + (marcado ? ' checked' : '') + '></td>' +
-          '<td><b>' + p.num + '</b></td>' +
-          '<td style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + esc(p.nome) +
-            ' <span style="color:#8a7d6d">' + esc(p.coord) + '</span></td>' +
-          '<td style="color:' + (zerado ? '#2e7d3a' : '#a2643a') + '">' + (zerado ? 'completo' : trio(falta)) + '</td>' +
-          '<td><b style="color:#2e7d3a">' + trio(meu) + '</b>' +
-            (nMinhas ? '<div style="color:#8a7d6d">' + nMinhas + ' aldeia(s)' + (nEnv ? ' · ' + nEnv + ' enviada(s)' : '') + '</div>' : '') +
-          '</td></tr>';
-      });
-      // A ordem não precisa mais ser explicada: cada número vem com o ícone da unidade colado.
-      h += '</table>' +
-        '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">origens marcadas: <b>' + marcadas.length + '</b>' +
-        (marcadas.length ? '' : ' — marque as aldeias na lista de Origens, abaixo') +
-        ' · pedidos na divisão: <b style="color:' + (nSel ? '#2e7d3a' : '#a2643a') + '">' + nSel + '</b>' +
-        (nSel ? '' : ' — marque ao menos um') + '</div>';
-      box.innerHTML = h;
-      // Grava `false` em vez de apagar a chave. Com `delete`, desmarcar o ÚLTIMO pedido esvaziava
-      // o objeto e a semeadura logo acima remarcava todos de novo — o mesmo defeito de antes,
-      // só que na borda. Chave presente com `false` é "desmarcado de propósito".
-      box.querySelectorAll('.cc-blz-sel').forEach((el) => el.addEventListener('change', () => {
-        b.alvosSel[el.getAttribute('data-num')] = !!el.checked;
-        save(); ccBlzRender();
-      }));
-      const todos = document.getElementById('cc-blz-todos');
-      if (todos) todos.addEventListener('change', () => {
-        b.pedidos.forEach((p) => { b.alvosSel[p.num] = !!todos.checked; });
-        save(); ccBlzRender();
-      });
-      const t = document.getElementById('cc-blz-texto');
-      if (t) t.value = ccBlzTexto(false);
-    }
-    async function ccMassaEnviar() {
-      const msg = document.getElementById('cc-massa-msg');
-      const rel = document.getElementById('cc-massa-rel');
-      const diz = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c0483a'; } };
-      if (!config.cmd.suporteOkAt) return diz('O apoio ainda não foi verificado neste mundo — deixe a praça aberta alguns segundos e tente de novo.');
-      const alvos = ((document.getElementById('cc-massa-alvos') || {}).value || '').split(/\n/)
-        .map((s) => { const m = s.match(/(\d{1,3})\s*\|\s*(\d{1,3})/); return m ? { x: m[1], y: m[2] } : null; })
-        .filter(Boolean);
-      if (!alvos.length) return diz('Informe ao menos um alvo (ex: 500|600).');
-      alvos.forEach((a) => ccHistAdd(a.x + '|' + a.y)); ccHistRender();
-      const spec = ccMassaSpec();
-      if (!Object.keys(spec).length) return diz('Escolha as tropas (número, "50%" ou "tudo").');
-      const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid]);
-      if (!marcadas.length) return diz('Marque as origens na lista acima.');
-      const dividir = (document.getElementById('cc-massa-dividir') || {}).checked && alvos.length > 1;
-
-      const rotU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]).filter((u) => u !== 'snob');
-      const rotNome = {}; UNITS.forEach(([u, n]) => { rotNome[u] = n; });
-
-      // CONFIRMACAO. Este botao dispara AGORA e o numero de envios e `origens x alvos` -- sem teto.
-      // Marcar 40 origens e colar 20 alvos e um clique que solta 800 comandos, e no modo "tudo" e o
-      // exercito inteiro saindo de casa. Apoio volta, mas volta VIAGEM INTEIRA depois; enquanto isso
-      // a aldeia fica sem nada.
-      //
-      // Os dois vizinhos deste mesmo arquivo ja perguntam antes ("Agendar N comando(s)?" e "Agrupar
-      // N comando(s) em M trem(ns)?"); este era o unico do tipo que nao perguntava.
-      //
-      // A frase diz o que vai sair, nao "tem certeza?": quantidade de envios, e a tropa por extenso
-      // no modo em que ela foi pedida. "tudo" aparece em CAIXA ALTA porque e o modo em que o usuario
-      // nao tem numero nenhum na tela pra conferir.
-      const tropaTxt = Object.keys(spec).map((u) => {
-        const s = spec[u], nome = rotNome[u] || u;
-        return s.mode === 'all' ? (nome + ': TUDO') : s.mode === 'pct' ? (nome + ': ' + s.val + '%') : (nome + ': ' + s.val);
-      }).join(', ');
-      const nEnvios = marcadas.length * alvos.length;
-      if (!confirm('Enviar apoio AGORA — isto não agenda, sai na hora.\n\n'
-        + nEnvios + ' envio(s): ' + marcadas.length + ' origem(ns) × ' + alvos.length + ' alvo(s)\n'
-        + 'Tropa por envio: ' + tropaTxt + '\n'
-        + (dividir ? 'Dividindo a tropa entre os alvos.\n' : (alvos.length > 1 ? 'Cada alvo recebe a quantidade CHEIA (sem dividir).\n' : ''))
-        + '\nConfirma?')) { diz('Cancelado — nada foi enviado.', '#6f6153'); return; }
-
-      diz('Enviando… (não feche a praça)', '#6f6153'); if (rel) rel.textContent = '';
-      const linhas = []; const totais = {}; let enviados = 0, falhas = 0;
-      for (const v of marcadas) {
-        const resolvido = ccMassaResolver(spec, v.avail);
-        if (!Object.keys(resolvido).length) { linhas.push((v.coord || v.vid) + ' — sem tropa disponível'); continue; }
-        const partes = dividir ? ccMassaDividir(resolvido, alvos.length) : alvos.map(() => Object.assign({}, resolvido));
-        for (let i = 0; i < alvos.length; i++) {
-          const amounts = partes[i];
-          if (!amounts || !Object.keys(amounts).length) continue;
-          const slots = rotU.map((u) => amounts[u] || 0).join('/');
-          try {
-            const prep = await cmdPrepare(v.vid, alvos[i].x, alvos[i].y, amounts, 'support');
-            await cmdFire(prep);
-            enviados++;
-            Object.keys(amounts).forEach((u) => { totais[u] = (totais[u] || 0) + amounts[u]; });
-            linhas.push((v.coord || v.vid) + (v.nome ? ' ' + v.nome : '') + ' → ' + alvos[i].x + '|' + alvos[i].y + ': ' + slots);
-          } catch (e) {
-            falhas++;
-            linhas.push((v.coord || v.vid) + ' → ' + alvos[i].x + '|' + alvos[i].y + ': ✕ ' + (e.message || e).toString().slice(0, 40));
-          }
-          await sleep(150);   // pequeno gap entre envios pra não atropelar o servidor
-        }
-      }
-      const header = 'ordem: ' + rotU.map((u) => rotNome[u] || u).join('/');
-      const total = 'TOTAL: ' + rotU.map((u) => totais[u] || 0).join('/');
-      if (rel) rel.textContent = header + '\n' + linhas.join('\n') + '\n────────\n' + total;
-      diz(enviados + ' apoio(s) enviado(s)' + (falhas ? ' · ' + falhas + ' falha(s)' : '') + '.', falhas ? '#a2643a' : '#2e7d3a');
-      pushLog('🚚 Apoio em massa: ' + enviados + ' envio(s)' + (falhas ? ', ' + falhas + ' falha(s)' : '') + '.', falhas ? 'err' : 'ok', 'cmd');
     }
 
     // Alvo: aceita "478|586", "478 586", "478|586:1" etc.
@@ -21047,6 +19812,1308 @@
       const abrir = () => { if (CCVILAS.length) ccSnipeModal(p); else setTimeout(abrir, 500); };
       setTimeout(abrir, 300);
     }
+  // ==================== CENTRO DE COMANDO — ABA OPERACAO (ccOp*) — um alvo por vez, ondas com horario calibravel ====================
+  // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
+  // 171-cc-nucleo.js e FECHA em 177-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
+  // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
+  // primeiro justamente por isso.
+  //
+  // Cortado de 175-cc-rico.js (5297 linhas numa ilha so) na v11.224.0. O corte foi por NOME de
+  // funcao, nao por comentario de secao: era comum uma funcao de uma aba morar fisicamente
+  // dentro do bloco de outra (ccMassaEnviar vivia dentro da secao da Blindagem), que e
+  // exatamente como "mexer numa aba quebrava a outra".
+
+    // ==================== OPERAÇÃO ====================
+    // O ALVO é o container: cada um tem coordenada, horário de chegada da 1ª onda e uma
+    // LISTA ORDENADA de ondas. Cada onda é uma aldeia + tropas digitadas à mão.
+    //
+    // Defasagem: só ondas DA MESMA ALDEIA precisam de espaçamento entre si (é o mesmo
+    // jogo/conta enviando mais de um comando — nuke e trem de nobre, por exemplo). Ondas de
+    // aldeias diferentes têm a viagem calculada cada uma pela sua origem, então todas miram
+    // o horário de chegada normal (o mesmo, ou o calibrado à mão), sem gap artificial entre
+    // elas. "Dividir" quebra uma onda em N da MESMA aldeia — essas sim saem espaçadas.
+    function ccOpCfg() {
+      const c = (config.cmd.op = config.cmd.op || { gapMs: 100, ativo: null, grupo: '', alvos: [] });
+      if (c.gapMs == null) c.gapMs = 100;
+      if (!Array.isArray(c.alvos)) c.alvos = [];
+      return c;
+    }
+    function ccOpAtivo() {
+      const c = ccOpCfg();
+      return c.alvos.find((a) => a.id === c.ativo) || c.alvos[0] || null;
+    }
+
+    function ccOpAlvoNovo() {
+      const c = ccOpCfg();
+      const a = { id: genId(), coord: '', chegadaLocal: '', vids: {}, ondas: [] };
+      c.alvos.push(a); c.ativo = a.id; save(); ccOpRender();
+    }
+    function ccOpAlvoDel() {
+      const c = ccOpCfg(), a = ccOpAtivo(); if (!a) return;
+      c.alvos = c.alvos.filter((z) => z.id !== a.id);
+      c.ativo = c.alvos.length ? c.alvos[0].id : null;
+      save(); ccOpRender();
+    }
+    function ccOpChegadaBase(a) { return a ? arrivalToServerMs(a.chegadaLocal || '') || 0 : 0; }
+    function ccOpEtapaAtual() {
+      const a = ccOpAtivo(); if (!a) return 1;
+      const n = parseInt(a.etapa, 10);
+      return (n >= 1 && n <= 3) ? n : 1;
+    }
+    // Cada etapa depende do que a anterior produziu: sem coordenada a lista de origens não tem
+    // como ordenar por distância, e sem horário de chegada a etapa 3 calcularia a saída a partir
+    // do nada. Por isso avançar é validado — e é a mesma checagem que apaga o passo na trilha.
+    function ccOpBloqueio(n) {
+      const a = ccOpAtivo();
+      if (!a) return 'Crie um alvo primeiro.';
+      if (n >= 2) {
+        if (!ccCoordParse(a.coord)) return 'Preencha a coordenada do alvo (ex.: 478|586).';
+        if (!ccOpChegadaBase(a)) return 'Escolha quando a 1ª onda deve chegar.';
+      }
+      if (n >= 3 && !Object.keys(a.vids || {}).length) return 'Marque ao menos uma aldeia de origem.';
+      return null;
+    }
+    function ccOpAviso(t) { const el = document.getElementById('cc-op-aviso'); if (el) el.textContent = t || ''; }
+    function ccOpIrEtapa(n) {
+      const a = ccOpAtivo(); if (!a) return;
+      const alvo = Math.max(1, Math.min(CC_OP_ETAPAS.length, n));
+      // Voltar nunca é bloqueado — só avançar.
+      if (alvo > ccOpEtapaAtual()) {
+        const b = ccOpBloqueio(alvo);
+        if (b) { ccOpAviso(b); return; }
+      }
+      a.etapa = alvo; save(); ccOpRender();
+    }
+    function ccOpRenderEtapas() {
+      const cab = document.getElementById('cc-op-passos');
+      const nav = document.getElementById('cc-op-nav');
+      if (!cab || !nav) return;
+      const at = ccOpEtapaAtual();
+      CC_OP_ETAPAS.forEach((e) => {
+        const el = document.getElementById('cc-op-e' + e.n);
+        if (el) el.style.display = (e.n === at) ? 'block' : 'none';
+      });
+      cab.innerHTML = CC_OP_ETAPAS.map((e) => {
+        const atual = (e.n === at);
+        const liberada = atual || e.n < at || !ccOpBloqueio(e.n);
+        return '<a data-op-etapa="' + e.n + '" title="' + esc(e.dica) + '" style="cursor:' + (liberada ? 'pointer' : 'default') +
+          ';color:' + (atual ? '#8b5426' : liberada ? '#2e7d3a' : '#b7ab99') +
+          ';font-weight:' + (atual ? '700' : '400') +
+          ';background:' + (atual ? '#fdf6e8' : 'transparent') +
+          ';border:1px solid ' + (atual ? '#c9a35a' : 'transparent') +
+          ';border-radius:10px;padding:2px 9px;text-decoration:none;white-space:nowrap">' +
+          (e.n < at ? '✓' : e.n) + '. ' + esc(e.rot) + '</a>';
+      }).join('<span style="color:#c9bda8">›</span>');
+      cab.querySelectorAll('[data-op-etapa]').forEach((el) => el.onclick = (ev) => {
+        ev.preventDefault(); ccOpIrEtapa(parseInt(el.getAttribute('data-op-etapa'), 10));
+      });
+      const prox = CC_OP_ETAPAS.find((e) => e.n === at + 1);
+      // Verde = pode seguir. É o sinal de "já preenchi o que precisava aqui" sem precisar ler
+      // texto nenhum; cinza com o motivo no title = ainda falta algo nesta etapa.
+      const trava = prox ? ccOpBloqueio(prox.n) : null;
+      nav.innerHTML =
+        (at > 1 ? '<button id="cc-op-voltar" class="twmgr-btn twmgr-ghost" style="padding:3px 12px;font-size:10px">← Voltar</button>' : '<span></span>') +
+        '<span id="cc-op-aviso" style="font-size:9px;color:#c0483a;flex:1;text-align:center;padding:0 6px"></span>' +
+        (prox ? '<button id="cc-op-avancar" class="twmgr-btn ' + (trava ? 'twmgr-ghost' : 'twmgr-go') + '" ' +
+          'style="padding:3px 12px;font-size:10px"' + (trava ? ' title="' + esc(trava) + '"' : '') + '>' +
+          esc(prox.rot) + ' →</button>' : '<span></span>');
+      const bv = document.getElementById('cc-op-voltar'); if (bv) bv.onclick = () => ccOpIrEtapa(at - 1);
+      const ba = document.getElementById('cc-op-avancar'); if (ba) ba.onclick = () => ccOpIrEtapa(at + 1);
+      // Armar só na última etapa: nas outras ele mandaria um alvo pela metade (sem tropa definida).
+      const arow = document.getElementById('cc-armar-row');
+      if (arow && ccTipo() === 'op') arow.style.display = (at === CC_OP_ETAPAS.length) ? 'flex' : 'none';
+    }
+    function ccOpOndaAdd(vid) {
+      const a = ccOpAtivo(); if (!a) return;
+      a.ondas.push({ id: genId(), vid: String(vid), tipo: 'attack', amounts: {}, offsetMs: null });
+      save(); ccOpRender();
+    }
+    function ccOpOndaMover(id, d) {
+      const a = ccOpAtivo(); if (!a) return;
+      const i = a.ondas.findIndex((z) => z.id === id), j = i + d;
+      if (i < 0 || j < 0 || j >= a.ondas.length) return;
+      a.ondas.splice(j, 0, a.ondas.splice(i, 1)[0]);
+      // Reordenou: os horários calibrados à mão perdem o sentido — tudo volta pro automático.
+      a.ondas.forEach((z) => { z.offsetMs = null; });
+      save(); ccOpRender();
+    }
+    // Quebra uma onda em N ondas da MESMA aldeia. Por padrão divide a tropa igualmente (resto
+    // pras primeiras); cada uma fica com seus próprios campos, editáveis livremente depois —
+    // "dividir" é só o ponto de partida, não uma amarra.
+    function ccOpOndaDividir(id, n) {
+      const a = ccOpAtivo(); if (!a) return;
+      const i = a.ondas.findIndex((z) => z.id === id); if (i < 0) return;
+      const o = a.ondas[i];
+      n = Math.max(2, Math.min(20, parseInt(n, 10) || 2));
+      const partes = [];
+      for (let k = 0; k < n; k++) {
+        const amounts = {};
+        Object.keys(o.amounts || {}).forEach((u) => {
+          const tot = o.amounts[u], base = Math.floor(tot / n), resto = tot % n;
+          const q = base + (k < resto ? 1 : 0);
+          if (q > 0) amounts[u] = q;
+        });
+        partes.push({ id: genId(), vid: o.vid, tipo: o.tipo, amounts: amounts, offsetMs: null });
+      }
+      a.ondas.splice(i, 1, ...partes);
+      save(); ccOpRender();
+    }
+    // "Tudo" (mesma ideia do apoio em massa do jogo): preenche com o MÁXIMO disponível.
+    // filtroU presente = só aquela unidade (checkbox de coluna); ausente = todas.
+    // Processa as ondas NA ORDEM da lista — a 1ª onda de uma aldeia pega o disponível
+    // primeiro, a 2ª (se houver) fica com o que sobrar, igual aconteceria mandando na mão.
+    function ccOpAplicarTudo(a, filtroU) {
+      const listaU = filtroU ? [filtroU] : (CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]));
+      (a.ondas || []).forEach((o) => {
+        const dispBase = ccOpDisponivel(o.vid);
+        o.amounts = o.amounts || {};
+        listaU.forEach((u) => {
+          const meu = o.amounts[u] || 0;
+          const teto = (dispBase[u] || 0) + meu;
+          if (teto > 0) o.amounts[u] = teto; else delete o.amounts[u];
+        });
+      });
+      save(); ccOpRender();
+    }
+    // "Tudo" só de UMA onda (uma aldeia só) — todas as unidades dela.
+    function ccOpOndaTudo(id) {
+      const a = ccOpAtivo(); if (!a) return;
+      const o = a.ondas.find((z) => z.id === id); if (!o) return;
+      const dispBase = ccOpDisponivel(o.vid);
+      const listaU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
+      o.amounts = o.amounts || {};
+      listaU.forEach((u) => {
+        const meu = o.amounts[u] || 0;
+        const teto = (dispBase[u] || 0) + meu;
+        if (teto > 0) o.amounts[u] = teto; else delete o.amounts[u];
+      });
+      save(); ccOpRender();
+    }
+    // Offset efetivo de CADA onda: automático = posição entre as ondas DA MESMA aldeia (gap
+    // ms entre a 1ª, 2ª, 3ª... dela); calibrado à mão sobrescreve. Ondas de aldeias diferentes
+    // começam todas em offset 0 (o horário de chegada normal do alvo).
+    function ccOpCalcularOffsets(a) {
+      const gap = ccOpCfg().gapMs, cont = {}, map = {};
+      (a.ondas || []).forEach((o) => {
+        const n = cont[o.vid] || 0; cont[o.vid] = n + 1;
+        map[o.id] = (o.offsetMs != null) ? o.offsetMs : n * gap;
+      });
+      return map;
+    }
+    async function ccOpAplicarFiltroGrupo() {
+      const gid = ccOpCfg().grupo || '';
+      if (!gid) { _ccOpGrupoVidsSet = null; ccOpRender(); return; }
+      try {
+        const vs = await getVillagesInGroup(gid);
+        _ccOpGrupoVidsSet = new Set(vs.map((x) => String(x.vid)));
+      } catch (e) {
+        _ccOpGrupoVidsSet = null;
+        pushLog('Operação: não consegui filtrar pelo grupo (' + (e.message || e) + ').', 'err', 'cmd');
+      }
+      ccOpRender();
+    }
+    async function ccOpCarregarGrupos() {
+      const sel = document.getElementById('cc-op-grupo'); if (!sel) return;
+      let grupos = []; try { grupos = await getGroups(); } catch (e) { /* sem grupos: fica só "Todas" */ }
+      const cur = ccOpCfg().grupo || '';
+      sel.innerHTML = '<option value="">Todas as aldeias</option>' +
+        grupos.map((g) => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('');
+      sel.value = cur;
+      if (cur) ccOpAplicarFiltroGrupo();
+      // Mesmo conteudo no seletor do Ataque em massa.
+      const selA = document.getElementById('cc-atkm-grupo');
+      if (selA) {
+        const curA = selA.value;
+        selA.innerHTML = sel.innerHTML;
+        selA.value = curA || '';
+        const el = document.getElementById('cc-atkm-pool');
+        if (el) el.textContent = ccAtkmPool().length + ' aldeia(s)';
+      }
+    }
+
+    // Tropa disponível de uma aldeia PRA OPERAÇÃO: total (casa+fora+trânsito — inclui o que
+    // está saqueando/farmando, que volta sozinho) MENOS o que está apoiando outra aldeia
+    // agora (fora) MENOS o que o Coordenado já reservou (config.reservations, escrito só por
+    // ele) MENOS o que a própria Operação já comprometeu em QUALQUER onda, de QUALQUER alvo
+    // (senão dava pra "gastar" a mesma tropa duas vezes só trocando de aba/alvo).
+    function ccOpComprometidoTudo(vid) {
+      const acc = {};
+      ccOpCfg().alvos.forEach((al) => (al.ondas || []).forEach((o) => {
+        if (String(o.vid) !== String(vid)) return;
+        Object.keys(o.amounts || {}).forEach((u) => { acc[u] = (acc[u] || 0) + (o.amounts[u] || 0); });
+      }));
+      return acc;
+    }
+    function ccOpDisponivel(vid) {
+      const v = CCVILAS.find((z) => String(z.vid) === String(vid));
+      if (!v) return {};
+      const minhas = v.minhas || v.avail || {};
+      const fora = v.fora || {};
+      const resPlanner = (config.reservations || {})[String(vid)] || {};
+      const resOp = ccOpComprometidoTudo(vid);
+      const out = {};
+      (CC_UNIDADES_MUNDO || UNITS.map((u) => u[0])).forEach((u) => {
+        out[u] = Math.max(0, (minhas[u] || 0) - (fora[u] || 0) - (resPlanner[u] || 0) - (resOp[u] || 0));
+      });
+      return out;
+    }
+    // Resumo por aldeia: soma o que ela manda em TODAS as ondas DESTE alvo e compara com o
+    // que ainda sobrava pra ela na Operação inteira (incluindo o que ESTA onda já usa, senão
+    // toda aldeia com onda pareceria estourada consigo mesma).
+    function ccOpResumo(a) {
+      const porVid = {};
+      (a.ondas || []).forEach((o) => {
+        const acc = (porVid[o.vid] = porVid[o.vid] || {});
+        Object.keys(o.amounts || {}).forEach((u) => { acc[u] = (acc[u] || 0) + (o.amounts[u] || 0); });
+      });
+      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+      const linhas = [];
+      Object.keys(porVid).forEach((vid) => {
+        const v = CCVILAS.find((z) => String(z.vid) === String(vid));
+        const nome = v ? ((v.nome ? v.nome + ' ' : '') + (v.coord || vid)) : vid;
+        const minhas = (v && v.minhas) || {};
+        const fora = (v && v.fora) || {};
+        const resPlanner = (config.reservations || {})[String(vid)] || {};
+        // "sobra" = total menos apoio-fora menos Coordenado menos TODAS as ondas da Operação
+        // que NÃO são de nenhum alvo (ou seja, o compromisso já soma este alvo também).
+        const compTudo = ccOpComprometidoTudo(vid);
+        const falta = Object.keys(porVid[vid]).filter((u) => {
+          const tetoTotal = Math.max(0, (minhas[u] || 0) - (fora[u] || 0) - (resPlanner[u] || 0));
+          return compTudo[u] > tetoTotal;
+        });
+        const tot = Object.keys(porVid[vid]).reduce((s, u) => s + porVid[vid][u], 0);
+        linhas.push('<span style="color:' + (falta.length ? '#c0483a' : '#6f6153') + '" title="' +
+          esc(falta.length ? 'falta: ' + falta.map((u) => rot[u] || u).join(', ') : 'cabe no estoque') + '">' +
+          esc(nome) + ' ' + fmtN(tot) + (falta.length ? ' ⚠' : '') + '</span>');
+      });
+      return linhas.join(' · ');
+    }
+    function ccOpRender() {
+      const cfg = ccOpCfg();
+      const sel = document.getElementById('cc-op-sel'); if (!sel) return;
+      const a = ccOpAtivo();
+      if (a) cfg.ativo = a.id;
+      sel.innerHTML = cfg.alvos.length
+        ? cfg.alvos.map((z, i) => '<option value="' + z.id + '">' + esc(z.coord || ('alvo ' + (i + 1) + ' (sem coord)')) + ' · ' + (z.ondas || []).length + ' onda(s)</option>').join('')
+        : '<option value="">— nenhum alvo —</option>';
+      if (a) sel.value = a.id;
+      const gapEl = document.getElementById('cc-op-gap'); if (gapEl) gapEl.value = cfg.gapMs;
+      const coordEl = document.getElementById('cc-op-coord'); if (coordEl) coordEl.value = a ? (a.coord || '') : '';
+      const chEl = document.getElementById('cc-op-chegada'); if (chEl) chEl.value = a ? (a.chegadaLocal || '') : '';
+      const tremEl = document.getElementById('cc-op-trem'); if (tremEl) tremEl.checked = !!(a && a.trem);
+      // Antes do return de "sem alvo": a trilha/navegação tem que aparecer mesmo sem alvo criado.
+      ccOpRenderEtapas();
+
+      const boxV = document.getElementById('cc-op-vilas');
+      const boxO = document.getElementById('cc-op-ondas');
+      const boxR = document.getElementById('cc-op-resumo');
+      if (!a) {
+        if (boxV) boxV.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— crie um alvo pra começar —</div>';
+        if (boxO) boxO.innerHTML = '';
+        if (boxR) boxR.innerHTML = '';
+        return;
+      }
+      // ---- aldeias participantes ----
+      const alvoP = ccCoordParse(a.coord);
+      const rotUn = {}; UNITS.forEach(([u, n]) => { rotUn[u] = n; });
+      const listaU0 = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
+      let vilas = CCVILAS.slice();
+      if (_ccOpGrupoVidsSet) vilas = vilas.filter((v) => _ccOpGrupoVidsSet.has(String(v.vid)));
+      vilas.sort((x, y) => {
+        const dx = (alvoP && x.x != null) ? fieldDist(x.x, x.y, +alvoP.x, +alvoP.y) : 1e9;
+        const dy = (alvoP && y.x != null) ? fieldDist(y.x, y.y, +alvoP.x, +alvoP.y) : 1e9;
+        return dx - dy;
+      });
+      boxV.innerHTML = vilas.map((v) => {
+        const on = !!a.vids[v.vid];
+        const d = (alvoP && v.x != null) ? fieldDist(v.x, v.y, +alvoP.x, +alvoP.y) : null;
+        const n = (a.ondas || []).filter((o) => String(o.vid) === String(v.vid)).length;
+        const disp = ccOpDisponivel(v.vid);
+        const tropas = listaU0.filter((u) => disp[u] > 0)
+          .map((u) => '<span title="' + esc(rotUn[u] || u) + ' — sobra pra novos compromissos">' + unitIcon(u, rotUn[u] || u) + fmtN(disp[u]) + '</span>').join(' ');
+        return '<div style="padding:2px 5px;border-bottom:1px solid rgba(0,0,0,.05);font-size:10px">' +
+          '<div style="display:grid;grid-template-columns:18px 1fr 52px 62px;gap:6px;align-items:center">' +
+            '<input type="checkbox" class="cc-op-v" data-vid="' + v.vid + '"' + (on ? ' checked' : '') + '>' +
+            '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' +
+              (v.nome ? '<b style="color:#584526">' + esc(v.nome) + '</b> ' : '') +
+              '<span style="color:#a2643a">' + esc(v.coord || v.vid) + '</span>' +
+              (n ? '<span style="color:#8a7d6d"> · ' + n + ' onda(s)</span>' : '') + '</span>' +
+            '<span style="color:#8a7d6d">' + (d == null ? '—' : d.toFixed(1) + ' c') + '</span>' +
+            (on ? '<a class="cc-op-add-onda" data-vid="' + v.vid + '" href="#" style="color:#2e7d3a;font-size:9px">+ onda</a>' : '<span></span>') +
+          '</div>' +
+          (tropas ? '<div style="margin:1px 0 0 24px;line-height:1.5">' + tropas + '</div>' : '') +
+        '</div>';
+      }).join('') || '<div style="color:#8a7d6d;padding:6px;font-size:10px">— nenhuma aldeia —</div>';
+      boxV.querySelectorAll('.cc-op-v').forEach((el) => el.onchange = () => {
+        const vid = el.getAttribute('data-vid');
+        if (el.checked) { a.vids[vid] = true; if (!(a.ondas || []).some((o) => String(o.vid) === String(vid))) ccOpOndaAdd(vid); }
+        else { delete a.vids[vid]; a.ondas = a.ondas.filter((o) => String(o.vid) !== String(vid)); }
+        save(); ccOpRender();
+      });
+      boxV.querySelectorAll('.cc-op-add-onda').forEach((el) => el.onclick = (ev) => {
+        ev.preventDefault(); ccOpOndaAdd(el.getAttribute('data-vid'));
+      });
+
+      // ---- ondas (a lista ordenada) ----
+      const base = ccOpChegadaBase(a);
+      const offsets = ccOpCalcularOffsets(a);
+      const listaU = ccUnidadesUI();
+      // Uma "coluna" por unidade, igual ao apoio em massa do jogo: marcar preenche aquela
+      // tropa com o máximo em TODAS as ondas de uma vez. Some se não há onda pra preencher.
+      const colsBox = document.getElementById('cc-op-tudo-cols');
+      if (colsBox) {
+        colsBox.style.display = (a.ondas || []).length ? 'block' : 'none';
+        // Mesma largura de célula (48px) e mesmo recuo (23px) das caixas de tropa abaixo, pra
+        // cada checkbox cair na vertical exata da coluna que ele preenche.
+        colsBox.innerHTML =
+          '<div style="color:#8a7d6d;margin-bottom:2px">tudo por tropa ' +
+            '<span style="color:#b3a794">— marca a coluna e preenche em todas as ondas</span></div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:3px;margin-left:23px">' + listaU.map(([u, rot]) =>
+            '<label style="display:flex;flex-direction:column;align-items:center;gap:2px;width:48px;padding:0;cursor:pointer" ' +
+              'title="preenche ' + esc(rot) + ' com o máximo em todas as ondas">' +
+              unitIcon(u, rot) + '<input type="checkbox" class="cc-op-tudo-col" data-u="' + u + '"></label>').join('') +
+          '</div>';
+        colsBox.querySelectorAll('.cc-op-tudo-col').forEach((el) => el.onclick = () => ccOpAplicarTudo(a, el.getAttribute('data-u')));
+      }
+      boxO.innerHTML = (a.ondas || []).length ? a.ondas.map((o, i) => {
+        const v = CCVILAS.find((z) => String(z.vid) === String(o.vid));
+        const nome = v ? ((v.nome ? v.nome + ' ' : '') + (v.coord || o.vid)) : o.vid;
+        const chega = base ? base + offsets[o.id] : 0;
+        const manual = (o.offsetMs != null);
+        // Saída: pela unidade mais lenta DESTA onda, na distância real origem→alvo.
+        const tViagem = (v && v.x != null && alvoP) ? ccTempoViagemMs(v.x, v.y, alvoP.x, alvoP.y, o.amounts) : null;
+        const sai = (chega && tViagem != null) ? chega - tViagem : null;
+        // Disponível pra ESTA caixa = sobra geral + o que esta própria onda já usa dessa unidade
+        // (senão a onda pareceria não poder nem manter o que ela mesma já tem).
+        const dispBase = ccOpDisponivel(o.vid);
+        const campos = listaU.map(([u, rot]) => {
+          const meu = (o.amounts && o.amounts[u]) || 0;
+          const disp = (dispBase[u] || 0) + meu;
+          return '<label class="twmgr-ucell' + (disp > 0 ? '' : ' vazia') + '" title="' + esc(rot) + ' — sobra ' + fmtN(disp) + ' pra esta onda">' +
+            unitIcon(u, rot) +
+            '<input class="cc-op-amt twmgr-uinp" data-id="' + o.id + '" data-u="' + u + '" type="number" min="0" placeholder="0" ' +
+              'value="' + (meu || '') + '">' +
+            '<span class="twmgr-uqt">' + fmtN(disp) + '</span>' +
+          '</label>';
+        }).join('');
+        return '<div style="border-bottom:1px solid rgba(0,0,0,.07);padding:4px 5px">' +
+          '<div style="display:grid;grid-template-columns:22px 1fr 74px 92px 46px;gap:5px;align-items:center;font-size:10px">' +
+            // Número da onda como medalhinha: numa lista longa é o que dá o senso de ordem.
+            '<span style="display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;' +
+              'border-radius:50%;background:#f2e8d5;color:#8b5426;font-weight:700;font-size:9px">' + (i + 1) + '</span>' +
+            '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#584526">' + esc(nome) + '</span>' +
+            '<select class="cc-op-tipo twmgr-inp" data-id="' + o.id + '" style="font-size:9px;padding:2px 3px !important">' +
+              '<option value="attack"' + (o.tipo !== 'support' ? ' selected' : '') + '>⚔ ataque</option>' +
+              '<option value="support"' + (o.tipo === 'support' ? ' selected' : '') + '>🛡 apoio</option></select>' +
+            '<input class="cc-op-chega" data-id="' + o.id + '" value="' + (chega ? srvClockMs(chega) : '') + '" placeholder="—" ' +
+              'title="horário de chegada desta onda; edite pra calibrar" ' +
+              'style="width:100%;border:1px solid ' + (manual ? '#c9a35a' : '#ddd2c0') + ';border-radius:6px;padding:3px 2px;' +
+              'background:' + (manual ? '#fffaf0' : '#fff') + ';text-align:center;font-size:10px;outline:none;' +
+              'color:' + (manual ? '#8b5426' : '#2e7d3a') + ';font-weight:' + (manual ? '700' : '400') + '">' +
+            '<span style="text-align:right;white-space:nowrap">' +
+              '<a class="cc-op-up" data-id="' + o.id + '" href="#" style="color:#a2643a;text-decoration:none" title="subir">▲</a> ' +
+              '<a class="cc-op-dn" data-id="' + o.id + '" href="#" style="color:#a2643a;text-decoration:none" title="descer">▼</a> ' +
+              '<a class="cc-op-rm" data-id="' + o.id + '" href="#" style="color:#c0483a;text-decoration:none" title="remover">✕</a></span>' +
+          '</div>' +
+          // Informação à esquerda, ações à direita — antes "sai" e os dois botões corriam juntos
+          // na mesma frase, e o dado mais importante da linha se perdia no meio dos links.
+          '<div style="display:flex;align-items:center;gap:5px;margin:3px 0 0 27px;font-size:9px;color:#8a7d6d">' +
+            '<span>sai <b style="color:' + (sai ? '#2e7d3a' : '#8a7d6d') + '">' + (sai ? srvClockMs(sai) : '—') + '</b>' +
+              (tViagem == null ? ' <span style="color:#a2643a">— digite a tropa pra calcular</span>' : '') + '</span>' +
+            '<span style="flex:1"></span>' +
+            '<a class="cc-op-onda-tudo" data-id="' + o.id + '" href="#" style="color:#2e7d3a;text-decoration:none" title="preenche todas as tropas desta aldeia com o máximo disponível">🧺 tudo</a>' +
+            '<span style="color:#d8cdb8">|</span>' +
+            '<a class="cc-op-div" data-id="' + o.id + '" href="#" style="color:#2e7d3a;text-decoration:none" title="quebra esta onda em N ondas iguais, da mesma aldeia">✂ dividir em</a>' +
+            '<input class="cc-op-divn" data-id="' + o.id + '" type="number" min="2" max="20" value="2" ' +
+              'style="width:34px;border:1px solid #ddd2c0;border-radius:6px;padding:2px 1px;background:#fff;color:#463b30;text-align:center;font-size:9px;outline:none">' +
+          '</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:3px;margin:4px 0 0 23px">' + campos + '</div>' +
+        '</div>';
+      }).join('') : '<div style="color:#8a7d6d;padding:6px;font-size:10px">— volte em <b>Origens</b> e marque uma aldeia pra criar a 1ª onda —</div>';
+
+      boxO.querySelectorAll('.cc-op-amt').forEach((el) => el.onchange = () => {
+        const o = a.ondas.find((z) => z.id === el.getAttribute('data-id')); if (!o) return;
+        const n = parseInt(el.value, 10) || 0;
+        o.amounts = o.amounts || {};
+        if (n > 0) o.amounts[el.getAttribute('data-u')] = n; else delete o.amounts[el.getAttribute('data-u')];
+        save(); ccOpRender();   // reflete no "sai" (unidade mais lenta pode mudar) e nos totais
+      });
+      boxO.querySelectorAll('.cc-op-tipo').forEach((el) => el.onchange = () => {
+        const o = a.ondas.find((z) => z.id === el.getAttribute('data-id')); if (!o) return;
+        o.tipo = el.value; save();
+      });
+      // Calibrar: digitar HH:MM:SS.mmm fixa o offset desta onda (deixa de seguir o gap).
+      boxO.querySelectorAll('.cc-op-chega').forEach((el) => el.onchange = () => {
+        const o = a.ondas.find((z) => z.id === el.getAttribute('data-id')); if (!o || !base) return;
+        const m = (el.value || '').match(/(\d{1,2}):(\d{2}):(\d{2})(?:[.,:](\d{1,3}))?/);
+        if (!m) { ccOpRender(); return; }
+        const d = new Date(base - wallToServerOffset());
+        d.setHours(+m[1], +m[2], +m[3], m[4] ? +(m[4] + '00').slice(0, 3) : 0);
+        o.offsetMs = Math.round((d.getTime() + wallToServerOffset()) - base);
+        save(); ccOpRender();
+      });
+      boxO.querySelectorAll('.cc-op-up').forEach((el) => el.onclick = (ev) => { ev.preventDefault(); ccOpOndaMover(el.getAttribute('data-id'), -1); });
+      boxO.querySelectorAll('.cc-op-dn').forEach((el) => el.onclick = (ev) => { ev.preventDefault(); ccOpOndaMover(el.getAttribute('data-id'), 1); });
+      boxO.querySelectorAll('.cc-op-rm').forEach((el) => el.onclick = (ev) => {
+        ev.preventDefault();
+        a.ondas = a.ondas.filter((z) => z.id !== el.getAttribute('data-id'));
+        save(); ccOpRender();
+      });
+      boxO.querySelectorAll('.cc-op-div').forEach((el) => el.onclick = (ev) => {
+        ev.preventDefault();
+        const id = el.getAttribute('data-id');
+        const nEl = boxO.querySelector('.cc-op-divn[data-id="' + id + '"]');
+        ccOpOndaDividir(id, nEl ? nEl.value : 2);
+      });
+      boxO.querySelectorAll('.cc-op-onda-tudo').forEach((el) => el.onclick = (ev) => {
+        ev.preventDefault(); ccOpOndaTudo(el.getAttribute('data-id'));
+      });
+      if (boxR) boxR.innerHTML = ccOpResumo(a);
+    }
+    // Arma TODAS as ondas do alvo ativo, cada uma com o seu horário. O disparo em si é o
+    // mesmo motor de precisão dos comandos avulsos — cmdAdicionar entrega pro cmdTick.
+    function ccOpArmarAtivo(dizer) {
+      const a = ccOpAtivo();
+      if (!a) return dizer('Crie um alvo primeiro.');
+      const alvoP = ccCoordParse(a.coord);
+      if (!alvoP) return dizer('Alvo inválido. Use 478|586.');
+      if (!(a.ondas || []).length) return dizer('Nenhuma onda neste alvo.');
+      let base = ccOpChegadaBase(a);
+      if (!ccModoJa() && !base) return dizer('Defina o horário de chegada da 1ª onda — ou marque "sair o quanto antes".');
+      const apoio = a.ondas.some((o) => o.tipo === 'support');
+      if (apoio && !config.cmd.suporteOkAt) {
+        return dizer('Tem onda de apoio, mas o parâmetro de apoio ainda não foi confirmado neste mundo.');
+      }
+      const offsets = ccOpCalcularOffsets(a);
+      // No modo "quanto antes" a base não vem do campo: é a mais cedo em que NENHUMA onda perde
+      // a saída. Cada onda tem o seu offset e a sua viagem, então a restrição é
+      // base >= saidaJa + viagem_i - offset_i; a base é o maior desses. Preserva a defasagem
+      // entre as ondas, que é o ponto da Operação — só antecipa o conjunto todo.
+      if (ccModoJa()) {
+        const saida = ccSaidaJaMs();
+        let minBase = 0;
+        a.ondas.forEach((o) => {
+          const v = CCVILAS.find((z) => String(z.vid) === String(o.vid));
+          if (!v || v.x == null) return;
+          const am = {};
+          Object.keys(o.amounts || {}).forEach((u) => { if (o.amounts[u] > 0) am[u] = o.amounts[u]; });
+          if (!Object.keys(am).length) return;
+          const t = ccTempoViagemMs(v.x, v.y, alvoP.x, alvoP.y, am);
+          if (t == null) return;
+          const precisa = saida + t - (offsets[o.id] || 0);
+          if (precisa > minBase) minBase = precisa;
+        });
+        if (!minBase) return dizer('Não consegui calcular a viagem de nenhuma onda.');
+        base = minBase;
+      }
+      let armados = 0, tremes = 0; const pulados = [];
+      // Prepara as ondas válidas mantendo a ordem da lista (é a ordem de chegada).
+      const prontas = [];
+      a.ondas.forEach((o, i) => {
+        const rotO = 'onda ' + (i + 1);
+        const v = CCVILAS.find((z) => String(z.vid) === String(o.vid));
+        if (!v) { pulados.push(rotO + ' (aldeia sumiu)'); return; }
+        const amounts = {};
+        Object.keys(o.amounts || {}).forEach((u) => { if (o.amounts[u] > 0) amounts[u] = o.amounts[u]; });
+        if (!Object.keys(amounts).length) { pulados.push(rotO + ' (sem tropa)'); return; }
+        const chega = base + offsets[o.id];
+        const t = (v.x != null) ? ccTempoViagemMs(v.x, v.y, alvoP.x, alvoP.y, amounts) : null;
+        if (t != null && (chega - t) <= srvNowP()) { pulados.push(rotO + ' (longe demais)'); return; }
+        prontas.push({ o: o, v: v, amounts: amounts, chega: chega, tipo: o.tipo === 'support' ? 'support' : 'attack' });
+      });
+      if (a.trem) {
+        // Trem: ondas de ATAQUE da mesma origem viram UM comando, enviado num POST só pelo
+        // recurso nativo do jogo. Some a corrida por tropa entre elas (o jogo aloca as N de uma
+        // vez) e o espaçamento passa a ser o mínimo do servidor — que é o que um NT quer.
+        // Apoio fica de fora: o formato train[] é do formulário de ataque.
+        const grupos = {};
+        prontas.forEach((p) => {
+          if (p.tipo !== 'attack') { cmdAdicionar(p.tipo, alvoP.x, alvoP.y, p.amounts, p.chega, p.v.vid); armados++; return; }
+          (grupos[String(p.v.vid)] = grupos[String(p.v.vid)] || []).push(p);
+        });
+        Object.keys(grupos).forEach((vid) => {
+          const g = grupos[vid];
+          // A chegada do trem é a da PRIMEIRA onda dele: todas saem juntas, então o horário das
+          // demais deixa de ser controlável — o servidor é quem espaça.
+          const extras = g.slice(1).map((p) => p.amounts);
+          cmdAdicionar('attack', alvoP.x, alvoP.y, g[0].amounts, g[0].chega, vid, extras);
+          armados += g.length;
+          if (extras.length) tremes++;
+        });
+      } else {
+        prontas.forEach((p) => { cmdAdicionar(p.tipo, alvoP.x, alvoP.y, p.amounts, p.chega, p.v.vid); armados++; });
+      }
+      if (!_ccPrevia) { ccHistAdd(alvoP.coord); ccHistRender(); save(); }
+      if (!armados) return dizer('Nada armado. ' + (pulados.length ? pulados.join(', ') : ''));
+      dizer(armados + ' onda(s) armada(s) → ' + alvoP.coord + ', a 1ª chegando ' + srvClockMs(base) +
+            (tremes ? ' · ' + tremes + ' trem(ns) num POST só' : '') +
+            (pulados.length ? ' · pulada(s): ' + pulados.join(', ') : ''),
+            pulados.length ? '#a2643a' : '#2e7d3a');
+    }
+  // ==================== CENTRO DE COMANDO — ABA ATAQUE EM MASSA (ccAtkm*) — varios alvos, distribuicao por menor viagem ====================
+  // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
+  // 171-cc-nucleo.js e FECHA em 177-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
+  // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
+  // primeiro justamente por isso.
+  //
+  // Cortado de 175-cc-rico.js (5297 linhas numa ilha so) na v11.224.0. O corte foi por NOME de
+  // funcao, nao por comentario de secao: era comum uma funcao de uma aba morar fisicamente
+  // dentro do bloco de outra (ccMassaEnviar vivia dentro da secao da Blindagem), que e
+  // exatamente como "mexer numa aba quebrava a outra".
+    function ccAtkmCfg() {
+      const c = (config.cmd.atkm = config.cmd.atkm || {});
+      if (c.tropas == null) c.tropas = {};
+      if (!Array.isArray(c.pares)) c.pares = [];
+      return c;
+    }
+    function ccAtkmTropasRender() {
+      const box = document.getElementById('cc-atkm-tropas'); if (!box) return;
+      const c = ccAtkmCfg();
+      const lista = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]);
+      const rotU = {}; UNITS.forEach(([u, n]) => { rotU[u] = n; });
+      box.innerHTML = lista.filter((u) => u !== 'militia').map((u) =>
+        '<label class="twmgr-ucell" title="' + esc(rotU[u] || u) + ' — numero ou a palavra tudo">' + unitIcon(u, rotU[u] || u) +
+        '<input class="cc-atkm-u twmgr-uinp" data-u="' + u + '" style="width:48px" placeholder="0" value="' +
+        esc(String(c.tropas[u] == null ? '' : c.tropas[u])) + '"></label>').join('');
+      box.querySelectorAll('.cc-atkm-u').forEach((el) => {
+        el.addEventListener('change', () => {
+          const cc = ccAtkmCfg();
+          const v = (el.value || '').trim();
+          if (!v) delete cc.tropas[el.getAttribute('data-u')]; else cc.tropas[el.getAttribute('data-u')] = v;
+          save(); ccAtkmTabela();
+        });
+      });
+    }
+    // Tropa de UMA origem a partir da receita. "tudo" e resolvido com o disponivel DELA — nao
+    // existe numero unico que sirva pra dezenas de aldeias diferentes.
+    function ccAtkmAmounts(vid) {
+      const receita = ccAtkmCfg().tropas || {};
+      const disp = ccOpDisponivel(vid);
+      const am = {};
+      Object.keys(receita).forEach((u) => {
+        const bruto = String(receita[u]).trim().toLowerCase();
+        if (!bruto) return;
+        const n = (bruto === 'tudo' || bruto === 'max') ? (disp[u] || 0)
+          : Math.min(parseInt(bruto, 10) || 0, disp[u] || 0);
+        if (n > 0) am[u] = n;
+      });
+      return am;
+    }
+    function ccAtkmPool() {
+      const gid = (document.getElementById('cc-atkm-grupo') || {}).value || '';
+      let pool = CCVILAS.filter((v) => v.x != null);
+      if (gid && _ccAtkmGrupoSet) pool = pool.filter((v) => _ccAtkmGrupoSet.has(String(v.vid)));
+      return pool;
+    }
+    function ccAtkmCoords() {
+      const txt = (document.getElementById('cc-atkm-alvos') || {}).value || '';
+      const out = [];
+      (txt.match(/\d{1,3}\s*\|\s*\d{1,3}/g) || []).forEach((c) => {
+        const k = c.replace(/\s+/g, '');
+        if (out.indexOf(k) < 0) out.push(k);
+      });
+      return out;
+    }
+    function ccAtkmChegadaMs() {
+      const v = (document.getElementById('cc-atkm-chegada') || {}).value || '';
+      if (!v) return null;
+      const t = new Date(v).getTime();
+      return isNaN(t) ? null : t;
+    }
+    function ccAtkmCalcular() {
+      const coords = ccAtkmCoords();
+      if (!coords.length) { alert('Cole pelo menos uma coordenada de alvo.'); return; }
+      const pool = ccAtkmPool();
+      if (!pool.length) { alert('Nenhuma aldeia de origem nesse grupo.'); return; }
+      const alvos = coords.map((c) => { const p = ccCoordParse(c); return { coord: c, x: +p.x, y: +p.y }; });
+      const origens = pool.map((v) => ({ vid: String(v.vid), x: v.x, y: v.y,
+        d: alvos.map((t) => fieldDist(v.x, v.y, t.x, t.y)) }));
+      // N = uma saida por origem. E a regra que dispensa o campo "quantos ataques".
+      const sol = ccPlanoResolver(origens, alvos, origens.length);
+      if (!sol) { alert('Nao consegui montar a distribuicao. Confira as coordenadas.'); return; }
+      const c = ccAtkmCfg();
+      c.pares = sol.pares.map((p) => ({ vid: origens[p.oi].vid, coord: alvos[p.tj].coord }));
+      save(); ccAtkmTabela();
+    }
+    // A tabela e o ponto de conferencia: origem, alvo, distancia e HORA DE SAIDA calculada com a
+    // tropa real daquela origem. Trocar o alvo de uma linha recalcula na hora.
+    function ccAtkmTabela() {
+      const box = document.getElementById('cc-atkm-tabela'); if (!box) return;
+      const c = ccAtkmCfg();
+      const bt = document.getElementById('cc-atkm-validar');
+      const av = document.getElementById('cc-atkm-aviso');
+      if (!c.pares.length) {
+        box.innerHTML = '<div style="color:#8a7d6d;padding:6px;font-size:10px">— calcule a distribuicao pra ver a lista —</div>';
+        if (bt) bt.style.display = 'none';
+        if (av) av.innerHTML = '';
+        return;
+      }
+      const coords = ccAtkmCoords();
+      const chegaMs = ccAtkmChegadaMs();
+      const porAlvo = {}; c.pares.forEach((p) => { porAlvo[p.coord] = (porAlvo[p.coord] || 0) + 1; });
+      const sais = [];
+      box.innerHTML = c.pares.map((p, i) => {
+        const v = CCVILAS.find((z) => String(z.vid) === String(p.vid));
+        const t = ccCoordParse(p.coord);
+        const am = ccAtkmAmounts(p.vid);
+        const dist = (v && t) ? fieldDist(v.x, v.y, +t.x, +t.y) : null;
+        const viagem = (v && t && Object.keys(am).length) ? ccTempoViagemMs(v.x, v.y, +t.x, +t.y, am) : null;
+        const sai = (chegaMs && viagem != null) ? (chegaMs - viagem) : null;
+        if (sai != null) sais.push(sai);
+        const tarde = sai != null && sai <= srvNowP();
+        return '<div style="display:grid;grid-template-columns:20px 1fr 12px 96px 44px 60px;gap:4px;align-items:center;'
+          + 'font-size:10px;padding:2px 4px;border-bottom:1px solid rgba(0,0,0,.06)">'
+          + '<span style="color:#8a7d6d">' + (i + 1) + '</span>'
+          + '<span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#584526">'
+            + esc((v && (v.nome || v.coord)) || p.vid) + '</span>'
+          + '<span style="color:#c9bda8">&rsaquo;</span>'
+          + '<select class="cc-atkm-troca twmgr-inp" data-i="' + i + '" style="font-size:9px;padding:1px">'
+          + coords.map((k) => '<option value="' + esc(k) + '"' + (k === p.coord ? ' selected' : '') + '>' + esc(k)
+              + ' (' + (porAlvo[k] || 0) + ')</option>').join('')
+          + '</select>'
+          + '<span style="color:#8a7d6d;text-align:right">' + (dist == null ? '—' : dist.toFixed(1) + 'c') + '</span>'
+          + '<span style="text-align:right;color:' + (tarde ? '#c0483a' : '#2e7d3a') + '">'
+            + (sai == null ? '—' : srvClockMs(sai)) + '</span>'
+          + '</div>';
+      }).join('');
+      const semTropa = c.pares.filter((p) => !Object.keys(ccAtkmAmounts(p.vid)).length).length;
+      if (av) {
+        av.innerHTML = c.pares.length + ' comando(s) em ' + Object.keys(porAlvo).length + ' alvo(s)'
+          + (sais.length ? (' · saidas de <b>' + srvClockMs(Math.min.apply(null, sais)) + '</b> a <b>'
+              + srvClockMs(Math.max.apply(null, sais)) + '</b>') : '')
+          + (semTropa ? (' · <b style="color:#c0483a">' + semTropa + ' sem tropa</b>') : '');
+      }
+      box.querySelectorAll('.cc-atkm-troca').forEach((el) => {
+        el.addEventListener('change', () => {
+          ccAtkmCfg().pares[parseInt(el.getAttribute('data-i'), 10)].coord = el.value;
+          save(); ccAtkmTabela();
+        });
+      });
+      if (bt) { bt.style.display = ''; bt.textContent = '✔ Validar e agendar ' + c.pares.length + ' comando(s)'; }
+    }
+    function ccAtkmValidar() {
+      const c = ccAtkmCfg();
+      if (!c.pares.length) { alert('Calcule a distribuicao primeiro.'); return; }
+      const chegaMs = ccAtkmChegadaMs();
+      if (!chegaMs) { alert('Defina a hora de chegada.'); return; }
+      if (chegaMs <= srvNowP()) { alert('Esse horario ja passou.'); return; }
+      const prontos = [], pulados = [];
+      c.pares.forEach((p) => {
+        const v = CCVILAS.find((z) => String(z.vid) === String(p.vid));
+        const t = ccCoordParse(p.coord);
+        if (!v || !t) { pulados.push(p.coord + ' (aldeia ou alvo invalido)'); return; }
+        const am = ccAtkmAmounts(p.vid);
+        if (!Object.keys(am).length) { pulados.push((v.nome || v.coord) + ' (sem tropa)'); return; }
+        const vi = ccTempoViagemMs(v.x, v.y, +t.x, +t.y, am);
+        if (vi == null) { pulados.push((v.nome || v.coord) + ' (nao calculei a viagem)'); return; }
+        // Saida no passado nao vira comando: seria agendar algo que o motor nunca consegue mandar.
+        if (chegaMs - vi <= srvNowP()) { pulados.push((v.nome || v.coord) + ' -> ' + p.coord + ' (saida ja passou)'); return; }
+        prontos.push({ v: v, t: t, am: am });
+      });
+      if (!prontos.length) { alert('Nada a agendar.\n\n' + pulados.join('\n')); return; }
+      if (!confirm('Agendar ' + prontos.length + ' comando(s), todos chegando ' + srvClockMs(chegaMs) + '?'
+        + (pulados.length ? ('\n\n' + pulados.length + ' pulado(s):\n' + pulados.slice(0, 8).join('\n')) : ''))) return;
+      prontos.forEach((p) => { cmdAdicionar('attack', p.t.x, p.t.y, p.am, chegaMs, p.v.vid); });
+      save();
+      pushLog('Ataque em massa: ' + prontos.length + ' comando(s) agendado(s) pra ' + srvClockMs(chegaMs)
+        + (pulados.length ? (' · ' + pulados.length + ' pulado(s)') : '') + '.', 'ok', 'cmd');
+      const av = document.getElementById('cc-atkm-aviso');
+      if (av) av.innerHTML = '✔ <b>' + prontos.length + '</b> comando(s) na fila'
+        + (pulados.length ? (' · ' + pulados.length + ' pulado(s)') : '');
+    }
+  // ==================== CENTRO DE COMANDO — ABA APOIO EM MASSA (ccMassa*) — apoio imediato das origens marcadas ====================
+  // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
+  // 171-cc-nucleo.js e FECHA em 177-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
+  // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
+  // primeiro justamente por isso.
+  //
+  // Cortado de 175-cc-rico.js (5297 linhas numa ilha so) na v11.224.0. O corte foi por NOME de
+  // funcao, nao por comentario de secao: era comum uma funcao de uma aba morar fisicamente
+  // dentro do bloco de outra (ccMassaEnviar vivia dentro da secao da Blindagem), que e
+  // exatamente como "mexer numa aba quebrava a outra".
+    // ---- Apoio em massa ----
+    // Grade de unidades: um campo por unidade do mundo. Aceita número, "50%" ou "tudo".
+    function ccMassaUnidades() {
+      const cont = document.getElementById('cc-massa-unidades'); if (!cont) return;
+      const listaU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]).filter((u) => u !== 'snob');
+      const rot = {}; UNITS.forEach(([u, n]) => { rot[u] = n; });
+      const antes = {};
+      cont.querySelectorAll('.cc-massa-u').forEach((el) => { antes[el.getAttribute('data-u')] = el.value; });
+      cont.innerHTML = listaU.map((u) =>
+        '<label style="display:flex;align-items:center;gap:3px;font-size:10px" title="' + esc(rot[u] || u) + '">' +
+          unitIcon(u, rot[u] || u) +
+          '<input class="cc-massa-u twmgr-inp" data-u="' + u + '" value="' + esc(antes[u] || '') + '" style="width:50px;font-size:10px;padding:1px" placeholder="0">' +
+        '</label>').join('');
+    }
+    // Lê a especificação digitada: {unidade: {mode:'all'|'pct'|'qty', val}}
+    function ccMassaSpec() {
+      const spec = {};
+      document.querySelectorAll('.cc-massa-u').forEach((el) => {
+        const u = el.getAttribute('data-u');
+        const raw = (el.value || '').trim().toLowerCase();
+        if (!raw) return;
+        if (/^(tudo|todas|todos|all|max|\*)$/.test(raw)) spec[u] = { mode: 'all' };
+        else if (/%$/.test(raw)) { const p = parseFloat(raw.replace(',', '.')); if (p > 0) spec[u] = { mode: 'pct', val: p }; }
+        else { const q = parseInt(raw.replace(/\D/g, ''), 10); if (q > 0) spec[u] = { mode: 'qty', val: q }; }
+      });
+      return spec;
+    }
+    // Resolve a spec contra o disponível de UMA aldeia -> {unidade: contagem}
+    function ccMassaResolver(spec, avail) {
+      const a = {};
+      Object.keys(spec).forEach((u) => {
+        const have = (avail && avail[u]) || 0;
+        if (!have) return;
+        const s = spec[u];
+        let n = s.mode === 'all' ? have : s.mode === 'pct' ? Math.floor(have * s.val / 100) : Math.min(s.val, have);
+        if (n > 0) a[u] = n;
+      });
+      return a;
+    }
+    // Divide um conjunto de tropas em N partes (resto vai pras primeiras).
+    function ccMassaDividir(amounts, n) {
+      const partes = Array.from({ length: n }, () => ({}));
+      Object.keys(amounts).forEach((u) => {
+        const base = Math.floor(amounts[u] / n);
+        let resto = amounts[u] - base * n;
+        for (let i = 0; i < n; i++) {
+          const q = base + (resto > 0 ? 1 : 0); if (resto > 0) resto--;
+          if (q > 0) partes[i][u] = q;
+        }
+      });
+      return partes;
+    }
+    async function ccMassaEnviar() {
+      const msg = document.getElementById('cc-massa-msg');
+      const rel = document.getElementById('cc-massa-rel');
+      const diz = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c0483a'; } };
+      if (!config.cmd.suporteOkAt) return diz('O apoio ainda não foi verificado neste mundo — deixe a praça aberta alguns segundos e tente de novo.');
+      const alvos = ((document.getElementById('cc-massa-alvos') || {}).value || '').split(/\n/)
+        .map((s) => { const m = s.match(/(\d{1,3})\s*\|\s*(\d{1,3})/); return m ? { x: m[1], y: m[2] } : null; })
+        .filter(Boolean);
+      if (!alvos.length) return diz('Informe ao menos um alvo (ex: 500|600).');
+      alvos.forEach((a) => ccHistAdd(a.x + '|' + a.y)); ccHistRender();
+      const spec = ccMassaSpec();
+      if (!Object.keys(spec).length) return diz('Escolha as tropas (número, "50%" ou "tudo").');
+      const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid]);
+      if (!marcadas.length) return diz('Marque as origens na lista acima.');
+      const dividir = (document.getElementById('cc-massa-dividir') || {}).checked && alvos.length > 1;
+
+      const rotU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]).filter((u) => u !== 'snob');
+      const rotNome = {}; UNITS.forEach(([u, n]) => { rotNome[u] = n; });
+
+      // CONFIRMACAO. Este botao dispara AGORA e o numero de envios e `origens x alvos` -- sem teto.
+      // Marcar 40 origens e colar 20 alvos e um clique que solta 800 comandos, e no modo "tudo" e o
+      // exercito inteiro saindo de casa. Apoio volta, mas volta VIAGEM INTEIRA depois; enquanto isso
+      // a aldeia fica sem nada.
+      //
+      // Os dois vizinhos deste mesmo arquivo ja perguntam antes ("Agendar N comando(s)?" e "Agrupar
+      // N comando(s) em M trem(ns)?"); este era o unico do tipo que nao perguntava.
+      //
+      // A frase diz o que vai sair, nao "tem certeza?": quantidade de envios, e a tropa por extenso
+      // no modo em que ela foi pedida. "tudo" aparece em CAIXA ALTA porque e o modo em que o usuario
+      // nao tem numero nenhum na tela pra conferir.
+      const tropaTxt = Object.keys(spec).map((u) => {
+        const s = spec[u], nome = rotNome[u] || u;
+        return s.mode === 'all' ? (nome + ': TUDO') : s.mode === 'pct' ? (nome + ': ' + s.val + '%') : (nome + ': ' + s.val);
+      }).join(', ');
+      const nEnvios = marcadas.length * alvos.length;
+      if (!confirm('Enviar apoio AGORA — isto não agenda, sai na hora.\n\n'
+        + nEnvios + ' envio(s): ' + marcadas.length + ' origem(ns) × ' + alvos.length + ' alvo(s)\n'
+        + 'Tropa por envio: ' + tropaTxt + '\n'
+        + (dividir ? 'Dividindo a tropa entre os alvos.\n' : (alvos.length > 1 ? 'Cada alvo recebe a quantidade CHEIA (sem dividir).\n' : ''))
+        + '\nConfirma?')) { diz('Cancelado — nada foi enviado.', '#6f6153'); return; }
+
+      diz('Enviando… (não feche a praça)', '#6f6153'); if (rel) rel.textContent = '';
+      const linhas = []; const totais = {}; let enviados = 0, falhas = 0;
+      for (const v of marcadas) {
+        const resolvido = ccMassaResolver(spec, v.avail);
+        if (!Object.keys(resolvido).length) { linhas.push((v.coord || v.vid) + ' — sem tropa disponível'); continue; }
+        const partes = dividir ? ccMassaDividir(resolvido, alvos.length) : alvos.map(() => Object.assign({}, resolvido));
+        for (let i = 0; i < alvos.length; i++) {
+          const amounts = partes[i];
+          if (!amounts || !Object.keys(amounts).length) continue;
+          const slots = rotU.map((u) => amounts[u] || 0).join('/');
+          try {
+            const prep = await cmdPrepare(v.vid, alvos[i].x, alvos[i].y, amounts, 'support');
+            await cmdFire(prep);
+            enviados++;
+            Object.keys(amounts).forEach((u) => { totais[u] = (totais[u] || 0) + amounts[u]; });
+            linhas.push((v.coord || v.vid) + (v.nome ? ' ' + v.nome : '') + ' → ' + alvos[i].x + '|' + alvos[i].y + ': ' + slots);
+          } catch (e) {
+            falhas++;
+            linhas.push((v.coord || v.vid) + ' → ' + alvos[i].x + '|' + alvos[i].y + ': ✕ ' + (e.message || e).toString().slice(0, 40));
+          }
+          await sleep(150);   // pequeno gap entre envios pra não atropelar o servidor
+        }
+      }
+      const header = 'ordem: ' + rotU.map((u) => rotNome[u] || u).join('/');
+      const total = 'TOTAL: ' + rotU.map((u) => totais[u] || 0).join('/');
+      if (rel) rel.textContent = header + '\n' + linhas.join('\n') + '\n────────\n' + total;
+      diz(enviados + ' apoio(s) enviado(s)' + (falhas ? ' · ' + falhas + ' falha(s)' : '') + '.', falhas ? '#a2643a' : '#2e7d3a');
+      pushLog('🚚 Apoio em massa: ' + enviados + ' envio(s)' + (falhas ? ', ' + falhas + ' falha(s)' : '') + '.', falhas ? 'err' : 'ok', 'cmd');
+    }
+  // ==================== CENTRO DE COMANDO — ABA BLINDAGEM (ccBlz*) — le o topico da tribo e divide os pedidos ====================
+  // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
+  // 171-cc-nucleo.js e FECHA em 177-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
+  // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
+  // primeiro justamente por isso.
+  //
+  // Cortado de 175-cc-rico.js (5297 linhas numa ilha so) na v11.224.0. O corte foi por NOME de
+  // funcao, nao por comentario de secao: era comum uma funcao de uma aba morar fisicamente
+  // dentro do bloco de outra (ccMassaEnviar vivia dentro da secao da Blindagem), que e
+  // exatamente como "mexer numa aba quebrava a outra".
+    // Datas do fórum: "hoje às 14:04", "ontem às 23:03", "em 07.08.2026 às 15:16" e a variante
+    // sem ano "em 07.08. às 15:16". Devolve ms, ou 0 quando não reconhece — 0 nunca é tratado
+    // como "recente", então a dúvida sempre cai pro lado seguro.
+    function ccBlzData(txt) {
+      const t = (txt || '').replace(/\s+/g, ' ').trim();
+      const hm = t.match(/(\d{1,2}):(\d{2})/);
+      if (!hm) return 0;
+      const h = +hm[1], mi = +hm[2];
+      const dm = t.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})?/);
+      const d = new Date();
+      if (dm) {
+        d.setFullYear(dm[3] ? +dm[3] : d.getFullYear(), (+dm[2]) - 1, +dm[1]);
+      } else if (/\bontem\b/i.test(t)) {
+        d.setDate(d.getDate() - 1);
+      } else if (!/\bhoje\b/i.test(t)) {
+        return 0;                                        // formato desconhecido: não arrisca
+      }
+      d.setHours(h, mi, 0, 0);
+      return d.getTime();
+    }
+    // Número de uma célula da tabela. Vazio, `✅` ou qualquer coisa sem dígito = 0.
+    function ccBlzNum(td) {
+      if (!td) return 0;
+      const s = (td.textContent || '').replace(/\D/g, '');
+      return s ? parseInt(s, 10) : 0;
+    }
+    // Linha de entrega: `num/lanc/esp/0/cp/0`. Tolera linha curta — no tópico real apareceu
+    // `14/1000/0/0/0` com 5 campos em vez de 6. Posição manda: nunca "compacta" os zeros, senão
+    // um 0 a menos faria a cavalaria virar espadachim.
+    function ccBlzLinha(txt) {
+      const m = (txt || '').trim().match(/^(\d{1,3})((?:\s*\/\s*\d+){2,6})\s*$/);
+      if (!m) return null;
+      // m[2] começa com a barra, então o split deixa um vazio na frente — o slice(1) tira. Sem
+      // ele TUDO anda uma casa e o lanceiro viraria zero.
+      const n = m[2].split('/').slice(1).map((s) => parseInt(s.trim(), 10) || 0);
+      return { num: +m[1], spear: n[0] || 0, sword: n[1] || 0, heavy: n[3] || 0 };
+    }
+    function ccBlzParse(doc) {
+      const posts = [].slice.call(doc.querySelectorAll('div.post'));
+      if (!posts.length) throw new Error('não achei nenhum post — a URL aponta pro tópico certo?');
+      // A tabela mora no PRIMEIRO post que tenha uma com ícone de unidade no cabeçalho. Procurar
+      // por ícone (e não pela posição) aguenta a tribo fixar outro post no topo.
+      let tabela = null, postTabela = null;
+      for (const p of posts) {
+        const t = [].slice.call(p.querySelectorAll('table'))
+          .find((x) => x.querySelector('tr img[src*="unit_"]') && !x.querySelector('table'));
+        if (t) { tabela = t; postTabela = p; break; }
+      }
+      if (!tabela) throw new Error('não achei a tabela de pedidos (nenhuma com ícone de unidade)');
+      const linhas = [].slice.call(tabela.querySelectorAll('tr'));
+      const cab = [].slice.call(linhas[0].children);
+      const col = {};
+      cab.forEach((c, i) => {
+        const im = c.querySelector('img');
+        const u = im && ((im.getAttribute('src') || '').match(/unit_([a-z]+)\./) || [])[1];
+        if (u && BLZ_UNITS.indexOf(u) >= 0 && col[u] == null) col[u] = i;
+      });
+      if (col.spear == null) throw new Error('a tabela não tem coluna de lanceiro');
+      const pedidos = [];
+      linhas.slice(1).forEach((tr) => {
+        const tds = [].slice.call(tr.children);
+        if (tds.length < 2) return;
+        const num = parseInt((tds[0].textContent || '').replace(/\D/g, ''), 10);
+        if (!num) return;
+        const m = (tds[1].textContent || '').replace(/\s+/g, ' ').match(/^(.*?)\((\d{1,3})\|(\d{1,3})\)/);
+        if (!m) return;
+        const pede = {};
+        BLZ_UNITS.forEach((u) => { pede[u] = col[u] != null ? ccBlzNum(tds[col[u]]) : 0; });
+        pedidos.push({ num: num, nome: m[1].trim(), coord: m[2] + '|' + m[3],
+                       x: +m[2], y: +m[3], pede: pede });
+      });
+      // Quando a tabela foi editada pela última vez. Sem rodapé de edição vale a data do post.
+      const rodape = (postTabela.innerText || '').split('\n').filter((l) => /Editado/i.test(l))[0];
+      const cabTab = (postTabela.querySelector('.postheader_left') || {}).innerText || '';
+      const editadoEm = ccBlzData(rodape) || ccBlzData(cabTab);
+      // Entregas: todo post que NÃO é o da tabela, uma linha por pedido atendido.
+      const entregas = [];
+      posts.forEach((p) => {
+        if (p === postTabela) return;
+        const hdr = (p.querySelector('.postheader_left') || {}).innerText || '';
+        const at = ccBlzData(hdr);
+        const autor = (hdr.replace(/\s+/g, ' ').match(/^(.*?)\s+(?:em|hoje|ontem)\b/) || [])[1] || '?';
+        (p.innerText || '').split('\n').forEach((l) => {
+          const e = ccBlzLinha(l);
+          if (!e) return;
+          e.autor = autor.trim(); e.at = at;
+          // A regra combinada: só conta quem postou DEPOIS da última edição da tabela.
+          e.posEdicao = !!(at && editadoEm && at >= editadoEm);
+          entregas.push(e);
+        });
+      });
+      return { pedidos: pedidos, entregas: entregas, editadoEm: editadoEm };
+    }
+    async function ccBlzBuscar() {
+      const b = config.cmd.blz;
+      const url = ((document.getElementById('cc-blz-url') || {}).value || '').trim();
+      if (!url) throw new Error('cole a URL do tópico da tribo');
+      b.url = url;
+      const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      const r = ccBlzParse(doc);
+      b.pedidos = r.pedidos; b.entregas = r.entregas; b.editadoEm = r.editadoEm;
+      b.lidoEm = Date.now();
+      // Pedido que sumiu da tabela leva junto o plano e a trava dele: manter viraria envio pra
+      // um número que hoje é outra aldeia — exatamente o problema da renumeração.
+      const vivos = {}; r.pedidos.forEach((p) => { vivos[p.num] = 1; });
+      Object.keys(b.plano).forEach((k) => { if (!vivos[k]) delete b.plano[k]; });
+      Object.keys(b.enviados).forEach((k) => { if (!vivos[k]) delete b.enviados[k]; });
+      // Pedido que sumiu sai da seleção; pedido NOVO entra marcado, pra a tabela recém-buscada
+      // já vir pronta pra dividir em vez de exigir 8 cliques antes de qualquer coisa acontecer.
+      b.alvosSel = b.alvosSel || {};
+      Object.keys(b.alvosSel).forEach((k) => { if (!vivos[k]) delete b.alvosSel[k]; });
+      r.pedidos.forEach((p) => { if (b.alvosSel[p.num] === undefined) b.alvosSel[p.num] = true; });
+      save();
+      return r;
+    }
+    // Quanto ainda falta em cada pedido: o pedido menos o que a tribo já entregou (só as entregas
+    // válidas) menos o que ESTE módulo já mandou nesta rodada.
+    function ccBlzEntregue(num) {
+      const b = config.cmd.blz;
+      const t = { spear: 0, sword: 0, heavy: 0 };
+      b.entregas.forEach((e) => {
+        if (e.num !== num || !e.posEdicao) return;
+        BLZ_UNITS.forEach((u) => { t[u] += e[u] || 0; });
+      });
+      return t;
+    }
+    function ccBlzFalta(p) {
+      const ent = ccBlzEntregue(p.num);
+      const meu = ccBlzMeuTotal(p.num);
+      const f = {};
+      BLZ_UNITS.forEach((u) => { f[u] = Math.max(0, (p.pede[u] || 0) - (ent[u] || 0) - (meu[u] || 0)); });
+      return f;
+    }
+    // O que EU já aloquei pra este pedido (soma do plano em todas as minhas aldeias).
+    function ccBlzMeuTotal(num) {
+      const linha = (config.cmd.blz.plano || {})[num] || {};
+      const t = { spear: 0, sword: 0, heavy: 0 };
+      Object.keys(linha).forEach((vid) => {
+        BLZ_UNITS.forEach((u) => { t[u] += (linha[vid] || {})[u] || 0; });
+      });
+      return t;
+    }
+    // Quanto sobra numa aldeia depois da reserva de casa e do que o plano já comprometeu nela.
+    //
+    // O estoque vem de `v.avail`, que SEGUE o seletor de fonte da lista de Origens: com "na
+    // aldeia agora" é só o que está parado aqui; com "suas próprias" entra também o que está
+    // fora apoiando e o que está voltando. Quem manda é a escolha do usuário.
+    //
+    // Vale saber o que cada uma significa na hora de enviar: em "suas próprias" a divisão conta
+    // tropa que ainda não chegou, então o envio daquela linha vai sair menor (ou falhar) até ela
+    // pousar em casa. É útil pra montar o plano agora e disparar quando a tropa voltar; não é
+    // útil pra mandar tudo de uma vez.
+    function ccBlzLivre(v) {
+      const b = config.cmd.blz;
+      const usado = { spear: 0, sword: 0, heavy: 0 };
+      Object.keys(b.plano).forEach((num) => {
+        const q = (b.plano[num] || {})[v.vid]; if (!q) return;
+        BLZ_UNITS.forEach((u) => { usado[u] += q[u] || 0; });
+      });
+      const estoque = v.avail || {};
+      const livre = {};
+      BLZ_UNITS.forEach((u) => {
+        livre[u] = Math.max(0, (estoque[u] || 0) - (b.reserva[u] || 0) - usado[u]);
+      });
+      return livre;
+    }
+    // Orçamento de UMA aldeia pra rodada inteira: o teto que o usuário definiu em "por aldeia",
+    // limitado ao que ela realmente tem livre. Campo vazio = sem teto, entra o disponível todo
+    // (que é como era antes desta opção existir).
+    //
+    // SÓ NÚMERO ABSOLUTO. A porcentagem existiu na v11.138.0 e saiu: com a fonte de tropa e a
+    // reserva no meio, "50%" tinha três bases plausíveis (estoque, livre, ou o que falta) e o
+    // resultado não batia com o que o usuário esperava. Número resolve o mesmo caso sem ambiguidade.
+    function ccBlzOrcamento(v) {
+      const b = config.cmd.blz, spec = b.porAldeia || {}, livre = ccBlzLivre(v);
+      // O que o plano JÁ tirou desta aldeia. O teto é da rodada inteira, então precisa descontar
+      // isso — senão ele se renovaria a cada passada e "50 lanceiros" viraria 50 por passada.
+      const usado = { spear: 0, sword: 0, heavy: 0 };
+      Object.keys(b.plano || {}).forEach((num) => {
+        const q = (b.plano[num] || {})[v.vid]; if (!q) return;
+        BLZ_UNITS.forEach((u) => { usado[u] += q[u] || 0; });
+      });
+      const out = {};
+      BLZ_UNITS.forEach((u) => {
+        const q = parseInt(String(spec[u] == null ? '' : spec[u]).replace(/\D/g, ''), 10);
+        const teto = (q > 0) ? q : Infinity;   // vazio, zero ou lixo = sem teto
+        const resta = (teto === Infinity) ? Infinity : Math.max(0, teto - usado[u]);
+        out[u] = Math.max(0, Math.min(resta, livre[u] || 0));
+      });
+      return out;
+    }
+    // Pedidos que entram na divisão. Nenhum marcado = todos (senão o primeiro uso da tela, com a
+    // seleção vazia, não distribuiria nada e pareceria quebrado).
+    function ccBlzPedidosAtivos() {
+      const b = config.cmd.blz, sel = b.alvosSel || {};
+      return (b.pedidos || []).filter((p) => sel[p.num]);
+    }
+    // ---- A sugestão ----
+    // Guloso por DISTÂNCIA: percorre todos os pares (aldeia, pedido) do mais perto pro mais longe
+    // e vai preenchendo. Defesa que chega tarde não defende, então proximidade é o critério que
+    // importa — e o guloso por distância dá, pra cada aldeia, o pedido mais perto que ainda
+    // precisa dela. Não mexe no que você já editou à mão: só soma em cima do que falta.
+    function ccBlzSugerir() {
+      const b = config.cmd.blz;
+      const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid] && v.x != null);
+      if (!marcadas.length) return { erro: 'marque as origens na lista de Origens, abaixo' };
+      if (!b.pedidos.length) return { erro: 'busque a tabela do tópico primeiro' };
+      const dist = (v, p) => Math.sqrt(Math.pow(v.x - p.x, 2) + Math.pow(v.y - p.y, 2));
+      const por = (par) => {
+        b.plano[par.p.num] = b.plano[par.p.num] || {};
+        const atual = b.plano[par.p.num][par.v.vid] || {};
+        BLZ_UNITS.forEach((u) => { if (par.q[u]) atual[u] = (atual[u] || 0) + par.q[u]; });
+        b.plano[par.p.num][par.v.vid] = atual;
+      };
+      let alocado = 0;
+      // ---- Passada 1: PROPORCIONAL ----
+      // O guloso puro (só distância) despejava a aldeia inteira no pedido mais perto e deixava os
+      // outros zerados — a tribo recebia tudo num lugar só. Aqui cada aldeia reparte o que tem
+      // entre TODOS os pedidos, na proporção do que cada um ainda precisa: pedido que falta o
+      // dobro recebe o dobro. As proporções são calculadas UMA vez, sobre a foto inicial, senão
+      // cada alocação mexeria no denominador e a divisão deixaria de ser proporcional.
+      const ativos = ccBlzPedidosAtivos();
+      if (!ativos.length) return { erro: 'nenhum pedido selecionado' };
+      const falta0 = {}; const totalFalta = { spear: 0, sword: 0, heavy: 0 };
+      ativos.forEach((p) => {
+        falta0[p.num] = ccBlzFalta(p);
+        BLZ_UNITS.forEach((u) => { totalFalta[u] += falta0[p.num][u] || 0; });
+      });
+      marcadas.forEach((v) => {
+        // `orc0` é o teto DA RODADA pra esta aldeia (o "por aldeia"); `usadoV` é o que ela já
+        // cedeu nesta passada. Sem esse par, o teto valeria por pedido em vez de por aldeia — uma
+        // aldeia com "50 lanceiros" mandaria 50 pra cada um dos 8 pedidos.
+        const orc0 = ccBlzOrcamento(v);
+        const usadoV = { spear: 0, sword: 0, heavy: 0 };
+        ativos.forEach((p) => {
+          const q = {}; let soma = 0;
+          const livreAgora = ccBlzLivre(v);        // desce a cada alocação desta mesma aldeia
+          BLZ_UNITS.forEach((u) => {
+            if (!totalFalta[u]) return;
+            const cota = Math.floor((orc0[u] || 0) * (falta0[p.num][u] || 0) / totalFalta[u]);
+            // O `ccBlzFalta` aqui é o TETO DO PEDIDO: nunca sai mais do que ainda falta nele.
+            const n = Math.min(cota, ccBlzFalta(p)[u] || 0, livreAgora[u] || 0,
+                               Math.max(0, (orc0[u] || 0) - usadoV[u]));
+            if (n > 0) { q[u] = n; soma += n; usadoV[u] += n; }
+          });
+          if (!soma) return;
+          por({ v: v, p: p, q: q }); alocado += soma;
+        });
+      });
+      // ---- Passada 2: SOBRA ----
+      // O piso da divisão e os pedidos que ficaram menores que a cota deixam resto. Ele vai pelo
+      // guloso de distância — aqui concentrar não é problema, é o que sobrou.
+      const pares = [];
+      marcadas.forEach((v) => ativos.forEach((p) => pares.push({ v: v, p: p, d: dist(v, p) })));
+      pares.sort((a, c) => a.d - c.d);
+      pares.forEach((par) => {
+        const falta = ccBlzFalta(par.p), livre = ccBlzLivre(par.v);
+        // O teto "por aldeia" vale aqui também: ccBlzOrcamento já desconta o que o plano
+        // comprometeu (via ccBlzLivre), então o que sobra dele é o resto do orçamento.
+        const orc = ccBlzOrcamento(par.v);
+        const q = {}; let soma = 0;
+        BLZ_UNITS.forEach((u) => {
+          const n = Math.min(falta[u] || 0, livre[u] || 0, orc[u] || 0);
+          if (n > 0) { q[u] = n; soma += n; }
+        });
+        if (!soma) return;
+        par.q = q; por(par); alocado += soma;
+      });
+      save();
+      // Espalhar tem um preço: cada par (aldeia, pedido) vira UM comando de apoio. Com muitas
+      // origens marcadas isso vira dezenas de envios, e é melhor você saber disso antes de clicar
+      // em Enviar do que descobrir no meio.
+      let envios = 0;
+      Object.keys(b.plano).forEach((n) => { envios += Object.keys(b.plano[n] || {}).length; });
+      return { alocado: alocado, envios: envios };
+    }
+    // O texto do fórum. Uma linha por pedido, agregando todas as MINHAS aldeias — a tribo quer
+    // saber quanto chegou, não de onde saiu. Os dois zeros fixos são as colunas ❌ da tabela.
+    function ccBlzTexto(soEnviados) {
+      const b = config.cmd.blz;
+      const linhas = [];
+      b.pedidos.forEach((p) => {
+        const linha = (b.plano || {})[p.num] || {};
+        const t = { spear: 0, sword: 0, heavy: 0 };
+        Object.keys(linha).forEach((vid) => {
+          if (soEnviados && !((b.enviados[p.num] || {})[vid])) return;
+          BLZ_UNITS.forEach((u) => { t[u] += (linha[vid] || {})[u] || 0; });
+        });
+        if (!(t.spear + t.sword + t.heavy)) return;
+        linhas.push(p.num + '/' + t.spear + '/' + t.sword + '/0/' + t.heavy + '/0');
+      });
+      return linhas.join('\n');
+    }
+    // ---- Envio ----
+    // Grava a trava ANTES de passar pro próximo e resposta ambígua conta como enviada. Apoio que
+    // sai duas vezes esvazia a aldeia de defesa em dobro, e não tem desfazer — na dúvida, o
+    // barato é você conferir na tela de comandos, não o script reenviar.
+    async function ccBlzEnviar() {
+      const b = config.cmd.blz;
+      const msg = document.getElementById('cc-blz-msg');
+      const diz = (t, cor) => { if (msg) { msg.textContent = t; msg.style.color = cor || '#c0483a'; } };
+      if (!config.cmd.suporteOkAt) return diz('O apoio ainda não foi verificado neste mundo — deixe a praça aberta alguns segundos e tente de novo.');
+      const tarefas = [];
+      b.pedidos.forEach((p) => {
+        const linha = b.plano[p.num] || {};
+        Object.keys(linha).forEach((vid) => {
+          if ((b.enviados[p.num] || {})[vid]) return;             // já saiu
+          const q = linha[vid] || {};
+          const amounts = {};
+          BLZ_UNITS.forEach((u) => { if (q[u] > 0) amounts[u] = q[u]; });
+          if (!Object.keys(amounts).length) return;
+          const v = CCVILAS.find((z) => String(z.vid) === String(vid));
+          if (!v) return;
+          tarefas.push({ p: p, v: v, amounts: amounts });
+        });
+      });
+      if (!tarefas.length) return diz('Nada pendente pra enviar — sugira a divisão ou preencha à mão.');
+      // Menos perigoso que o Apoio em massa (aqui a tropa esta escrita numero a numero no plano, na
+      // tela, e `b.enviados` impede reenvio), mas ainda e tropa saindo AGORA em lote. Pergunta antes,
+      // pelo mesmo padrao do resto do arquivo.
+      const nPed = Object.keys(tarefas.reduce((m, t) => { m[t.p.num] = 1; return m; }, {})).length;
+      if (!confirm('Enviar ' + tarefas.length + ' apoio(s) AGORA, cobrindo ' + nPed + ' pedido(s) da blindagem?\n\n'
+        + 'Sai na hora, não agenda.')) { diz('Cancelado — nada foi enviado.', '#6f6153'); return; }
+      diz('Enviando ' + tarefas.length + ' apoio(s)… (não feche a praça)', '#6f6153');
+      let ok = 0, falhas = 0;
+      for (const t of tarefas) {
+        const slots = BLZ_UNITS.map((u) => t.amounts[u] || 0).join('/');
+        try {
+          const prep = await cmdPrepare(t.v.vid, t.p.x, t.p.y, t.amounts, 'support');
+          await cmdFire(prep);
+          b.enviados[t.p.num] = b.enviados[t.p.num] || {};
+          b.enviados[t.p.num][t.v.vid] = Date.now(); save();
+          ok++;
+          pushLog('🛡 Blindagem #' + t.p.num + ': ' + (t.v.coord || t.v.vid) + ' → ' + t.p.coord + ' (' + slots + ')', 'ok', 'cmd');
+        } catch (e) {
+          const em = String(e.message || e);
+          if (/^ambiguo:/i.test(em)) {
+            b.enviados[t.p.num] = b.enviados[t.p.num] || {};
+            b.enviados[t.p.num][t.v.vid] = Date.now(); save();
+            pushLog('🛡 Blindagem #' + t.p.num + ' (' + (t.v.coord || t.v.vid) + '): resposta ambígua, pode ter saído. Marquei como enviada — confira nos comandos antes de repetir.', '', 'cmd');
+          } else {
+            falhas++;
+            pushLog('🛡 Blindagem #' + t.p.num + ' (' + (t.v.coord || t.v.vid) + ') FALHOU: ' + em, 'err', 'cmd');
+          }
+        }
+        await sleep(200);
+      }
+      diz(ok + ' apoio(s) enviado(s)' + (falhas ? ' · ' + falhas + ' falha(s)' : '') + '. O texto do fórum está abaixo.',
+          falhas ? '#a2643a' : '#2e7d3a');
+      ccBlzRender();
+    }
+    function ccBlzRender() {
+      const box = document.getElementById('cc-blz-lista'); if (!box) return;
+      const b = config.cmd.blz;
+      const inp = document.getElementById('cc-blz-url');
+      if (inp && !inp.value) inp.value = b.url || '';
+      BLZ_UNITS.forEach((u) => {
+        const el = document.getElementById('cc-blz-res-' + u);
+        if (el && el.value === '') el.value = b.reserva[u] || 0;
+        const pa = document.getElementById('cc-blz-pa-' + u);
+        if (pa && pa.value === '') pa.value = (b.porAldeia || {})[u] || '';
+      });
+      if (!b.pedidos.length) {
+        box.innerHTML = '<div style="color:#8a7d6d;font-size:10px;padding:6px;text-align:center">— sem pedidos. Cole a URL do tópico e clique Buscar. —</div>';
+        const t0 = document.getElementById('cc-blz-texto'); if (t0) t0.value = '';
+        return;
+      }
+      const marcadas = CCVILAS.filter((v) => config.cmd.origens[v.vid] && v.x != null);
+      const velhas = b.entregas.filter((e) => !e.posEdicao).length;
+      let h = '<div style="font-size:9px;color:#8a7d6d;margin-bottom:4px">' +
+        b.pedidos.length + ' pedido(s) · tabela editada ' +
+        (b.editadoEm ? new Date(b.editadoEm).toLocaleString('pt-BR') : '(data não lida)') +
+        (velhas ? ' · <b style="color:#a2643a">' + velhas + ' entrega(s) anteriores à edição ignoradas</b> — a tribo renumera os pedidos' : '') +
+        '</div>';
+      // Duas colunas de números e só. "pede" e "já veio" viraram tooltip da linha: eles explicam
+      // de onde o "falta" saiu, mas não são o que se olha pra decidir — o que decide é quanto
+      // ainda falta e quanto eu estou mandando. A marca escolhe quem entra na divisão.
+      // A seleção é EXPLÍCITA. Antes valia "nenhum marcado = todos", e o resultado era que
+      // desmarcar a última voltava a marcar todas — clicar não mudava nada na tela. Agora a
+      // lista nasce com tudo marcado (semeada na busca e aqui, pra quem já tinha tabela) e o
+      // que está gravado é a verdade.
+      const sel = b.alvosSel || (b.alvosSel = {});
+      if (!Object.keys(sel).length && b.pedidos.length) {
+        b.pedidos.forEach((p) => { sel[p.num] = true; });
+        save();
+      }
+      const nSel = b.pedidos.filter((p) => sel[p.num]).length;
+      const trio = (o) => BLZ_UNITS.map((u) => (o[u] || 0) > 0
+        ? unitIcon(u, BLZ_ROT[u]) + fmtN(o[u]) : '').filter(Boolean).join(' ') || '—';
+      h += '<table style="width:100%;font-size:10px;border-collapse:collapse">' +
+        '<tr style="color:#8a7d6d;text-align:left">' +
+        '<th style="width:16px"><input type="checkbox" id="cc-blz-todos" title="marcar/desmarcar todos"' + (nSel === b.pedidos.length ? ' checked' : '') + '></th>' +
+        '<th style="width:16px">#</th><th>aldeia</th>' +
+        '<th style="width:34%">falta</th><th style="width:34%">eu mando</th></tr>';
+      b.pedidos.forEach((p) => {
+        const ent = ccBlzEntregue(p.num), falta = ccBlzFalta(p), meu = ccBlzMeuTotal(p.num);
+        const zerado = !(falta.spear + falta.sword + falta.heavy);
+        const nMinhas = Object.keys((b.plano[p.num] || {})).length;
+        const nEnv = Object.keys((b.enviados[p.num] || {})).length;
+        const marcado = !!sel[p.num];
+        const tip = 'pedido: ' + BLZ_UNITS.map((u) => (p.pede[u] || 0) + ' ' + BLZ_ROT[u]).join(', ')
+          + '\njá entregue pela tribo: ' + BLZ_UNITS.map((u) => (ent[u] || 0)).join('/');
+        h += '<tr style="border-top:1px solid #efe7d8' + (zerado ? ';opacity:.5' : '') + '" title="' + esc(tip) + '">' +
+          '<td><input type="checkbox" class="cc-blz-sel" data-num="' + p.num + '"' + (marcado ? ' checked' : '') + '></td>' +
+          '<td><b>' + p.num + '</b></td>' +
+          '<td style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">' + esc(p.nome) +
+            ' <span style="color:#8a7d6d">' + esc(p.coord) + '</span></td>' +
+          '<td style="color:' + (zerado ? '#2e7d3a' : '#a2643a') + '">' + (zerado ? 'completo' : trio(falta)) + '</td>' +
+          '<td><b style="color:#2e7d3a">' + trio(meu) + '</b>' +
+            (nMinhas ? '<div style="color:#8a7d6d">' + nMinhas + ' aldeia(s)' + (nEnv ? ' · ' + nEnv + ' enviada(s)' : '') + '</div>' : '') +
+          '</td></tr>';
+      });
+      // A ordem não precisa mais ser explicada: cada número vem com o ícone da unidade colado.
+      h += '</table>' +
+        '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">origens marcadas: <b>' + marcadas.length + '</b>' +
+        (marcadas.length ? '' : ' — marque as aldeias na lista de Origens, abaixo') +
+        ' · pedidos na divisão: <b style="color:' + (nSel ? '#2e7d3a' : '#a2643a') + '">' + nSel + '</b>' +
+        (nSel ? '' : ' — marque ao menos um') + '</div>';
+      box.innerHTML = h;
+      // Grava `false` em vez de apagar a chave. Com `delete`, desmarcar o ÚLTIMO pedido esvaziava
+      // o objeto e a semeadura logo acima remarcava todos de novo — o mesmo defeito de antes,
+      // só que na borda. Chave presente com `false` é "desmarcado de propósito".
+      box.querySelectorAll('.cc-blz-sel').forEach((el) => el.addEventListener('change', () => {
+        b.alvosSel[el.getAttribute('data-num')] = !!el.checked;
+        save(); ccBlzRender();
+      }));
+      const todos = document.getElementById('cc-blz-todos');
+      if (todos) todos.addEventListener('change', () => {
+        b.pedidos.forEach((p) => { b.alvosSel[p.num] = !!todos.checked; });
+        save(); ccBlzRender();
+      });
+      const t = document.getElementById('cc-blz-texto');
+      if (t) t.value = ccBlzTexto(false);
+    }
+  // ==================== CENTRO DE COMANDO — PAINEL: monta o HTML, injeta nas telas do jogo, e FECHA a ilha ====================
+  // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
+  // 171-cc-nucleo.js e FECHA em 177-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
+  // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
+  // primeiro justamente por isso.
+  //
+  // Cortado de 175-cc-rico.js (5297 linhas numa ilha so) na v11.224.0. O corte foi por NOME de
+  // funcao, nao por comentario de secao: era comum uma funcao de uma aba morar fisicamente
+  // dentro do bloco de outra (ccMassaEnviar vivia dentro da secao da Blindagem), que e
+  // exatamente como "mexer numa aba quebrava a outra".
 
     function mountCmdCenter() {
       if (!config.cmd || !config.cmd.enabled) return;

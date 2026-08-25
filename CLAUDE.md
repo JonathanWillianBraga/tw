@@ -47,10 +47,18 @@ e esquecer de buildar, todo mundo continua recebendo a versão velha.
   içadas/hoisted; `const`/`let` precisam já ter executado, e a ordem é a numérica).
 - **Prefixos de 3 dígitos com folga** (`010`, `020`, … `180`) pra caber inserção
   futura sem quebrar a ordem.
-- **Exceção — ilha isolada:** `175-cc-rico.js` (Central de Comando rica) é
-  **embrulhado numa IIFE aninhada própria**. Os ~465 nomes internos dele (`cc*`/`cmd*`)
-  ficam presos no escopo dele e NÃO colidem com o resto; ele herda os helpers do escopo
-  externo por closure. Se for mexer nele, lembre que é um mundo à parte.
+- **Exceção — ilha isolada:** o Centro de Comando rico é **embrulhado numa IIFE aninhada
+  própria**, que **abre em `171-cc-nucleo.js` e fecha em `177-cc-painel.js`**. Nenhum arquivo
+  do meio abre ou fecha chave de IIFE — os sete formam UM escopo léxico só. Os ~465 nomes
+  internos (`cc*`/`cmd*`) ficam presos ali e NÃO colidem com o resto; os helpers do escopo
+  externo entram por closure.
+  - Os `const`/`let` de topo da ilha vivem **no núcleo**, que vem primeiro de propósito:
+    inicializador que executa (`const _mchan = ... new MessageChannel()`) depende da ordem
+    do arquivo. Função pode morar em qualquer um dos sete (são içadas); `const`, não.
+  - Foi cortado de `175-cc-rico.js` (5297 linhas) na v11.224.0, **por nome de função e não
+    por comentário de seção** — era comum uma função de uma aba morar fisicamente dentro do
+    bloco de outra (`ccMassaEnviar` vivia dentro da seção da Blindagem). Era isso que fazia
+    "mexer numa aba quebrar a outra".
 
 ### Abas do painel
 
@@ -97,5 +105,11 @@ Chaves de módulo (`wall`, `map`) seguem valendo em `config`, `refreshCards` e `
 | `130-captcha` `140-painel-controllers` `150-painel-ui` | captcha, controladores, UI do painel |
 | `155-backup` | exportar/importar a config inteira (todas as chaves `twMgr*`) |
 | `160-desviar` `170-mapa` | desviar, filtros do mapa |
-| `175-cc-rico` | **Central de Comando rica (ilha IIFE isolada)** |
+| `171-cc-nucleo` | **ABRE a ilha do Centro de Comando** — estado, motor de precisao, silencio, despachante, tempo de viagem |
+| `172-cc-praca` | CC: superficie compartilhada (origens, tropas, previa, fila, comandos do jogo) |
+| `173-cc-operacao` | CC: aba Operacao (`ccOp*`) |
+| `174-cc-atkmassa` | CC: aba Ataque em massa (`ccAtkm*`) |
+| `175-cc-apoiomassa` | CC: aba Apoio em massa (`ccMassa*`) |
+| `176-cc-blindagem` | CC: aba Blindagem da tribo (`ccBlz*`) |
+| `177-cc-painel` | CC: monta o HTML, injeta nas telas, e **FECHA a ilha** |
 | `180-centro-comando` | motor de precisão `cc*` + bootstrap + fecha a IIFE |

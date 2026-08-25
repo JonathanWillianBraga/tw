@@ -4,6 +4,15 @@ Suíte de automações para **Tribal Wars** (userscript / Tampermonkey): 11 abas
 
 > ⚠️ **Aviso:** automação pode violar as regras do jogo (InnoGames). Use por sua conta e risco. Projeto pessoal/educacional.
 
+## Documentação
+
+Arquitetura e **fluxo de cada módulo** ficam em [`docs/`](docs/) — publicados em
+**[GitHub Pages](https://jonathanwillianbraga.github.io/tw/)** quando o Pages estiver ligado
+(*Settings › Pages › Source: main / pasta `/docs`*).
+
+Comece por [Arquitetura](docs/arquitetura.md): como 33 arquivos viram um userscript, o ciclo
+de vida dos módulos e os cinco mecanismos que todos obedecem.
+
 ## Instalação (1 clique)
 
 1. Instale a extensão **[Tampermonkey](https://www.tampermonkey.net/)**.

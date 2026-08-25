@@ -1,3 +1,8 @@
+---
+layout: default
+title: Tela "Apoios enviados"
+---
+
 # Tela "Apoios enviados" — especificação
 
 Pedido do usuário (ago/2026): uma tela que mostre **cada aldeia que estou apoiando**, com as

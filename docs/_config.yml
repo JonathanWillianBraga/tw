@@ -1,0 +1,27 @@
+title: TW Manager
+description: Userscript de automação para Tribal Wars — arquitetura e fluxo dos módulos
+# Sem tema remoto de propósito: o layout é nosso (_layouts/default.html) e carrega o
+# mermaid do CDN. Tema pronto brigaria com isso e ainda amarraria o site a um plugin.
+theme: null
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+nav:
+  - titulo: Começo
+    itens:
+      - { url: "", nome: "Visão geral" }
+      - { url: "arquitetura", nome: "Arquitetura" }
+  - titulo: Fluxo dos módulos
+    itens:
+      - { url: "fluxo-saque", nome: "Saque e coleta" }
+      - { url: "fluxo-producao", nome: "Produção" }
+      - { url: "fluxo-mercado", nome: "Mercado" }
+      - { url: "fluxo-noblar", nome: "Noblar" }
+      - { url: "fluxo-mapa", nome: "Mapa e bárbaros" }
+      - { url: "fluxo-centro-comando", nome: "Centro de Comando" }
+      - { url: "fluxo-apoio", nome: "Apoio e defesa" }
+      - { url: "fluxo-auxiliares", nome: "Auxiliares" }
+  - titulo: Especificações
+    itens:
+      - { url: "tela-apoios-enviados", nome: "Tela: Apoios enviados" }

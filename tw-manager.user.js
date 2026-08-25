@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.222.0
+// @version      11.223.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.222.0';
+  const VERSION = '11.223.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -8851,9 +8851,32 @@
     const feitas = [];
     cunho = cunho || { n: 0 };
     let formados = 0, naFila = 0, prontoEm = null;
+    // NOBRE JA PARADO conta como oferta que EXISTE. Sem isto o modulo so enxergava o que ele
+    // mesmo tinha formado (`formados`) e o que estava na Academia (`naFila`) -- nobre pronto,
+    // parado numa origem no alcance deste alvo, era invisivel pra decisao de produzir.
+    //
+    // O efeito era o relatado: nobre sobressalente numa aldeia que o planner nao usou (escolta
+    // fora, `soNT`, ou o plano ja fechava sem ela) nao contava pra nada, entao o ciclo formava
+    // MAIS por cima. Matar os sobressalentes so liberava o limite da conta e o ciclo seguinte
+    // refazia os mesmos, no mesmo lugar -- um moinho de moeda e populacao.
+    //
+    // A conta e de graca: `o.nobres` ja veio de `nobleOrigensPerto` (avail.snob menos o que
+    // alvos anteriores desta rodada reservaram), e e somado ANTES do laco, sobre a lista toda --
+    // nao so sobre as aldeias que o laco chegar a visitar, senao o teto dependeria da ordem.
+    //
+    // Se o parado existe mas nao da pra usar, formar outro TAMBEM nao vai dar: o que falta nao e
+    // nobre, e escolta/alcance. Produzir em cima nao conserta nada e gasta o que nao volta.
+    const parados = (origensOrdenadas || []).reduce((s, o) => s + (o.nobres || 0), 0);
+    if (parados >= faltam && faltam > 0) {
+      pushLog('Noblar (recruta) → ' + alvo.coord + ' — não formei nada: já existem ' + parados
+        + ' nobre(s) PARADOS no alcance e faltam ' + faltam + '. Se eles não estão saindo, o que'
+        + ' falta é escolta ou alcance, não nobre — formar mais não resolve.', '', 'noble');
+      nbTrail(alvo.coord, 'recruta', { resumo: 'coberto por ' + parados + ' parado(s)', formados: 0, naFila: 0, parados: parados });
+      return { formados: 0, naFila: 0, prontoEm: null };
+    }
     for (const o of origensOrdenadas) {
-      // O que ja esta na fila conta como feito: nao precisa encomendar de novo.
-      if (formados + naFila >= faltam) break;
+      // O que ja esta na fila e o que ja esta parado contam como feito: nao precisa encomendar.
+      if (formados + naFila + parados >= faltam) break;
       let st;
       try { st = await getSnobState(o.vid); }
       catch (e) { continue; }                       // sem Academia: proxima aldeia
@@ -8868,6 +8891,14 @@
           + (fl.prontoEm ? ' (1º às ' + new Date(fl.prontoEm).toLocaleTimeString('pt-BR') + ')' : '') });
         await sleep(200);
         continue;                                   // ja tem nobre vindo daqui; nao empilha mais
+      }
+      // Mesma regra da fila, pro nobre que JA ESTA PRONTO e parado nesta origem. A da fila
+      // existia; esta faltava -- e e ela que impedia o empilhamento em cima de aldeia que ja tem
+      // nobre sobrando. `parados` ja contou este nobre no teto la em cima; formar outro aqui
+      // seria contar a mesma necessidade duas vezes.
+      if ((o.nobres || 0) > 0) {
+        feitas.push({ nome: o.nome, ok: false, motivo: o.nobres + ' já parado(s) aqui' });
+        continue;
       }
       const m = st.moedas || {};
       if (!(m.podemFormar > 0)) {

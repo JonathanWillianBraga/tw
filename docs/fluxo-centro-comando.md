@@ -5,7 +5,7 @@ title: Centro de Comando
 
 # Centro de Comando
 
-`171` a `178` (a **ilha**) · `180-centro-comando` (motor `cc`)
+`171` a `179` (a **ilha**) · `180-centro-comando` (motor `cc`)
 
 O subsistema de **precisão**: mandar comandos que chegam na hora marcada, ao milissegundo.
 É o único lugar do script onde o erro se mede em ms.
@@ -34,7 +34,8 @@ bloco da Blindagem. Era literalmente isso que fazia mexer numa aba quebrar a out
 | `175-cc-apoiomassa` | 133 | Aba Apoio em massa (`ccMassa*`) |
 | `176-cc-blindagem` | 447 | Aba Blindagem da tribo (`ccBlz*`) |
 | `177-cc-calibrar` | 276 | Calibração do agendador (`ccCalib*`) |
-| `178-cc-painel` | 837 | Monta o HTML, injeta nas telas, **FECHA a ilha** |
+| `178-cc-ensaio` | 190 | Ensaio de operação (`ccEnsaio*`) |
+| `179-cc-painel` | 855 | Monta o HTML, injeta nas telas, **FECHA a ilha** |
 
 </div>
 
@@ -172,6 +173,46 @@ sem medir nada.
 Um viés sozinho é confiança falsa: `+40 ms` pode ser *"sempre +40"* ou *"às vezes −200, às
 vezes +280"* — e são decisões opostas na hora de mirar um snipe. A tela dá o veredito em
 português (**firme / aceitável / instável**) com a janela mínima que a medição sustenta.
+
+---
+
+## Ensaio de operação
+
+Responde, sem gastar nada, a pergunta que antes só se respondia arriscando uma operação de
+verdade: **a conta de viagem, saída e ordem está certa?**
+
+Pega o alvo (o campo Alvo, ou a bárbara mais próxima), escolhe as **N aldeias mais próximas**
+dele — a mesma escolha que o armar de verdade faz — e programa **ataque e apoio** de cada uma
+pra chegarem todos no mesmo horário.
+
+```mermaid
+flowchart TD
+  A["Ensaiar"] --> B["alvo: campo Alvo<br/>ou bárbara mais próxima"]
+  B --> C["N origens mais próximas"]
+  C --> D["chegada = viagem mais lenta + 10min"]
+  D --> E["por origem × (ataque, apoio):<br/>ccTempoViagemMs → saída"]
+  E --> F["tabela ordenada por SAÍDA"]
+  F --> G{"viagens distintas ==<br/>saídas distintas?"}
+  G -->|sim| H["✔ coerente"]
+  G -->|não| I["✕ INCOERENTE"]
+```
+
+**É seco por padrão.** Um "teste" que arma comando na fila não é teste: o motor prepara 60 s
+antes da saída e **dispara**. Você olharia a tabela, se distrairia, e a tropa sairia. Armar de
+verdade é um segundo botão, explícito, e o que ele arma leva o marcador `_ensaio` — o
+`🧹 limpar ensaio` tira só isso da fila, sem encostar no que você armou à mão.
+
+**Não é uma simulação escrita à parte** — usa `ccTempoViagemMs`, o mesmo cálculo do armar real.
+Se a conta estiver errada, a tabela mostra errado, que é o que se quer de um ensaio.
+
+### Por que ataque *e* apoio na mesma tabela
+
+Porque é onde o erro aparece. Os dois miram a **mesma chegada**, mas a tropa é diferente
+(cavalaria leve × lanceiro) → a viagem é diferente → a **saída** tem que ser diferente.
+
+Daí a conferência automática no topo da tabela: *n viagens distintas devem produzir n saídas
+distintas*. Se duas linhas com viagens diferentes mostram a mesma saída, tem defeito — e a
+tela diz isso em vermelho em vez de esperar você reparar.
 
 ---
 

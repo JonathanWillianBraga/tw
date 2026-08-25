@@ -1,6 +1,6 @@
   // ==================== CENTRO DE COMANDO — CALIBRACAO (ccCalib*) ====================
   // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
-  // 171-cc-nucleo.js e FECHA em 178-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // 171-cc-nucleo.js e FECHA em 179-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
   // de IIFE. Todos partilham o mesmo escopo lexico.
   //
   // ---------------------------------------------------------------------------------------

@@ -10,7 +10,7 @@ Arquitetura e **fluxo de cada módulo** ficam em [`docs/`](docs/) — publicados
 **[GitHub Pages](https://jonathanwillianbraga.github.io/tw/)** quando o Pages estiver ligado
 (*Settings › Pages › Source: main / pasta `/docs`*).
 
-Comece por [Arquitetura](docs/arquitetura.md): como 33 arquivos viram um userscript, o ciclo
+Comece por [Arquitetura](docs/arquitetura.md): como 34 arquivos viram um userscript, o ciclo
 de vida dos módulos e os cinco mecanismos que todos obedecem.
 
 ## Instalação (1 clique)

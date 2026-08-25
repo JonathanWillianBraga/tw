@@ -1,6 +1,6 @@
   // ==================== CENTRO DE COMANDO — PRACA: superficie COMPARTILHADA (origens, tropas, previa, fila, comandos do jogo) ====================
   // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
-  // 171-cc-nucleo.js e FECHA em 178-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // 171-cc-nucleo.js e FECHA em 179-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
   // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
   // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
   // primeiro justamente por isso.
@@ -1675,6 +1675,16 @@
         vi.innerHTML = 'viés <b style="color:' + (k.n ? '#2e7d3a' : '#8a7d6d') + '">' +
           (k.n ? (k.biasMs > 0 ? '+' : '') + Math.round(k.biasMs || 0) + 'ms' : '—') + '</b>' +
           (k.n ? ' (' + k.n + ' amostra' + (k.n > 1 ? 's' : '') + ')' : ' <span style="color:#584526">(não calibrou)</span>');
+      }
+      // O mesmo número no <summary> do bloco recolhido. Recolher não pode ESCONDER informação:
+      // "não calibrou" é justamente o que precisa ser visto sem abrir nada, porque é o estado em
+      // que o agendador está rodando com lead zero.
+      const vr = document.getElementById('cc-vies-resumo');
+      if (vr) {
+        const k2 = (config.cmd && config.cmd.calib) || {};
+        vr.innerHTML = k2.n
+          ? '· viés ' + (k2.biasMs > 0 ? '+' : '') + Math.round(k2.biasMs || 0) + 'ms'
+          : '· <span style="color:#c0483a">nunca calibrou</span>';
       }
       const agora = Date.now();
       if (agora - _ccLastRender >= 1000) { _ccLastRender = agora; ccRender(); }

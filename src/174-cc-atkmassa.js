@@ -1,6 +1,6 @@
   // ==================== CENTRO DE COMANDO — ABA ATAQUE EM MASSA (ccAtkm*) — varios alvos, distribuicao por menor viagem ====================
   // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
-  // 171-cc-nucleo.js e FECHA em 178-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // 171-cc-nucleo.js e FECHA em 179-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
   // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
   // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
   // primeiro justamente por isso.

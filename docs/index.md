@@ -7,7 +7,7 @@ title: Visão geral
 
 Userscript de automação para **Tribal Wars**. Um arquivo só chega no navegador
 (`tw-manager.user.js`, ~23 mil linhas), mas ele é **gerado** — a fonte da verdade são os
-33 módulos em `src/*.js`.
+34 módulos em `src/*.js`.
 
 > **A regra de ouro:** não edite `tw-manager.user.js`. Edite o módulo em `src/` e rode
 > `python tools/build.py`. Quem edita o gerado perde o trabalho no build seguinte.
@@ -19,7 +19,7 @@ Userscript de automação para **Tribal Wars**. Um arquivo só chega no navegado
 Cada página descreve o **fluxo** de um grupo de módulos: por onde o ciclo entra, que
 decisões ele toma, o que ele grava e onde ele pode falhar. A ordem sugerida:
 
-1. **[Arquitetura](arquitetura)** — como 33 arquivos viram um; escopo compartilhado, ciclo
+1. **[Arquitetura](arquitetura)** — como 34 arquivos viram um; escopo compartilhado, ciclo
    de vida, e os cinco mecanismos que *todo* módulo obedece. Leia esta primeiro: sem ela, o
    fluxo de qualquer módulo individual parece arbitrário.
 2. Depois, a página do domínio que te interessa.
@@ -66,7 +66,8 @@ deliberada pra inserção futura.
 | `175-cc-apoiomassa` | 133 | — | `cmd` | [Centro de Comando](fluxo-centro-comando) |
 | `176-cc-blindagem` | 447 | — | `cmd.blz` | [Centro de Comando](fluxo-centro-comando) |
 | `177-cc-calibrar` | 276 | — | `cmd.calib` | [Centro de Comando](fluxo-centro-comando) |
-| `178-cc-painel` | 837 | — | `cmd` | [Centro de Comando](fluxo-centro-comando) |
+| `178-cc-ensaio` | 190 | — | *(sem estado)* | [Centro de Comando](fluxo-centro-comando) |
+| `179-cc-painel` | 855 | — | `cmd` | [Centro de Comando](fluxo-centro-comando) |
 | `180-centro-comando` | 1526 | `ccTick` | `cc` | [Centro de Comando](fluxo-centro-comando) |
 
 </div>

@@ -5,7 +5,7 @@
   // getAllVillages, fakePrepare, fieldDist, getMapVillages, UNITS, config, IMG_BASE...).
   // Traz copia so do que o v11 nao tem: FREEZEKEY, NETLAT, defCmd, MODELOS_PADRAO, srvClockMs,
   // netProbe. Estado proprio em config.cmd (coexiste com config.cc do v11).
-  // SPLIT v11.224.0: esta IIFE ABRE aqui e FECHA em 178-cc-painel.js.
+  // SPLIT v11.224.0: esta IIFE ABRE aqui e FECHA em 179-cc-painel.js.
   (function () {
     'use strict';
     const FREEZEKEY = KEY + '_freeze';   // modo silêncio, compartilhado entre abas

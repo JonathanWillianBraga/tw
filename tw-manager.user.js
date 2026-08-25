@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.225.0
+// @version      11.226.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.225.0';
+  const VERSION = '11.226.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -16559,7 +16559,7 @@
   // getAllVillages, fakePrepare, fieldDist, getMapVillages, UNITS, config, IMG_BASE...).
   // Traz copia so do que o v11 nao tem: FREEZEKEY, NETLAT, defCmd, MODELOS_PADRAO, srvClockMs,
   // netProbe. Estado proprio em config.cmd (coexiste com config.cc do v11).
-  // SPLIT v11.224.0: esta IIFE ABRE aqui e FECHA em 178-cc-painel.js.
+  // SPLIT v11.224.0: esta IIFE ABRE aqui e FECHA em 179-cc-painel.js.
   (function () {
     'use strict';
     const FREEZEKEY = KEY + '_freeze';   // modo silêncio, compartilhado entre abas
@@ -17728,7 +17728,7 @@
     }
   // ==================== CENTRO DE COMANDO — PRACA: superficie COMPARTILHADA (origens, tropas, previa, fila, comandos do jogo) ====================
   // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
-  // 171-cc-nucleo.js e FECHA em 178-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // 171-cc-nucleo.js e FECHA em 179-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
   // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
   // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
   // primeiro justamente por isso.
@@ -19404,6 +19404,16 @@
           (k.n ? (k.biasMs > 0 ? '+' : '') + Math.round(k.biasMs || 0) + 'ms' : '—') + '</b>' +
           (k.n ? ' (' + k.n + ' amostra' + (k.n > 1 ? 's' : '') + ')' : ' <span style="color:#584526">(não calibrou)</span>');
       }
+      // O mesmo número no <summary> do bloco recolhido. Recolher não pode ESCONDER informação:
+      // "não calibrou" é justamente o que precisa ser visto sem abrir nada, porque é o estado em
+      // que o agendador está rodando com lead zero.
+      const vr = document.getElementById('cc-vies-resumo');
+      if (vr) {
+        const k2 = (config.cmd && config.cmd.calib) || {};
+        vr.innerHTML = k2.n
+          ? '· viés ' + (k2.biasMs > 0 ? '+' : '') + Math.round(k2.biasMs || 0) + 'ms'
+          : '· <span style="color:#c0483a">nunca calibrou</span>';
+      }
       const agora = Date.now();
       if (agora - _ccLastRender >= 1000) { _ccLastRender = agora; ccRender(); }
     }
@@ -19831,7 +19841,7 @@
     }
   // ==================== CENTRO DE COMANDO — ABA OPERACAO (ccOp*) — um alvo por vez, ondas com horario calibravel ====================
   // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
-  // 171-cc-nucleo.js e FECHA em 178-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // 171-cc-nucleo.js e FECHA em 179-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
   // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
   // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
   // primeiro justamente por isso.
@@ -20370,7 +20380,7 @@
     }
   // ==================== CENTRO DE COMANDO — ABA ATAQUE EM MASSA (ccAtkm*) — varios alvos, distribuicao por menor viagem ====================
   // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
-  // 171-cc-nucleo.js e FECHA em 178-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // 171-cc-nucleo.js e FECHA em 179-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
   // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
   // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
   // primeiro justamente por isso.
@@ -20542,7 +20552,7 @@
     }
   // ==================== CENTRO DE COMANDO — ABA APOIO EM MASSA (ccMassa*) — apoio imediato das origens marcadas ====================
   // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
-  // 171-cc-nucleo.js e FECHA em 178-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // 171-cc-nucleo.js e FECHA em 179-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
   // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
   // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
   // primeiro justamente por isso.
@@ -20675,7 +20685,7 @@
     }
   // ==================== CENTRO DE COMANDO — ABA BLINDAGEM (ccBlz*) — le o topico da tribo e divide os pedidos ====================
   // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
-  // 171-cc-nucleo.js e FECHA em 178-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // 171-cc-nucleo.js e FECHA em 179-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
   // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
   // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
   // primeiro justamente por isso.
@@ -21122,7 +21132,7 @@
     }
   // ==================== CENTRO DE COMANDO — CALIBRACAO (ccCalib*) ====================
   // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
-  // 171-cc-nucleo.js e FECHA em 178-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // 171-cc-nucleo.js e FECHA em 179-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
   // de IIFE. Todos partilham o mesmo escopo lexico.
   //
   // ---------------------------------------------------------------------------------------
@@ -21396,9 +21406,214 @@
       + r.max + '</b>ms (desvio ' + r.dp + 'ms)</span><br>'
       + '<span style="color:' + cor + '">' + esc(veredito) + '</span>';
   }
+  // ==================== CENTRO DE COMANDO — ENSAIO (ccEnsaio*) ====================
+  // Parte da ILHA do Centro de Comando. A ilha ABRE em 171-cc-nucleo.js e FECHA em
+  // 179-cc-painel.js: nenhum arquivo do meio abre ou fecha chave de IIFE.
+  //
+  // ---------------------------------------------------------------------------------------
+  // O QUE ISTO E
+  //
+  // Um ensaio de operacao: escolhe um alvo, pega N das suas aldeias, e programa ATAQUE e APOIO
+  // de cada uma pra chegarem TODOS no mesmo horario. Serve pra responder, em 5 segundos e sem
+  // gastar nada, a pergunta que hoje so se responde arriscando uma operacao de verdade:
+  //
+  //     "a conta de viagem, saida e ordem esta certa?"
+  //
+  // ---------------------------------------------------------------------------------------
+  // POR QUE ELE E SECO POR PADRAO
+  //
+  // Um "teste" que arma comando na fila NAO e teste: o motor prepara 60s antes da saida e
+  // DISPARA. Voce ia olhar a tabela, se distrair, e a tropa saia. Entao o padrao aqui e o
+  // ensaio SECO — nada entra na fila, nada sai.
+  //
+  // E ele nao e uma simulacao escrita a parte, que e o defeito classico de tela de previa
+  // ("mostra uma coisa e o botao faz outra"). Ele usa `ccTempoViagemMs`, o MESMO calculo de
+  // viagem que o armar de verdade usa. Se a conta estiver errada, a tabela mostra errado — que
+  // e exatamente o que se quer de um ensaio.
+  //
+  // Armar de verdade e um segundo botao, separado e explicito, com marcador `_ensaio` pra dar
+  // pra limpar tudo num clique.
+  //
+  // ---------------------------------------------------------------------------------------
+  // POR QUE ATAQUE **E** APOIO NA MESMA TABELA
+  //
+  // Porque e onde o erro aparece. Os dois miram a MESMA chegada, mas a tropa e diferente
+  // (cavalaria leve x lanceiro), entao a viagem e diferente, entao a SAIDA tem que ser
+  // diferente. Ver as duas colunas lado a lado, com origens de distancias variadas, e o jeito
+  // mais rapido de perceber que a conta escorregou: se duas linhas com viagens diferentes
+  // mostram a mesma saida, tem defeito.
+
+  // Composicao do ensaio. Uma unidade de cada, de proposito: o que se afere e o TEMPO, e o
+  // tempo sai da unidade mais lenta do comando. Cavalaria leve (ataque) e lanceiro (apoio) tem
+  // velocidades diferentes — e essa diferenca e justamente o que a tabela precisa exibir.
+  const CC_ENSAIO_ATQ = { light: 1 };
+  const CC_ENSAIO_APO = { spear: 1 };
+  const CC_ENSAIO_N_PADRAO = 5;
+
+  // Alvo do ensaio: o que estiver digitado no campo Alvo; senao, a barbara mais proxima da sua
+  // aldeia atual. Nunca uma aldeia de jogador escolhida por mim — mirar alguem sem querer, mesmo
+  // em ensaio seco, e o tipo de acidente que nao se desfaz depois de armar de verdade.
+  async function ccEnsaioAlvo() {
+    const digitado = (typeof ccAlvo === 'function') ? ccAlvo() : null;
+    if (digitado) return { x: +digitado.x, y: +digitado.y, fonte: 'campo Alvo' };
+    const eu = CCVILAS.find((v) => String(v.vid) === String(CUR_VID)) || CCVILAS[0];
+    if (!eu || eu.x == null) throw new Error('não sei onde você está — abra a praça de reunião');
+    const barbs = (await getMapVillages()).filter((v) => v.player === '0');
+    if (!barbs.length) throw new Error('nenhuma bárbara no village.txt pra usar de alvo');
+    let alvo = null, melhor = Infinity;
+    barbs.forEach((b) => { const d = fieldDist(eu.x, eu.y, +b.x, +b.y); if (d < melhor) { melhor = d; alvo = b; } });
+    return { x: +alvo.x, y: +alvo.y, fonte: 'bárbara mais próxima' };
+  }
+
+  // Monta o plano. NAO toca na fila, NAO faz requisicao de envio — so calcula.
+  async function ccEnsaioMontar(n) {
+    n = Math.max(1, Math.min(12, n || CC_ENSAIO_N_PADRAO));
+    if (!CCVILAS.length) throw new Error('a lista de aldeias ainda não carregou — espere a praça abrir');
+    const alvo = await ccEnsaioAlvo();
+    // Origens: as N mais PROXIMAS do alvo que tenham coordenada. Mais proximas primeiro porque e
+    // assim que o armar de verdade escolhe — o ensaio tem que ensaiar a mesma escolha.
+    const origens = CCVILAS
+      .filter((v) => v.x != null && !(v.x === alvo.x && v.y === alvo.y))
+      .map((v) => ({ v: v, d: fieldDist(v.x, v.y, alvo.x, alvo.y) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, n);
+    if (!origens.length) throw new Error('nenhuma aldeia sua com coordenada conhecida');
+
+    // A chegada: a mais lenta de todas MAIS uma folga. Precisa caber a viagem mais longa, senao
+    // a saida daria no passado e o ensaio mostraria numero negativo em vez de plano.
+    let maisLenta = 0;
+    origens.forEach((o) => {
+      [CC_ENSAIO_ATQ, CC_ENSAIO_APO].forEach((amt) => {
+        const t = ccTempoViagemMs(o.v.x, o.v.y, alvo.x, alvo.y, amt) || 0;
+        if (t > maisLenta) maisLenta = t;
+      });
+    });
+    const chegada = srvNowP() + maisLenta + 10 * 60000;   // 10 min de folga sobre a mais lenta
+
+    const linhas = [];
+    origens.forEach((o) => {
+      [['attack', CC_ENSAIO_ATQ, '⚔ ataque'], ['support', CC_ENSAIO_APO, '🛡 apoio']].forEach(([tipo, amt, rot]) => {
+        const viagem = ccTempoViagemMs(o.v.x, o.v.y, alvo.x, alvo.y, amt);
+        linhas.push({
+          tipo: tipo, rot: rot, vid: o.v.vid,
+          nome: (o.v.nome || '') + ' ' + (o.v.coord || ''),
+          dist: Math.round(o.d * 10) / 10,
+          viagem: viagem, saida: (viagem != null) ? (chegada - viagem) : null,
+          amounts: amt,
+        });
+      });
+    });
+    // Ordena pela SAIDA: e a ordem em que as coisas realmente acontecem, e a unica em que da
+    // pra conferir a olho se o escalonamento faz sentido.
+    linhas.sort((a, b) => (a.saida || 0) - (b.saida || 0));
+    return { alvo: alvo, chegada: chegada, linhas: linhas, n: origens.length };
+  }
+
+  let _ccEnsaio = null;
+
+  async function ccEnsaioRodar() {
+    const box = document.getElementById('cc-ensaio-out');
+    const nEl = document.getElementById('cc-ensaio-n');
+    if (box) box.innerHTML = '<span class="twmgr-lbl">calculando…</span>';
+    let p;
+    try { p = await ccEnsaioMontar(parseInt(nEl && nEl.value, 10) || CC_ENSAIO_N_PADRAO); }
+    catch (e) { if (box) box.innerHTML = '<span style="color:#c0483a;font-size:10px">' + esc(e.message || e) + '</span>'; return; }
+    _ccEnsaio = p;
+    ccEnsaioRender();
+  }
+
+  function ccEnsaioRender() {
+    const box = document.getElementById('cc-ensaio-out'); if (!box) return;
+    if (!_ccEnsaio) { box.innerHTML = ''; return; }
+    const p = _ccEnsaio;
+    const hhmm = (ms) => (ms == null ? '—' : srvClockMs(ms));
+    const dur = (ms) => {
+      if (ms == null) return '—';
+      const s = Math.round(ms / 1000);
+      return Math.floor(s / 3600) + ':' + String(Math.floor((s % 3600) / 60)).padStart(2, '0')
+        + ':' + String(s % 60).padStart(2, '0');
+    };
+    // Conferencia automatica: viagens diferentes TEM que dar saidas diferentes. Se nao derem, a
+    // conta escorregou — e melhor a tela dizer isso do que esperar o usuario reparar.
+    const porViagem = {};
+    p.linhas.forEach((l) => { if (l.viagem != null) porViagem[l.viagem] = (porViagem[l.viagem] || 0) + 1; });
+    const saidasDistintas = Object.keys(p.linhas.reduce((m, l) => { m[l.saida] = 1; return m; }, {})).length;
+    const viagensDistintas = Object.keys(porViagem).length;
+    const coerente = saidasDistintas === viagensDistintas;
+    const semViagem = p.linhas.filter((l) => l.viagem == null).length;
+
+    box.innerHTML =
+      '<div style="font-size:10px;color:#6f6153;margin-bottom:4px">' +
+        '<b>' + p.linhas.length + '</b> comando(s) de ' + p.n + ' aldeia(s) → <b>' + p.alvo.x + '|' + p.alvo.y + '</b> ' +
+        '<span style="color:#8a7d6d">(' + esc(p.alvo.fonte) + ')</span> · todos chegando <b>' + hhmm(p.chegada) + '</b>' +
+      '</div>' +
+      (semViagem
+        ? '<div style="font-size:10px;color:#c0483a;margin-bottom:4px">⚠ ' + semViagem
+          + ' linha(s) sem tempo de viagem — o cálculo local não resolveu essa origem.</div>'
+        : '<div style="font-size:10px;color:' + (coerente ? '#2e7d3a' : '#c0483a') + ';margin-bottom:4px">' +
+          (coerente
+            ? '✔ coerente: ' + viagensDistintas + ' viagem(ns) distinta(s) → ' + saidasDistintas + ' saída(s) distinta(s)'
+            : '✕ INCOERENTE: ' + viagensDistintas + ' viagem(ns) distinta(s) mas ' + saidasDistintas
+              + ' saída(s) — comandos com viagens diferentes deveriam sair em horas diferentes') +
+          '</div>') +
+      '<table class="twmgr-bld-tab" style="width:100%">' +
+      '<thead><tr><th style="width:52px">tipo</th><th>origem</th><th style="width:44px">dist</th>' +
+      '<th style="width:64px">viagem</th><th style="width:92px">sai</th><th style="width:92px">chega</th></tr></thead><tbody>' +
+      p.linhas.map((l, i) =>
+        '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
+        '<td style="white-space:nowrap">' + l.rot + '</td>' +
+        '<td>' + esc(l.nome) + '</td>' +
+        '<td>' + l.dist + '</td>' +
+        '<td style="font-variant-numeric:tabular-nums">' + dur(l.viagem) + '</td>' +
+        '<td style="font-variant-numeric:tabular-nums">' + hhmm(l.saida) + '</td>' +
+        '<td style="font-variant-numeric:tabular-nums;color:#8a7d6d">' + hhmm(p.chegada) + '</td>' +
+        '</tr>').join('') +
+      '</tbody></table>' +
+      '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Ensaio SECO: nada foi armado e nada vai sair. ' +
+      'Ataque leva cavalaria leve, apoio leva lanceiro — velocidades diferentes de propósito, pra a coluna "sai" ter o que provar.</div>';
+    const bt = document.getElementById('cc-ensaio-armar');
+    if (bt) bt.style.display = 'inline-block';
+  }
+
+  // ARMAR DE VERDADE — botao separado, e so aparece depois do ensaio seco. Marca cada comando
+  // com `_ensaio` pra o "limpar" saber o que e dele e nao encostar no que voce armou a mao.
+  function ccEnsaioArmar() {
+    if (!_ccEnsaio) return;
+    const p = _ccEnsaio;
+    if (!confirm('Armar de VERDADE os ' + p.linhas.length + ' comando(s) do ensaio?\n\n'
+      + 'Alvo: ' + p.alvo.x + '|' + p.alvo.y + '\n'
+      + 'Chegada: ' + srvClockMs(p.chegada) + '\n\n'
+      + 'Eles entram na fila e o motor VAI DISPARAR na hora calculada — a primeira saída é\n'
+      + srvClockMs(p.linhas[0].saida) + '. Pra desistir, use "🧹 limpar ensaio" antes disso.')) return;
+    let n = 0;
+    p.linhas.forEach((l) => {
+      const c = cmdAdicionar(l.tipo, String(p.alvo.x), String(p.alvo.y), l.amounts, p.chegada, l.vid, null);
+      if (c) { c._ensaio = true; n++; }
+    });
+    save();
+    pushLog('🧪 Ensaio: ' + n + ' comando(s) armado(s) de verdade → ' + p.alvo.x + '|' + p.alvo.y
+      + ', chegando ' + srvClockMs(p.chegada) + '. Use "limpar ensaio" pra cancelar antes da saída.', 'ok', 'cmd');
+    const bt = document.getElementById('cc-ensaio-limpar');
+    if (bt) bt.style.display = 'inline-block';
+    ccRender();
+  }
+
+  // Tira da fila SO o que o ensaio armou, e so o que ainda nao saiu. Comando ja enviado nao se
+  // desarma tirando da lista — pra aquele o caminho e o cancelamento do jogo.
+  function ccEnsaioLimpar() {
+    const antes = cmdFila().length;
+    const presos = cmdFila().filter((c) => c._ensaio && c.state === 'enviado').length;
+    config.cmd.fila = cmdFila().filter((c) => !(c._ensaio && c.state !== 'enviado'));
+    save();
+    const tirados = antes - cmdFila().length;
+    pushLog('🧪 Ensaio: ' + tirados + ' comando(s) do ensaio tirados da fila.'
+      + (presos ? ' ' + presos + ' já tinham SAÍDO — esses só o cancelamento do jogo desfaz.' : ''),
+      presos ? 'err' : 'ok', 'cmd');
+    ccRender();
+  }
   // ==================== CENTRO DE COMANDO — PAINEL: monta o HTML, injeta nas telas do jogo, e FECHA a ilha ====================
   // Parte da ILHA do Centro de Comando. A ilha e UMA IIFE aninhada que ABRE em
-  // 171-cc-nucleo.js e FECHA em 178-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
+  // 171-cc-nucleo.js e FECHA em 179-cc-painel.js: nenhum arquivo do meio abre ou fecha chave
   // de IIFE. Todos partilham o mesmo escopo lexico, entao uma funcao daqui enxerga as dos
   // outros naturalmente — funcoes sao icadas, e os const/let de topo vivem no nucleo, que vem
   // primeiro justamente por isso.
@@ -21429,27 +21644,6 @@
         '<div id="cc-corpo">' +
         '<div id="cc-saude" style="font-size:10px;color:#6f6153;margin-bottom:4px"></div>' +
         '<div id="cc-silencio" style="font-size:10px;color:#a2643a;margin-bottom:4px;min-height:12px"></div>' +
-        // Ajuste de precisão: o viés adaptativo (ccMedir) deveria corrigir sozinho, mas dá pra
-        // forçar aqui. "Atrasar chegada" positivo = chega mais tarde (corrige quando sai adiantado).
-        '<div style="font-size:10px;color:#8a7d6d;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
-          '<span title="Se os comandos chegam ADIANTADOS, aumente. Se atrasados, use negativo. Some ao viés que o sistema mede sozinho.">Atrasar chegada <input id="cc-atraso" class="twmgr-inp" type="number" step="10" style="width:60px;font-size:10px;padding:1px">ms</span>' +
-          '<span style="color:#584526">(+ = mais tarde)</span>' +
-          '<span id="cc-vies" style="margin-left:auto"></span>' +
-        '</div>' +
-        // CALIBRACAO (177-cc-calibrar). Fica no topo, colada no ajuste de precisao, porque as
-        // duas mexem no MESMO numero: o `Atrasar chegada` e a correcao manual, isto aqui e a
-        // medida. Ver o vies ao lado do botao que o mede e o que impede o usuario de ficar
-        // chutando o ajuste manual sem nunca ter medido nada.
-        '<div style="font-size:10px;border:1px solid #e6dcc9;border-radius:6px;padding:6px;margin-bottom:8px;background:#fffdf8">' +
-          '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
-            '<b style="color:#a2643a">🎯 Calibração do agendador</b>' +
-            '<button id="cc-calib-go" class="twmgr-btn" style="font-size:10px;padding:1px 8px" ' +
-              'title="Manda comandos REAIS (1 explorador numa bárbara), mede a chegada que o servidor carimbou e cancela cada um em seguida.">Calibrar agora</button>' +
-            '<span style="color:#8a7d6d">amostras <input id="cc-calib-n" class="twmgr-inp" type="number" min="1" max="6" value="3" style="width:38px;font-size:10px;padding:1px"></span>' +
-          '</div>' +
-          '<div id="cc-calib-estado" style="margin-top:4px;line-height:1.45"></div>' +
-          '<div id="cc-calib-msg" style="margin-top:3px;color:#6f6153"></div>' +
-        '</div>' +
         row('Alvo',
           '<input id="cc-alvo" class="twmgr-inp" style="width:130px;font-variant-numeric:tabular-nums" placeholder="478|586">' +
           '<span id="cc-alvo-ok" style="font-size:10px;color:#8a7d6d"></span>', 'cc-row-alvo') +
@@ -21484,7 +21678,15 @@
             'border:1px solid #e0d6c6;border-bottom:none;border-radius:6px 6px 0 0;font-size:11px;user-select:none">' +
             t.ico + ' ' + t.rot + '</div>').join('') +
         '</div>' +
-        '<div id="cc-aba-corpo" style="border:1px solid #e0d6c6;border-radius:0 6px 6px 6px;padding:8px;margin-bottom:8px">' +
+        // ROLAGEM INTERNA no corpo da aba. Sem isto ele chegava a 552px sozinho (medido na aba
+        // Ataque em massa) e empurrava o botao "Armar" pra fora da tela: voce configurava aqui,
+        // rolava a PAGINA pra achar o botao, e rolava de volta pra corrigir o alvo. Era o
+        // vai-e-volta reclamado.
+        //
+        // Com `max-height` + `overflow-y:auto`, o painel inteiro cabe numa tela e o botao fica
+        // sempre visivel — quem rola e o miolo, nao a pagina. `resize:vertical` deixa quem quiser
+        // esticar (a aba Operacao com muitas ondas agradece), e o navegador lembra do tamanho.
+        '<div id="cc-aba-corpo" style="border:1px solid #e0d6c6;border-radius:0 6px 6px 6px;padding:8px;margin-bottom:8px;max-height:360px;overflow-y:auto;resize:vertical">' +
           '<div id="cc-aba-hint" style="font-size:10px;color:#8a7d6d;margin-bottom:6px"></div>' +
         // Fake: dezenas de alvos de uma vez, com duas distribuições possíveis.
         '<div id="cc-fake-cfg" style="display:none">' +
@@ -21622,6 +21824,54 @@
           '</div>' +
         '</div>' +   // fim de #cc-aba-corpo
         // Tropas digitadas AQUI, não nas caixas do jogo. "tudo" = manda o estoque inteiro daquela origem.
+        // AJUSTES DE PRECISAO — recolhidos, e no FIM do painel.
+        //
+        // Eles estavam no TOPO, empurrando as abas 140px pra baixo. Mas sao SETUP: voce mexe
+        // no vies uma vez e esquece. O que voce usa toda vez (escolher a aba, o alvo, armar) e
+        // que tem que estar a mao. <details> fechado guarda o valor sem custar altura.
+        '<details style="margin-top:8px">' +
+          '<summary style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer;outline:none">⚙ Ajustes de precisao <span id="cc-vies-resumo" style="color:#8a7d6d;font-weight:400"></span></summary>' +
+          '<div style="padding-top:6px">' +
+          // Ajuste de precisão: o viés adaptativo (ccMedir) deveria corrigir sozinho, mas dá pra
+          // forçar aqui. "Atrasar chegada" positivo = chega mais tarde (corrige quando sai adiantado).
+          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+            '<span title="Se os comandos chegam ADIANTADOS, aumente. Se atrasados, use negativo. Some ao viés que o sistema mede sozinho.">Atrasar chegada <input id="cc-atraso" class="twmgr-inp" type="number" step="10" style="width:60px;font-size:10px;padding:1px">ms</span>' +
+            '<span style="color:#584526">(+ = mais tarde)</span>' +
+            '<span id="cc-vies" style="margin-left:auto"></span>' +
+          '</div>' +
+          // CALIBRACAO (177-cc-calibrar). Fica no topo, colada no ajuste de precisao, porque as
+          // duas mexem no MESMO numero: o `Atrasar chegada` e a correcao manual, isto aqui e a
+          // medida. Ver o vies ao lado do botao que o mede e o que impede o usuario de ficar
+          // chutando o ajuste manual sem nunca ter medido nada.
+          '<div style="font-size:10px;border:1px solid #e6dcc9;border-radius:6px;padding:6px;margin-bottom:8px;background:#fffdf8">' +
+            '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+              '<b style="color:#a2643a">🎯 Calibração do agendador</b>' +
+              '<button id="cc-calib-go" class="twmgr-btn" style="font-size:10px;padding:1px 8px" ' +
+                'title="Manda comandos REAIS (1 explorador numa bárbara), mede a chegada que o servidor carimbou e cancela cada um em seguida.">Calibrar agora</button>' +
+              '<span style="color:#8a7d6d">amostras <input id="cc-calib-n" class="twmgr-inp" type="number" min="1" max="6" value="3" style="width:38px;font-size:10px;padding:1px"></span>' +
+            '</div>' +
+            '<div id="cc-calib-estado" style="margin-top:4px;line-height:1.45"></div>' +
+            '<div id="cc-calib-msg" style="margin-top:3px;color:#6f6153"></div>' +
+          '</div>' +
+        // ENSAIO (178-cc-ensaio). Mora colado na calibracao porque as duas sao AFERICAO: uma
+        // mede o lead, a outra confere a conta de viagem/saida. Nenhuma das duas e coisa que
+        // voce usa pra jogar — por isso as duas ficam neste bloco recolhido, e nao no caminho
+        // de quem so quer armar um comando.
+        '<div style="font-size:10px;border:1px solid #e6dcc9;border-radius:6px;padding:6px;margin-top:6px;background:#fffdf8">' +
+          '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+            '<b style="color:#a2643a">🧪 Ensaio de operação</b>' +
+            '<button id="cc-ensaio-go" class="twmgr-btn" style="font-size:10px;padding:1px 8px" ' +
+              'title="Programa ataque E apoio das N aldeias mais próximas do alvo, todos chegando junto. SECO: não arma nada, não sai nada.">Ensaiar</button>' +
+            '<span style="color:#8a7d6d">aldeias <input id="cc-ensaio-n" class="twmgr-inp" type="number" min="1" max="12" value="5" style="width:38px;font-size:10px;padding:1px"></span>' +
+            '<button id="cc-ensaio-armar" class="twmgr-btn twmgr-ghost" style="font-size:10px;padding:1px 8px;display:none" ' +
+              'title="Põe o ensaio na fila DE VERDADE — o motor vai disparar na hora calculada.">▶ armar de verdade</button>' +
+            '<button id="cc-ensaio-limpar" class="twmgr-btn twmgr-ghost" style="font-size:10px;padding:1px 8px;display:none" ' +
+              'title="Tira da fila só o que o ensaio armou.">🧹 limpar ensaio</button>' +
+          '</div>' +
+          '<div id="cc-ensaio-out" style="margin-top:5px;max-height:260px;overflow-y:auto"></div>' +
+          '</div>' +
+          '</div>' +
+        '</details>' +
         '<div id="cc-tropas-sec" style="margin:8px 0 4px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
             '<span data-sec="tropas" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Tropas por origem</span>' +
@@ -21899,6 +22149,13 @@
         ccCalibIniciar(parseInt(nEl && nEl.value, 10) || 3);
       });
       ccCalibRender();
+      // Ensaio: seco no clique principal; armar e limpar são botões separados e explícitos.
+      const ensGo = document.getElementById('cc-ensaio-go');
+      if (ensGo) ensGo.addEventListener('click', () => ccEnsaioRodar());
+      const ensArm = document.getElementById('cc-ensaio-armar');
+      if (ensArm) ensArm.addEventListener('click', () => ccEnsaioArmar());
+      const ensLim = document.getElementById('cc-ensaio-limpar');
+      if (ensLim) ensLim.addEventListener('click', () => ccEnsaioLimpar());
       // Ajuste manual de saída. O campo é "atrasar chegada" (intuitivo): positivo = chega mais
       // tarde, então guardo o NEGATIVO em ajusteMs (que soma ao lead = adianta a saída).
       const atrasoEl = document.getElementById('cc-atraso');

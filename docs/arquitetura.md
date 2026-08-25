@@ -5,7 +5,7 @@ title: Arquitetura
 
 # Arquitetura
 
-Como 33 arquivos viram um userscript, e as cinco regras que *todo* módulo obedece.
+Como 34 arquivos viram um userscript, e as cinco regras que *todo* módulo obedece.
 
 ---
 
@@ -17,7 +17,7 @@ reordena, não conserta nada. O que está em `src/` é o que vai pro ar.
 ```mermaid
 flowchart LR
   A["010-core.js<br/>ABRE a IIFE"] --> B["020 … 170<br/>módulos"]
-  B --> C["171 … 178<br/>ilha do Centro de Comando"]
+  B --> C["171 … 179<br/>ilha do Centro de Comando"]
   C --> D["180-centro-comando.js<br/>FECHA a IIFE + bootstrap"]
   D --> E["tw-manager.user.js"]
 ```
@@ -34,14 +34,14 @@ Consequências que importam:
 
 ### A ilha isolada
 
-`171` a `178` formam uma **IIFE aninhada** — o Centro de Comando rico. Ela **abre** em
-`171-cc-nucleo.js` e **fecha** em `178-cc-painel.js`; nenhum arquivo do meio mexe em chave
+`171` a `179` formam uma **IIFE aninhada** — o Centro de Comando rico. Ela **abre** em
+`171-cc-nucleo.js` e **fecha** em `179-cc-painel.js`; nenhum arquivo do meio mexe em chave
 de IIFE.
 
 Existe pra os ~465 nomes internos (`cc*`/`cmd*`) não colidirem com o Centro de Comando novo
 do v11 (`180`, também `cc*`). A ilha herda os helpers do escopo externo por closure.
 
-> Regra do corte: **só função se move** entre os sete arquivos. Todo `const`/`let` de topo
+> Regra do corte: **só função se move** entre os arquivos da ilha. Todo `const`/`let` de topo
 > vive no núcleo, na ordem original — inicializador que executa
 > (`const _mchan = new MessageChannel()`) depende da ordem do arquivo.
 

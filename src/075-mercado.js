@@ -399,6 +399,18 @@
       st.forEach((s) => {
         const eff = s.cur[r] + chegando(s, r);
         const dB = demB[s.vid], dR = demR[s.vid];
+        // Nivel 0 — CONSTRUCAO URGENTE. Fazenda/Armazem que dispararam o gatilho de lotacao do
+        // modelo ("sobrou menos de X%"). Sao os dois casos em que esperar CUSTA A CADA HORA:
+        // fazenda cheia trava o recrutamento da aldeia inteira, armazem cheio joga producao fora.
+        // Nenhum outro edificio tem esse custo de espera, entao nenhum outro merece este nivel.
+        //
+        // O criterio nao e "e Fazenda?" — e o gatilho, que ja mediu a lotacao real. Fazenda
+        // urgente e Fazenda que calhou de ser o proximo item do modelo sao coisas diferentes.
+        if (dB && dB.cost && dB.urgente && (dB.cost[r] || 0) > eff) {
+          receivers.push({ s: s, prio: 0, def: (dB.cost[r] || 0) - eff, falta: 1, urgente: true,
+                           motivo: (BUILD_META[dB.b] && BUILD_META[dB.b].name) || dB.b });
+          return;
+        }
         // Nivel 1 — CONSTRUCAO TRAVADA. Alvo = o que falta pra DESBLOQUEAR, nao uma %.
         if (dB && dB.cost && (dB.cost[r] || 0) > eff) {
           receivers.push({ s: s, prio: 1, def: (dB.cost[r] || 0) - eff, falta: 1,
@@ -466,7 +478,8 @@
             pushLog('Equilíbrio: ' + don.s.name + ' → ' + rec.s.coord + ' (' + amount + ' ' + ({ wood: 'madeira', stone: 'argila', iron: 'ferro' }[r]) + ')'
               // O MOTIVO no log de envio. Sem ele, a mudança de prioridade fica invisível: as
               // linhas saem iguais e não dá pra conferir se a trava de construção foi atendida.
-              + (rec.prio === 1 ? ' — 🔨 destrava ' + rec.motivo + ' em ' + rec.s.name
+              + (rec.prio === 0 ? ' — 🚨 ' + rec.motivo + ' URGENTE em ' + rec.s.name
+               : rec.prio === 1 ? ' — 🔨 destrava ' + rec.motivo + ' em ' + rec.s.name
                : rec.prio === 2 ? ' — ⚔ recrutar' : ''), 'ok', 'market');
             await sleep(400 + Math.floor(Math.random() * 300));
           } catch (e) { pushLog('Equilíbrio em ' + don.s.name + ': ' + (e.message || e), 'err', 'market'); }

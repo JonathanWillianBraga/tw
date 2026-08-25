@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.228.0
+// @version      11.229.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.228.0';
+  const VERSION = '11.229.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5138,6 +5138,18 @@
       st.forEach((s) => {
         const eff = s.cur[r] + chegando(s, r);
         const dB = demB[s.vid], dR = demR[s.vid];
+        // Nivel 0 — CONSTRUCAO URGENTE. Fazenda/Armazem que dispararam o gatilho de lotacao do
+        // modelo ("sobrou menos de X%"). Sao os dois casos em que esperar CUSTA A CADA HORA:
+        // fazenda cheia trava o recrutamento da aldeia inteira, armazem cheio joga producao fora.
+        // Nenhum outro edificio tem esse custo de espera, entao nenhum outro merece este nivel.
+        //
+        // O criterio nao e "e Fazenda?" — e o gatilho, que ja mediu a lotacao real. Fazenda
+        // urgente e Fazenda que calhou de ser o proximo item do modelo sao coisas diferentes.
+        if (dB && dB.cost && dB.urgente && (dB.cost[r] || 0) > eff) {
+          receivers.push({ s: s, prio: 0, def: (dB.cost[r] || 0) - eff, falta: 1, urgente: true,
+                           motivo: (BUILD_META[dB.b] && BUILD_META[dB.b].name) || dB.b });
+          return;
+        }
         // Nivel 1 — CONSTRUCAO TRAVADA. Alvo = o que falta pra DESBLOQUEAR, nao uma %.
         if (dB && dB.cost && (dB.cost[r] || 0) > eff) {
           receivers.push({ s: s, prio: 1, def: (dB.cost[r] || 0) - eff, falta: 1,
@@ -5205,7 +5217,8 @@
             pushLog('Equilíbrio: ' + don.s.name + ' → ' + rec.s.coord + ' (' + amount + ' ' + ({ wood: 'madeira', stone: 'argila', iron: 'ferro' }[r]) + ')'
               // O MOTIVO no log de envio. Sem ele, a mudança de prioridade fica invisível: as
               // linhas saem iguais e não dá pra conferir se a trava de construção foi atendida.
-              + (rec.prio === 1 ? ' — 🔨 destrava ' + rec.motivo + ' em ' + rec.s.name
+              + (rec.prio === 0 ? ' — 🚨 ' + rec.motivo + ' URGENTE em ' + rec.s.name
+               : rec.prio === 1 ? ' — 🔨 destrava ' + rec.motivo + ' em ' + rec.s.name
                : rec.prio === 2 ? ' — ⚔ recrutar' : ''), 'ok', 'market');
             await sleep(400 + Math.floor(Math.random() * 300));
           } catch (e) { pushLog('Equilíbrio em ' + don.s.name + ': ' + (e.message || e), 'err', 'market'); }
@@ -6266,7 +6279,17 @@
         else r = computeBuild(stEff, plan);
         if (!r.build) {
           if (r.demand) {
-            config.build.demand[vid] = { b: r.demand.b, cost: r.demand.cost, coord: alvo.coord };
+            // `urgente` VIAJA JUNTO. Ele nasce de bldPrioridadeCondicional, que ja mediu a
+            // lotacao real ("sobrou menos de X% de populacao/armazem") e por isso FURA a ordem
+            // do modelo aqui dentro. Ate agora essa urgencia morria neste ponto: a demanda saia
+            // com a mesma cara de um item comum de fila, e quem le la fora (o Equilibrio) nao
+            // tinha como saber que aquela Fazenda trava o recrutamento da aldeia inteira, ou que
+            // aquele Armazem esta jogando recurso fora a cada hora.
+            //
+            // E uma informacao que so existe aqui: e medicao de estado, nao tipo de edificio.
+            // Fazenda urgente e diferente de Fazenda que calhou de ser o proximo item do modelo.
+            config.build.demand[vid] = { b: r.demand.b, cost: r.demand.cost, coord: alvo.coord,
+                                         urgente: !!urgente };
             // Só reclama de falta de recurso se não conseguiu enfileirar NADA — depois de encher
             // uns slots, parar por falta de recurso é o comportamento esperado, não um aviso.
             if (!postos.length) {

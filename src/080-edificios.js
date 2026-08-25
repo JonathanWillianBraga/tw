@@ -664,7 +664,17 @@
         else r = computeBuild(stEff, plan);
         if (!r.build) {
           if (r.demand) {
-            config.build.demand[vid] = { b: r.demand.b, cost: r.demand.cost, coord: alvo.coord };
+            // `urgente` VIAJA JUNTO. Ele nasce de bldPrioridadeCondicional, que ja mediu a
+            // lotacao real ("sobrou menos de X% de populacao/armazem") e por isso FURA a ordem
+            // do modelo aqui dentro. Ate agora essa urgencia morria neste ponto: a demanda saia
+            // com a mesma cara de um item comum de fila, e quem le la fora (o Equilibrio) nao
+            // tinha como saber que aquela Fazenda trava o recrutamento da aldeia inteira, ou que
+            // aquele Armazem esta jogando recurso fora a cada hora.
+            //
+            // E uma informacao que so existe aqui: e medicao de estado, nao tipo de edificio.
+            // Fazenda urgente e diferente de Fazenda que calhou de ser o proximo item do modelo.
+            config.build.demand[vid] = { b: r.demand.b, cost: r.demand.cost, coord: alvo.coord,
+                                         urgente: !!urgente };
             // Só reclama de falta de recurso se não conseguiu enfileirar NADA — depois de encher
             // uns slots, parar por falta de recurso é o comportamento esperado, não um aviso.
             if (!postos.length) {

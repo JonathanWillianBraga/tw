@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.226.0
+// @version      11.227.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.226.0';
+  const VERSION = '11.227.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -21824,54 +21824,6 @@
           '</div>' +
         '</div>' +   // fim de #cc-aba-corpo
         // Tropas digitadas AQUI, não nas caixas do jogo. "tudo" = manda o estoque inteiro daquela origem.
-        // AJUSTES DE PRECISAO — recolhidos, e no FIM do painel.
-        //
-        // Eles estavam no TOPO, empurrando as abas 140px pra baixo. Mas sao SETUP: voce mexe
-        // no vies uma vez e esquece. O que voce usa toda vez (escolher a aba, o alvo, armar) e
-        // que tem que estar a mao. <details> fechado guarda o valor sem custar altura.
-        '<details style="margin-top:8px">' +
-          '<summary style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer;outline:none">⚙ Ajustes de precisao <span id="cc-vies-resumo" style="color:#8a7d6d;font-weight:400"></span></summary>' +
-          '<div style="padding-top:6px">' +
-          // Ajuste de precisão: o viés adaptativo (ccMedir) deveria corrigir sozinho, mas dá pra
-          // forçar aqui. "Atrasar chegada" positivo = chega mais tarde (corrige quando sai adiantado).
-          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
-            '<span title="Se os comandos chegam ADIANTADOS, aumente. Se atrasados, use negativo. Some ao viés que o sistema mede sozinho.">Atrasar chegada <input id="cc-atraso" class="twmgr-inp" type="number" step="10" style="width:60px;font-size:10px;padding:1px">ms</span>' +
-            '<span style="color:#584526">(+ = mais tarde)</span>' +
-            '<span id="cc-vies" style="margin-left:auto"></span>' +
-          '</div>' +
-          // CALIBRACAO (177-cc-calibrar). Fica no topo, colada no ajuste de precisao, porque as
-          // duas mexem no MESMO numero: o `Atrasar chegada` e a correcao manual, isto aqui e a
-          // medida. Ver o vies ao lado do botao que o mede e o que impede o usuario de ficar
-          // chutando o ajuste manual sem nunca ter medido nada.
-          '<div style="font-size:10px;border:1px solid #e6dcc9;border-radius:6px;padding:6px;margin-bottom:8px;background:#fffdf8">' +
-            '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
-              '<b style="color:#a2643a">🎯 Calibração do agendador</b>' +
-              '<button id="cc-calib-go" class="twmgr-btn" style="font-size:10px;padding:1px 8px" ' +
-                'title="Manda comandos REAIS (1 explorador numa bárbara), mede a chegada que o servidor carimbou e cancela cada um em seguida.">Calibrar agora</button>' +
-              '<span style="color:#8a7d6d">amostras <input id="cc-calib-n" class="twmgr-inp" type="number" min="1" max="6" value="3" style="width:38px;font-size:10px;padding:1px"></span>' +
-            '</div>' +
-            '<div id="cc-calib-estado" style="margin-top:4px;line-height:1.45"></div>' +
-            '<div id="cc-calib-msg" style="margin-top:3px;color:#6f6153"></div>' +
-          '</div>' +
-        // ENSAIO (178-cc-ensaio). Mora colado na calibracao porque as duas sao AFERICAO: uma
-        // mede o lead, a outra confere a conta de viagem/saida. Nenhuma das duas e coisa que
-        // voce usa pra jogar — por isso as duas ficam neste bloco recolhido, e nao no caminho
-        // de quem so quer armar um comando.
-        '<div style="font-size:10px;border:1px solid #e6dcc9;border-radius:6px;padding:6px;margin-top:6px;background:#fffdf8">' +
-          '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
-            '<b style="color:#a2643a">🧪 Ensaio de operação</b>' +
-            '<button id="cc-ensaio-go" class="twmgr-btn" style="font-size:10px;padding:1px 8px" ' +
-              'title="Programa ataque E apoio das N aldeias mais próximas do alvo, todos chegando junto. SECO: não arma nada, não sai nada.">Ensaiar</button>' +
-            '<span style="color:#8a7d6d">aldeias <input id="cc-ensaio-n" class="twmgr-inp" type="number" min="1" max="12" value="5" style="width:38px;font-size:10px;padding:1px"></span>' +
-            '<button id="cc-ensaio-armar" class="twmgr-btn twmgr-ghost" style="font-size:10px;padding:1px 8px;display:none" ' +
-              'title="Põe o ensaio na fila DE VERDADE — o motor vai disparar na hora calculada.">▶ armar de verdade</button>' +
-            '<button id="cc-ensaio-limpar" class="twmgr-btn twmgr-ghost" style="font-size:10px;padding:1px 8px;display:none" ' +
-              'title="Tira da fila só o que o ensaio armou.">🧹 limpar ensaio</button>' +
-          '</div>' +
-          '<div id="cc-ensaio-out" style="margin-top:5px;max-height:260px;overflow-y:auto"></div>' +
-          '</div>' +
-          '</div>' +
-        '</details>' +
         '<div id="cc-tropas-sec" style="margin:8px 0 4px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
             '<span data-sec="tropas" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Tropas por origem</span>' +
@@ -21922,7 +21874,17 @@
           '<label style="cursor:pointer" title="Na hora de preparar, se a origem tiver menos tropa do que foi pedido, manda o que tiver em vez de falhar. Cada comando na Fila pode sobrescrever isto individualmente.">' +
             '<input id="cc-parcial" type="checkbox"> enviar mesmo com tropa insuficiente (usa o que tiver disponível)</label>' +
         '</div>' +
-        '<div id="cc-armar-row" style="display:flex;gap:6px;align-items:center">' +
+        // A LINHA DE ACAO GRUDA NO PE DA TELA (`position:sticky; bottom:0`).
+        //
+        // Medido no jogo: na aba Ataque, o bloco de Origens sozinho tem 387px e fica ENTRE o
+        // corpo da aba e este botao. Em tela de notebook isso joga o "Armar" pra fora — voce
+        // configura em cima, rola pra achar o botao, e rola de volta pra conferir. Com sticky o
+        // botao acompanha a rolagem e some da vista nunca.
+        //
+        // O gradiente no fundo existe pra a linha nao ficar "flutuando" sobre o conteudo que
+        // passa por baixo dela: o texto entra num degrade em vez de cortar seco.
+        '<div id="cc-armar-row" style="display:flex;gap:6px;align-items:center;position:sticky;bottom:0;z-index:5;' +
+          'background:linear-gradient(180deg,rgba(253,250,245,0),#fdfaf5 45%);padding:8px 0 4px;border-top:1px solid #e0d6c6;margin-top:4px">' +
           '<button id="cc-prever" class="twmgr-btn twmgr-ghost" style="padding:5px 10px" title="roda o mesmo cálculo do Armar, mas sem entrar na fila — mostra origem, tropas, saída e chegada">👁 Prever</button>' +
           '<button id="cc-armar" class="twmgr-btn twmgr-go" style="flex:1">▶ Armar comando</button>' +
           '<button id="cc-diag" class="twmgr-btn twmgr-ghost" title="copia um relatório do estado interno pra área de transferência">🐛</button>' +
@@ -21934,6 +21896,54 @@
         '<div id="cc-msg" style="font-size:10px;margin-top:5px;min-height:12px"></div>' +
         '<div id="cc-previa" style="font-size:10px;margin-top:4px;max-height:220px;overflow-y:auto"></div>' +
         '<div id="cc-teste-out" style="font-size:10px;margin-top:3px"></div>' +
+        // AJUSTES DE PRECISAO — recolhidos, e no FIM do painel.
+        //
+        // Eles estavam no TOPO, empurrando as abas 140px pra baixo. Mas sao SETUP: voce mexe
+        // no vies uma vez e esquece. O que voce usa toda vez (escolher a aba, o alvo, armar) e
+        // que tem que estar a mao. <details> fechado guarda o valor sem custar altura.
+        '<details style="margin-top:8px">' +
+          '<summary style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer;outline:none">⚙ Ajustes de precisao <span id="cc-vies-resumo" style="color:#8a7d6d;font-weight:400"></span></summary>' +
+          '<div style="padding-top:6px">' +
+          // Ajuste de precisão: o viés adaptativo (ccMedir) deveria corrigir sozinho, mas dá pra
+          // forçar aqui. "Atrasar chegada" positivo = chega mais tarde (corrige quando sai adiantado).
+          '<div style="font-size:10px;color:#8a7d6d;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+            '<span title="Se os comandos chegam ADIANTADOS, aumente. Se atrasados, use negativo. Some ao viés que o sistema mede sozinho.">Atrasar chegada <input id="cc-atraso" class="twmgr-inp" type="number" step="10" style="width:60px;font-size:10px;padding:1px">ms</span>' +
+            '<span style="color:#584526">(+ = mais tarde)</span>' +
+            '<span id="cc-vies" style="margin-left:auto"></span>' +
+          '</div>' +
+          // CALIBRACAO (177-cc-calibrar). Fica no topo, colada no ajuste de precisao, porque as
+          // duas mexem no MESMO numero: o `Atrasar chegada` e a correcao manual, isto aqui e a
+          // medida. Ver o vies ao lado do botao que o mede e o que impede o usuario de ficar
+          // chutando o ajuste manual sem nunca ter medido nada.
+          '<div style="font-size:10px;border:1px solid #e6dcc9;border-radius:6px;padding:6px;margin-bottom:8px;background:#fffdf8">' +
+            '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+              '<b style="color:#a2643a">🎯 Calibração do agendador</b>' +
+              '<button id="cc-calib-go" class="twmgr-btn" style="font-size:10px;padding:1px 8px" ' +
+                'title="Manda comandos REAIS (1 explorador numa bárbara), mede a chegada que o servidor carimbou e cancela cada um em seguida.">Calibrar agora</button>' +
+              '<span style="color:#8a7d6d">amostras <input id="cc-calib-n" class="twmgr-inp" type="number" min="1" max="6" value="3" style="width:38px;font-size:10px;padding:1px"></span>' +
+            '</div>' +
+            '<div id="cc-calib-estado" style="margin-top:4px;line-height:1.45"></div>' +
+            '<div id="cc-calib-msg" style="margin-top:3px;color:#6f6153"></div>' +
+          '</div>' +
+        // ENSAIO (178-cc-ensaio). Mora colado na calibracao porque as duas sao AFERICAO: uma
+        // mede o lead, a outra confere a conta de viagem/saida. Nenhuma das duas e coisa que
+        // voce usa pra jogar — por isso as duas ficam neste bloco recolhido, e nao no caminho
+        // de quem so quer armar um comando.
+        '<div style="font-size:10px;border:1px solid #e6dcc9;border-radius:6px;padding:6px;margin-top:6px;background:#fffdf8">' +
+          '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+            '<b style="color:#a2643a">🧪 Ensaio de operação</b>' +
+            '<button id="cc-ensaio-go" class="twmgr-btn" style="font-size:10px;padding:1px 8px" ' +
+              'title="Programa ataque E apoio das N aldeias mais próximas do alvo, todos chegando junto. SECO: não arma nada, não sai nada.">Ensaiar</button>' +
+            '<span style="color:#8a7d6d">aldeias <input id="cc-ensaio-n" class="twmgr-inp" type="number" min="1" max="12" value="5" style="width:38px;font-size:10px;padding:1px"></span>' +
+            '<button id="cc-ensaio-armar" class="twmgr-btn twmgr-ghost" style="font-size:10px;padding:1px 8px;display:none" ' +
+              'title="Põe o ensaio na fila DE VERDADE — o motor vai disparar na hora calculada.">▶ armar de verdade</button>' +
+            '<button id="cc-ensaio-limpar" class="twmgr-btn twmgr-ghost" style="font-size:10px;padding:1px 8px;display:none" ' +
+              'title="Tira da fila só o que o ensaio armou.">🧹 limpar ensaio</button>' +
+          '</div>' +
+          '<div id="cc-ensaio-out" style="margin-top:5px;max-height:260px;overflow-y:auto"></div>' +
+          '</div>' +
+          '</div>' +
+        '</details>' +
         '<div style="margin-top:8px;border-top:1px solid #ece4d8;padding-top:6px">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">' +
             '<span data-sec="fila" style="font-size:10px;color:#8b5426;font-weight:600;cursor:pointer" title="recolher/expandir">▾ Fila <span id="cc-fila-n" style="color:#8a7d6d;font-weight:400"></span></span>' +

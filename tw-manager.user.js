@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.221.0
+// @version      11.222.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.221.0';
+  const VERSION = '11.222.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -19645,6 +19645,12 @@
         });
       });
       if (!tarefas.length) return diz('Nada pendente pra enviar — sugira a divisão ou preencha à mão.');
+      // Menos perigoso que o Apoio em massa (aqui a tropa esta escrita numero a numero no plano, na
+      // tela, e `b.enviados` impede reenvio), mas ainda e tropa saindo AGORA em lote. Pergunta antes,
+      // pelo mesmo padrao do resto do arquivo.
+      const nPed = Object.keys(tarefas.reduce((m, t) => { m[t.p.num] = 1; return m; }, {})).length;
+      if (!confirm('Enviar ' + tarefas.length + ' apoio(s) AGORA, cobrindo ' + nPed + ' pedido(s) da blindagem?\n\n'
+        + 'Sai na hora, não agenda.')) { diz('Cancelado — nada foi enviado.', '#6f6153'); return; }
       diz('Enviando ' + tarefas.length + ' apoio(s)… (não feche a praça)', '#6f6153');
       let ok = 0, falhas = 0;
       for (const t of tarefas) {
@@ -19774,6 +19780,29 @@
 
       const rotU = CC_UNIDADES_MUNDO || UNITS.map((u) => u[0]).filter((u) => u !== 'snob');
       const rotNome = {}; UNITS.forEach(([u, n]) => { rotNome[u] = n; });
+
+      // CONFIRMACAO. Este botao dispara AGORA e o numero de envios e `origens x alvos` -- sem teto.
+      // Marcar 40 origens e colar 20 alvos e um clique que solta 800 comandos, e no modo "tudo" e o
+      // exercito inteiro saindo de casa. Apoio volta, mas volta VIAGEM INTEIRA depois; enquanto isso
+      // a aldeia fica sem nada.
+      //
+      // Os dois vizinhos deste mesmo arquivo ja perguntam antes ("Agendar N comando(s)?" e "Agrupar
+      // N comando(s) em M trem(ns)?"); este era o unico do tipo que nao perguntava.
+      //
+      // A frase diz o que vai sair, nao "tem certeza?": quantidade de envios, e a tropa por extenso
+      // no modo em que ela foi pedida. "tudo" aparece em CAIXA ALTA porque e o modo em que o usuario
+      // nao tem numero nenhum na tela pra conferir.
+      const tropaTxt = Object.keys(spec).map((u) => {
+        const s = spec[u], nome = rotNome[u] || u;
+        return s.mode === 'all' ? (nome + ': TUDO') : s.mode === 'pct' ? (nome + ': ' + s.val + '%') : (nome + ': ' + s.val);
+      }).join(', ');
+      const nEnvios = marcadas.length * alvos.length;
+      if (!confirm('Enviar apoio AGORA — isto não agenda, sai na hora.\n\n'
+        + nEnvios + ' envio(s): ' + marcadas.length + ' origem(ns) × ' + alvos.length + ' alvo(s)\n'
+        + 'Tropa por envio: ' + tropaTxt + '\n'
+        + (dividir ? 'Dividindo a tropa entre os alvos.\n' : (alvos.length > 1 ? 'Cada alvo recebe a quantidade CHEIA (sem dividir).\n' : ''))
+        + '\nConfirma?')) { diz('Cancelado — nada foi enviado.', '#6f6153'); return; }
+
       diz('Enviando… (não feche a praça)', '#6f6153'); if (rel) rel.textContent = '';
       const linhas = []; const totais = {}; let enviados = 0, falhas = 0;
       for (const v of marcadas) {

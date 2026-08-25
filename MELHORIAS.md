@@ -1,6 +1,6 @@
 # Melhorias — backlog priorizado
 
-Revisão anterior em **2026-08-13**. Repassada em **2026-08-25** (v11.221.0), item por item,
+Revisão anterior em **2026-08-13**. Repassada em **2026-08-25** (v11.221.0 e v11.222.0), item a item,
 contra o código de hoje — quase 60 versões depois. Boa parte do arquivo antigo estava
 desatualizada; ver as duas seções de resolvidos.
 
@@ -22,7 +22,28 @@ contrato — as linhas andam, confira antes de mexer.
 
 ## Aberto
 
-### 1. `cmdTick()` não consulta `captchaBlocked()` na entrada — P1
+### 1. Apoio em massa manda a quantidade CHEIA pra cada alvo — P2
+
+`175-cc-rico.js` · `ccMassaEnviar` / `ccMassaResolver`
+
+Com "dividir" desmarcado, `resolvido` é calculado **uma vez** contra `v.avail` e cada alvo recebe
+uma cópia inteira. `v.avail` é um snapshot: não desconta o que já saiu. Então:
+
+- `50%` com 2 alvos → 50% + 50% = manda tudo. **É o que o usuário pediu**, funciona.
+- `tudo` com 2 alvos → tenta mandar 100% duas vezes. O primeiro leva, o segundo falha.
+- `60%` com 2 alvos → o segundo envio pede mais do que sobrou.
+
+Não é silencioso (as falhas aparecem no relatório com ✕) e não perde tropa — por isso P2 e não
+P0. Mas o relatório fica cheio de erro que parece bug do jogo, quando é a conta do próprio módulo.
+
+**Verificação:** lido `ccMassaResolver` (resolve contra `avail`), `ccMassaEnviar` (cópia por alvo,
+`avail` nunca decrementado entre envios). Confirmado no código.
+
+**Direção:** descontar do `avail` local a cada envio bem-sucedido, ou barrar na confirmação quando
+`pct × alvos > 100`. A confirmação já avisa *"Cada alvo recebe a quantidade CHEIA"* — o aviso é
+paliativo, não o conserto.
+
+### 2. `cmdTick()` não consulta `captchaBlocked()` na entrada — P1
 
 O `tools/check.py` cospe esse aviso **a cada build**, e ele está sendo convivido, não resolvido.
 Todo outro `*Tick` do repo testa captcha antes de agir; a Central não. Com captcha na tela, ela
@@ -36,7 +57,7 @@ passou a ignorar).
 exceção — registrar o motivo no código e tirar a regra do `check.py`. Aviso permanente que
 ninguém lê é pior que nenhum aviso: ele treina a gente a ignorar a saída do validador.
 
-### 2. Os `catch (e) {}` vazios, sem critério visível — P3
+### 3. Os `catch (e) {}` vazios, sem critério visível — P3
 
 Distribuídos pelo repo, com concentração em `175-cc-rico`, `020-engine` e `180-centro-comando`.
 
@@ -51,7 +72,25 @@ O vazio silencioso vira sinal de que ninguém pensou.
 
 ---
 
-## Resolvido nesta passada (v11.221.0)
+## Resolvido nesta passada (v11.222.0)
+
+### Apoio em massa disparava sem confirmação — P0
+
+`ccMassaEnviar` mandava direto no clique: `origens marcadas × alvos colados`, **sem teto e sem
+perguntar**. 40 origens e 20 alvos = 800 comandos num clique; no modo `tudo` é o exército inteiro
+saindo de casa. Apoio volta, mas volta viagem inteira depois — e até lá a aldeia está vazia.
+
+O agravante é que o padrão já existia **no mesmo arquivo**: `Agendar N comando(s)?` e `Agrupar N
+comando(s) em M trem(ns)?` perguntam antes. Esse era o único do tipo que não perguntava.
+
+A confirmação diz **o que vai sair** (nº de envios, origens × alvos, tropa por extenso no modo em
+que foi pedida) em vez de "tem certeza?". `TUDO` aparece em caixa alta porque é justamente o modo
+em que não há número nenhum na tela pra conferir. `ccBlzEnviar` (Blindagem) ganhou o mesmo — lá é
+menos grave, porque o plano está escrito número a número na tela e `b.enviados` impede reenvio.
+
+---
+
+## Resolvido na passada anterior (v11.221.0)
 
 ### Teto de cunhagem era por ALVO, não por ciclo — P0
 

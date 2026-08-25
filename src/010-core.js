@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.220.0
+// @version      11.221.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.220.0';
+  const VERSION = '11.221.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -610,13 +610,22 @@
     if (!c.build.plans) c.build.plans = { atk: null, def: null };
     if (!Array.isArray(c.build.plans.atk) || !c.build.plans.atk.length) c.build.plans.atk = tplToPlan(c.build.atkTpl || ATK_TPL);
     if (!Array.isArray(c.build.plans.def) || !c.build.plans.def.length) c.build.plans.def = tplToPlan(c.build.defTpl || DEF_TPL);
-    // Sanitiza: mantém só chaves válidas, clampa nível, preserva 'en'
-    ['atk', 'def'].forEach((k) => {
-      c.build.plans[k] = (c.build.plans[k] || []).filter((it) => it && BUILD_META[it.b]).map((it) => ({ b: it.b, lvl: Math.max(1, Math.min(BUILD_META[it.b].max, parseInt(it.lvl, 10) || 1)), en: it.en !== false }));
+    // Sanitiza CORRIGINDO NO LUGAR — nunca remontando `{b, lvl, en}` do zero.
+    //
+    // A versao antiga era `.map((it) => ({ b: it.b, lvl: ..., en: ... }))`: um molde de tres
+    // campos que RECONSTROI o item. Todo campo fora do molde morria a cada `load()`, ou seja, a
+    // cada F5 -- e, pior, tambem na IMPORTACAO DE BACKUP, calada. E a armadilha que o CLAUDE.md
+    // descreve: o proximo campo por item do plano (uma data, uma origem, um "so ate nivel X")
+    // nasceria morto e ninguem ligaria o sumico ao sanitizador. Filtrar item invalido e clampar
+    // nivel continua igual; o que muda e que o resto do objeto sobrevive.
+    const sanPlan = (p) => (p || []).filter((it) => it && BUILD_META[it.b]).map((it) => {
+      it.lvl = Math.max(1, Math.min(BUILD_META[it.b].max, parseInt(it.lvl, 10) || 1));
+      it.en = it.en !== false;
+      return it;
     });
+    ['atk', 'def'].forEach((k) => { c.build.plans[k] = sanPlan(c.build.plans[k]); });
     // Migração v11.14 — modelos nomeados + atribuição por aldeia. Os planos ATK/DEF viram os dois
     // primeiros modelos ("Ofensiva"/"Defensiva"), então quem atualiza não perde a lista que montou.
-    const sanPlan = (p) => (p || []).filter((it) => it && BUILD_META[it.b]).map((it) => ({ b: it.b, lvl: Math.max(1, Math.min(BUILD_META[it.b].max, parseInt(it.lvl, 10) || 1)), en: it.en !== false }));
     if (!c.build.templates || typeof c.build.templates !== 'object') c.build.templates = {};
     if (!Object.keys(c.build.templates).length) {
       c.build.templates = { atk: { name: 'Ofensiva', plan: c.build.plans.atk.slice() }, def: { name: 'Defensiva', plan: c.build.plans.def.slice() } };

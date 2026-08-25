@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.220.0
+// @version      11.221.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.220.0';
+  const VERSION = '11.221.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -610,13 +610,22 @@
     if (!c.build.plans) c.build.plans = { atk: null, def: null };
     if (!Array.isArray(c.build.plans.atk) || !c.build.plans.atk.length) c.build.plans.atk = tplToPlan(c.build.atkTpl || ATK_TPL);
     if (!Array.isArray(c.build.plans.def) || !c.build.plans.def.length) c.build.plans.def = tplToPlan(c.build.defTpl || DEF_TPL);
-    // Sanitiza: mantém só chaves válidas, clampa nível, preserva 'en'
-    ['atk', 'def'].forEach((k) => {
-      c.build.plans[k] = (c.build.plans[k] || []).filter((it) => it && BUILD_META[it.b]).map((it) => ({ b: it.b, lvl: Math.max(1, Math.min(BUILD_META[it.b].max, parseInt(it.lvl, 10) || 1)), en: it.en !== false }));
+    // Sanitiza CORRIGINDO NO LUGAR — nunca remontando `{b, lvl, en}` do zero.
+    //
+    // A versao antiga era `.map((it) => ({ b: it.b, lvl: ..., en: ... }))`: um molde de tres
+    // campos que RECONSTROI o item. Todo campo fora do molde morria a cada `load()`, ou seja, a
+    // cada F5 -- e, pior, tambem na IMPORTACAO DE BACKUP, calada. E a armadilha que o CLAUDE.md
+    // descreve: o proximo campo por item do plano (uma data, uma origem, um "so ate nivel X")
+    // nasceria morto e ninguem ligaria o sumico ao sanitizador. Filtrar item invalido e clampar
+    // nivel continua igual; o que muda e que o resto do objeto sobrevive.
+    const sanPlan = (p) => (p || []).filter((it) => it && BUILD_META[it.b]).map((it) => {
+      it.lvl = Math.max(1, Math.min(BUILD_META[it.b].max, parseInt(it.lvl, 10) || 1));
+      it.en = it.en !== false;
+      return it;
     });
+    ['atk', 'def'].forEach((k) => { c.build.plans[k] = sanPlan(c.build.plans[k]); });
     // Migração v11.14 — modelos nomeados + atribuição por aldeia. Os planos ATK/DEF viram os dois
     // primeiros modelos ("Ofensiva"/"Defensiva"), então quem atualiza não perde a lista que montou.
-    const sanPlan = (p) => (p || []).filter((it) => it && BUILD_META[it.b]).map((it) => ({ b: it.b, lvl: Math.max(1, Math.min(BUILD_META[it.b].max, parseInt(it.lvl, 10) || 1)), en: it.en !== false }));
     if (!c.build.templates || typeof c.build.templates !== 'object') c.build.templates = {};
     if (!Object.keys(c.build.templates).length) {
       c.build.templates = { atk: { name: 'Ofensiva', plan: c.build.plans.atk.slice() }, def: { name: 'Defensiva', plan: c.build.plans.def.slice() } };
@@ -8303,6 +8312,20 @@
       if (!v) continue;                 // ainda não entrou na lista de aldeias; tenta no próximo ciclo
       await nobleAplicarPos(c, v, false);
     }
+    // PODA. `posFeitos` so crescia -- uma entrada por aldeia conquistada, pra sempre.
+    //
+    // O criterio sai das TRES leituras que existem, e nao de um palpite de idade:
+    //   1) o `continue` do laço acima            -> percorre `conquistadas`
+    //   2) o selo "aplicado" do histórico        -> percorre `conquistadas`
+    //   3) o selo "aplicado" da tabela de alvos  -> percorre `alvos`
+    // Entao entrada cuja coord nao esta em NENHUMA das duas listas ja e invisivel pro script
+    // inteiro: apagar nao reexecuta bandeira/grupo/nome (leitura 1 nunca chega nela) e nao apaga
+    // selo de tela nenhum (2 e 3 nunca chegam nela). `conquistadas` sozinha nao bastaria: ela tem
+    // teto de 100, e um alvo ainda na fila cairia fora e perderia o selo da tabela de alvos.
+    const viva = {};
+    (config.noble.conquistadas || []).forEach((c) => { viva[c.coord] = 1; });
+    (config.noble.alvos || []).forEach((a) => { viva[a.coord] = 1; });
+    Object.keys(config.noble.posFeitos || {}).forEach((k) => { if (!viva[k]) delete config.noble.posFeitos[k]; });
     save();
   }
 
@@ -8818,9 +8841,16 @@
   //
   // Devolve { formados, naFila, prontoEm }. `naFila + formados` responde "vem mais nobre?", que
   // e o que decide se um envio parcial espera ou sai.
-  async function nobleRecrutar(alvo, origensOrdenadas, faltam) {
+  //
+  // `cunho` e o CONTADOR DE CUNHAGEM DO CICLO, e vem de fora de proposito. A UI promete "quantas
+  // aldeias podem cunhar num mesmo ciclo", mas esta funcao roda UMA VEZ POR ALVO -- contador
+  // local zerava a cada alvo e o teto de 3 virava 3 POR ALVO. Com 4 alvos na fila, 12 aldeias
+  // cunhavam num ciclo que prometia 3. Moeda nao tem desfazer, entao o contador tem que viver no
+  // escopo do ciclo, igual `usados` (pool de nobres) e `enviadosNoCiclo` ja fazem.
+  async function nobleRecrutar(alvo, origensOrdenadas, faltam, cunho) {
     const feitas = [];
-    let formados = 0, naFila = 0, prontoEm = null, cunhadas = 0;
+    cunho = cunho || { n: 0 };
+    let formados = 0, naFila = 0, prontoEm = null;
     for (const o of origensOrdenadas) {
       // O que ja esta na fila conta como feito: nao precisa encomendar de novo.
       if (formados + naFila >= faltam) break;
@@ -8844,7 +8874,7 @@
         // Sem moeda guardada o bastante. Cunhar e OPT-IN (gasta recurso sem volta) e tem alvo:
         // so ate esta aldeia conseguir fechar um NT de `cunharAte` nobres, contando o que ela ja
         // tem MAIS o que esta na fila. Sem esse teto ela cunharia pra sempre.
-        if (config.noble.cunhar && cunhadas < (config.noble.cunharMaxAldeias || 3)) {
+        if (config.noble.cunhar && cunho.n < (config.noble.cunharMaxAldeias || 3)) {
           const jaTem = ((o.avail || {}).snob || 0) + (fl.nobres || 0);
           // O teto e o MENOR entre "fechar o NT" e o que a aldeia da vez realmente precisa.
           // Sem o segundo, um alvo a que falta 1 nobre mandaria cunhar ate 4 -- e moeda nao tem
@@ -8857,7 +8887,7 @@
           } else {
             try {
               const rc = await mintCoins(o.vid);
-              cunhadas++;
+              cunho.n++;
               feitas.push({ nome: o.nome, ok: false,
                             motivo: '+' + (rc.minted || 0) + ' moeda(s), faltam ' + m.faltam });
             } catch (e2) {
@@ -8996,6 +9026,9 @@
     const usados = {};
     const plano = [];
     let enviadosNoCiclo = 0;
+    // Teto de cunhagem do CICLO INTEIRO (ver nobleRecrutar). Objeto e nao numero porque quem
+    // incrementa e a funcao chamada por alvo -- numero seria copia e o teto voltaria a ser por alvo.
+    const cunho = { n: 0 };
     let prontos = 0, completos = 0, recrutando = 0, naFila = 0;
     // A FILA. Uma aldeia por vez: o alvo da vez tem prioridade absoluta sobre nobre parado,
     // recrutamento e cunhagem. O proximo so entra quando a lealdade PREVISTA do da vez ja esta
@@ -9049,7 +9082,7 @@
         // Faltou nobre: tenta FORMAR nas mais proximas (nunca cunhar). O nobre formado entra na
         // fila da Academia, entao ele so aparece no plano do proximo ciclo -- de proposito.
         try {
-          const rec = await nobleRecrutar(alvo, r.dentroDoLimite || [], r.falta);
+          const rec = await nobleRecrutar(alvo, r.dentroDoLimite || [], r.falta, cunho);
           vindo = (rec.formados || 0) + (rec.naFila || 0);
           recrutando += vindo;
           prontoEm = rec.prontoEm || null;
@@ -9138,7 +9171,11 @@
       + (daVez ? ' — a vez é de ' + daVez.coord : '')
       + (travado && naFila > 1 ? ' (as outras aguardam)' : '')
       + '. ' + (config.noble.autoEnviar === false ? 'Nada foi enviado (disparo manual).'
-        : enviadosNoCiclo + ' comando(s) enviado(s).'), 'ok', 'noble');
+        : enviadosNoCiclo + ' comando(s) enviado(s).')
+      // Gasto sem volta aparece no resumo do ciclo. Antes so havia a linha por aldeia, no meio
+      // de dezenas de outras -- ninguem via que o ciclo tinha cunhado em 12 aldeias.
+      + (cunho.n ? ' Cunhou em ' + cunho.n + '/' + (config.noble.cunharMaxAldeias || 3)
+        + ' aldeia(s) do teto do ciclo.' : ''), 'ok', 'noble');
     scheduleNoble();
   }
   function scheduleNoble() {
@@ -11987,10 +12024,16 @@
   // ==================== ASSISTENTE DE SAQUE: TEMPLATE B ====================
   // Descobre o template_id do B (e as unidades) direto do am_farm; envia via o endpoint
   // oficial do assistente pra manter o alvo listado com relatório fresco.
-  let _farmTplCache = null, _farmTplCacheAt = 0;
+  // Cache POR ALDEIA. Hoje existe um chamador so (020-engine, sempre com CUR_VID), entao uma
+  // gaveta unica dava no mesmo -- mas so por acidente. No dia em que alguem chamar isto pra uma
+  // segunda aldeia, a gaveta unica faz a PRIMEIRA aldeia da janela de 30 min responder por todas
+  // as outras, e o modulo manda a composicao errada em silencio. Custa uma chave; fica por aldeia.
+  const _farmTplCache = {};
   async function getFarmTemplates(vid, force) {
     const now = Date.now();
-    if (!force && _farmTplCache && (now - _farmTplCacheAt < 30 * 60 * 1000)) return _farmTplCache;
+    const ck = String(vid || CUR_VID);
+    const hit = _farmTplCache[ck];
+    if (!force && hit && (now - hit.at < 30 * 60 * 1000)) return hit.tpl;
     const res = await fetch('/game.php?village=' + vid + '&screen=am_farm', { credentials: 'include' });
     const html = await res.text();
     if (/^\s*<!doctype|^\s*<html/i.test(html.slice(0, 60)) && html.length < 2000) {
@@ -12110,7 +12153,7 @@
       });
     });
 
-    _farmTplCache = out; _farmTplCacheAt = now;
+    _farmTplCache[ck] = { tpl: out, at: now };
     return out;
   }
   async function sendFarmB(srcVid, tgtVid, tplBId) {
@@ -12250,8 +12293,25 @@
       }
       await sleep(250);
     }
-    if (lidos) save();
+    if (lidos) { mapPodaRelatorios(); save(); }
     return achou;
+  }
+  // `relatoriosLidos` ganha uma entrada por relatório de exploração lido — e nunca perdia
+  // nenhuma. Numa conta rodada isso e a estrutura que mais engorda o config (e o backup junto).
+  //
+  // Poda pelos MAIS NOVOS: id de relatório e crescente, entao os menores sao os mais velhos.
+  // Ordena como NUMERO, nao como texto -- `.sort()` cru compara string, e "9" > "10", o que
+  // jogaria fora justamente os recentes. O pior caso de podar demais e reler um relatório
+  // (uma requisição), nunca uma decisao errada: quem manda na blacklist e `blacklistDefesa`,
+  // que nao e tocada aqui.
+  const MAP_RELS_TETO = 3000;
+  function mapPodaRelatorios() {
+    const cfg = config.map;
+    const ids = Object.keys(cfg.relatoriosLidos || {});
+    if (ids.length <= MAP_RELS_TETO) return 0;
+    const fora = ids.sort((a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0)).slice(0, ids.length - MAP_RELS_TETO);
+    fora.forEach((k) => { delete cfg.relatoriosLidos[k]; });
+    return fora.length;
   }
 
   // Apaga os relatórios de uma aldeia no jogo, o que a tira da listagem do assistente.
@@ -12281,7 +12341,7 @@
 
   // Bárbaro NOVO = vid que não estava no conjunto conhecido. Pega tanto aldeia que virou
   // bárbara quanto conta deletada. É o que faz o ciclo contínuo ter utilidade.
-  function mapDetectarNovos(barbs) {
+  function mapDetectarNovos(barbs, universo) {
     const cfg = config.map;
     const agora = Date.now();
     const primeiraVez = !Object.keys(cfg.barbConhecidos).length;
@@ -12289,6 +12349,20 @@
     barbs.forEach((b) => {
       if (!cfg.barbConhecidos[b.vid]) { cfg.barbConhecidos[b.vid] = agora; if (!primeiraVez) novos.push(b); }
     });
+    // PODA. `barbConhecidos` so crescia: uma entrada por bárbaro ja visto na vida da conta, pra
+    // sempre. Isso engorda o localStorage (e o backup, que carrega tudo) sem teto nenhum.
+    //
+    // O criterio e conservador de proposito: so sai vid que NAO EXISTE MAIS no village.txt, ou
+    // seja, aldeia que sumiu do mundo. Podar por idade, ou pela lista JA FILTRADA de bárbaros,
+    // seria errado -- `barbs` passa por minPoints/maxPoints, entao um bárbaro que so saiu da
+    // janela de pontos voltaria a ser anunciado como NOVO quando reentrasse. Falso alarme e pior
+    // que a gordura que a poda tira.
+    if (universo && universo.length) {
+      const existe = {}; universo.forEach((v) => { existe[v.vid] = 1; });
+      let podados = 0;
+      Object.keys(cfg.barbConhecidos).forEach((vid) => { if (!existe[vid]) { delete cfg.barbConhecidos[vid]; podados++; } });
+      if (podados) pushLog('🗺️ Poda: ' + podados + ' bárbaro(s) que não existem mais saíram do registro.', '', 'map');
+    }
     if (primeiraVez) pushLog('🗺️ Primeira leitura do mapa: ' + barbs.length + ' bárbaros registrados. A partir do próximo ciclo eu aviso o que for novo.', '', 'map');
     else if (novos.length) pushLog('🗺️ ' + novos.length + ' bárbaro(s) NOVO(S) desde a última leitura.', 'ok', 'map');
     save();
@@ -12350,7 +12424,7 @@
     try { allV = await getMapVillages(); }
     catch (e) { pushLog('BM: erro ao ler village.txt: ' + (e.message || e), 'err'); return null; }
     const barb = allV.filter((v) => (!cfg.onlyBarbarians || v.player === '0') && v.points >= (cfg.minPoints || 0) && v.points <= (cfg.maxPoints || 99999));
-    const novos = mapDetectarNovos(barb);
+    const novos = mapDetectarNovos(barb, allV);
     const idNovo = {}; novos.forEach((b) => { idNovo[b.vid] = 1; });
     let mine;
     try {
@@ -12482,7 +12556,22 @@
     const spyCount = Math.max(1, cfg.spyCount || 1);
     const reserve = Math.max(0, cfg.spyReserve || 0);
     const plan = await mapPlanTargets();
-    if (!plan) { cfg.running = false; save(); setMapStatus(false); return; }
+    // `null` do mapPlanTargets significa UMA coisa so: nao deu pra LER agora (village.txt ou a
+    // lista de aldeias caiu). Nao e "nao ha o que fazer" -- plano vazio volta como objeto.
+    //
+    // Isto DESLIGAVA o modulo: um 429 ou um timeout desarmava o Barbaros de vez, e o botao
+    // voltava pro estado "parado" sem nada explicando. Ate alguem reparar e clicar em ▶ de novo,
+    // nada saia. Todo o resto do script, no mesmo caso, so loga e tenta no ciclo seguinte -- e e
+    // isso que ele faz agora.
+    if (!plan) {
+      // Mesma conta do fim do ciclo bem-sucedido (`cicloMin`, em minutos) — falha de leitura não
+      // é motivo pra martelar o servidor mais rápido que o normal.
+      cfg.nextAt = now + Math.max(5, cfg.cicloMin || 30) * 60000;
+      save();
+      pushLog('Mapa: não consegui ler os dados agora — tento de novo no próximo ciclo (o módulo continua ligado).', 'err', 'map');
+      scheduleMap();
+      return;
+    }
     cfg.lastPreview = plan.plan.flatMap((p) => p.targets.map((t) => ({ src: p.src.coord, srcName: p.src.name, coord: t.coord, dist: Math.round(t.dist * 10) / 10, pts: t.points, name: t.name, lastAt: t.lastAt }))).slice(0, 500);
     save(); renderMapPreview();
     const totalPlanned = plan.plan.reduce((a, p) => a + p.targets.length, 0);
@@ -12790,6 +12879,19 @@
         await sleep(400 + Math.floor(Math.random() * 300));
       } catch (e) { pushLog('Cadeado em ' + b.name + ' (' + b.x + '|' + b.y + '): ' + (e.message || e), 'err', 'lock'); }
     }
+    // PODA — e aqui ela tem que ser mais covarde que nas outras estruturas, porque o endpoint e
+    // um TOGGLE: apagar a memoria de uma aldeia que AINDA e candidata faz o proximo ciclo chamar
+    // o toggle em cima dela e DESTRAVAR o que ja estava travado. (Existe o conserto do
+    // `type !== 'add'`, mas ele custa 2 requisicoes e deixa a aldeia solta no meio.)
+    //
+    // Por isso o criterio nao e idade: so sai vid que deixou de ser BÁRBARO (foi conquistada) ou
+    // sumiu do mundo. O laço acima so visita `inRange`, que exige `player === '0'` -- entao uma
+    // entrada assim nunca mais seria consultada, e apagar nao pode disparar toggle nenhum.
+    const barbAgora = {};
+    allV.forEach((v) => { if (v.player === '0') barbAgora[v.vid] = 1; });
+    let podados = 0;
+    Object.keys(config.lock.reserved).forEach((vid) => { if (!barbAgora[vid]) { delete config.lock.reserved[vid]; podados++; } });
+    if (podados) pushLog('Cadeado: poda — ' + podados + ' aldeia(s) saíram do registro (não são mais bárbaras).', '', 'lock');
     config.lock.stats = { inRange: inRange.length, total: Object.keys(config.lock.reserved).length, lockedNow: lockedNow, redSkipped: redSkipped };
     config.lock.nextAt = now + Math.max(60, config.lock.interval || 1800) * 1000;
     save();

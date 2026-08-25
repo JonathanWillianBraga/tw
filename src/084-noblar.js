@@ -1197,6 +1197,20 @@
       if (!v) continue;                 // ainda não entrou na lista de aldeias; tenta no próximo ciclo
       await nobleAplicarPos(c, v, false);
     }
+    // PODA. `posFeitos` so crescia -- uma entrada por aldeia conquistada, pra sempre.
+    //
+    // O criterio sai das TRES leituras que existem, e nao de um palpite de idade:
+    //   1) o `continue` do laço acima            -> percorre `conquistadas`
+    //   2) o selo "aplicado" do histórico        -> percorre `conquistadas`
+    //   3) o selo "aplicado" da tabela de alvos  -> percorre `alvos`
+    // Entao entrada cuja coord nao esta em NENHUMA das duas listas ja e invisivel pro script
+    // inteiro: apagar nao reexecuta bandeira/grupo/nome (leitura 1 nunca chega nela) e nao apaga
+    // selo de tela nenhum (2 e 3 nunca chegam nela). `conquistadas` sozinha nao bastaria: ela tem
+    // teto de 100, e um alvo ainda na fila cairia fora e perderia o selo da tabela de alvos.
+    const viva = {};
+    (config.noble.conquistadas || []).forEach((c) => { viva[c.coord] = 1; });
+    (config.noble.alvos || []).forEach((a) => { viva[a.coord] = 1; });
+    Object.keys(config.noble.posFeitos || {}).forEach((k) => { if (!viva[k]) delete config.noble.posFeitos[k]; });
     save();
   }
 
@@ -1712,9 +1726,16 @@
   //
   // Devolve { formados, naFila, prontoEm }. `naFila + formados` responde "vem mais nobre?", que
   // e o que decide se um envio parcial espera ou sai.
-  async function nobleRecrutar(alvo, origensOrdenadas, faltam) {
+  //
+  // `cunho` e o CONTADOR DE CUNHAGEM DO CICLO, e vem de fora de proposito. A UI promete "quantas
+  // aldeias podem cunhar num mesmo ciclo", mas esta funcao roda UMA VEZ POR ALVO -- contador
+  // local zerava a cada alvo e o teto de 3 virava 3 POR ALVO. Com 4 alvos na fila, 12 aldeias
+  // cunhavam num ciclo que prometia 3. Moeda nao tem desfazer, entao o contador tem que viver no
+  // escopo do ciclo, igual `usados` (pool de nobres) e `enviadosNoCiclo` ja fazem.
+  async function nobleRecrutar(alvo, origensOrdenadas, faltam, cunho) {
     const feitas = [];
-    let formados = 0, naFila = 0, prontoEm = null, cunhadas = 0;
+    cunho = cunho || { n: 0 };
+    let formados = 0, naFila = 0, prontoEm = null;
     for (const o of origensOrdenadas) {
       // O que ja esta na fila conta como feito: nao precisa encomendar de novo.
       if (formados + naFila >= faltam) break;
@@ -1738,7 +1759,7 @@
         // Sem moeda guardada o bastante. Cunhar e OPT-IN (gasta recurso sem volta) e tem alvo:
         // so ate esta aldeia conseguir fechar um NT de `cunharAte` nobres, contando o que ela ja
         // tem MAIS o que esta na fila. Sem esse teto ela cunharia pra sempre.
-        if (config.noble.cunhar && cunhadas < (config.noble.cunharMaxAldeias || 3)) {
+        if (config.noble.cunhar && cunho.n < (config.noble.cunharMaxAldeias || 3)) {
           const jaTem = ((o.avail || {}).snob || 0) + (fl.nobres || 0);
           // O teto e o MENOR entre "fechar o NT" e o que a aldeia da vez realmente precisa.
           // Sem o segundo, um alvo a que falta 1 nobre mandaria cunhar ate 4 -- e moeda nao tem
@@ -1751,7 +1772,7 @@
           } else {
             try {
               const rc = await mintCoins(o.vid);
-              cunhadas++;
+              cunho.n++;
               feitas.push({ nome: o.nome, ok: false,
                             motivo: '+' + (rc.minted || 0) + ' moeda(s), faltam ' + m.faltam });
             } catch (e2) {
@@ -1890,6 +1911,9 @@
     const usados = {};
     const plano = [];
     let enviadosNoCiclo = 0;
+    // Teto de cunhagem do CICLO INTEIRO (ver nobleRecrutar). Objeto e nao numero porque quem
+    // incrementa e a funcao chamada por alvo -- numero seria copia e o teto voltaria a ser por alvo.
+    const cunho = { n: 0 };
     let prontos = 0, completos = 0, recrutando = 0, naFila = 0;
     // A FILA. Uma aldeia por vez: o alvo da vez tem prioridade absoluta sobre nobre parado,
     // recrutamento e cunhagem. O proximo so entra quando a lealdade PREVISTA do da vez ja esta
@@ -1943,7 +1967,7 @@
         // Faltou nobre: tenta FORMAR nas mais proximas (nunca cunhar). O nobre formado entra na
         // fila da Academia, entao ele so aparece no plano do proximo ciclo -- de proposito.
         try {
-          const rec = await nobleRecrutar(alvo, r.dentroDoLimite || [], r.falta);
+          const rec = await nobleRecrutar(alvo, r.dentroDoLimite || [], r.falta, cunho);
           vindo = (rec.formados || 0) + (rec.naFila || 0);
           recrutando += vindo;
           prontoEm = rec.prontoEm || null;
@@ -2032,7 +2056,11 @@
       + (daVez ? ' — a vez é de ' + daVez.coord : '')
       + (travado && naFila > 1 ? ' (as outras aguardam)' : '')
       + '. ' + (config.noble.autoEnviar === false ? 'Nada foi enviado (disparo manual).'
-        : enviadosNoCiclo + ' comando(s) enviado(s).'), 'ok', 'noble');
+        : enviadosNoCiclo + ' comando(s) enviado(s).')
+      // Gasto sem volta aparece no resumo do ciclo. Antes so havia a linha por aldeia, no meio
+      // de dezenas de outras -- ninguem via que o ciclo tinha cunhado em 12 aldeias.
+      + (cunho.n ? ' Cunhou em ' + cunho.n + '/' + (config.noble.cunharMaxAldeias || 3)
+        + ' aldeia(s) do teto do ciclo.' : ''), 'ok', 'noble');
     scheduleNoble();
   }
   function scheduleNoble() {

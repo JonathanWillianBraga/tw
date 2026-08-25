@@ -1,10 +1,16 @@
   // ==================== ASSISTENTE DE SAQUE: TEMPLATE B ====================
   // Descobre o template_id do B (e as unidades) direto do am_farm; envia via o endpoint
   // oficial do assistente pra manter o alvo listado com relatório fresco.
-  let _farmTplCache = null, _farmTplCacheAt = 0;
+  // Cache POR ALDEIA. Hoje existe um chamador so (020-engine, sempre com CUR_VID), entao uma
+  // gaveta unica dava no mesmo -- mas so por acidente. No dia em que alguem chamar isto pra uma
+  // segunda aldeia, a gaveta unica faz a PRIMEIRA aldeia da janela de 30 min responder por todas
+  // as outras, e o modulo manda a composicao errada em silencio. Custa uma chave; fica por aldeia.
+  const _farmTplCache = {};
   async function getFarmTemplates(vid, force) {
     const now = Date.now();
-    if (!force && _farmTplCache && (now - _farmTplCacheAt < 30 * 60 * 1000)) return _farmTplCache;
+    const ck = String(vid || CUR_VID);
+    const hit = _farmTplCache[ck];
+    if (!force && hit && (now - hit.at < 30 * 60 * 1000)) return hit.tpl;
     const res = await fetch('/game.php?village=' + vid + '&screen=am_farm', { credentials: 'include' });
     const html = await res.text();
     if (/^\s*<!doctype|^\s*<html/i.test(html.slice(0, 60)) && html.length < 2000) {
@@ -124,7 +130,7 @@
       });
     });
 
-    _farmTplCache = out; _farmTplCacheAt = now;
+    _farmTplCache[ck] = { tpl: out, at: now };
     return out;
   }
   async function sendFarmB(srcVid, tgtVid, tplBId) {

@@ -72,6 +72,19 @@
         await sleep(400 + Math.floor(Math.random() * 300));
       } catch (e) { pushLog('Cadeado em ' + b.name + ' (' + b.x + '|' + b.y + '): ' + (e.message || e), 'err', 'lock'); }
     }
+    // PODA — e aqui ela tem que ser mais covarde que nas outras estruturas, porque o endpoint e
+    // um TOGGLE: apagar a memoria de uma aldeia que AINDA e candidata faz o proximo ciclo chamar
+    // o toggle em cima dela e DESTRAVAR o que ja estava travado. (Existe o conserto do
+    // `type !== 'add'`, mas ele custa 2 requisicoes e deixa a aldeia solta no meio.)
+    //
+    // Por isso o criterio nao e idade: so sai vid que deixou de ser BÁRBARO (foi conquistada) ou
+    // sumiu do mundo. O laço acima so visita `inRange`, que exige `player === '0'` -- entao uma
+    // entrada assim nunca mais seria consultada, e apagar nao pode disparar toggle nenhum.
+    const barbAgora = {};
+    allV.forEach((v) => { if (v.player === '0') barbAgora[v.vid] = 1; });
+    let podados = 0;
+    Object.keys(config.lock.reserved).forEach((vid) => { if (!barbAgora[vid]) { delete config.lock.reserved[vid]; podados++; } });
+    if (podados) pushLog('Cadeado: poda — ' + podados + ' aldeia(s) saíram do registro (não são mais bárbaras).', '', 'lock');
     config.lock.stats = { inRange: inRange.length, total: Object.keys(config.lock.reserved).length, lockedNow: lockedNow, redSkipped: redSkipped };
     config.lock.nextAt = now + Math.max(60, config.lock.interval || 1800) * 1000;
     save();

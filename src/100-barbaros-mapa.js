@@ -113,8 +113,25 @@
       }
       await sleep(250);
     }
-    if (lidos) save();
+    if (lidos) { mapPodaRelatorios(); save(); }
     return achou;
+  }
+  // `relatoriosLidos` ganha uma entrada por relatório de exploração lido — e nunca perdia
+  // nenhuma. Numa conta rodada isso e a estrutura que mais engorda o config (e o backup junto).
+  //
+  // Poda pelos MAIS NOVOS: id de relatório e crescente, entao os menores sao os mais velhos.
+  // Ordena como NUMERO, nao como texto -- `.sort()` cru compara string, e "9" > "10", o que
+  // jogaria fora justamente os recentes. O pior caso de podar demais e reler um relatório
+  // (uma requisição), nunca uma decisao errada: quem manda na blacklist e `blacklistDefesa`,
+  // que nao e tocada aqui.
+  const MAP_RELS_TETO = 3000;
+  function mapPodaRelatorios() {
+    const cfg = config.map;
+    const ids = Object.keys(cfg.relatoriosLidos || {});
+    if (ids.length <= MAP_RELS_TETO) return 0;
+    const fora = ids.sort((a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0)).slice(0, ids.length - MAP_RELS_TETO);
+    fora.forEach((k) => { delete cfg.relatoriosLidos[k]; });
+    return fora.length;
   }
 
   // Apaga os relatórios de uma aldeia no jogo, o que a tira da listagem do assistente.
@@ -144,7 +161,7 @@
 
   // Bárbaro NOVO = vid que não estava no conjunto conhecido. Pega tanto aldeia que virou
   // bárbara quanto conta deletada. É o que faz o ciclo contínuo ter utilidade.
-  function mapDetectarNovos(barbs) {
+  function mapDetectarNovos(barbs, universo) {
     const cfg = config.map;
     const agora = Date.now();
     const primeiraVez = !Object.keys(cfg.barbConhecidos).length;
@@ -152,6 +169,20 @@
     barbs.forEach((b) => {
       if (!cfg.barbConhecidos[b.vid]) { cfg.barbConhecidos[b.vid] = agora; if (!primeiraVez) novos.push(b); }
     });
+    // PODA. `barbConhecidos` so crescia: uma entrada por bárbaro ja visto na vida da conta, pra
+    // sempre. Isso engorda o localStorage (e o backup, que carrega tudo) sem teto nenhum.
+    //
+    // O criterio e conservador de proposito: so sai vid que NAO EXISTE MAIS no village.txt, ou
+    // seja, aldeia que sumiu do mundo. Podar por idade, ou pela lista JA FILTRADA de bárbaros,
+    // seria errado -- `barbs` passa por minPoints/maxPoints, entao um bárbaro que so saiu da
+    // janela de pontos voltaria a ser anunciado como NOVO quando reentrasse. Falso alarme e pior
+    // que a gordura que a poda tira.
+    if (universo && universo.length) {
+      const existe = {}; universo.forEach((v) => { existe[v.vid] = 1; });
+      let podados = 0;
+      Object.keys(cfg.barbConhecidos).forEach((vid) => { if (!existe[vid]) { delete cfg.barbConhecidos[vid]; podados++; } });
+      if (podados) pushLog('🗺️ Poda: ' + podados + ' bárbaro(s) que não existem mais saíram do registro.', '', 'map');
+    }
     if (primeiraVez) pushLog('🗺️ Primeira leitura do mapa: ' + barbs.length + ' bárbaros registrados. A partir do próximo ciclo eu aviso o que for novo.', '', 'map');
     else if (novos.length) pushLog('🗺️ ' + novos.length + ' bárbaro(s) NOVO(S) desde a última leitura.', 'ok', 'map');
     save();
@@ -213,7 +244,7 @@
     try { allV = await getMapVillages(); }
     catch (e) { pushLog('BM: erro ao ler village.txt: ' + (e.message || e), 'err'); return null; }
     const barb = allV.filter((v) => (!cfg.onlyBarbarians || v.player === '0') && v.points >= (cfg.minPoints || 0) && v.points <= (cfg.maxPoints || 99999));
-    const novos = mapDetectarNovos(barb);
+    const novos = mapDetectarNovos(barb, allV);
     const idNovo = {}; novos.forEach((b) => { idNovo[b.vid] = 1; });
     let mine;
     try {
@@ -345,7 +376,22 @@
     const spyCount = Math.max(1, cfg.spyCount || 1);
     const reserve = Math.max(0, cfg.spyReserve || 0);
     const plan = await mapPlanTargets();
-    if (!plan) { cfg.running = false; save(); setMapStatus(false); return; }
+    // `null` do mapPlanTargets significa UMA coisa so: nao deu pra LER agora (village.txt ou a
+    // lista de aldeias caiu). Nao e "nao ha o que fazer" -- plano vazio volta como objeto.
+    //
+    // Isto DESLIGAVA o modulo: um 429 ou um timeout desarmava o Barbaros de vez, e o botao
+    // voltava pro estado "parado" sem nada explicando. Ate alguem reparar e clicar em ▶ de novo,
+    // nada saia. Todo o resto do script, no mesmo caso, so loga e tenta no ciclo seguinte -- e e
+    // isso que ele faz agora.
+    if (!plan) {
+      // Mesma conta do fim do ciclo bem-sucedido (`cicloMin`, em minutos) — falha de leitura não
+      // é motivo pra martelar o servidor mais rápido que o normal.
+      cfg.nextAt = now + Math.max(5, cfg.cicloMin || 30) * 60000;
+      save();
+      pushLog('Mapa: não consegui ler os dados agora — tento de novo no próximo ciclo (o módulo continua ligado).', 'err', 'map');
+      scheduleMap();
+      return;
+    }
     cfg.lastPreview = plan.plan.flatMap((p) => p.targets.map((t) => ({ src: p.src.coord, srcName: p.src.name, coord: t.coord, dist: Math.round(t.dist * 10) / 10, pts: t.points, name: t.name, lastAt: t.lastAt }))).slice(0, 500);
     save(); renderMapPreview();
     const totalPlanned = plan.plan.reduce((a, p) => a + p.targets.length, 0);

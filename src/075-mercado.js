@@ -374,16 +374,62 @@
       // `falta` = fração do alvo que ainda não tem (1 = vazia, 0 = no alvo). Quem está mais perto
       // de zerado vai primeiro, do tamanho que for. O quanto ela recebe continua saindo do
       // déficit real — o que muda é só a ORDEM de atendimento.
-      const receivers = st.map((s) => ({ s: s, eff: s.cur[r] + chegando(s, r) }))
-        .filter((x) => x.eff < x.s.thr[r])
-        .map((x) => ({ s: x.s, def: x.s.thr[r] - x.eff,
-                       falta: x.s.thr[r] > 0 ? (x.s.thr[r] - x.eff) / x.s.thr[r] : 0 }))
-        .sort((a, b) => b.falta - a.falta);
+      // FILA EM TRES NIVEIS. Ate aqui havia UM criterio: carencia relativa ao limiar (% do
+      // armazem). E essa era a raiz do "tenho aldeia parada sem construir":
+      //
+      //   o alvo do Equilibrio e RELATIVO (uma % do armazem) e o custo de um edificio e
+      //   ABSOLUTO (54.574 de argila). Os dois numeros nunca se comparavam. Uma aldeia podia
+      //   estar "no alvo" — e portanto atendida, e portanto ignorada — sem conseguir pagar a
+      //   Fazenda que a travava havia dias.
+      //
+      // Pior: a informacao ja existia. `080-edificios` grava `config.build.demand[vid]` com o
+      // edificio e o CUSTO EXATO a cada ciclo, e `040-tropas` grava a dele com o comentario
+      // "demanda de recrutar p/ Equilibrio". Nenhuma das duas era lida por ninguem — cano
+      // construido e nunca ligado, o mesmo defeito da chave de silencio da Central.
+      //
+      // Os niveis sao escalonados de proposito, e nao um criterio unico ponderado: na conta do
+      // usuario ha 70 demandas de recrutamento contra 15 travas de construcao. No mesmo nivel,
+      // as 70 afogariam as 15 — que sao justamente as que doem.
+      // Mesma guarda do Recrutar: demanda de modulo DESLIGADO e dado velho. As duas estruturas
+      // so sao zeradas no inicio do ciclo do dono, entao com o dono parado elas congelam no
+      // ultimo estado e o Equilibrio priorizaria pra sempre uma trava que ja nao existe.
+      const demB = (config.build && config.build.running && config.build.demand) || {};
+      const demR = (config.recruit && config.recruit.running && config.recruit.demand) || {};
+      const receivers = [];
+      st.forEach((s) => {
+        const eff = s.cur[r] + chegando(s, r);
+        const dB = demB[s.vid], dR = demR[s.vid];
+        // Nivel 1 — CONSTRUCAO TRAVADA. Alvo = o que falta pra DESBLOQUEAR, nao uma %.
+        if (dB && dB.cost && (dB.cost[r] || 0) > eff) {
+          receivers.push({ s: s, prio: 1, def: (dB.cost[r] || 0) - eff, falta: 1,
+                           motivo: (BUILD_META[dB.b] && BUILD_META[dB.b].name) || dB.b });
+          return;
+        }
+        // Nivel 2 — RECRUTAMENTO sem recurso. Mesma ideia, um degrau abaixo.
+        if (dR && (dR[r] || 0) > eff) {
+          receivers.push({ s: s, prio: 2, def: (dR[r] || 0) - eff, falta: 1, motivo: 'recrutar' });
+          return;
+        }
+        // Nivel 3 — o equilibrio de sempre, por carencia relativa ao limiar.
+        if (eff < s.thr[r]) {
+          receivers.push({ s: s, prio: 3, def: s.thr[r] - eff, falta: s.thr[r] > 0 ? (s.thr[r] - eff) / s.thr[r] : 0 });
+        }
+      });
+      // Dentro dos niveis 1 e 2, MENOR FALTA PRIMEIRO: desbloqueia mais aldeias por recurso
+      // movido (quem precisa de 500 sai da fila antes de quem precisa de 50.000). No nivel 3
+      // segue valendo a carencia relativa, que e o criterio antigo e continua certo la.
+      receivers.sort((a, b) => (a.prio - b.prio)
+        || (a.prio < 3 ? (a.def - b.def) : (b.falta - a.falta)));
       // Quem foi pro começo da fila e por quê. Sem isto a mudança de critério é invisível: os
       // envios saem igual, só em outra ordem, e não dá pra conferir se está fazendo efeito.
       if (receivers.length) {
-        pushLog('Equilíbrio (' + NOME_RES[r] + '): fila por carência — '
-          + receivers.slice(0, 4).map((x) => x.s.name + ' ' + Math.round((1 - x.falta) * 100) + '% do alvo').join(' · ')
+        const travadas = receivers.filter((x) => x.prio === 1).length;
+        pushLog('Equilíbrio (' + NOME_RES[r] + '): fila — '
+          + (travadas ? travadas + ' aldeia(s) TRAVADAS em construção primeiro · ' : '')
+          + receivers.slice(0, 4).map((x) => x.s.name + ' '
+              + (x.prio === 1 ? '🔨 ' + x.motivo + ', faltam ' + fmtN(Math.round(x.def))
+               : x.prio === 2 ? '⚔ recrutar, faltam ' + fmtN(Math.round(x.def))
+               : Math.round((1 - x.falta) * 100) + '% do alvo')).join(' · ')
           + (receivers.length > 4 ? ' · +' + (receivers.length - 4) + ' atrás' : ''), '', 'market');
       }
       for (const rec of receivers) {
@@ -417,7 +463,11 @@
             don.s.cur[r] -= amount; don.s.cap -= amount; rec.def -= amount; don.exc -= amount;
             config.market.inflight[rec.s.vid] = config.market.inflight[rec.s.vid] || [];
             config.market.inflight[rec.s.vid].push({ r: r, amt: amount, arriveAt: now + ((dur && dur > 0 ? dur : 3600) * 1000) });
-            pushLog('Equilíbrio: ' + don.s.name + ' → ' + rec.s.coord + ' (' + amount + ' ' + ({ wood: 'madeira', stone: 'argila', iron: 'ferro' }[r]) + ')', 'ok', 'market');
+            pushLog('Equilíbrio: ' + don.s.name + ' → ' + rec.s.coord + ' (' + amount + ' ' + ({ wood: 'madeira', stone: 'argila', iron: 'ferro' }[r]) + ')'
+              // O MOTIVO no log de envio. Sem ele, a mudança de prioridade fica invisível: as
+              // linhas saem iguais e não dá pra conferir se a trava de construção foi atendida.
+              + (rec.prio === 1 ? ' — 🔨 destrava ' + rec.motivo + ' em ' + rec.s.name
+               : rec.prio === 2 ? ' — ⚔ recrutar' : ''), 'ok', 'market');
             await sleep(400 + Math.floor(Math.random() * 300));
           } catch (e) { pushLog('Equilíbrio em ' + don.s.name + ': ' + (e.message || e), 'err', 'market'); }
         }

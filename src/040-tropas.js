@@ -248,8 +248,51 @@
     } catch (e) { /* sem plano/estado: reserva 0, vira só "encher até X%" */ }
     return alvosDaReceita(state, modelo, reservaObra);
   }
-  function computeRecruit(state, targets, cfg, queuedSec) {
+  // RESERVA DO QUE A CONSTRUCAO ESTA ESPERANDO.
+  //
+  // O problema, medido na conta do usuario: 15 aldeias travadas em Construcoes (Fazenda/Quartel
+  // custando 20 a 70 mil) contra 70 demandas de recrutamento. O Recrutar gasta CONTINUO e
+  // PEQUENO; a Construcao espera um BOLO GRANDE. Sem arbitro, o quartel come o recurso a cada
+  // ciclo e a Fazenda de 54k nunca acumula — a aldeia fica parada pra sempre, recebendo recurso
+  // do Equilibrio e torrando em lanceiro.
+  //
+  // Ja existia guarda anticolisao Construcoes<->Obra ("o Construcoes cede"), mas NADA entre
+  // Construcoes<->Recrutar: o Recrutar so lia os modelos de Construcoes pra reservar POPULACAO,
+  // nunca recurso.
+  //
+  // A politica escolhida foi RESERVAR, nao pausar: o Recrutar continua recrutando, mas so com o
+  // que sobra ACIMA do custo da construcao travada. Quartel nao fica ocioso e a construcao
+  // acumula. E o mesmo padrao da reserva de populacao que ele ja fazia.
+  //
+  // Reserva so o que FALTA (custo menos o que a aldeia ja tem), nao o custo inteiro: se a aldeia
+  // ja juntou 40k dos 54k, congelar 54k puniria ela duas vezes.
+  function rcReservaObra(vid, res) {
+    // SO VALE COM O DONO LIGADO. `build.demand` e zerada no inicio do buildTick — com o
+    // Construcoes DESLIGADO ela congela no ultimo ciclo e fica velha pra sempre. Sem esta
+    // guarda, o Recrutar reservaria recurso indefinidamente pra uma obra que ninguem vai
+    // enfileirar, e a aldeia pararia de recrutar sem motivo visivel na tela.
+    const bOk = !!(config.build && config.build.running);
+    const oOk = !!(config.obra && config.obra.running);
+    const d = (bOk && config.build.demand && config.build.demand[vid])
+           || (oOk && config.obra.demand && config.obra.demand[vid]);
+    if (!d || !d.cost) return null;
+    const fora = {};
+    let algum = false;
+    ['wood', 'stone', 'iron'].forEach((k) => {
+      const falta = Math.max(0, (d.cost[k] || 0) - (res[k] || 0));
+      // O que a aldeia JA TEM daquele recurso fica reservado ate o teto do custo; o excedente
+      // acima do custo e que sobra pro Recrutar.
+      const congelar = Math.min(res[k] || 0, d.cost[k] || 0);
+      if (congelar > 0) { res[k] = (res[k] || 0) - congelar; algum = true; }
+      fora[k] = falta;
+    });
+    return algum ? { b: d.b, cost: d.cost, falta: fora } : null;
+  }
+  function computeRecruit(state, targets, cfg, queuedSec, vid) {
     const amounts = {}, addedSec = {}, res = Object.assign({}, state.res);
+    // Congela o que a construcao travada precisa ANTES de qualquer conta de escala — o fator `f`
+    // abaixo divide por `res`, entao reservar depois nao teria efeito nenhum.
+    const reservado = (vid != null) ? rcReservaObra(vid, res) : null;
     let popFree = state.popFree, reason = 'alvo atingido';
     const wantCost = { wood: 0, stone: 0, iron: 0 };
     const groups = { barracks: [], stable: [], garage: [] };
@@ -294,7 +337,14 @@
       });
       if (added > 0) addedSec[b] = added; else if (reason !== 'reposto') reason = 'sem recurso/pop';
     });
-    return { amounts, addedSec, reason, wantCost };
+    // O motivo tem que DIZER que foi reserva, e nao "sem recurso". Sao coisas diferentes e a
+    // diferenca importa: "sem recurso" manda o usuario procurar problema no Equilibrio; "guardando
+    // pra construcao" diz que o sistema esta fazendo exatamente o que foi mandado fazer.
+    if (reservado && reason === 'sem recurso/pop') {
+      const bn = (BUILD_META[reservado.b] && BUILD_META[reservado.b].name) || reservado.b;
+      reason = 'guardando recurso p/ ' + bn;
+    }
+    return { amounts, addedSec, reason, wantCost, reservado };
   }
   async function sendRecruit(vid, amounts) {
     const b = new URLSearchParams();
@@ -353,7 +403,7 @@
       }
       if (!Object.keys(targets).length) continue;
       const queuedSec = state.queuedSec || { barracks: 0, stable: 0, garage: 0 };  // FILA REAL lida da tela
-      const { amounts, reason, wantCost } = computeRecruit(state, targets, config.recruit, queuedSec);
+      const { amounts, reason, wantCost } = computeRecruit(state, targets, config.recruit, queuedSec, vid);
       config.recruit.demand = config.recruit.demand || {};
       config.recruit.demand[vid] = wantCost || { wood: 0, stone: 0, iron: 0 };  // demanda de recrutar p/ Equilíbrio
       const fmtm = (s) => Math.floor(s / 3600) + 'h' + String(Math.floor((s % 3600) / 60)).padStart(2, '0');

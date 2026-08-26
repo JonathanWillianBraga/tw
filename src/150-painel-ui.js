@@ -813,6 +813,25 @@
             '<span style="font-size:9px;color:#8a7d6d;flex:1">Aldeias suas com nobre em casa que <b>não vai sair</b> — e o motivo de cada uma. Confere sozinho a cada <b>30 min</b>; nobre já escalado no plano do ciclo não entra aqui.</span>' +
           '</div>' +
           '<div id="twmgr-nb-ocio"></div>') +
+        // DESCARTE (087-nobre-descarte). Fica logo abaixo de "Nobres parados" porque é a AÇÃO
+        // sobre aquela lista: lá você vê o problema, aqui você resolve.
+        sec('Descartar nobre inútil',
+          '<div style="font-size:9px;color:#8a7d6d;margin-bottom:5px">Age só sobre quem está com '
+            + '<b>"nenhum alvo no alcance"</b> na lista acima. Os outros motivos (falta escolta, fila vazia) '
+            + 'passam sozinhos — descartar por causa deles seria destruir nobre à toa.</div>' +
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:5px">' +
+            '<span style="font-size:10px;color:#6f6153">bárbara em até '
+              + '<input id="twmgr-nb-desc-h" class="twmgr-inp" type="number" step="0.5" min="0.5" style="width:52px;font-size:10px;padding:1px"> h</span>' +
+            '<span style="font-size:10px;color:#6f6153">escolta '
+              + '<input id="twmgr-nb-desc-spy" class="twmgr-inp" type="number" min="0" style="width:46px;font-size:10px;padding:1px"> explorador(es)</span>' +
+            '<label style="font-size:10px;color:#b03030;cursor:pointer" title="Sem bárbara ao alcance, dispensa o nobre pela tela do próprio jogo. Não devolve moeda nem recurso.">' +
+              '<input id="twmgr-nb-desc-disp" type="checkbox"> permitir DISPENSAR quem não alcança bárbara</label>' +
+          '</div>' +
+          '<div style="display:flex;gap:6px;align-items:center">' +
+            '<button id="twmgr-nb-desc-prev" class="twmgr-btn twmgr-ghost" style="padding:5px 12px" title="mostra o destino de cada nobre sem fazer nada">👁 Prever</button>' +
+            '<button id="twmgr-nb-desc-go" class="twmgr-btn" style="padding:5px 12px" title="pede confirmação nomeando cada aldeia antes de agir">▶ Descartar</button>' +
+          '</div>' +
+          '<div id="twmgr-nb-desc-out" style="margin-top:6px"></div>') +
         sec('Modelos de envio',
           '<div id="twmgr-nb-chips" class="twmgr-chips"></div>' +
           '<div class="twmgr-card2">' +
@@ -1329,6 +1348,21 @@
     document.getElementById('twmgr-nb-start').addEventListener('click', nobleStart);
     document.getElementById('twmgr-nb-stop').addEventListener('click', nobleStop);
     document.getElementById('twmgr-nb-ocio-go').addEventListener('click', nobleConferirOciosos);
+    // Descarte de nobre inútil. Os três campos gravam na hora; o "Descartar" ainda pede
+    // confirmação nomeando cada aldeia — ver 087-nobre-descarte.
+    (function () {
+      const d = nbDescCfg();
+      const h = document.getElementById('twmgr-nb-desc-h');
+      const s = document.getElementById('twmgr-nb-desc-spy');
+      const p = document.getElementById('twmgr-nb-desc-disp');
+      if (!h || !s || !p) return;
+      h.value = d.horas; s.value = d.spies; p.checked = !!d.permitirDispensar;
+      h.addEventListener('change', () => { d.horas = Math.max(0.5, parseFloat((h.value || '').replace(',', '.')) || 1); h.value = d.horas; save(); });
+      s.addEventListener('change', () => { d.spies = Math.max(0, parseInt(s.value, 10) || 0); s.value = d.spies; save(); });
+      p.addEventListener('change', () => { d.permitirDispensar = p.checked; save(); });
+      document.getElementById('twmgr-nb-desc-prev').addEventListener('click', nbDescPrever);
+      document.getElementById('twmgr-nb-desc-go').addEventListener('click', nbDescExecutar);
+    })();
     renderNobleOciosos();   // só desenha o estado atual; quem dispara a leitura é showTab
     setNobleStatus(config.noble.running);
 

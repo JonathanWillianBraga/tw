@@ -34,9 +34,17 @@
   // muda a hora de chegada. A duracao segue vindo do proprio jogo mesmo assim.
 
   const NOBLE_POR_CONQUISTA = 4;   // padrao: 4 comandos derrubam 100 de lealdade no caso tipico
-  // Quem pode ir de escolta. Explorador nao briga; ariete e catapulta servem pra muralha e
-  // predio, nao pra proteger nobre. Fica so tropa de campo.
-  const NOBLE_ESCOLTA = ['spear', 'sword', 'axe', 'light', 'heavy'];
+  // Quem pode ir de escolta. Ariete e catapulta ficam de fora: servem pra muralha e predio, nao
+  // pra proteger nobre.
+  //
+  // EXPLORADOR entra (pedido do usuario, v11.233.0) mesmo NAO BRIGANDO. A versao anterior o
+  // excluia por principio — "so tropa de campo" — mas isso e o script decidindo tatica pelo
+  // jogador. Ele e util em pelo menos dois casos que o modulo nao tem como adivinhar:
+  //   · descarte de nobre (087-nobre-descarte), onde ele e enchimento barato;
+  //   · quem quer que a leva chegue com explorador junto, por qualquer motivo seu.
+  // Continua valendo o aviso na tela de que ele nao soma defesa — informar e diferente de
+  // proibir. Quem poe numero ali sabe o que esta fazendo.
+  const NOBLE_ESCOLTA = ['spear', 'sword', 'axe', 'spy', 'light', 'heavy'];
   // Total de nobres da conta, lido de passagem na Academia ("Na Aldeia/Total"). Vive fora do
   // config porque é estado do jogo, não escolha do usuário — mas vai pro stats pro card mostrar.
   let _nbTotalConta = null;

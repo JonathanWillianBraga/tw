@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.232.0
+// @version      11.233.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.232.0';
+  const VERSION = '11.233.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -7297,9 +7297,17 @@
   // muda a hora de chegada. A duracao segue vindo do proprio jogo mesmo assim.
 
   const NOBLE_POR_CONQUISTA = 4;   // padrao: 4 comandos derrubam 100 de lealdade no caso tipico
-  // Quem pode ir de escolta. Explorador nao briga; ariete e catapulta servem pra muralha e
-  // predio, nao pra proteger nobre. Fica so tropa de campo.
-  const NOBLE_ESCOLTA = ['spear', 'sword', 'axe', 'light', 'heavy'];
+  // Quem pode ir de escolta. Ariete e catapulta ficam de fora: servem pra muralha e predio, nao
+  // pra proteger nobre.
+  //
+  // EXPLORADOR entra (pedido do usuario, v11.233.0) mesmo NAO BRIGANDO. A versao anterior o
+  // excluia por principio — "so tropa de campo" — mas isso e o script decidindo tatica pelo
+  // jogador. Ele e util em pelo menos dois casos que o modulo nao tem como adivinhar:
+  //   · descarte de nobre (087-nobre-descarte), onde ele e enchimento barato;
+  //   · quem quer que a leva chegue com explorador junto, por qualquer motivo seu.
+  // Continua valendo o aviso na tela de que ele nao soma defesa — informar e diferente de
+  // proibir. Quem poe numero ali sabe o que esta fazendo.
+  const NOBLE_ESCOLTA = ['spear', 'sword', 'axe', 'spy', 'light', 'heavy'];
   // Total de nobres da conta, lido de passagem na Academia ("Na Aldeia/Total"). Vive fora do
   // config porque é estado do jogo, não escolha do usuário — mas vai pro stats pro card mostrar.
   let _nbTotalConta = null;
@@ -11325,8 +11333,16 @@
   //      cai, o que é progresso pra conquistar de graça. Nos dois casos é melhor que o lixo.
   //
   //   3. DISPENSAR — o `screen=train&mode=decommission` do proprio jogo (tela "Dispensar").
-  //      Ultimo recurso: nao devolve NADA, nem recurso nem moeda. So se justifica porque o slot
-  //      preso vale mais que o nobre encalhado.
+  //      Ultimo recurso: nao devolve o RECURSO da unidade. So se justifica porque o slot preso
+  //      vale mais que o nobre encalhado.
+  //
+  // O QUE SE PERDE, E O QUE NAO — corrigido pelo usuario, eu tinha escrito errado
+  //
+  // Nobre que morre (ou que e dispensado) NAO devolve o recurso da unidade, mas TAMBEM NAO
+  // queima as moedas gastas nele: elas ja contaram pro limite e continuam contando. O prejuizo
+  // de descartar e portanto MUITO menor do que parece — e so o recurso da unidade, nao a
+  // cunhagem. Isso pesa a favor de descartar: nobre encalhado prendendo slot custa mais caro
+  // que o recurso de refaze-lo numa aldeia onde ele sirva.
   //
   // POR QUE O ALCANCE PRECISA SER CONFIGURAVEL — e por que 1h nao basta
   //
@@ -11340,7 +11356,7 @@
   //
   // Com o limite em 1h, 52 das 70 aldeias nao teriam bárbara ao alcance e cairiam no Dispensar.
   // Por isso o limite e um campo, e nao uma constante: e o usuario que decide quanto tempo de
-  // viagem vale a pena pra nao queimar a moeda.
+  // viagem vale a pena.
   //
   // NADA AQUI E AUTOMATICO. As duas acoes sao irreversiveis e nenhuma roda em ciclo: e botao,
   // com previa do que vai acontecer com CADA nobre, e confirmacao que nomeia as aldeias.
@@ -11494,7 +11510,7 @@
       + (vaiMinha.length ? 'ATAQUE A ALDEIA SUA (' + vaiMinha.length + ') — o nobre morre na sua própria defesa:\n'
           + vaiMinha.map(linhaTxt).join('\n') + '\n\n' : '')
       + (vaiBarb.length ? 'ATAQUE A BÁRBARA (' + vaiBarb.length + '):\n' + vaiBarb.map(linhaTxt).join('\n') + '\n\n' : '')
-      + (vaiDisp.length ? 'DISPENSAR (' + vaiDisp.length + ') — irreversível, não devolve moeda nem recurso:\n'
+      + (vaiDisp.length ? 'DISPENSAR (' + vaiDisp.length + ') — perde o recurso da unidade (as moedas ficam):\n'
           + vaiDisp.map(linhaTxt).join('\n') + '\n\n' : '')
       + (parados.length ? parados.length + ' aldeia(s) ficam de fora (bárbara longe demais).\n\n' : '')
       + 'Nada disso tem desfazer. Confirma?')) {
@@ -11523,7 +11539,7 @@
           await nbDescDispensar(l.vid, l.nobres);
           nDisp++;
           pushLog('Descarte: ' + l.nome + ' — ' + l.nobres + ' nobre(s) DISPENSADO(S). Slot liberado; '
-            + 'a moeda não volta.', 'ok', 'noble');
+            + 'O recurso da unidade se perde; as moedas continuam contando pro limite.', 'ok', 'noble');
         }
       } catch (e) {
         nErro++;
@@ -14852,7 +14868,7 @@
               + '<input id="twmgr-nb-desc-h" class="twmgr-inp" type="number" step="0.5" min="0.5" style="width:52px;font-size:10px;padding:1px"> h</span>' +
             '<span style="font-size:10px;color:#6f6153">escolta '
               + '<input id="twmgr-nb-desc-spy" class="twmgr-inp" type="number" min="0" style="width:46px;font-size:10px;padding:1px"> explorador(es)</span>' +
-            '<label style="font-size:10px;color:#b03030;cursor:pointer" title="Sem bárbara ao alcance, dispensa o nobre pela tela do próprio jogo. Não devolve moeda nem recurso.">' +
+            '<label style="font-size:10px;color:#b03030;cursor:pointer" title="Sem alvo ao alcance, dispensa o nobre pela tela do próprio jogo. Perde o recurso da unidade — as moedas gastas nele continuam contando pro limite.">' +
               '<input id="twmgr-nb-desc-disp" type="checkbox"> permitir DISPENSAR quem não alcança bárbara</label>' +
           '</div>' +
           '<div style="display:flex;gap:6px;align-items:center">' +
@@ -14882,7 +14898,7 @@
           '</div>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:6px"><b>Cada comando leva 1 nobre.</b> A lealdade cai uma vez por <b>ataque</b>, então 4 nobres num comando só desperdiçaria 3 — é por isso que NT são 4 comandos seguidos. Uma aldeia que manda 3 nobres precisa de <b>3× a escolta</b>.</div>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Alvo em <b>⇅ seguir ordem</b> fica com o modelo que armar <b>mais comandos completos</b> — vale mais um que rende 4 do que um que rende 1. Empate fica com quem vem antes.</div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Só tropa de campo na escolta: explorador não briga, e aríete e catapulta servem pra muralha, não pra proteger nobre. Como o nobre é a unidade <b>mais lenta do jogo</b>, a escolta não atrasa a chegada.</div>') +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Aríete e catapulta ficam de fora: servem pra muralha, não pra proteger nobre. <b>Explorador não soma defesa</b> — está aí porque tem uso (descarte, ou levar olho junto), mas não conta como escolta de verdade. Como o nobre é a unidade <b>mais lenta do jogo</b>, a escolta não atrasa a chegada.</div>') +
         '<div class="twmgr-cols">' +
           '<div class="twmgr-card2"><h4>⚖ Lealdade</h4>' +
             '<div class="twmgr-fld"><span title="Quanto um nobre derruba. No jogo varia de 20 a 35 — um valor MAIOR arrisca mandar de menos; menor manda de sobra">Queda por ataque</span><input id="twmgr-nb-lpa" class="twmgr-inp" type="number" min="1" max="100" value="25"></div>' +

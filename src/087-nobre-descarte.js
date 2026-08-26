@@ -20,8 +20,16 @@
   //      cai, o que é progresso pra conquistar de graça. Nos dois casos é melhor que o lixo.
   //
   //   3. DISPENSAR — o `screen=train&mode=decommission` do proprio jogo (tela "Dispensar").
-  //      Ultimo recurso: nao devolve NADA, nem recurso nem moeda. So se justifica porque o slot
-  //      preso vale mais que o nobre encalhado.
+  //      Ultimo recurso: nao devolve o RECURSO da unidade. So se justifica porque o slot preso
+  //      vale mais que o nobre encalhado.
+  //
+  // O QUE SE PERDE, E O QUE NAO — corrigido pelo usuario, eu tinha escrito errado
+  //
+  // Nobre que morre (ou que e dispensado) NAO devolve o recurso da unidade, mas TAMBEM NAO
+  // queima as moedas gastas nele: elas ja contaram pro limite e continuam contando. O prejuizo
+  // de descartar e portanto MUITO menor do que parece — e so o recurso da unidade, nao a
+  // cunhagem. Isso pesa a favor de descartar: nobre encalhado prendendo slot custa mais caro
+  // que o recurso de refaze-lo numa aldeia onde ele sirva.
   //
   // POR QUE O ALCANCE PRECISA SER CONFIGURAVEL — e por que 1h nao basta
   //
@@ -35,7 +43,7 @@
   //
   // Com o limite em 1h, 52 das 70 aldeias nao teriam bárbara ao alcance e cairiam no Dispensar.
   // Por isso o limite e um campo, e nao uma constante: e o usuario que decide quanto tempo de
-  // viagem vale a pena pra nao queimar a moeda.
+  // viagem vale a pena.
   //
   // NADA AQUI E AUTOMATICO. As duas acoes sao irreversiveis e nenhuma roda em ciclo: e botao,
   // com previa do que vai acontecer com CADA nobre, e confirmacao que nomeia as aldeias.
@@ -189,7 +197,7 @@
       + (vaiMinha.length ? 'ATAQUE A ALDEIA SUA (' + vaiMinha.length + ') — o nobre morre na sua própria defesa:\n'
           + vaiMinha.map(linhaTxt).join('\n') + '\n\n' : '')
       + (vaiBarb.length ? 'ATAQUE A BÁRBARA (' + vaiBarb.length + '):\n' + vaiBarb.map(linhaTxt).join('\n') + '\n\n' : '')
-      + (vaiDisp.length ? 'DISPENSAR (' + vaiDisp.length + ') — irreversível, não devolve moeda nem recurso:\n'
+      + (vaiDisp.length ? 'DISPENSAR (' + vaiDisp.length + ') — perde o recurso da unidade (as moedas ficam):\n'
           + vaiDisp.map(linhaTxt).join('\n') + '\n\n' : '')
       + (parados.length ? parados.length + ' aldeia(s) ficam de fora (bárbara longe demais).\n\n' : '')
       + 'Nada disso tem desfazer. Confirma?')) {
@@ -218,7 +226,7 @@
           await nbDescDispensar(l.vid, l.nobres);
           nDisp++;
           pushLog('Descarte: ' + l.nome + ' — ' + l.nobres + ' nobre(s) DISPENSADO(S). Slot liberado; '
-            + 'a moeda não volta.', 'ok', 'noble');
+            + 'O recurso da unidade se perde; as moedas continuam contando pro limite.', 'ok', 'noble');
         }
       } catch (e) {
         nErro++;

@@ -824,7 +824,7 @@
               + '<input id="twmgr-nb-desc-h" class="twmgr-inp" type="number" step="0.5" min="0.5" style="width:52px;font-size:10px;padding:1px"> h</span>' +
             '<span style="font-size:10px;color:#6f6153">escolta '
               + '<input id="twmgr-nb-desc-spy" class="twmgr-inp" type="number" min="0" style="width:46px;font-size:10px;padding:1px"> explorador(es)</span>' +
-            '<label style="font-size:10px;color:#b03030;cursor:pointer" title="Sem bárbara ao alcance, dispensa o nobre pela tela do próprio jogo. Não devolve moeda nem recurso.">' +
+            '<label style="font-size:10px;color:#b03030;cursor:pointer" title="Sem alvo ao alcance, dispensa o nobre pela tela do próprio jogo. Perde o recurso da unidade — as moedas gastas nele continuam contando pro limite.">' +
               '<input id="twmgr-nb-desc-disp" type="checkbox"> permitir DISPENSAR quem não alcança bárbara</label>' +
           '</div>' +
           '<div style="display:flex;gap:6px;align-items:center">' +
@@ -854,7 +854,7 @@
           '</div>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:6px"><b>Cada comando leva 1 nobre.</b> A lealdade cai uma vez por <b>ataque</b>, então 4 nobres num comando só desperdiçaria 3 — é por isso que NT são 4 comandos seguidos. Uma aldeia que manda 3 nobres precisa de <b>3× a escolta</b>.</div>' +
           '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Alvo em <b>⇅ seguir ordem</b> fica com o modelo que armar <b>mais comandos completos</b> — vale mais um que rende 4 do que um que rende 1. Empate fica com quem vem antes.</div>' +
-          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Só tropa de campo na escolta: explorador não briga, e aríete e catapulta servem pra muralha, não pra proteger nobre. Como o nobre é a unidade <b>mais lenta do jogo</b>, a escolta não atrasa a chegada.</div>') +
+          '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Aríete e catapulta ficam de fora: servem pra muralha, não pra proteger nobre. <b>Explorador não soma defesa</b> — está aí porque tem uso (descarte, ou levar olho junto), mas não conta como escolta de verdade. Como o nobre é a unidade <b>mais lenta do jogo</b>, a escolta não atrasa a chegada.</div>') +
         '<div class="twmgr-cols">' +
           '<div class="twmgr-card2"><h4>⚖ Lealdade</h4>' +
             '<div class="twmgr-fld"><span title="Quanto um nobre derruba. No jogo varia de 20 a 35 — um valor MAIOR arrisca mandar de menos; menor manda de sobra">Queda por ataque</span><input id="twmgr-nb-lpa" class="twmgr-inp" type="number" min="1" max="100" value="25"></div>' +

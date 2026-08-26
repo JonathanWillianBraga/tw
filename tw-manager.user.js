@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.229.0
+// @version      11.230.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.229.0';
+  const VERSION = '11.230.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5039,6 +5039,9 @@
   // pelo diagnóstico sob demanda (equilibrioDiagnostico), sem mandar nada em nenhum dos dois.
   // "storage" guardado À PARTE de "thr": thr já vem escalado pelo limiar (storage*pct), mas
   // pra saber se uma aldeia está perto de ESTOURAR o armazém preciso do valor bruto.
+  // Multiplicador do raio de doacao pra receptor TRAVADO (construcao urgente ou parada).
+  // Ver o comentario no laco de doadores: prioridade sem alcance nao entrega nada.
+  const EQ_RAIO_TRAVADA = 2;
   const EQ_ALVO_TETO = 0.92;   // no automático, nunca mira o topo: produção entre ciclos precisa caber
   async function getEquilibrioSnapshot() {
     let vils = await getAllVillagesCached();
@@ -5174,11 +5177,18 @@
       // Quem foi pro começo da fila e por quê. Sem isto a mudança de critério é invisível: os
       // envios saem igual, só em outra ordem, e não dá pra conferir se está fazendo efeito.
       if (receivers.length) {
+        const urgentes = receivers.filter((x) => x.prio === 0).length;
         const travadas = receivers.filter((x) => x.prio === 1).length;
         pushLog('Equilíbrio (' + NOME_RES[r] + '): fila — '
-          + (travadas ? travadas + ' aldeia(s) TRAVADAS em construção primeiro · ' : '')
+          + (urgentes ? urgentes + ' URGENTE(S) (gatilho de fazenda/armazém) · ' : '')
+          + (travadas ? travadas + ' travada(s) em construção · ' : '')
           + receivers.slice(0, 4).map((x) => x.s.name + ' '
-              + (x.prio === 1 ? '🔨 ' + x.motivo + ', faltam ' + fmtN(Math.round(x.def))
+              // O nivel 0 PRECISA de caso proprio aqui. Sem ele a urgente caia no `else` e
+              // saia como "0% do alvo" — que diz exatamente o OPOSTO do que esta acontecendo:
+              // ela esta no topo da fila por prioridade, nao por estar zerada. Log que mente ao
+              // contrario e pior que log nenhum: manda voce investigar o problema errado.
+              + (x.prio === 0 ? '🚨 ' + x.motivo + ' URGENTE, faltam ' + fmtN(Math.round(x.def))
+               : x.prio === 1 ? '🔨 ' + x.motivo + ', faltam ' + fmtN(Math.round(x.def))
                : x.prio === 2 ? '⚔ recrutar, faltam ' + fmtN(Math.round(x.def))
                : Math.round((1 - x.falta) * 100) + '% do alvo')).join(' · ')
           + (receivers.length > 4 ? ' · +' + (receivers.length - 4) + ' atrás' : ''), '', 'market');
@@ -5199,9 +5209,24 @@
           continue;
         }
         if (rec.def > espaco) rec.def = espaco;
+        // RAIO MAIOR PRA QUEM ESTA TRAVADO (niveis 0 e 1).
+        //
+        // Medido no log de um ciclo real: a Fazenda URGENTE de 483|566 (precisa ~72k) recebeu
+        // 2.828 de argila, enquanto 430|588 — que estava a 96% do alvo — recebeu ~15.000. Nao
+        // foi a ordem que falhou: a urgente FOI atendida primeiro. Faltou DOADOR AO ALCANCE.
+        //
+        // A causa e geografica. As travadas moram numa regiao esparsa e o `maxDist` cortava
+        // quase todo mundo; a de 96% fica no meio do bolo de aldeias e tinha 15 doadores a mao.
+        // Prioridade sem alcance nao entrega nada — ela so garante que os poucos que chegam
+        // atendem primeiro.
+        //
+        // O dobro do raio, e nao "sem limite": mercador leva tempo real na estrada, e recurso
+        // que chega em 15 horas nao destrava nada. O dobro traz a proxima coroa de aldeias sem
+        // transformar a entrega em viagem de um dia.
+        const raio = (rec.prio <= 1) ? maxDist * EQ_RAIO_TRAVADA : maxDist;
         const donors = st.filter((s) => s.vid !== rec.s.vid && s.cap > 0 && s.cur[r] > s.thr[r])
           .map((s) => ({ s: s, exc: s.cur[r] - s.thr[r], d: coordDist(s.coord, rec.s.coord) }))
-          .filter((x) => x.d <= maxDist)
+          .filter((x) => x.d <= raio)
           .sort((a, b) => a.d - b.d);
         for (const don of donors) {
           if (rec.def <= 0) break;

@@ -8,15 +8,18 @@
   // aldeia. A v11.223.0 estancou a sangria — o Noblar parou de formar nobre em cima de nobre
   // parado — mas não resolve o que JÁ está encalhado.
   //
-  // DOIS DESTINOS, e a ordem importa
+  // TRÊS DESTINOS, nesta ordem de preferência
   //
-  //   1. BÁRBARA PERTO — manda o nobre + escolta de exploradores atacar uma bárbara ao alcance.
-  //      Preferido: o nobre sai de cena e ainda derruba lealdade da bárbara no caminho. Se a
-  //      bárbara estiver indefesa o ataque VENCE, o nobre volta e a lealdade dela cai — o que
-  //      é progresso pra conquistar de graça. Se tiver defesa, o nobre morre, que é o pedido.
-  //      Nos dois casos o resultado é melhor que jogar a moeda no lixo.
+  //   1. SUA PRÓPRIA ALDEIA (defendida) — o jogo deixa atacar aldeia sua, e o nobre morre lá.
+  //      É a melhor: suas aldeias estão sempre por perto (não dependem de sorte no mapa), a
+  //      morte é CERTA, e não mexe com bárbara nenhuma que você talvez queira conquistar.
+  //      Só entra aldeia com defesa — ver a trava logo abaixo.
   //
-  //   2. DISPENSAR — o `screen=train&mode=decommission` do proprio jogo (tela "Dispensar").
+  //   2. BÁRBARA PERTO — nobre + escolta de exploradores. Se a bárbara tiver defesa, o nobre
+  //      morre (o pedido). Se estiver indefesa, o ataque VENCE: o nobre volta e a lealdade dela
+  //      cai, o que é progresso pra conquistar de graça. Nos dois casos é melhor que o lixo.
+  //
+  //   3. DISPENSAR — o `screen=train&mode=decommission` do proprio jogo (tela "Dispensar").
   //      Ultimo recurso: nao devolve NADA, nem recurso nem moeda. So se justifica porque o slot
   //      preso vale mais que o nobre encalhado.
   //
@@ -40,6 +43,25 @@
   const NBDESC_MOTIVO_ALVO = 'nenhum alvo no alcance';   // o motivo exato que nobleOciosos() carimba
   const NBDESC_SPY_PADRAO = 5;
   const NBDESC_HORAS_PADRAO = 1;
+
+  // ---------------------------------------------------------------------------------------
+  // ALVO PREFERIDO: A SUA PROPRIA ALDEIA — e a trava que impede o tiro pela culatra
+  //
+  // O jogo DEIXA atacar aldeia sua, e o nobre morre la. Isso e melhor que a barbara por tres
+  // motivos: as suas aldeias estao sempre perto (nao dependem de sorte no mapa), a morte e
+  // certa, e nao mexe com barbara nenhuma que voce talvez queira conquistar depois.
+  //
+  // MAS tem um jeito de sair pela culatra, e foi o proprio usuario que apontou: "inclusive e
+  // possivel se noblar". Se a aldeia escolhida estiver SEM DEFESA, o ataque VENCE — o nobre
+  // sobrevive e a lealdade DA SUA ALDEIA cai. Repetido, voce conquista a si mesmo.
+  //
+  // A regra que fecha isso: so serve aldeia com defesa suficiente pra o ataque PERDER. Um nobre
+  // mais alguns exploradores e um ataque ridiculo (nobre ataca 30, explorador ataca 0), entao
+  // meia duzia de lanceiros ja bastaria. O piso aqui e MUITO mais alto que o necessario de
+  // proposito: a leitura de tropa e um retrato, pode estar velha, e o custo de errar e a
+  // lealdade da propria aldeia. Margem larga sai de graca — sobra aldeia defendida.
+  const NBDESC_DEF_MIN = 200;
+  const NBDESC_DEF_UNITS = ['spear', 'sword', 'archer', 'heavy'];
 
   function nbDescCfg() {
     const c = config.noble;
@@ -72,23 +94,46 @@
       const x = +m[1], y = +m[2];
       // Bárbara mais perto. A viagem e a do NOBRE (35 min/campo): explorador e mais rapido, mas
       // quem manda no tempo do comando e a unidade mais LENTA.
-      let alvo = null, melhor = Infinity;
-      barbs.forEach((b) => { const dd = fieldDist(x, y, +b.x, +b.y); if (dd < melhor) { melhor = dd; alvo = b; } });
-      const minutos = melhor * vel;
       const tropa = tropaPor[String(o.vid)] || {};
       const spies = Math.min(Math.max(0, parseInt(d.spies, 10) || 0), tropa.spy || 0);
-      const cabe = alvo && minutos <= limMin;
+
+      // 1) MINHA ALDEIA DEFENDIDA, a mais perto. Preferida: morte certa e sempre por perto.
+      //    A propria aldeia de origem esta fora (nao da pra atacar a si mesma de si mesma).
+      let mine = null, dMine = Infinity;
+      (todas || []).forEach((v) => {
+        if (String(v.vid) === String(o.vid)) return;
+        const mm = (v.coord || '').match(/(\d+)\|(\d+)/); if (!mm) return;
+        const t = tropaPor[String(v.vid)] || {};
+        const def = NBDESC_DEF_UNITS.reduce((s, u) => s + (t[u] || 0), 0);
+        if (def < NBDESC_DEF_MIN) return;                 // sem defesa = risco de auto-noblar
+        const dd = fieldDist(x, y, +mm[1], +mm[2]);
+        if (dd < dMine) { dMine = dd; mine = { coord: v.coord, nome: v.name || v.coord, def: def }; }
+      });
+      // 2) BARBARA mais perto (fallback: mata se ela tiver defesa, senao derruba lealdade dela).
+      let alvo = null, melhor = Infinity;
+      barbs.forEach((b) => { const dd = fieldDist(x, y, +b.x, +b.y); if (dd < melhor) { melhor = dd; alvo = b; } });
+
+      const minMine = mine ? dMine * vel : Infinity;
+      const minBarb = alvo ? melhor * vel : Infinity;
+      const cabeMine = mine && minMine <= limMin;
+      const cabeBarb = alvo && minBarb <= limMin;
+      const usa = cabeMine ? 'minha' : cabeBarb ? 'barbara' : (d.permitirDispensar ? 'dispensar' : 'nada');
+      const alvoCoord = usa === 'minha' ? mine.coord : usa === 'barbara' ? (alvo.x + '|' + alvo.y) : null;
+      const min = usa === 'minha' ? minMine : usa === 'barbara' ? minBarb : null;
+      const campos = usa === 'minha' ? dMine : usa === 'barbara' ? melhor : null;
       linhas.push({
         vid: o.vid, nome: o.nome, coord: o.coord, nobres: o.nobres,
-        alvo: alvo ? (alvo.x + '|' + alvo.y) : null,
-        campos: alvo ? Math.round(melhor * 100) / 100 : null,
-        minutos: alvo ? Math.round(minutos) : null,
+        alvo: alvoCoord, alvoNome: usa === 'minha' ? mine.nome : null,
+        def: usa === 'minha' ? mine.def : null,
+        campos: campos != null ? Math.round(campos * 100) / 100 : null,
+        minutos: min != null ? Math.round(min) : null,
         spies: spies, spiesPedidos: parseInt(d.spies, 10) || 0,
-        destino: cabe ? 'barbara' : (d.permitirDispensar ? 'dispensar' : 'nada'),
-        porque: cabe ? null
-              : !alvo ? 'nenhuma bárbara no mapa'
-              : (d.permitirDispensar ? 'bárbara mais perto está a ' + fmtDur(Math.round(minutos * 60))
-                 : 'bárbara a ' + fmtDur(Math.round(minutos * 60)) + ' — fora do limite, e dispensar está desligado'),
+        destino: usa,
+        porque: (usa === 'minha' || usa === 'barbara') ? null
+              : (!mine && !alvo) ? 'não achei aldeia defendida nem bárbara'
+              : 'mais perto: ' + (mine ? 'sua ' + mine.coord + ' a ' + fmtDur(Math.round(minMine * 60)) : '—')
+                + (alvo ? ' · bárbara a ' + fmtDur(Math.round(minBarb * 60)) : '')
+                + ' — fora do limite' + (d.permitirDispensar ? '' : ', e dispensar está desligado'),
       });
     });
     return { linhas: linhas, nenhum: false };
@@ -121,10 +166,11 @@
       pushLog('Descarte: nenhum nobre com "' + NBDESC_MOTIVO_ALVO + '" — nada a fazer.', 'ok', 'noble');
       return;
     }
+    const vaiMinha = p.linhas.filter((l) => l.destino === 'minha');
     const vaiBarb = p.linhas.filter((l) => l.destino === 'barbara');
     const vaiDisp = p.linhas.filter((l) => l.destino === 'dispensar');
     const parados = p.linhas.filter((l) => l.destino === 'nada');
-    if (!vaiBarb.length && !vaiDisp.length) {
+    if (!vaiMinha.length && !vaiBarb.length && !vaiDisp.length) {
       pushLog('Descarte: ' + parados.length + ' aldeia(s) com nobre inútil, mas nenhuma tem bárbara dentro de '
         + d.horas + 'h e o Dispensar está desligado. Aumente o limite ou ligue o Dispensar.', 'err', 'noble');
       return;
@@ -132,11 +178,16 @@
     // A confirmacao NOMEIA cada aldeia e cada destino. "Tem certeza?" nao serve aqui: as duas
     // acoes sao irreversiveis e diferentes entre si, e o usuario precisa ver QUEM leva qual.
     const linhaTxt = (l) => '  · ' + l.nome + ' (' + l.coord + '): ' + l.nobres + ' nobre(s) → '
-      + (l.destino === 'barbara'
-        ? 'ataca ' + l.alvo + ' a ' + l.campos + ' campos (' + fmtDur(l.minutos * 60) + ')'
+      + (l.destino === 'minha'
+        ? 'ataca SUA ' + l.alvoNome + ' (' + l.alvo + ', ' + fmtN(l.def) + ' de defesa) a '
+          + l.campos + ' campos (' + fmtDur(l.minutos * 60) + '), com ' + l.spies + ' explorador(es)'
+        : l.destino === 'barbara'
+        ? 'ataca bárbara ' + l.alvo + ' a ' + l.campos + ' campos (' + fmtDur(l.minutos * 60) + ')'
           + ', com ' + l.spies + ' explorador(es)' + (l.spies < l.spiesPedidos ? ' (só tinha isso)' : '')
         : 'DISPENSAR — não volta nada');
-    if (!confirm('DESCARTAR ' + (vaiBarb.length + vaiDisp.length) + ' aldeia(s) com nobre inútil?\n\n'
+    if (!confirm('DESCARTAR ' + (vaiMinha.length + vaiBarb.length + vaiDisp.length) + ' aldeia(s) com nobre inútil?\n\n'
+      + (vaiMinha.length ? 'ATAQUE A ALDEIA SUA (' + vaiMinha.length + ') — o nobre morre na sua própria defesa:\n'
+          + vaiMinha.map(linhaTxt).join('\n') + '\n\n' : '')
       + (vaiBarb.length ? 'ATAQUE A BÁRBARA (' + vaiBarb.length + '):\n' + vaiBarb.map(linhaTxt).join('\n') + '\n\n' : '')
       + (vaiDisp.length ? 'DISPENSAR (' + vaiDisp.length + ') — irreversível, não devolve moeda nem recurso:\n'
           + vaiDisp.map(linhaTxt).join('\n') + '\n\n' : '')
@@ -150,16 +201,19 @@
       if (l.destino === 'nada') continue;
       { const pare = devoParar('noble'); if (pare) { pushLog('Descarte: interrompido — ' + pare + '.', '', 'noble'); break; } }
       try {
-        if (l.destino === 'barbara') {
+        if (l.destino === 'minha' || l.destino === 'barbara') {
           const [ax, ay] = l.alvo.split('|');
           const unidades = { snob: l.nobres };
           if (l.spies > 0) unidades.spy = l.spies;
           const prep = await fakePrepare(l.vid, ax, ay, unidades);
           await fakeFire(prep);
           nAtk++;
-          pushLog('Descarte: ' + l.nome + ' → bárbara ' + l.alvo + ' com ' + l.nobres + ' nobre(s) + '
-            + l.spies + ' explorador(es). Se a bárbara tiver defesa o nobre morre; se não tiver, '
-            + 'ele volta e a lealdade dela cai.', 'ok', 'noble');
+          pushLog('Descarte: ' + l.nome + ' → ' + (l.destino === 'minha' ? 'SUA ' + l.alvoNome : 'bárbara')
+            + ' ' + l.alvo + ' com ' + l.nobres + ' nobre(s) + ' + l.spies + ' explorador(es). '
+            + (l.destino === 'minha'
+              ? 'Ela tem ' + fmtN(l.def) + ' de defesa em casa — o ataque PERDE e o nobre morre.'
+              : 'Se a bárbara tiver defesa o nobre morre; se não tiver, ele volta e a lealdade dela cai.'),
+            'ok', 'noble');
         } else {
           await nbDescDispensar(l.vid, l.nobres);
           nDisp++;
@@ -190,8 +244,8 @@
         + NBDESC_MOTIVO_ALVO + '" — nada a descartar.</span>';
       return;
     }
-    const cor = { barbara: '#3f8f52', dispensar: '#b03030', nada: '#8a7340' };
-    const rot = { barbara: '⚔ bárbara', dispensar: '🗑 dispensar', nada: '— fica' };
+    const cor = { minha: '#3f8f52', barbara: '#8b5426', dispensar: '#b03030', nada: '#8a7340' };
+    const rot = { minha: '🏠 minha aldeia', barbara: '⚔ bárbara', dispensar: '🗑 dispensar', nada: '— fica' };
     box.innerHTML = '<table style="width:100%;font-size:10px;border-collapse:collapse">' +
       '<tr style="color:#8a7340"><td>aldeia</td><td style="width:38px">nobres</td>'
       + '<td style="width:76px">destino</td><td>o que acontece</td></tr>' +
@@ -199,9 +253,10 @@
         '<td style="padding:2px 0">' + esc(l.nome) + ' <span style="color:#8a7340">' + esc(l.coord) + '</span></td>' +
         '<td><b style="color:#8b5426">' + l.nobres + '</b></td>' +
         '<td style="color:' + cor[l.destino] + '">' + rot[l.destino] + '</td>' +
-        '<td style="color:#6f6153">' + (l.destino === 'barbara'
-          ? 'ataca ' + esc(l.alvo) + ' · ' + l.campos + ' campos · ' + esc(fmtDur(l.minutos * 60))
-            + ' · ' + l.spies + ' explorador(es)'
+        '<td style="color:#6f6153">' + (l.destino === 'minha' || l.destino === 'barbara'
+          ? 'ataca ' + esc(l.destino === 'minha' ? (l.alvoNome + ' ' + l.alvo) : ('bárbara ' + l.alvo))
+            + (l.destino === 'minha' ? ' <span style="color:#3f8f52">(' + fmtN(l.def) + ' def)</span>' : '')
+            + ' · ' + l.campos + ' campos · ' + esc(fmtDur(l.minutos * 60)) + ' · ' + l.spies + ' explorador(es)'
           : esc(l.porque || '')) + '</td></tr>').join('') +
       '</table>' +
       '<div style="color:#8a7340;font-size:9px;margin-top:3px">Prévia — nada foi feito. '

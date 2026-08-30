@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.241.0
+// @version      11.242.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.241.0';
+  const VERSION = '11.242.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5195,6 +5195,11 @@
     const st = base.map((x) => Object.assign({}, x, {
       thr: { wood: x.storage * pctRes.wood, stone: x.storage * pctRes.stone, iron: x.storage * pctRes.iron },
     }));
+    // O alerta de lotacao (076) se alimenta daqui: o Equilibrio ja leu TODAS as aldeias, entao
+    // saber se os armazens bateram o alvo da cunhagem custa zero. E o unico ciclo que roda
+    // enquanto a Cunhagem esta DESLIGADA — que e justamente quando o alerta importa.
+    try { cplChecarAlvo(st.map((x) => ({ cap: x.storage, wood: x.cur.wood, stone: x.cur.stone, iron: x.cur.iron }))); }
+    catch (e) { /* alerta e opcional */ }
     return { st: st, pct: fixo, pctRes: pctRes, auto: auto };
   }
   async function equilibrioPass() {
@@ -5785,10 +5790,13 @@
   let _cplDados = null, _cplAt = 0, _cplCarregando = false, _cplErr = null, _cplPlano = null;
   // Estado AO VIVO: alimentado pelo proprio ciclo da Cunhagem, sem requisicao extra.
   let _cplVivo = null;
+  // Ultima leitura de lotacao, pro painel mostrar mesmo com tudo desligado.
+  let _cplLot = null;
 
   function cplCfg() {
     const c = config.market;
     if (c.cplHoras == null) c.cplHoras = 48;
+    if (c.cplAlvoPct == null) c.cplAlvoPct = CPL_ALVO_PADRAO;
     if (c.cplDesconto == null) c.cplDesconto = 44;      // % que a bandeira corta dos tres
     if (!c.cplInv) c.cplInv = { 1: 0, 2: 0, 5: 0, 10: 0, 15: 0, 30: 0 };
     CPL_PCTS.forEach((p) => { if (c.cplInv[p] == null) c.cplInv[p] = 0; });
@@ -6107,6 +6115,7 @@
     try {
       const V = await cplLerAldeias();
       _cplDados = V; _cplAt = Date.now();
+      try { cplChecarAlvo(Object.keys(V).map((k) => V[k])); } catch (e) { /* opcional */ }
       const destAtual = (config.market.destCoords || [])[0] || null;
       const rank = Object.keys(V).map((k) => ({ coord: k, nome: V[k].nome, d: cplDistPonderada(V, k),
                                                  snob: V[k].snob }))
@@ -6135,12 +6144,64 @@
   }
 
   // ---------------------------------------------------------------------------------------
+  // QUANDO COMECAR A CUNHAR — o alerta de lotacao.
+  //
+  // A intuicao do usuario ("quanto mais cheio o armazem, mais rende a cunhagem") esta CERTA, e
+  // eu duvidei dela duas vezes antes de medir. O que a medicao mostrou, na conta real:
+  //
+  //     esperar   lotacao   producao perdida   moedas   nobres
+  //        0h      59,2%           0            1.718     +19
+  //       24h      68,5%         7,5 k          1.804     +20
+  //       52h      79,1%       147   k          1.919     +21   <- otimo
+  //       96h      88,0%         5,84 M         1.954     +21
+  //
+  // Ate ~80% o transbordo e desprezivel (147k, 0,2% do que se ganha) e cada faixa vale nobre.
+  // Depois de 80% a curva SATURA: mais 44h de espera nao rendem nobre nenhum e queimam 5,8M em
+  // producao jogada fora, porque as aldeias que enchem primeiro passam a produzir pro ralo.
+  //
+  // Por isso o alvo padrao e 80%: e onde o ganho para e o desperdicio comeca.
+  const CPL_ALVO_PADRAO = 80;
+
+  // Lotacao geral = quanto do armazem TOTAL esta ocupado, somando os tres recursos. Ponderada
+  // pela capacidade e nao media das aldeias: uma aldeia de 400k pesa mais que uma de 20k, e e a
+  // primeira que decide se vale disparar a operacao.
+  function cplLotacao(lista) {
+    if (!lista || !lista.length) return null;
+    let cap = 0, uso = 0, cheios = 0, total = 0;
+    lista.forEach((v) => {
+      ['wood', 'stone', 'iron'].forEach((k) => {
+        cap += v.cap; uso += Math.min(v.cap, v[k] || 0); total++;
+        if ((v[k] || 0) >= v.cap * 0.999) cheios++;
+      });
+    });
+    return { pct: cap ? uso / cap : 0, cheios: cheios, total: total, cap: cap, uso: uso };
+  }
+
+  // Alerta uma vez por travessia, nao a cada ciclo: repetir a mesma linha varreria o log de 200
+  // linhas, que e compartilhado com todos os modulos (ja aconteceu com a recruta do Noblar).
+  function cplChecarAlvo(lista) {
+    const c = cplCfg();
+    const L = cplLotacao(lista); if (!L) return;
+    const alvo = Math.max(1, Math.min(99, parseFloat(c.cplAlvoPct) || CPL_ALVO_PADRAO)) / 100;
+    _cplLot = { at: Date.now(), pct: L.pct, cheios: L.cheios, total: L.total };
+    if (L.pct >= alvo && !c._cplAvisou) {
+      c._cplAvisou = 1; save();
+      pushLog('🪙 Cunhagem: os armazéns bateram ' + Math.round(L.pct * 100) + '% (alvo '
+        + Math.round(alvo * 100) + '%) — é a hora de rodar a cunhagem. Esperar mais satura: '
+        + 'a produção das aldeias cheias passa a transbordar sem virar moeda.', 'ok', 'market');
+    } else if (L.pct < alvo * 0.9 && c._cplAvisou) {
+      c._cplAvisou = 0; save();   // rearma depois de drenar, pro proximo ciclo avisar de novo
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------
   // PAINEL AO VIVO. Alimentado pelo PROPRIO ciclo da Cunhagem (075-mercado), que ja le o mercado
   // de cada doadora — entao isto custa ZERO requisicao. Com a Cunhagem desligada, o estado fica
   // congelado na ultima leitura, e a tela diz isso.
   function cplVivoRegistrar(lista) {
     if (!lista || !lista.length) return;
     _cplVivo = { at: Date.now(), lista: lista };
+    try { cplChecarAlvo(lista); } catch (e) { /* alerta e opcional */ }
     try { cplVivoRender(); } catch (e) { /* a tela pode nao estar aberta */ }
     return _cplVivo;
   }
@@ -6237,7 +6298,36 @@
     const gargalo = Object.keys(porRec).sort((a, b) => porRec[a] - porRec[b])[0];
     const alt = p.rank.filter((x) => x.coord !== p.sede)[0];
     const distSede = cplDistPonderada(_cplDados, p.sede);
+    // LOTACAO em cima de tudo: e ela que responde "comeco agora ou espero?", e a resposta muda
+    // o resto da tela. Sem isso o usuario le a projecao sem saber se e a hora de agir.
+    const alvoPct = Math.max(1, Math.min(99, parseFloat(c.cplAlvoPct) || 80));
+    const L = _cplLot;
+    const prodH = Object.keys(_cplDados || {}).reduce((a, k) => a + _cplDados[k].pw + _cplDados[k].ps + _cplDados[k].pi, 0);
+    let eta = null;
+    if (L && prodH > 0 && L.pct < alvoPct / 100) {
+      // Estimativa GROSSA e assumidamente otimista: ignora que aldeia cheia para de acumular.
+      // Serve pra ordem de grandeza ("horas ou dias"), nao pra marcar hora.
+      const falta = (alvoPct / 100 - L.pct) * (_cplDados ? Object.keys(_cplDados).reduce((a, k) => a + _cplDados[k].cap * 3, 0) : 0);
+      eta = falta / prodH;
+    }
     box.innerHTML =
+      (L ? '<div style="border:1px solid ' + (L.pct >= alvoPct / 100 ? '#bcd9bc' : '#e6dcc9')
+          + ';background:' + (L.pct >= alvoPct / 100 ? '#eef7ee' : '#fffdf8')
+          + ';border-radius:6px;padding:7px;margin-bottom:6px">'
+          + '<b style="font-size:14px;color:' + (L.pct >= alvoPct / 100 ? '#2e7d3a' : '#a2643a') + '">'
+          + Math.round(L.pct * 100) + '%</b> <span style="font-size:10px;color:#6f6153">dos armazéns ocupados'
+          + ' · alvo ' + alvoPct + '%</span><br>'
+          + '<span style="font-size:10px;color:' + (L.pct >= alvoPct / 100 ? '#2e7d3a' : '#6f6153') + '">'
+          + (L.pct >= alvoPct / 100
+              ? '<b>Hora de rodar.</b> Esperar mais satura — a produção das aldeias cheias passa a transbordar sem virar moeda.'
+              : 'Ainda enchendo' + (eta != null && eta > 0 && isFinite(eta)
+                  ? ' — chega ao alvo em ~' + (eta < 24 ? Math.round(eta) + 'h' : Math.round(eta / 24) + ' dia(s)')
+                    + ' <span style="color:#8a7d6d">(estimativa otimista: ignora aldeia que enche e para de acumular)</span>'
+                  : '') + '.')
+          + '</span>'
+          + (L.cheios ? '<br><span style="font-size:10px;color:#b03030">' + L.cheios + ' de ' + L.total
+             + ' depósitos já no teto — esses estão jogando produção fora agora.</span>' : '')
+          + '</div>' : '') +
       '<table class="twmgr-bld-tab" style="width:100%"><thead><tr>' +
         '<th>cenário em ' + p.horas + 'h</th><th style="width:74px">moedas</th><th style="width:62px">nobres</th></tr></thead><tbody>' +
       cen.map((x, i) => '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '"' + (x.forte ? ' style="background:#eef7ee"' : '') + '>' +
@@ -15440,6 +15530,7 @@
               '<button id="twmgr-cpl-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">🎯 Projetar</button>' +
               '<span style="font-size:10px;color:#6f6153">janela <input id="twmgr-cpl-h" class="twmgr-inp" type="number" min="1" max="336" style="width:52px;font-size:10px;padding:1px"> h</span>' +
               '<span style="font-size:10px;color:#6f6153" title="Quanto a bandeira corta do custo da moeda. A tela sempre mostra as duas colunas, com e sem.">bandeira −<input id="twmgr-cpl-desc" class="twmgr-inp" type="number" min="0" max="95" style="width:46px;font-size:10px;padding:1px">%</span>' +
+              '<span style="font-size:10px;color:#6f6153" title="Lotação dos armazéns em que vale disparar a cunhagem. Medido nesta conta: até ~80% cada faixa vale nobre; depois disso satura e a produção das aldeias cheias começa a transbordar sem virar moeda.">avisar aos <input id="twmgr-cpl-alvo" class="twmgr-inp" type="number" min="1" max="99" style="width:44px;font-size:10px;padding:1px">% cheio</span>' +
             '</div>' +
             '<div style="font-size:10px;color:#6f6153;margin-bottom:3px">Pacotes de recurso no inventário <span style="color:#8a7d6d">— digite uma vez; eu não consigo ler do jogo</span></div>' +
             '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">' +
@@ -15979,6 +16070,14 @@
           save(); cplVivoRender();
         });
       });
+      const al = document.getElementById('twmgr-cpl-alvo');
+      if (al) {
+        al.value = c.cplAlvoPct;
+        al.addEventListener('change', () => {
+          c.cplAlvoPct = Math.max(1, Math.min(99, parseInt(al.value, 10) || 80));
+          al.value = c.cplAlvoPct; c._cplAvisou = 0; save(); cplRender();
+        });
+      }
       const g = document.getElementById('twmgr-cpl-go');
       if (g) g.addEventListener('click', cplPlanejar);
       cplVivoRender();

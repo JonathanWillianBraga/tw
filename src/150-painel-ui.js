@@ -710,6 +710,7 @@
               '<button id="twmgr-cpl-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">🎯 Projetar</button>' +
               '<span style="font-size:10px;color:#6f6153">janela <input id="twmgr-cpl-h" class="twmgr-inp" type="number" min="1" max="336" style="width:52px;font-size:10px;padding:1px"> h</span>' +
               '<span style="font-size:10px;color:#6f6153" title="Quanto a bandeira corta do custo da moeda. A tela sempre mostra as duas colunas, com e sem.">bandeira −<input id="twmgr-cpl-desc" class="twmgr-inp" type="number" min="0" max="95" style="width:46px;font-size:10px;padding:1px">%</span>' +
+              '<span style="font-size:10px;color:#6f6153" title="Lotação dos armazéns em que vale disparar a cunhagem. Medido nesta conta: até ~80% cada faixa vale nobre; depois disso satura e a produção das aldeias cheias começa a transbordar sem virar moeda.">avisar aos <input id="twmgr-cpl-alvo" class="twmgr-inp" type="number" min="1" max="99" style="width:44px;font-size:10px;padding:1px">% cheio</span>' +
             '</div>' +
             '<div style="font-size:10px;color:#6f6153;margin-bottom:3px">Pacotes de recurso no inventário <span style="color:#8a7d6d">— digite uma vez; eu não consigo ler do jogo</span></div>' +
             '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">' +
@@ -1249,6 +1250,14 @@
           save(); cplVivoRender();
         });
       });
+      const al = document.getElementById('twmgr-cpl-alvo');
+      if (al) {
+        al.value = c.cplAlvoPct;
+        al.addEventListener('change', () => {
+          c.cplAlvoPct = Math.max(1, Math.min(99, parseInt(al.value, 10) || 80));
+          al.value = c.cplAlvoPct; c._cplAvisou = 0; save(); cplRender();
+        });
+      }
       const g = document.getElementById('twmgr-cpl-go');
       if (g) g.addEventListener('click', cplPlanejar);
       cplVivoRender();

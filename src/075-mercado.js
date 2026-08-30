@@ -441,6 +441,11 @@
     const st = base.map((x) => Object.assign({}, x, {
       thr: { wood: x.storage * pctRes.wood, stone: x.storage * pctRes.stone, iron: x.storage * pctRes.iron },
     }));
+    // O alerta de lotacao (076) se alimenta daqui: o Equilibrio ja leu TODAS as aldeias, entao
+    // saber se os armazens bateram o alvo da cunhagem custa zero. E o unico ciclo que roda
+    // enquanto a Cunhagem esta DESLIGADA — que e justamente quando o alerta importa.
+    try { cplChecarAlvo(st.map((x) => ({ cap: x.storage, wood: x.cur.wood, stone: x.cur.stone, iron: x.cur.iron }))); }
+    catch (e) { /* alerta e opcional */ }
     return { st: st, pct: fixo, pctRes: pctRes, auto: auto };
   }
   async function equilibrioPass() {

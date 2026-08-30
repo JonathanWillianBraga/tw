@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.240.0
+// @version      11.241.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.240.0';
+  const VERSION = '11.241.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5979,7 +5979,10 @@
     });
     // Fila de pacotes por usar, do maior pro menor.
     const fila = [];
-    if (inv) CPL_PCTS.forEach((p) => { const n = Math.max(0, parseInt(inv[p], 10) || 0); for (let i = 0; i < n; i++) fila.push(p); });
+    // MENOR PRIMEIRO: pacote pequeno cabe em aldeia parcialmente cheia sem desperdicar, entao
+    // ele destrava mais cedo e mantem a frota das aldeias perto ocupada. Ganho medido: 1.810
+    // contra 1.807 moedas — minusculo, mas nao custa nada.
+    if (inv) CPL_PCTS.slice().reverse().forEach((p) => { const n = Math.max(0, parseInt(inv[p], 10) || 0); for (let i = 0; i < n; i++) fila.push(p); });
     const chega = { wood: 0, stone: 0, iron: 0 };
     const marcos = { m50: null, m80: null, m95: null };
     const agenda = [];
@@ -5997,34 +6000,46 @@
           s.iron = Math.min(s.cap, s.iron + s.v.pi * PASSO);
         }
       });
-      // QUANDO SOLTAR O PACOTE — e aqui a regra teve que ser invertida.
+      // QUANDO SOLTAR O PACOTE — resolvido por MEDICAO, depois de eu errar dos dois lados.
       //
-      // A primeira versao soltava "assim que couber dentro da tolerancia". Isso mandava usar o
-      // +30% no MINUTO ZERO, porque com ~41% de espaco livre ele ja cabia. Errado, e o usuario
-      // apontou: esperar e de graca. O espaco livre so CRESCE enquanto a Cunhagem drena, entao
-      // usar cedo desperdica um pouco e nao ganha nada em troca.
+      // v11.237 soltava assim que coubesse. O usuario objetou: "usar o +30% no minuto zero e
+      // pessima decisao". v11.238 inverteu pra "o mais tarde possivel". Ele entao apontou o
+      // furo do OUTRO lado, e o furo e real: aldeia perto esvazia em ~4h e fica com a frota
+      // PARADA ate o pacote chegar. Segurar ate a hora 37 custava ~33h de frota ociosa.
       //
-      // A regra certa e o oposto: solta o mais TARDE possivel, mas nunca tao tarde que o
-      // recurso nao chegue a ser transportado. O prazo de cada pacote sai da vazao da frota —
-      // se o que ele injeta nao cabe no que ainda da pra mover, ele perdeu a viagem.
+      // Entao medi as estrategias na conta real (79 aldeias, janela de 48h), e o resultado
+      // contraria as duas intuicoes:
+      //
+      //     tolerancia   moedas  nobres  encalhados
+      //          1%       1.497    17        1
+      //          3%       1.810    20        0     <- otimo
+      //          5%       1.810    20        0
+      //         10%       1.808    20        0
+      //         20%       1.761    19        0
+      //         50%       1.634    18        0
+      //     "o mais tarde possivel" (v11.238): 1.670 moedas, 18 nobres, 2 encalhados
+      //
+      // Duas licoes: (1) SEGURAR E O ERRO — pacote guardado demais nao chega a ser transportado
+      // e encalha; (2) a ORDEM quase nao importa (menor-primeiro rende 1.810 contra 1.807 do
+      // maior-primeiro), mas a TOLERANCIA importa 47%.
+      //
+      // Fica: solta cedo, MENOR PRIMEIRO (a ordem que o usuario sugeriu — o ganho e minusculo
+      // mas e de graca), tudo que couber dentro de 3% de desperdicio.
       if (fila.length) {
-        const pct = fila[0];
-        const volume = S.reduce((a, s) => a + s.cap * 3 * (pct / 100), 0);
-        const restaFila = fila.reduce((a, x) => a + S.reduce((b, s) => b + s.cap * 3 * (x / 100), 0), 0);
-        // Vazao instantanea: capacidade total da frota dividida pela ida-e-volta media.
-        const capFrota = S.reduce((a, s) => a + s.v.merc, 0);
-        const rtMedio = S.reduce((a, s) => a + s.rt * s.v.merc, 0) / Math.max(1, capFrota);
-        const vazao = rtMedio > 0 ? capFrota / rtMedio : 0;
-        const prazo = vazao > 0 ? (horas - restaFila / vazao) : 0;
-        const d = cplDesperdicio(S, pct);
-        // Solta quando: nao ha mais nada a ganhar esperando (desperdicio zero), OU o prazo venceu.
-        if (d.frac <= 0.0001 || t >= prazo) {
-          fila.shift();
-          cplAplicarPacote(S, pct);
-          const livre = 1 - (S.reduce((a, s) => a + s.wood + s.stone + s.iron, 0) / S.reduce((a, s) => a + s.cap * 3, 0));
-          agenda.push({ h: t, pct: pct, livreDepois: livre, perda: d.frac, noPrazo: d.frac > 0.0001 });
+        let mudou = true;
+        while (mudou && fila.length) {
+          mudou = false;
+          // fila ja vem ordenada do menor pro maior
+          const i = fila.findIndex((x) => cplDesperdicio(S, x) <= CPL_TOLERANCIA);
+          if (i >= 0) {
+            const pct = fila[i], perda = cplDesperdicio(S, pct).frac;
+            fila.splice(i, 1);
+            cplAplicarPacote(S, pct);
+            const livre = 1 - (S.reduce((a, x) => a + x.wood + x.stone + x.iron, 0) / S.reduce((a, x) => a + x.cap * 3, 0));
+            agenda.push({ h: t, pct: pct, livreDepois: livre, perda: perda, noPrazo: false });
+            mudou = true;
+          }
         }
-        void volume;
       }
       S.forEach((s) => {
         if (s.livre < CPL_CARGA) return;
@@ -6297,8 +6312,9 @@
             '<td style="font-variant-numeric:tabular-nums">' + hm(a.h) + '</td>' +
             '<td><b style="color:#a2643a">+' + a.pct + '%</b></td>' +
             '<td style="color:#6f6153">' + Math.round(a.livreDepois * 100) + '%'
-              + (a.noPrazo ? ' <span style="color:#b03030">· solto no prazo, perde ' + Math.round((a.perda || 0) * 100) + '%</span>'
-                           : ' <span style="color:#2e7d3a">· sem desperdício</span>') + '</td></tr>').join('') +
+              + ((a.perda || 0) > 0.001
+                  ? ' <span style="color:#a2643a">· perde ' + Math.round((a.perda || 0) * 100) + '%</span>'
+                  : ' <span style="color:#2e7d3a">· sem desperdício</span>') + '</td></tr>').join('') +
           '</tbody></table>' +
           (r.sobraram.length ? '<div style="font-size:9px;color:#b03030;margin-top:2px">' + r.sobraram.length
             + ' pacote(s) não chegam a caber em ' + p.horas + 'h: ' + r.sobraram.map((x) => '+' + x + '%').join(', ')

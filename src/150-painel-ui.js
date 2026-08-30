@@ -352,7 +352,7 @@
   // duplicar a função daria duas cópias pra manter em sincronia.
   const SUBS = { farm: ['farm', 'estat', 'wall', 'map', 'fichas'], noble: ['alvos', 'cunhar', 'pos'],
                  recruit: ['rcmodelos', 'rcstatus'], build: ['bldmodelos', 'bldstatus'],
-                 market: ['cunhagem', 'equilibrio', 'solidario', 'pacotes'] };
+                 market: ['cunhagem', 'equilibrio', 'solidario', 'pacotes', 'cplano'] };
   function showSub(mod, name) {
     (SUBS[mod] || []).forEach((n) => {
       const c = document.getElementById('twmgr-sub-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
@@ -635,6 +635,7 @@
           subBtn('equilibrio', '⚖️', 'Equilíbrio', 'market') +
           subBtn('solidario', '🤝', 'Solidário', 'market') +
           subBtn('pacotes', '📦', 'Pacotes', 'market') +
+          subBtn('cplano', '🎯', 'Projeção', 'market') +
         '</div>' +
         '<div id="twmgr-sub-cunhagem">' +
         sec('💰 Cunhagem',
@@ -699,6 +700,17 @@
               '<span id="twmgr-mk-pac-quando" style="font-size:9px;color:#8a7d6d;flex:1"></span>' +
             '</div>' +
             '<div id="twmgr-mk-pacotes"></div>') +
+        '</div>' +
+        // PLANEJADOR (076-cunhagem-plano). Fica na sub-aba da Cunhagem porque responde às
+        // perguntas que se faz ANTES de ligar: qual sede, quanto chega, quantos nobres dá.
+        '<div id="twmgr-sub-cplano" style="display:none">' +
+        sec('🎯 Projeção da cunhagem',
+            '<div style="font-size:10px;color:#8a7d6d;margin-bottom:5px">Simula a operação com o <b>tempo correndo</b>: cada mercador sai, viaja, entrega e só fica livre de novo depois da <b>ida e volta</b>. Respeita a reserva e a razão configuradas acima. O custo da moeda é lido da <b>Academia</b> da sede — se a bandeira de desconto estiver ativa, ela já entra na conta.</div>' +
+            '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;flex-wrap:wrap">' +
+              '<button id="twmgr-cpl-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">🎯 Projetar</button>' +
+              '<span style="font-size:10px;color:#6f6153">janela <input id="twmgr-cpl-h" class="twmgr-inp" type="number" min="1" max="336" style="width:56px;font-size:10px;padding:1px"> h</span>' +
+            '</div>' +
+            '<div id="twmgr-cpl-out"></div>') +
         '</div>' +
         sec('Ritmo (compartilhado pelos modos ligados)', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-mk-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         modLog('market') +
@@ -1197,6 +1209,19 @@
     document.getElementById('twmgr-mk-eq-diag').addEventListener('click', equilibrioDiagnostico);
     equilibrioRenderSaude();   // mostra o diagnóstico salvo da última vez, sem esperar um novo
     document.getElementById('twmgr-mk-pac-go').addEventListener('click', calcularPacotesUI);
+    // Projeção da cunhagem (076-cunhagem-plano). A janela em horas é config, não constante:
+    // 48h é o caso do usuário, mas quem tem bandeira de outra duração precisa de outro número.
+    (function () {
+      const h = document.getElementById('twmgr-cpl-h'); if (!h) return;
+      if (config.market.cplHoras == null) config.market.cplHoras = 48;
+      h.value = config.market.cplHoras;
+      h.addEventListener('change', () => {
+        config.market.cplHoras = Math.max(1, Math.min(336, parseInt(h.value, 10) || 48));
+        h.value = config.market.cplHoras; save();
+      });
+      const g = document.getElementById('twmgr-cpl-go');
+      if (g) g.addEventListener('click', cplPlanejar);
+    })();
     renderPacotes();           // só desenha o estado atual; a leitura é sob clique
 
     document.getElementById('twmgr-bld-max').value = config.build.maxQueue || 5;

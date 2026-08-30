@@ -77,32 +77,35 @@
     }
     return alloc;
   }
-  // RAZAO TRAVADA — o envio da Cunhagem sai SEMPRE na mesma proporcao, custe o que custar.
+  // RAZAO TRAVADA NO DESTINO — e nao dentro de cada aldeia.
   //
-  // O QUE ESTAVA ERRADO (medido na conta, 78 doadoras, destino 446|596)
+  // O QUE ESTAVA ERRADO ANTES (v11.234.0, desenho meu, corrigido pelo usuario)
   //
-  // O `balancedSplit` acima reparte pela proporcao MAS limita ao que a doadora tem, e a sobra da
-  // capacidade do mercador vai pros OUTROS DOIS recursos. Isso e proposital la — nao desperdicar
-  // mercador — e e exatamente o que nao se pode fazer aqui.
+  // A primeira versao exigia a razao exata DENTRO DE CADA COMANDO: achava o maior multiplo que
+  // cabia na doadora e mandava so isso. Resultado medido: a proporcao chegava perfeita, mas
+  // aldeia com pouco ferro mandava carga PARCIAL (uma com 1k de ferro sobrando usava 33% do
+  // mercador) e aldeia sem ferro nenhum nao mandava NADA. Isso contraria o objetivo: o usuario
+  // quer TODAS drenando ate a reserva.
   //
-  // Simulado com os dados reais, o que chegava por ciclo:
-  //     madeira 33,4%  ·  argila 37,0%  ·  ferro 29,6%
-  // contra a razao da moeda (16.800/18.000/15.000):
-  //     madeira 33,7%  ·  argila 36,1%  ·  ferro 30,1%
+  // O erro foi de escopo. A razao que importa e a que CHEGA NO DESTINO, que e a soma de todos os
+  // comandos — nao a de cada um isolado.
   //
-  // Um desvio de ~1 ponto parece nada, mas ele COMPOE sem limite: cunhar consome os tres em
-  // proporcao EXATA, entao o excesso de um recurso nunca e consumido — so empilha. Simulando 20
-  // ciclos, o destino ia pra ~47k de argila parada com o ferro raspando o zero, porque o ferro
-  // era o gargalo em TODA capacidade testada (5k, 10k, 20k, 40k).
+  // POR QUE DA PRA TER AS DUAS COISAS (medido na conta)
   //
-  // A REGRA AGORA: acha o maior multiplo da razao que cabe em TUDO ao mesmo tempo — no que a
-  // doadora tem de cada recurso E na capacidade do mercador. Se falta ferro, o comando inteiro
-  // encolhe; o mercador vai com menos carga em vez de completar com argila.
+  // Excedente agregado acima da reserva: 12,0M madeira · 13,6M argila · 9,0M ferro. Um ciclo de
+  // 78 aldeias a 10k de capacidade move 780k, o que na razao pede apenas ~235k de ferro. Ou seja:
+  // o ferro NAO e escasso no ciclo, ele so esta mal distribuido entre as aldeias. Entao da pra
+  // encher todo mercador E fechar a razao no destino — basta escolher QUAL recurso pedir de cada
+  // aldeia.
   //
-  // Consequencia aceita de propósito: doadora sem sobra de UM dos recursos manda ZERO. Mandar
-  // dois de tres quebraria a razao, que e justamente o que se quer evitar — melhor ela esperar
-  // o proximo ciclo do que sujar a mistura no destino.
-  function racaoExata(totalCapacity, avail, reserve, weights) {
+  // COMO: guloso pelo mais atrasado. Vai enchendo o mercador em passos de 1.000 (um mercador),
+  // e a cada passo pega o recurso que esta mais atras da razao CONTANDO O QUE JA SAIU NO CICLO
+  // INTEIRO (`jaEnviado`). Aldeia sem ferro manda madeira; a proxima, cheia de ferro, e cobrada
+  // do ferro que faltou. O desequilibrio de uma vira a cota da outra.
+  //
+  // `jaEnviado` e o estado que faz isso funcionar: sem ele cada aldeia decidiria sozinha e a
+  // soma voltaria a ser o acaso da geologia de cada uma.
+  function racaoCarteira(totalCapacity, avail, reserve, weights, jaEnviado) {
     const keys = ['wood', 'stone', 'iron'];
     const w = {}; let soma = 0;
     keys.forEach((k) => { w[k] = Math.max(0, (weights && weights[k]) || 0); soma += w[k]; });
@@ -110,18 +113,24 @@
     if (soma <= 0) return balancedSplit(totalCapacity, avail, reserve, weights);
     const sobra = {};
     keys.forEach((k) => { sobra[k] = Math.max(0, (avail[k] || 0) - (reserve[k] || 0)); });
-    // `m` = quantas vezes a razao inteira cabe. O menor gargalo manda em todos.
-    let m = totalCapacity / soma, gargalo = 'mercador';
-    keys.forEach((k) => {
-      if (w[k] <= 0) return;
-      const cabe = sobra[k] / w[k];
-      if (cabe < m) { m = cabe; gargalo = k; }
-    });
-    // `_gargalo` viaja junto so pro log: quem le "so 12 de 78 mandaram" precisa saber QUAL
-    // recurso travou, senao vai procurar defeito no modulo em vez de mina de ferro atrasada.
-    if (!(m > 0)) return { wood: 0, stone: 0, iron: 0, _gargalo: gargalo };
-    const out = { wood: 0, stone: 0, iron: 0, _gargalo: gargalo };
-    keys.forEach((k) => { out[k] = Math.floor(m * w[k]); });
+    const ja = jaEnviado || { wood: 0, stone: 0, iron: 0 };
+    const out = { wood: 0, stone: 0, iron: 0 };
+    let resta = totalCapacity;
+    const PASSO = 1000;                       // um mercador
+    while (resta > 0) {
+      let alvo = null, pior = Infinity;
+      keys.forEach((k) => {
+        if (w[k] <= 0) return;
+        if (sobra[k] - out[k] <= 0) return;   // esta aldeia nao tem mais desse
+        // "atraso" = quanto ja saiu daquele recurso em unidades da razao. Menor = mais atrasado.
+        const razao = ((ja[k] || 0) + out[k]) / w[k];
+        if (razao < pior) { pior = razao; alvo = k; }
+      });
+      if (!alvo) break;                       // aldeia seca: acabou o que ela podia dar
+      const leva = Math.min(PASSO, resta, sobra[alvo] - out[alvo]);
+      if (leva <= 0) break;
+      out[alvo] += leva; resta -= leva;
+    }
     return out;
   }
   async function sendMarketResources(vid, coord, amounts) {
@@ -210,7 +219,8 @@
 
     let count = 0; const tot = { wood: 0, stone: 0, iron: 0 };
     // Quem nao mandou nada, e quem mandou menos do que podia — por causa de qual recurso.
-    const travou = {}, apertou = {};
+    // Quantas aldeias nao tinham nada acima da reserva, e quantas nao encheram o mercador.
+    let semSobra = 0, parcial = 0;
     for (const v of vils) {
       { const pare = devoParar('market'); if (pare) { pushLog('Cunhagem: interrompida — ' + pare + '.', '', 'market'); break; } }
       if (!srcSet[v.vid]) continue;
@@ -220,12 +230,13 @@
       let state;
       try { state = await getMarketState(v.vid); } catch (e) { pushLog('Cunhagem em ' + v.name + ': erro ao ler o mercado (' + (e.message || e) + ').', 'err', 'market'); continue; }
       if (!state.capacity) continue;
-      const amounts = racaoExata(state.capacity, state, reserve, weights);
-      if ((amounts.wood + amounts.stone + amounts.iron) <= 0) {
-        travou[amounts._gargalo] = (travou[amounts._gargalo] || 0) + 1;
-        continue;
-      }
-      if (amounts._gargalo && amounts._gargalo !== 'mercador') apertou[amounts._gargalo] = (apertou[amounts._gargalo] || 0) + 1;
+      const amounts = racaoCarteira(state.capacity, state, reserve, weights, tot);
+      const carga = amounts.wood + amounts.stone + amounts.iron;
+      // ZERO = a aldeia nao tem NADA acima da reserva. Com a razao de carteira nao existe mais
+      // "travou por falta de um recurso": quem tem qualquer sobra manda alguma coisa.
+      if (carga <= 0) { semSobra++; continue; }
+      // Encheu menos que o mercador comporta = acabou a sobra dela, nao a razao.
+      if (carga < state.capacity) parcial++;
       try {
         await sendMarketResources(v.vid, coord, amounts);
         count++; tot.wood += amounts.wood; tot.stone += amounts.stone; tot.iron += amounts.iron;
@@ -249,14 +260,19 @@
     }
 
     config.market.modes.cunhagem.stats = { sending: count, receiving: destCoords.length, wood: tot.wood, stone: tot.stone, iron: tot.iron, coins: coins };
-    const rotG = { wood: 'madeira', stone: 'argila', iron: 'ferro', mercador: 'mercador' };
-    const listar = (o) => Object.keys(o).map((k) => o[k] + ' por ' + (rotG[k] || k)).join(', ');
+    // A PROPORCAO QUE DE FATO CHEGOU. E a unica medida que importa aqui — a razao e do destino,
+    // nao de cada comando. Se ela sair torta, o numero aparece no log em vez de virar surpresa
+    // no armazem duas semanas depois.
+    const somaTot = tot.wood + tot.stone + tot.iron;
+    const pc = (k) => (somaTot ? Math.round(tot[k] / somaTot * 1000) / 10 : 0);
+    const somaW = weights.wood + weights.stone + weights.iron;
+    const alvoPc = (k) => Math.round(weights[k] / somaW * 1000) / 10;
     pushLog('Cunhagem: ciclo concluído — ' + count + ' aldeia(s) enviaram recurso'
       + (config.market.autoMint ? ', ' + coins + ' moeda(s) cunhada(s) em ' + mintCount + ' aldeia(s)' : '')
-      // Razão travada: quem não fecha a proporção manda ZERO. Sem esta linha o usuário vê
-      // "12 de 78 enviaram" e vai procurar defeito no módulo em vez de mina atrasada.
-      + (Object.keys(travou).length ? '. Não mandaram nada (não fechavam a razão): ' + listar(travou) : '')
-      + (Object.keys(apertou).length ? '. Mandaram menos que a capacidade, travadas por: ' + listar(apertou) : '')
+      + '. Chegou ' + pc('wood') + '/' + pc('stone') + '/' + pc('iron') + '%'
+      + ' (alvo ' + alvoPc('wood') + '/' + alvoPc('stone') + '/' + alvoPc('iron') + '%)'
+      + (semSobra ? ' · ' + semSobra + ' sem nada acima da reserva' : '')
+      + (parcial ? ' · ' + parcial + ' encheram só parte do mercador (sobra acabou)' : '')
       + '.', 'ok', 'market');
   }
 

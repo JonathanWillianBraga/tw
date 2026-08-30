@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.237.0
+// @version      11.238.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.237.0';
+  const VERSION = '11.238.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -5822,20 +5822,37 @@
     return V;
   }
 
-  // Custo da moeda direto da Academia. E o que faz a bandeira entrar sozinha na conta.
+  // Custo da moeda e estado do limite, direto da Academia. Duas licoes desta tela:
+  //
+  //   · O CUSTO sai da linha do FORMULARIO DE CUNHAGEM (`form[action*="action=coin"]`), nao de
+  //     regex sobre o texto da pagina. Meu primeiro padrao procurava "tres numeros com ponto" e
+  //     casava com a linha do NOBRE (40.000/50.000/50.000) em vez da moeda — mesma forma, outro
+  //     significado. Ancorar no formulario e estrutural: nao ha como pegar a linha errada.
+  //
+  //   · O TOTAL de moedas nao e lido, e DEDUZIDO. O regex de "Total" casava com "Na Aldeia/Total"
+  //     e devolvia lixo. Mas a tela diz "falta 52 para o limite 81" e "ja guardadas 29" — e
+  //     52+29=81 fecha sozinho. Deduzir de dois numeros que parseiam limpo vale mais que ler um
+  //     que parseia sujo.
   async function cplLerAcademia(vid) {
-    const out = { custo: null, total: null, limite: null };
-    try {
-      const st = await getSnobState(vid);
-      if (st.moedas && st.moedas.limite != null) out.limite = st.moedas.limite - 1;   // limite ATUAL
-      const r = await fetch('/game.php?village=' + vid + '&screen=snob', { credentials: 'include' });
-      const d = new DOMParser().parseFromString(await r.text(), 'text/html');
-      const txt = (d.body ? d.body.textContent : '').replace(/\s+/g, ' ');
-      const m = txt.match(/(\d{1,3}(?:\.\d{3})+)\s+(\d{1,3}(?:\.\d{3})+)\s+(\d{1,3}(?:\.\d{3})+)\s*(?:Cunhar|\d+\s*\()/i);
-      if (m) out.custo = { wood: +m[1].replace(/\./g, ''), stone: +m[2].replace(/\./g, ''), iron: +m[3].replace(/\./g, '') };
-      const mt = txt.match(/Total\s*:?\s*(\d{1,3}(?:\.\d{3})*|\d+)/i);
-      if (mt) out.total = +String(mt[1]).replace(/\./g, '');
-    } catch (e) { /* fica no que deu */ }
+    const out = { custo: null, limite: null, guardadas: null, faltam: null };
+    const r = await fetch('/game.php?village=' + vid + '&screen=snob', { credentials: 'include' });
+    const d = new DOMParser().parseFromString(await r.text(), 'text/html');
+    const f = d.querySelector('form[action*="action=coin"]');
+    if (f) {
+      const tr = f.closest('tr');
+      const nums = tr ? (tr.textContent || '').match(/\d{1,3}(?:\.\d{3})+/g) : null;
+      if (nums && nums.length >= 3) {
+        out.custo = { wood: +nums[0].replace(/\./g, ''), stone: +nums[1].replace(/\./g, ''), iron: +nums[2].replace(/\./g, '') };
+      }
+    }
+    // Sem acento no regex de proposito: comparo contra o texto normalizado, porque classe de
+    // caractere com acento em fonte gerada por script ja quebrou calado neste repo.
+    const txt = (d.body ? d.body.textContent : '').replace(/\s+/g, ' ')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const mF = txt.match(/falta ainda para o limite de nobres (\d+)[^0-9]{0,12}(\d+)/i);
+    const mG = txt.match(/ja guardadas para o limite de nobres \d+[^0-9]{0,12}(\d+)/i);
+    if (mF) { out.limite = (+mF[1]) - 1; out.faltam = +mF[2]; }   // "limite 81" = o PROXIMO
+    if (mG) out.guardadas = +mG[1];
     return out;
   }
 
@@ -5880,14 +5897,19 @@
     return { cabem: cabem, segura: segura };
   }
 
-  // Quantos nobres a mais um punhado de moedas compra. Limite N custa `1+2+...+N` ACUMULADO.
-  function cplNobres(totalAtual, moedasNovas, limiteAtual) {
-    if (totalAtual == null || limiteAtual == null) return null;
-    const alvo = totalAtual + (moedasNovas || 0);
-    let n = Math.max(1, limiteAtual);
-    while (((n + 1) * (n + 2)) / 2 <= alvo) n++;
-    return Math.max(0, n - limiteAtual);
+  // Quantos nobres a mais um punhado de moedas compra. O limite N custa N moedas pra ser
+  // atingido, e o custo SOBE a cada um — por isso dobrar moeda nao dobra nobre, e por isso a
+  // resposta e um laco e nao uma divisao.
+  //
+  // Parte de `guardadas` (o que ja esta acumulado pro proximo) em vez do total da vida: sao os
+  // dois numeros que a tela da limpos, e o total so seria usado pra chegar neles de volta.
+  function cplNobres(limiteAtual, guardadas, moedasNovas) {
+    if (limiteAtual == null) return null;
+    let n = limiteAtual, saldo = (guardadas || 0) + (moedasNovas || 0);
+    while (saldo >= n + 1) { saldo -= (n + 1); n++; }
+    return n - limiteAtual;
   }
+
 
   // ---------------------------------------------------------------------------------------
   // SIMULACAO com o TEMPO CORRENDO. Passo de 15 min: o mercador sai, entrega em `ida`, e SO
@@ -5934,16 +5956,34 @@
           s.iron = Math.min(s.cap, s.iron + s.v.pi * PASSO);
         }
       });
-      // Pacote entra assim que couber sem estourar a tolerancia. Um por passo, pra o cronograma
-      // ficar legivel e pra o proximo ser avaliado ja com o efeito do anterior.
+      // QUANDO SOLTAR O PACOTE — e aqui a regra teve que ser invertida.
+      //
+      // A primeira versao soltava "assim que couber dentro da tolerancia". Isso mandava usar o
+      // +30% no MINUTO ZERO, porque com ~41% de espaco livre ele ja cabia. Errado, e o usuario
+      // apontou: esperar e de graca. O espaco livre so CRESCE enquanto a Cunhagem drena, entao
+      // usar cedo desperdica um pouco e nao ganha nada em troca.
+      //
+      // A regra certa e o oposto: solta o mais TARDE possivel, mas nunca tao tarde que o
+      // recurso nao chegue a ser transportado. O prazo de cada pacote sai da vazao da frota —
+      // se o que ele injeta nao cabe no que ainda da pra mover, ele perdeu a viagem.
       if (fila.length) {
-        const d = cplDesperdicio(S, fila[0]);
-        if (d.frac <= CPL_TOLERANCIA) {
-          const p = fila.shift();
-          cplAplicarPacote(S, p);
+        const pct = fila[0];
+        const volume = S.reduce((a, s) => a + s.cap * 3 * (pct / 100), 0);
+        const restaFila = fila.reduce((a, x) => a + S.reduce((b, s) => b + s.cap * 3 * (x / 100), 0), 0);
+        // Vazao instantanea: capacidade total da frota dividida pela ida-e-volta media.
+        const capFrota = S.reduce((a, s) => a + s.v.merc, 0);
+        const rtMedio = S.reduce((a, s) => a + s.rt * s.v.merc, 0) / Math.max(1, capFrota);
+        const vazao = rtMedio > 0 ? capFrota / rtMedio : 0;
+        const prazo = vazao > 0 ? (horas - restaFila / vazao) : 0;
+        const d = cplDesperdicio(S, pct);
+        // Solta quando: nao ha mais nada a ganhar esperando (desperdicio zero), OU o prazo venceu.
+        if (d.frac <= 0.0001 || t >= prazo) {
+          fila.shift();
+          cplAplicarPacote(S, pct);
           const livre = 1 - (S.reduce((a, s) => a + s.wood + s.stone + s.iron, 0) / S.reduce((a, s) => a + s.cap * 3, 0));
-          agenda.push({ h: t, pct: p, livreDepois: livre });
+          agenda.push({ h: t, pct: pct, livreDepois: livre, perda: d.frac, noPrazo: d.frac > 0.0001 });
         }
+        void volume;
       }
       S.forEach((s) => {
         if (s.livre < CPL_CARGA) return;
@@ -6120,7 +6160,7 @@
     });
     const linha = (r, custo) => {
       const m = cplMoedas(r.chega, custo);
-      const n = cplNobres(p.ac && p.ac.total, m, p.ac && p.ac.limite);
+      const n = cplNobres(p.ac && p.ac.limite, p.ac && p.ac.guardadas, m);
       return { m: m, n: n };
     };
     const cen = [
@@ -6141,13 +6181,26 @@
         '<td>' + x.rot + '</td><td style="font-variant-numeric:tabular-nums"><b>' + fmtN(x.m) + '</b></td>' +
         '<td style="color:' + (x.forte ? '#2e7d3a' : '#6f6153') + '"><b>' + (x.n == null ? '—' : '+' + x.n) + '</b></td></tr>').join('') +
       '</tbody></table>' +
-      (p.ac && p.ac.total == null ? '<div style="font-size:9px;color:#a2643a;margin-top:2px">Não li o total de moedas da Academia — a coluna de nobres fica vazia.</div>' : '') +
+      (!p.ac || p.ac.limite == null ? '<div style="font-size:9px;color:#a2643a;margin-top:2px">Não li o limite de nobres da Academia da sede — a coluna de nobres fica vazia. A sede tem Academia?</div>' : '') +
       '<table class="twmgr-bld-tab" style="width:100%;margin-top:6px"><tbody>' +
       '<tr><td style="color:#6f6153;width:96px">Sede</td><td><b>' + esc(p.sedeNome) + '</b> ' + esc(p.sede) +
         (p.destAtual === p.sede ? ' <span style="color:#2e7d3a">(destino atual)</span>' : ' <span style="color:#a2643a">(sugerida)</span>') +
         ' <span style="color:#8a7d6d">· dist. ponderada ' + (Math.round(distSede * 10) / 10) + '</span></td></tr>' +
-      (alt ? '<tr><td style="color:#6f6153">Alternativa</td><td>' + esc(alt.nome) + ' ' + esc(alt.coord)
-        + ' <span style="color:#8a7d6d">· ' + (Math.round(alt.d * 10) / 10) + '</span></td></tr>' : '') +
+      (alt ? (function () {
+        // RECOMENDACAO, nao so o numero. Trocar de sede custa mover Academia e bandeira — entao
+        // a tela tem que dizer se o ganho paga isso, e nao deixar a conta pro usuario.
+        const ganho = distSede > 0 ? (1 - alt.d / distSede) : 0;
+        const vale = ganho >= 0.15;
+        return '<tr><td style="color:#6f6153">Melhor sede</td><td>'
+          + (alt.d < distSede
+            ? '<b>' + esc(alt.nome) + '</b> ' + esc(alt.coord) + ' <span style="color:#8a7d6d">· '
+              + (Math.round(alt.d * 10) / 10) + ' contra ' + (Math.round(distSede * 10) / 10) + '</span><br>'
+              + (vale ? '<b style="color:#2e7d3a">Vale trocar</b> — ' + Math.round(ganho * 100) + '% mais perto.'
+                      : '<b style="color:#a2643a">Não vale trocar</b> — só ' + Math.round(ganho * 100)
+                        + '% mais perto, e mudar significa mover Academia e bandeira.')
+            : '<b style="color:#2e7d3a">A atual já é a melhor.</b>')
+          + '</td></tr>';
+      })() : '') +
       '<tr><td style="color:#6f6153">Chega</td><td>' +
         '<span style="color:#8a6a44">' + fmtN(Math.round(r.chega.wood)) + '</span> / ' +
         '<span style="color:#c1743c">' + fmtN(Math.round(r.chega.stone)) + '</span> / ' +
@@ -6167,7 +6220,9 @@
           r.agenda.map((a, i) => '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
             '<td style="font-variant-numeric:tabular-nums">' + hm(a.h) + '</td>' +
             '<td><b style="color:#a2643a">+' + a.pct + '%</b></td>' +
-            '<td style="color:#6f6153">' + Math.round(a.livreDepois * 100) + '%</td></tr>').join('') +
+            '<td style="color:#6f6153">' + Math.round(a.livreDepois * 100) + '%'
+              + (a.noPrazo ? ' <span style="color:#b03030">· solto no prazo, perde ' + Math.round((a.perda || 0) * 100) + '%</span>'
+                           : ' <span style="color:#2e7d3a">· sem desperdício</span>') + '</td></tr>').join('') +
           '</tbody></table>' +
           (r.sobraram.length ? '<div style="font-size:9px;color:#b03030;margin-top:2px">' + r.sobraram.length
             + ' pacote(s) não chegam a caber em ' + p.horas + 'h: ' + r.sobraram.map((x) => '+' + x + '%').join(', ')

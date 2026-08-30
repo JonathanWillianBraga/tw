@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.244.0
+// @version      11.245.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.244.0';
+  const VERSION = '11.245.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -6154,12 +6154,26 @@
       const horas = Math.max(1, parseFloat(c.cplHoras) || 48);
       const comPac = cplSimular(V, sede, horas, true, c.cplInv);
       const semPac = cplSimular(V, sede, horas, true, null);
+      // A RESERVA E UMA ALAVANCA, e ninguem enxerga quanto ela custa. Com 79 aldeias a 20k por
+      // recurso sao 4,7M congelados — 13% do total. Simular com metade responde "vale mexer?"
+      // sem o usuario ter que testar na mao. Nao muda nada: e so uma segunda projecao.
+      const rw = config.market.reserveWood, rs = config.market.reserveStone, ri = config.market.reserveIron;
+      let meiaReserva = null;
+      try {
+        config.market.reserveWood = Math.floor(rw / 2);
+        config.market.reserveStone = Math.floor(rs / 2);
+        config.market.reserveIron = Math.floor(ri / 2);
+        meiaReserva = cplSimular(V, sede, horas, true, c.cplInv);
+      } finally {
+        config.market.reserveWood = rw; config.market.reserveStone = rs; config.market.reserveIron = ri;
+      }
       let ac = null;
       try {
         const vid = (await getAllVillagesCached()).filter((x) => x.coord === sede).map((x) => x.vid)[0];
         if (vid) ac = await cplLerAcademia(vid);
       } catch (e) { /* segue sem a Academia */ }
       _cplPlano = { sede: sede, sedeNome: V[sede].nome, destAtual: destAtual, rank: rank,
+                    meiaReserva: meiaReserva, totalAldeias: Object.keys(V).length,
                     rankAcad: rankAcad, semDadoAcad: semDadoAcad, sedeSnob: V[sede].snob,
                     horas: horas, comPac: comPac, semPac: semPac, ac: ac,
                     temProducao: Object.keys(V).some((k) => V[k].pw > 0) };
@@ -6416,7 +6430,48 @@
         + ' com bandeira · ' + fmtN(base.wood) + '/' + fmtN(base.stone) + '/' + fmtN(base.iron) + ' sem'
         + (lido ? ' <span style="color:#2e7d3a">(lido da Academia)</span>' : ' <span style="color:#a2643a">(padrão — não li a Academia)</span>') + '</td></tr>' +
       '<tr><td style="color:#6f6153">Trava</td><td><b style="color:#b03030">' + gargalo + '</b>'
-        + ' <span style="color:#8a7d6d">— é ele que limita; a sobra dos outros fica parada</span></td></tr>' +
+        + ' <span style="color:#8a7d6d">— é ele que limita a cunhagem</span></td></tr>' +
+      // O QUE SOBRA SEM PAR. Era o medo original do usuario ("3kk de madeira e argila com 400mil
+      // de ferro"). A linha "Trava" nomeia o recurso mas nao diz o TAMANHO do encalhe — e e o
+      // tamanho que decide se vale mexer em mina de ferro ou aceitar.
+      (function () {
+        const m = cen[0].m;
+        const sob = { madeira: r.chega.wood - m * comB.wood, argila: r.chega.stone - m * comB.stone,
+                      ferro: r.chega.iron - m * comB.iron };
+        const tot = sob.madeira + sob.argila + sob.ferro;
+        const pior = Object.keys(sob).sort((a, b) => sob[b] - sob[a])[0];
+        return '<tr><td style="color:#6f6153">Sobra sem par</td><td>'
+          + '<span style="color:#8a6a44">' + fmtN(Math.max(0, Math.round(sob.madeira))) + '</span> / '
+          + '<span style="color:#c1743c">' + fmtN(Math.max(0, Math.round(sob.argila))) + '</span> / '
+          + '<span style="color:#5f7382">' + fmtN(Math.max(0, Math.round(sob.ferro))) + '</span>'
+          + (tot > m * (comB.wood + comB.stone + comB.iron) * 0.05
+            ? '<br><span style="color:#b03030">' + fmtN(Math.round(tot)) + ' ficam parados no destino</span>'
+              + ' <span style="color:#8a7d6d">— sobretudo ' + pior + '. Para converter isso você precisa de mais '
+              + gargalo + ', não de mais bandeira.</span>'
+            : ' <span style="color:#2e7d3a">— pouca sobra, a mistura está bem casada</span>')
+          + '</td></tr>';
+      })() +
+      // A RESERVA como alavanca visivel.
+      (p.meiaReserva ? (function () {
+        const m2 = cplMoedas(p.meiaReserva.chega, comB);
+        const n2 = cplNobres(p.ac && p.ac.limite, p.ac && p.ac.guardadas, m2);
+        const dm = m2 - cen[0].m, dn = (n2 != null && cen[0].n != null) ? n2 - cen[0].n : null;
+        const trava = (config.market.reserveWood + config.market.reserveStone + config.market.reserveIron) * (p.totalAldeias || 0);
+        return '<tr><td style="color:#6f6153">Reserva</td><td>'
+          + fmtN(config.market.reserveWood) + '/' + fmtN(config.market.reserveStone) + '/' + fmtN(config.market.reserveIron)
+          + ' por aldeia · <b>' + fmtN(trava) + '</b> congelados no total'
+          + (dm > 0 ? '<br><span style="color:#a2643a">Pela metade renderia <b>+' + fmtN(dm) + '</b> moeda(s)'
+              + (dn ? ' e <b>+' + dn + '</b> nobre(s)' : '') + '</span>'
+              + ' <span style="color:#8a7d6d">— o custo é deixar as aldeias mais expostas.</span>'
+            : '<br><span style="color:#2e7d3a">Baixar não renderia nada — a frota já é o gargalo.</span>')
+          + '</td></tr>';
+      })() : '') +
+      // Quem ficou de fora, e por que. Sem isto "so 60 origens" vira investigacao.
+      '<tr><td style="color:#6f6153">Origens</td><td>' + r.origens + ' de ' + ((p.totalAldeias || 1) - 1)
+        + ' aldeia(s) participam'
+        + (r.origens < (p.totalAldeias || 1) - 1
+          ? ' <span style="color:#a2643a">— as demais não têm mercador livre para a janela</span>' : '')
+        + '</td></tr>' +
       (p.temProducao ? '' : '<tr><td style="color:#6f6153">Produção</td><td><span style="color:#a2643a">não li os níveis de mina — a projeção está por baixo</span></td></tr>') +
       '</tbody></table>' +
       (r.agenda.length

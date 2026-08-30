@@ -66,7 +66,7 @@
       if (!coord) return;
       V[coord] = { coord: coord, nome: nome.replace(/\s*\(\d{1,3}\|\d{1,3}\).*$/, '').trim() || coord,
                    wood: num(w.textContent), stone: num(s.textContent), iron: num(i.textContent),
-                   cap: cap, merc: mc ? (+mc[2]) * CPL_CARGA : 0, pw: 0, ps: 0, pi: 0 };
+                   cap: cap, merc: mc ? (+mc[2]) * CPL_CARGA : 0, pw: 0, ps: 0, pi: 0, snob: null };
     });
     if (!Object.keys(V).length) throw new Error('nenhuma aldeia lida');
     // Niveis de mina -> producao/hora. As colunas saem do ICONE do cabecalho, nao de posicao
@@ -82,6 +82,10 @@
           const m = (im.getAttribute('src') || '').match(/([a-z_]{3,})\.(png|webp)/i);
           if (m) col[m[1]] = i;
         });
+        // A ACADEMIA vem de brinde: esta na MESMA tabela que os niveis de mina, entao saber
+        // quais aldeias podem cunhar hoje nao custa requisicao nenhuma. Sem isso a sugestao de
+        // sede seria geografia pura — e a melhor aldeia do mapa as vezes nao tem Academia, o que
+        // transforma "troque pra ela" num conselho que custa uma construcao inteira.
         if (col.wood != null && col.stone != null && col.iron != null) {
           bt.querySelectorAll('tr').forEach((tr) => {
             const lbl = tr.querySelector('.quickedit-label'); if (!lbl) return;
@@ -92,6 +96,7 @@
             V[coord].pw = CPL_PROD[nv(col.wood)] || 0;
             V[coord].ps = CPL_PROD[nv(col.stone)] || 0;
             V[coord].pi = CPL_PROD[nv(col.iron)] || 0;
+            V[coord].snob = (col.snob != null) ? nv(col.snob) : null;   // null = coluna ausente
           });
         }
       }
@@ -329,8 +334,14 @@
       const V = await cplLerAldeias();
       _cplDados = V; _cplAt = Date.now();
       const destAtual = (config.market.destCoords || [])[0] || null;
-      const rank = Object.keys(V).map((k) => ({ coord: k, nome: V[k].nome, d: cplDistPonderada(V, k) }))
+      const rank = Object.keys(V).map((k) => ({ coord: k, nome: V[k].nome, d: cplDistPonderada(V, k),
+                                                 snob: V[k].snob }))
         .filter((x) => isFinite(x.d)).sort((a, b) => a.d - b.d);
+      // Duas listas, porque sao duas perguntas diferentes: "qual e a melhor" e "qual e a melhor
+      // que eu POSSO usar hoje". Se a coluna da Academia nao veio (`snob == null`), nao da pra
+      // afirmar nada — a segunda lista fica vazia e a tela diz isso em vez de chutar.
+      const rankAcad = rank.filter((x) => x.snob != null && x.snob >= 1);
+      const semDadoAcad = rank.every((x) => x.snob == null);
       const sede = (destAtual && V[destAtual]) ? destAtual : (rank[0] && rank[0].coord);
       if (!sede) throw new Error('não consegui escolher uma sede');
       const horas = Math.max(1, parseFloat(c.cplHoras) || 48);
@@ -342,6 +353,7 @@
         if (vid) ac = await cplLerAcademia(vid);
       } catch (e) { /* segue sem a Academia */ }
       _cplPlano = { sede: sede, sedeNome: V[sede].nome, destAtual: destAtual, rank: rank,
+                    rankAcad: rankAcad, semDadoAcad: semDadoAcad, sedeSnob: V[sede].snob,
                     horas: horas, comPac: comPac, semPac: semPac, ac: ac,
                     temProducao: Object.keys(V).some((k) => V[k].pw > 0) };
     } catch (e) { _cplErr = e.message || String(e); }
@@ -463,21 +475,49 @@
       '<tr><td style="color:#6f6153;width:96px">Sede</td><td><b>' + esc(p.sedeNome) + '</b> ' + esc(p.sede) +
         (p.destAtual === p.sede ? ' <span style="color:#2e7d3a">(destino atual)</span>' : ' <span style="color:#a2643a">(sugerida)</span>') +
         ' <span style="color:#8a7d6d">· dist. ponderada ' + (Math.round(distSede * 10) / 10) + '</span></td></tr>' +
-      (alt ? (function () {
-        // RECOMENDACAO, nao so o numero. Trocar de sede custa mover Academia e bandeira — entao
-        // a tela tem que dizer se o ganho paga isso, e nao deixar a conta pro usuario.
-        const ganho = distSede > 0 ? (1 - alt.d / distSede) : 0;
-        const vale = ganho >= 0.15;
-        return '<tr><td style="color:#6f6153">Melhor sede</td><td>'
-          + (alt.d < distSede
-            ? '<b>' + esc(alt.nome) + '</b> ' + esc(alt.coord) + ' <span style="color:#8a7d6d">· '
-              + (Math.round(alt.d * 10) / 10) + ' contra ' + (Math.round(distSede * 10) / 10) + '</span><br>'
-              + (vale ? '<b style="color:#2e7d3a">Vale trocar</b> — ' + Math.round(ganho * 100) + '% mais perto.'
-                      : '<b style="color:#a2643a">Não vale trocar</b> — só ' + Math.round(ganho * 100)
-                        + '% mais perto, e mudar significa mover Academia e bandeira.')
-            : '<b style="color:#2e7d3a">A atual já é a melhor.</b>')
+      (function () {
+        // DUAS SUGESTOES, porque sao duas perguntas diferentes:
+        //   · a melhor aldeia do mapa (geografia pura)
+        //   · a melhor que JA TEM ACADEMIA — a unica acionavel hoje
+        // Recomendar a primeira sem checar a segunda e mandar o usuario construir Academia sem
+        // dizer que esta mandando.
+        const pct = (d) => (distSede > 0 ? Math.round((1 - d / distSede) * 100) : 0);
+        const linhaDe = (x, rot, cor) => '<tr><td style="color:#6f6153">' + rot + '</td><td>'
+          + '<b>' + esc(x.nome) + '</b> ' + esc(x.coord)
+          + ' <span style="color:#8a7d6d">· ' + (Math.round(x.d * 10) / 10)
+          + ' contra ' + (Math.round(distSede * 10) / 10) + ' da atual</span>'
+          + (x.coord === p.sede ? ' <b style="color:#2e7d3a">— é a atual</b>'
+             : '<br><span style="color:' + cor + '">' + (pct(x.d) >= 15 ? 'Vale trocar' : 'Ganho pequeno')
+               + ' — ' + pct(x.d) + '% mais perto'
+               + (x.snob != null && x.snob < 1 ? ' · <b style="color:#b03030">SEM Academia</b> (teria que construir)' : '')
+               + '</span>')
           + '</td></tr>';
-      })() : '') +
+        let out = '';
+        const melhor = p.rank[0];
+        if (melhor) out += linhaDe(melhor, 'Melhor do mapa', pct(melhor.d) >= 15 ? '#2e7d3a' : '#a2643a');
+        if (p.semDadoAcad) {
+          out += '<tr><td style="color:#6f6153">Com Academia</td><td><span style="color:#a2643a">'
+            + 'não consegui ler a coluna de Academia — não dá pra dizer quais podem cunhar hoje.</span></td></tr>';
+        } else {
+          const melhorAc = p.rankAcad[0];
+          if (!melhorAc) {
+            out += '<tr><td style="color:#6f6153">Com Academia</td><td><span style="color:#b03030">'
+              + 'nenhuma aldeia sua tem Academia.</span></td></tr>';
+          } else if (melhor && melhorAc.coord === melhor.coord) {
+            out += '<tr><td style="color:#6f6153">Com Academia</td><td><b style="color:#2e7d3a">'
+              + 'a melhor do mapa já tem Academia</b> — nada a construir.</td></tr>';
+          } else {
+            out += linhaDe(melhorAc, 'Melhor <b>com Academia</b>', pct(melhorAc.d) >= 15 ? '#2e7d3a' : '#a2643a');
+          }
+        }
+        // A sede de hoje tem Academia? Se nao tiver, a operacao nao sai do lugar — e esse aviso
+        // vale mais que qualquer sugestao de troca.
+        if (p.sedeSnob != null && p.sedeSnob < 1) {
+          out += '<tr><td style="color:#6f6153">⚠ Atenção</td><td><b style="color:#b03030">'
+            + 'a sede atual NÃO tem Academia</b> — não há onde cunhar o que chegar.</td></tr>';
+        }
+        return out;
+      })() +
       '<tr><td style="color:#6f6153">Chega</td><td>' +
         '<span style="color:#8a6a44">' + fmtN(Math.round(r.chega.wood)) + '</span> / ' +
         '<span style="color:#c1743c">' + fmtN(Math.round(r.chega.stone)) + '</span> / ' +

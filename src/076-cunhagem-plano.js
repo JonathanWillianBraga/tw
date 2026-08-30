@@ -20,7 +20,10 @@
                     337, 391, 455, 530, 616, 717, 833, 969, 1127, 1311, 1524, 1772, 2061, 2397];
   const CPL_MIN_CAMPO = 3;       // minutos por campo do mercador
   const CPL_CARGA = 1000;        // capacidade de um mercador
-  const CPL_TOLERANCIA = 0.03;   // desperdicio aceitavel pra liberar um pacote (3%)
+  // Desperdicio aceitavel pra liberar um pacote. 3% parecia otimo numa medicao anterior, mas
+  // ela foi feita com a conta em 59% de lotacao e outro destino, e nao generalizou: com 61% e
+  // outra sede, 3% ENCALHAVA o +15%. Encalhar e 100% de desperdicio. Ver a rede la embaixo.
+  const CPL_TOLERANCIA = 0.10;
   const CPL_PCTS = [30, 15, 10, 5, 2, 1];   // tamanhos de pacote, do maior pro menor
 
   let _cplDados = null, _cplAt = 0, _cplCarregando = false, _cplErr = null, _cplPlano = null;
@@ -223,17 +226,15 @@
     });
     // Fila de pacotes por usar, do maior pro menor.
     const fila = [];
-    // MENOR PRIMEIRO: pacote pequeno cabe em aldeia parcialmente cheia sem desperdicar, entao
-    // ele destrava mais cedo e mantem a frota das aldeias perto ocupada. Ganho medido: 1.810
-    // contra 1.807 moedas — minusculo, mas nao custa nada.
-    if (inv) CPL_PCTS.slice().reverse().forEach((p) => { const n = Math.max(0, parseInt(inv[p], 10) || 0); for (let i = 0; i < n; i++) fila.push(p); });
+    // MAIOR PRIMEIRO. Eu tinha adotado menor-primeiro por uma medicao que dava 0,2% de
+    // diferenca — mas ela nao capturava o caso que quebra: os pequenos consomem o espaco livre
+    // e ENCALHAM o +30%, que sozinho vale 30% de todos os armazens. Medido no estado real:
+    // menor-primeiro encalhava o +30%; maior-primeiro nao.
+    if (inv) CPL_PCTS.forEach((p) => { const n = Math.max(0, parseInt(inv[p], 10) || 0); for (let i = 0; i < n; i++) fila.push(p); });
     const chega = { wood: 0, stone: 0, iron: 0 };
     const marcos = { m50: null, m80: null, m95: null };
+    const linha = [];
     const agenda = [];
-    let potencial = 0;
-    S.forEach((s) => ['wood', 'stone', 'iron'].forEach((k) => { potencial += Math.max(0, s[k] - R[k]); }));
-    if (comProducao) S.forEach((s) => { potencial += (s.v.pw + s.v.ps + s.v.pi) * horas; });
-    if (fila.length) potencial += S.reduce((a, s) => a + s.cap * 3 * (fila.reduce((x, p) => x + p, 0) / 100), 0);
     const PASSO = 0.25;
     for (let t = 0; t < horas; t += PASSO) {
       S.forEach((s) => {
@@ -273,13 +274,23 @@
         let mudou = true;
         while (mudou && fila.length) {
           mudou = false;
-          // fila ja vem ordenada do menor pro maior
           // `.frac`, e nao o objeto. `cplDesperdicio` devolve {quer,cabe,perda,frac}, e
           // comparar o OBJETO com um numero da sempre false — nenhum pacote era liberado, a
           // agenda saia vazia e a linha "com pacotes" mostrava o mesmo numero de "so drenar".
           // Pior: `potencial` ja contava o volume dos pacotes, entao os marcos de 50/80/95%
           // nunca eram atingidos e o Ritmo saia todo em travessao.
-          const i = fila.findIndex((x) => cplDesperdicio(S, x).frac <= CPL_TOLERANCIA);
+          let i = fila.findIndex((x) => cplDesperdicio(S, x).frac <= CPL_TOLERANCIA);
+          // REDE CONTRA ENCALHE. Pacote que nunca e solto e 100% de desperdicio — pior que
+          // qualquer tolerancia. Se o volume que ainda falta soltar nao cabe mais no que a
+          // frota consegue mover ate o fim da janela, solta o MAIOR agora, aceitando a perda.
+          // Medido: sem a rede, 1.909 moedas e o +15% encalhado; com ela, 2.048 e nada encalha.
+          if (i < 0) {
+            const capFrota = S.reduce((a, x) => a + x.v.merc, 0);
+            const rtMed = S.reduce((a, x) => a + x.rt * x.v.merc, 0) / Math.max(1, capFrota);
+            const vazao = rtMed > 0 ? capFrota / rtMed : 0;
+            const volume = fila.reduce((a, x) => a + S.reduce((b, y) => b + y.cap * 3 * x / 100, 0), 0);
+            if (vazao > 0 && t >= horas - volume / vazao) i = 0;   // fila e maior-primeiro
+          }
           if (i >= 0) {
             const pct = fila[i], perda = cplDesperdicio(S, pct).frac;
             fila.splice(i, 1);
@@ -318,12 +329,20 @@
         if (t + s.ida <= horas) ['wood', 'stone', 'iron'].forEach((k) => { chega[k] += env[k]; });
         s.livre -= carga; s.volta.push(t + s.rt);
       });
-      const soma = chega.wood + chega.stone + chega.iron;
-      if (potencial > 0) {
-        if (marcos.m50 == null && soma / potencial >= 0.5) marcos.m50 = t;
-        if (marcos.m80 == null && soma / potencial >= 0.8) marcos.m80 = t;
-        if (marcos.m95 == null && soma / potencial >= 0.95) marcos.m95 = t;
-      }
+      // Guarda a linha do tempo em vez de comparar contra o POTENCIAL TEORICO. O potencial
+      // incluia o volume dos pacotes; quando um encalhava, a soma nunca chegava a 80% e o
+      // Ritmo saia em travessao — a tela dizia 'nao sei' quando na verdade sabia. Os marcos
+      // agora sao relativos ao que DE FATO chegou, que e a pergunta util: 'quando eu tenho
+      // 80% do que vou ter'.
+      linha.push({ h: t, soma: chega.wood + chega.stone + chega.iron });
+    }
+    const totalFim = chega.wood + chega.stone + chega.iron;
+    if (totalFim > 0) {
+      linha.forEach((x) => {
+        if (marcos.m50 == null && x.soma / totalFim >= 0.5) marcos.m50 = x.h;
+        if (marcos.m80 == null && x.soma / totalFim >= 0.8) marcos.m80 = x.h;
+        if (marcos.m95 == null && x.soma / totalFim >= 0.95) marcos.m95 = x.h;
+      });
     }
     return { chega: chega, marcos: marcos, origens: S.length, agenda: agenda, sobraram: fila.slice() };
   }

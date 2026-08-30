@@ -647,7 +647,7 @@
               '<input id="twmgr-mk-rwood" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px">' +
               '<input id="twmgr-mk-rstone" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px">' +
               '<input id="twmgr-mk-riron" class="twmgr-inp" type="number" min="0" step="100" value="0" style="width:64px"></div>' +
-            '<div class="twmgr-row"><span class="twmgr-lbl" title="Proporção pra dividir o que cada aldeia manda — pensado pro custo de formar o nobre, pra não sobrar recurso parado no destino. Zerar os 3 volta pra divisão igual entre os três.">Peso mad/arg/fer (custo do nobre)</span>' +
+            '<div class="twmgr-row"><span class="twmgr-lbl" title="É RAZÃO, não quantidade: 28/30/25 e 28000/30000/25000 dão o mesmo resultado. Deixe ZERADO que o módulo lê o custo real da moeda na Academia do destino — aí a bandeira de desconto entra sozinha. Preencher aqui vira override manual.">Razão mad/arg/fer <span style="color:#8a7d6d">(0 = ler da Academia)</span></span>' +
               '<input id="twmgr-mk-pwood" class="twmgr-inp" type="number" min="0" step="1000" value="28000" style="width:64px">' +
               '<input id="twmgr-mk-pstone" class="twmgr-inp" type="number" min="0" step="1000" value="30000" style="width:64px">' +
               '<input id="twmgr-mk-piron" class="twmgr-inp" type="number" min="0" step="1000" value="25000" style="width:64px"></div>' +
@@ -1185,9 +1185,9 @@
     document.getElementById('twmgr-mk-rwood').value = config.market.reserveWood || 0;
     document.getElementById('twmgr-mk-rstone').value = config.market.reserveStone || 0;
     document.getElementById('twmgr-mk-riron').value = config.market.reserveIron || 0;
-    document.getElementById('twmgr-mk-pwood').value = config.market.cunhagemPesoWood != null ? config.market.cunhagemPesoWood : 28000;
-    document.getElementById('twmgr-mk-pstone').value = config.market.cunhagemPesoStone != null ? config.market.cunhagemPesoStone : 30000;
-    document.getElementById('twmgr-mk-piron').value = config.market.cunhagemPesoIron != null ? config.market.cunhagemPesoIron : 25000;
+    document.getElementById('twmgr-mk-pwood').value = config.market.cunhagemPesoWood || 0;
+    document.getElementById('twmgr-mk-pstone').value = config.market.cunhagemPesoStone || 0;
+    document.getElementById('twmgr-mk-piron').value = config.market.cunhagemPesoIron || 0;
     document.getElementById('twmgr-mk-automint').checked = !!config.market.autoMint;
     document.getElementById('twmgr-mk-stopon').checked = !!config.market.cunhagemStopEnabled;
     document.getElementById('twmgr-mk-stophours').value = config.market.cunhagemStopHours != null ? config.market.cunhagemStopHours : 2;

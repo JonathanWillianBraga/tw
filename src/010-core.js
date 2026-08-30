@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.238.0
+// @version      11.239.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.238.0';
+  const VERSION = '11.239.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -584,9 +584,24 @@
     if (c.market.reserveWood == null) c.market.reserveWood = 0;
     if (c.market.reserveStone == null) c.market.reserveStone = 0;
     if (c.market.reserveIron == null) c.market.reserveIron = 0;
-    if (c.market.cunhagemPesoWood == null) c.market.cunhagemPesoWood = 28000;
-    if (c.market.cunhagemPesoStone == null) c.market.cunhagemPesoStone = 30000;
-    if (c.market.cunhagemPesoIron == null) c.market.cunhagemPesoIron = 25000;
+    // A RAZAO DA CUNHAGEM NASCE EM ZERO = "leia da Academia" (v11.239.0).
+    //
+    // O campo sempre foi razao pura (28/30/25 e 28000/30000/25000 dao o mesmo resultado), e por
+    // isso era uma configuracao que parecia importante e nao era — e que envelhecia calada:
+    // bandeira de desconto ou mundo diferente mudariam o custo real sem ninguem lembrar de
+    // reconfigurar. Agora zero significa "pergunte ao jogo", e preencher vira override.
+    if (c.market.cunhagemPesoWood == null) c.market.cunhagemPesoWood = 0;
+    if (c.market.cunhagemPesoStone == null) c.market.cunhagemPesoStone = 0;
+    if (c.market.cunhagemPesoIron == null) c.market.cunhagemPesoIron = 0;
+    // Migracao unica: quem tinha EXATAMENTE o padrao antigo salvo nunca escolheu aquele numero —
+    // ele veio do default. Zera pra o automatico assumir. Quem digitou outra coisa fica intacto.
+    if (!c.market._razaoAuto) {
+      c.market._razaoAuto = 1;
+      if (c.market.cunhagemPesoWood === 28000 && c.market.cunhagemPesoStone === 30000
+          && c.market.cunhagemPesoIron === 25000) {
+        c.market.cunhagemPesoWood = 0; c.market.cunhagemPesoStone = 0; c.market.cunhagemPesoIron = 0;
+      }
+    }
     if (!Array.isArray(c.market.cunhagemSourceGroups)) c.market.cunhagemSourceGroups = [];
     if (c.market.cunhagemStopEnabled == null) c.market.cunhagemStopEnabled = false;
     if (c.market.cunhagemStopHours == null) c.market.cunhagemStopHours = 2;

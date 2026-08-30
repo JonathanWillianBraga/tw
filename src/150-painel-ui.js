@@ -705,12 +705,25 @@
         // perguntas que se faz ANTES de ligar: qual sede, quanto chega, quantos nobres dá.
         '<div id="twmgr-sub-cplano" style="display:none">' +
         sec('🎯 Projeção da cunhagem',
-            '<div style="font-size:10px;color:#8a7d6d;margin-bottom:5px">Simula a operação com o <b>tempo correndo</b>: cada mercador sai, viaja, entrega e só fica livre de novo depois da <b>ida e volta</b>. Respeita a reserva e a razão configuradas acima. O custo da moeda é lido da <b>Academia</b> da sede — se a bandeira de desconto estiver ativa, ela já entra na conta.</div>' +
+            '<div style="font-size:10px;color:#8a7d6d;margin-bottom:5px">Simula com o <b>tempo correndo</b>: cada mercador sai, viaja, entrega e só fica livre depois da <b>ida e volta</b>. Respeita a reserva e a razão configuradas acima. O custo da moeda é lido da <b>Academia</b> da sede.</div>' +
             '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;flex-wrap:wrap">' +
               '<button id="twmgr-cpl-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">🎯 Projetar</button>' +
-              '<span style="font-size:10px;color:#6f6153">janela <input id="twmgr-cpl-h" class="twmgr-inp" type="number" min="1" max="336" style="width:56px;font-size:10px;padding:1px"> h</span>' +
+              '<span style="font-size:10px;color:#6f6153">janela <input id="twmgr-cpl-h" class="twmgr-inp" type="number" min="1" max="336" style="width:52px;font-size:10px;padding:1px"> h</span>' +
+              '<span style="font-size:10px;color:#6f6153" title="Quanto a bandeira corta do custo da moeda. A tela sempre mostra as duas colunas, com e sem.">bandeira −<input id="twmgr-cpl-desc" class="twmgr-inp" type="number" min="0" max="95" style="width:46px;font-size:10px;padding:1px">%</span>' +
+            '</div>' +
+            '<div style="font-size:10px;color:#6f6153;margin-bottom:3px">Pacotes de recurso no inventário <span style="color:#8a7d6d">— digite uma vez; eu não consigo ler do jogo</span></div>' +
+            '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">' +
+              '<span style="font-size:10px;color:#6f6153">+30% <input id="twmgr-cpl-inv-30" class="twmgr-inp" type="number" min="0" style="width:42px;font-size:10px;padding:1px"></span>' +
+              '<span style="font-size:10px;color:#6f6153">+15% <input id="twmgr-cpl-inv-15" class="twmgr-inp" type="number" min="0" style="width:42px;font-size:10px;padding:1px"></span>' +
+              '<span style="font-size:10px;color:#6f6153">+10% <input id="twmgr-cpl-inv-10" class="twmgr-inp" type="number" min="0" style="width:42px;font-size:10px;padding:1px"></span>' +
+              '<span style="font-size:10px;color:#6f6153">+5% <input id="twmgr-cpl-inv-5" class="twmgr-inp" type="number" min="0" style="width:42px;font-size:10px;padding:1px"></span>' +
+              '<span style="font-size:10px;color:#6f6153">+2% <input id="twmgr-cpl-inv-2" class="twmgr-inp" type="number" min="0" style="width:42px;font-size:10px;padding:1px"></span>' +
+              '<span style="font-size:10px;color:#6f6153">+1% <input id="twmgr-cpl-inv-1" class="twmgr-inp" type="number" min="0" style="width:42px;font-size:10px;padding:1px"></span>' +
             '</div>' +
             '<div id="twmgr-cpl-out"></div>') +
+        sec('⏱ Ao vivo — quando usar cada pacote',
+            '<div style="font-size:10px;color:#8a7d6d;margin-bottom:5px">Atualiza a cada ciclo da <b>Cunhagem</b>, usando a leitura que ela já faz (custo zero). Com a Cunhagem desligada, fica congelado na última leitura.</div>' +
+            '<div id="twmgr-cpl-vivo"></div>') +
         '</div>' +
         sec('Ritmo (compartilhado pelos modos ligados)', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-mk-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         modLog('market') +
@@ -1209,18 +1222,36 @@
     document.getElementById('twmgr-mk-eq-diag').addEventListener('click', equilibrioDiagnostico);
     equilibrioRenderSaude();   // mostra o diagnóstico salvo da última vez, sem esperar um novo
     document.getElementById('twmgr-mk-pac-go').addEventListener('click', calcularPacotesUI);
-    // Projeção da cunhagem (076-cunhagem-plano). A janela em horas é config, não constante:
-    // 48h é o caso do usuário, mas quem tem bandeira de outra duração precisa de outro número.
+    // Projeção da cunhagem (076-cunhagem-plano). Janela, desconto e inventário são config:
+    // 48h é o caso de hoje, mas bandeira de outra duração e outro inventário pedem outros números.
     (function () {
-      const h = document.getElementById('twmgr-cpl-h'); if (!h) return;
-      if (config.market.cplHoras == null) config.market.cplHoras = 48;
-      h.value = config.market.cplHoras;
-      h.addEventListener('change', () => {
-        config.market.cplHoras = Math.max(1, Math.min(336, parseInt(h.value, 10) || 48));
-        h.value = config.market.cplHoras; save();
+      const c = cplCfg();
+      const h = document.getElementById('twmgr-cpl-h');
+      if (h) {
+        h.value = c.cplHoras;
+        h.addEventListener('change', () => {
+          c.cplHoras = Math.max(1, Math.min(336, parseInt(h.value, 10) || 48)); h.value = c.cplHoras; save();
+        });
+      }
+      const d = document.getElementById('twmgr-cpl-desc');
+      if (d) {
+        d.value = c.cplDesconto;
+        d.addEventListener('change', () => {
+          c.cplDesconto = Math.max(0, Math.min(95, parseFloat((d.value || '').replace(',', '.')) || 0));
+          d.value = c.cplDesconto; save(); cplRender();
+        });
+      }
+      [30, 15, 10, 5, 2, 1].forEach((p) => {
+        const el = document.getElementById('twmgr-cpl-inv-' + p); if (!el) return;
+        el.value = c.cplInv[p] || 0;
+        el.addEventListener('change', () => {
+          c.cplInv[p] = Math.max(0, parseInt(el.value, 10) || 0); el.value = c.cplInv[p];
+          save(); cplVivoRender();
+        });
       });
       const g = document.getElementById('twmgr-cpl-go');
       if (g) g.addEventListener('click', cplPlanejar);
+      cplVivoRender();
     })();
     renderPacotes();           // só desenha o estado atual; a leitura é sob clique
 

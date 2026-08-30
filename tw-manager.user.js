@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.236.0
+// @version      11.237.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.236.0';
+  const VERSION = '11.237.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -4957,6 +4957,8 @@
     const destSet = {}; vils.forEach((v) => { if (v.coord && destCoords.includes(v.coord)) destSet[v.vid] = true; });
 
     let count = 0; const tot = { wood: 0, stone: 0, iron: 0 };
+    // Retrato dos armazens deste ciclo, pro planejador sugerir o momento dos pacotes.
+    const foto = [];
     // Quem nao mandou nada, e quem mandou menos do que podia — por causa de qual recurso.
     // Quantas aldeias nao tinham nada acima da reserva, e quantas nao encheram o mercador.
     let semSobra = 0, parcial = 0;
@@ -4968,6 +4970,9 @@
       const coord = destCoords.map((c) => ({ c: c, d: coordDist(v.coord, c) })).sort((a, b) => a.d - b.d)[0].c;   // destino mais perto
       let state;
       try { state = await getMarketState(v.vid); } catch (e) { pushLog('Cunhagem em ' + v.name + ': erro ao ler o mercado (' + (e.message || e) + ').', 'err', 'market'); continue; }
+      // Alimenta o painel AO VIVO do planejador (076). A leitura ja aconteceu pro envio, entao
+      // isto custa ZERO requisicao — e e o que permite dizer "use o +30% agora" no meio do ciclo.
+      if (state.storage) foto.push({ coord: v.coord, cap: state.storage, wood: state.wood, stone: state.stone, iron: state.iron });
       if (!state.capacity) continue;
       const amounts = racaoCarteira(state.capacity, state, reserve, weights, tot);
       const carga = amounts.wood + amounts.stone + amounts.iron;
@@ -5002,6 +5007,7 @@
     // A PROPORCAO QUE DE FATO CHEGOU. E a unica medida que importa aqui — a razao e do destino,
     // nao de cada comando. Se ela sair torta, o numero aparece no log em vez de virar surpresa
     // no armazem duas semanas depois.
+    try { if (foto.length) cplVivoRegistrar(foto); } catch (e) { /* planejador e opcional */ }
     const somaTot = tot.wood + tot.stone + tot.iron;
     const pc = (k) => (somaTot ? Math.round(tot[k] / somaTot * 1000) / 10 : 0);
     const somaW = weights.wood + weights.stone + weights.iron;
@@ -5716,39 +5722,46 @@
       '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">"Estoura" = algum dos três recursos passa do armazém daquela aldeia. O desperdício é a soma do que passaria, somando os três recursos.</div>';
   }
   // ==================== PLANEJADOR DA CUNHAGEM (cpl*) ====================
-  // Responde, ANTES de ligar a Cunhagem, as perguntas que só se respondiam abrindo planilha:
-  // qual aldeia deve ser a sede, quanto recurso chega numa janela de N horas, quantas moedas isso
-  // vira e quantos nobres a mais isso significa.
+  // Responde, ANTES e DURANTE a operacao, o que so se respondia em planilha: qual aldeia deve
+  // ser a sede, quanto recurso chega na janela, quantas moedas e quantos NOBRES isso vira com e
+  // sem a bandeira de desconto, e — a parte que mais importa — EM QUE MOMENTO usar cada pacote
+  // de recurso do inventario.
   //
-  // POR QUE ISTO NAO E "SO UMA CONTA"
+  // AS ARMADILHAS QUE SO APARECEM MEDINDO
   //
-  // Cada uma dessas perguntas tem uma armadilha que so aparece medindo:
-  //
-  //   · A SEDE nao e a aldeia central do mapa — e a que minimiza a distancia PONDERADA PELO
-  //     EXCEDENTE. Aldeia perto de muita gente pobre vale menos que aldeia perto de poucos
-  //     armazens cheios.
-  //   · O GARGALO quase nunca e o recurso: e a FROTA. Numa conta medida, 13,3M de producao em
-  //     48h renderam so +217 moedas, porque os mercadores ja estavam saturados. Projecao que
-  //     ignora ida-e-volta erra pra cima com folga.
-  //   · O CUSTO DA MOEDA vem da tela da Academia, nao de constante — assim a bandeira de
-  //     desconto entra sozinha na conta, sem o usuario configurar nada.
-  //   · O NOBRE encarece: o limite N custa `1+2+...+N` moedas acumuladas. Dobrar as moedas NAO
-  //     dobra os nobres, e e o numero de nobres que interessa.
-  //
-  // ESCOPO: so projeta. Nao liga a Cunhagem, nao muda destino, nao envia nada.
+  //   · A SEDE nao e a aldeia central do mapa: e a que minimiza a distancia PONDERADA PELO
+  //     EXCEDENTE. Perto de muita gente pobre vale menos que perto de poucos armazens cheios.
+  //   · O GARGALO quase nunca e o recurso, e a FROTA. Medido nesta conta: 13,3M de producao em
+  //     48h renderam +217 moedas, porque os mercadores ja saturavam. Projecao que ignora a
+  //     ida-e-volta erra pra cima com folga.
+  //   · O CUSTO DA MOEDA vem da Academia, nao de constante — a bandeira entra sozinha na conta.
+  //   · O NOBRE encarece: o limite N custa `1+2+...+N` ACUMULADO. Dobrar moeda NAO dobra nobre.
+  //   · O PACOTE de X% so rende se houver X% de espaco livre. Usado com armazem cheio, mais da
+  //     metade evapora — medido: 32,9M perdidos contra 0,6M na ordem certa.
 
-  // Producao/hora por nivel de mina, velocidade 1. Tabela do jogo.
   const CPL_PROD = [0, 30, 35, 41, 47, 55, 64, 74, 86, 100, 117, 136, 158, 184, 214, 249, 289,
                     337, 391, 455, 530, 616, 717, 833, 969, 1127, 1311, 1524, 1772, 2061, 2397];
-  const CPL_MIN_CAMPO = 3;       // minutos por campo do mercador neste mundo
+  const CPL_MIN_CAMPO = 3;       // minutos por campo do mercador
   const CPL_CARGA = 1000;        // capacidade de um mercador
-  const CPL_JANELA_H = 48;       // janela padrao da projecao
+  const CPL_TOLERANCIA = 0.03;   // desperdicio aceitavel pra liberar um pacote (3%)
+  const CPL_PCTS = [30, 15, 10, 5, 2, 1];   // tamanhos de pacote, do maior pro menor
 
   let _cplDados = null, _cplAt = 0, _cplCarregando = false, _cplErr = null, _cplPlano = null;
+  // Estado AO VIVO: alimentado pelo proprio ciclo da Cunhagem, sem requisicao extra.
+  let _cplVivo = null;
 
-  // Uma leitura de aldeia com TUDO que a projecao precisa. Duas requisicoes no total, e as duas
-  // sao telas de visao geral (uma por conta, nao uma por aldeia) — ler aldeia a aldeia custaria
-  // 79 requisicoes e e o que torna projecao assim inviavel na pratica.
+  function cplCfg() {
+    const c = config.market;
+    if (c.cplHoras == null) c.cplHoras = 48;
+    if (c.cplDesconto == null) c.cplDesconto = 44;      // % que a bandeira corta dos tres
+    if (!c.cplInv) c.cplInv = { 1: 0, 2: 0, 5: 0, 10: 0, 15: 0, 30: 0 };
+    CPL_PCTS.forEach((p) => { if (c.cplInv[p] == null) c.cplInv[p] = 0; });
+    return c;
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // LEITURA — duas requisicoes, as duas de VISAO GERAL (uma por conta). Ler aldeia a aldeia
+  // custaria 79 requisicoes e e o que torna projecao assim inviavel na pratica.
   async function cplLerAldeias() {
     const num = (s) => parseInt(String(s).replace(/\D/g, ''), 10) || 0;
     const res = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=prod&page=-1', { credentials: 'include' });
@@ -5768,7 +5781,7 @@
       const cap = tdRes && tdRes.nextElementSibling ? num(tdRes.nextElementSibling.textContent) : 0;
       if (!cap) return;
       const tds = tr.querySelectorAll('td');
-      // "livres/total" — a projecao usa o TOTAL: mercador ocupado agora volta dentro da janela.
+      // "livres/total" — usa o TOTAL: mercador ocupado agora volta dentro da janela.
       const mc = (iCom >= 0 && tds[iCom]) ? (tds[iCom].textContent || '').match(/(\d+)\s*\/\s*(\d+)/) : null;
       const lbl = tr.querySelector('.quickedit-label');
       const nome = ((lbl && lbl.textContent) || '').replace(/\s+/g, ' ').trim();
@@ -5779,8 +5792,8 @@
                    cap: cap, merc: mc ? (+mc[2]) * CPL_CARGA : 0, pw: 0, ps: 0, pi: 0 };
     });
     if (!Object.keys(V).length) throw new Error('nenhuma aldeia lida');
-    // Niveis das minas -> producao/hora. As colunas sao achadas pelo ICONE do cabecalho, nao por
-    // posicao fixa: mundo com edificio a mais deslocaria tudo e a conta sairia calada e errada.
+    // Niveis de mina -> producao/hora. As colunas saem do ICONE do cabecalho, nao de posicao
+    // fixa: mundo com um edificio a mais deslocaria tudo e a conta sairia calada e errada.
     try {
       const r2 = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=buildings&page=-1', { credentials: 'include' });
       const d2 = new DOMParser().parseFromString(await r2.text(), 'text/html');
@@ -5805,18 +5818,16 @@
           });
         }
       }
-    } catch (e) { /* sem producao: a projecao segue, so sai conservadora (avisa na tela) */ }
+    } catch (e) { /* sem producao: segue conservador, e a tela DIZ que esta por baixo */ }
     return V;
   }
 
-  // Custo da moeda e estado do limite, da propria Academia. Ler daqui — em vez de constante —
-  // e o que faz a bandeira de desconto entrar na conta sozinha.
+  // Custo da moeda direto da Academia. E o que faz a bandeira entrar sozinha na conta.
   async function cplLerAcademia(vid) {
-    const st = await getSnobState(vid);
-    const out = { custo: null, total: null, limite: null, faltam: null, guardadas: null };
-    if (st.moedas) { out.limite = st.moedas.limite; out.faltam = st.moedas.faltam; out.guardadas = st.moedas.tem; }
-    // O custo aparece na linha do formulario de cunhagem: tres numeros grandes seguidos.
+    const out = { custo: null, total: null, limite: null };
     try {
+      const st = await getSnobState(vid);
+      if (st.moedas && st.moedas.limite != null) out.limite = st.moedas.limite - 1;   // limite ATUAL
       const r = await fetch('/game.php?village=' + vid + '&screen=snob', { credentials: 'include' });
       const d = new DOMParser().parseFromString(await r.text(), 'text/html');
       const txt = (d.body ? d.body.textContent : '').replace(/\s+/g, ' ');
@@ -5824,25 +5835,68 @@
       if (m) out.custo = { wood: +m[1].replace(/\./g, ''), stone: +m[2].replace(/\./g, ''), iron: +m[3].replace(/\./g, '') };
       const mt = txt.match(/Total\s*:?\s*(\d{1,3}(?:\.\d{3})*|\d+)/i);
       if (mt) out.total = +String(mt[1]).replace(/\./g, '');
-    } catch (e) { /* fica no que o getSnobState deu */ }
+    } catch (e) { /* fica no que deu */ }
     return out;
   }
 
-  // Quantos nobres a mais um punhado de moedas compra. O limite N custa `1+2+...+N` ACUMULADO —
-  // por isso dobrar moeda nao dobra nobre, e por isso a resposta tem que ser calculada e nao
-  // estimada por regra de tres.
-  function cplNobres(totalAtual, moedasNovas, limiteAtual) {
-    const alvo = (totalAtual || 0) + (moedasNovas || 0);
-    let n = Math.max(1, limiteAtual || 1);
-    while (((n + 1) * (n + 2)) / 2 <= alvo) n++;
-    return Math.max(0, n - (limiteAtual || n));
+  // ---------------------------------------------------------------------------------------
+  // PACOTES — o desperdicio de usar um pacote de `pct` AGORA, dado o estado das aldeias.
+  // Mesma conta do modulo de Pacotes, so que reaproveitavel pela projecao e pelo painel vivo.
+  function cplDesperdicio(lista, pct) {
+    let quer = 0, cabe = 0;
+    lista.forEach((v) => {
+      const add = Math.floor(v.cap * pct / 100);
+      ['wood', 'stone', 'iron'].forEach((k) => {
+        quer += add;
+        cabe += Math.min(add, Math.max(0, v.cap - v[k]));
+      });
+    });
+    return { quer: quer, cabe: cabe, perda: quer - cabe, frac: quer ? (quer - cabe) / quer : 0 };
   }
 
-  // Simulacao com o TEMPO CORRENDO. Passo de 15 min: mercador sai, viaja, entrega e volta —
-  // e so pode sair de novo quando voltou. E o que separa esta projecao de uma regra de tres:
-  // sem a ida-e-volta, a conta enxerga capacidade que na verdade esta na estrada.
-  function cplSimular(V, destCoord, horas, comProducao) {
-    const dest = V[destCoord]; if (!dest) return null;
+  // Aplica o pacote no estado (usado tanto na simulacao quanto na previa do painel).
+  function cplAplicarPacote(lista, pct) {
+    lista.forEach((v) => {
+      const add = Math.floor(v.cap * pct / 100);
+      ['wood', 'stone', 'iron'].forEach((k) => { v[k] = Math.min(v.cap, v[k] + add); });
+    });
+  }
+
+  // Quais pacotes cabem AGORA, do maior pro menor, respeitando a tolerancia de desperdicio.
+  // Devolve tambem os que nao cabem e o quanto falta esvaziar — e a informacao que transforma
+  // "espere" em "espere ate tal ponto".
+  function cplQuaisCabem(lista, inv, tol) {
+    tol = (tol == null) ? CPL_TOLERANCIA : tol;
+    const cabem = [], segura = [];
+    const copia = lista.map((v) => Object.assign({}, v));
+    CPL_PCTS.forEach((p) => {
+      const n = Math.max(0, parseInt(inv[p], 10) || 0);
+      for (let i = 0; i < n; i++) {
+        const d = cplDesperdicio(copia, p);
+        if (d.frac <= tol) { cabem.push(p); cplAplicarPacote(copia, p); }
+        else { segura.push({ pct: p, perdaFrac: d.frac }); }
+      }
+    });
+    return { cabem: cabem, segura: segura };
+  }
+
+  // Quantos nobres a mais um punhado de moedas compra. Limite N custa `1+2+...+N` ACUMULADO.
+  function cplNobres(totalAtual, moedasNovas, limiteAtual) {
+    if (totalAtual == null || limiteAtual == null) return null;
+    const alvo = totalAtual + (moedasNovas || 0);
+    let n = Math.max(1, limiteAtual);
+    while (((n + 1) * (n + 2)) / 2 <= alvo) n++;
+    return Math.max(0, n - limiteAtual);
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // SIMULACAO com o TEMPO CORRENDO. Passo de 15 min: o mercador sai, entrega em `ida`, e SO
+  // fica livre de novo depois da IDA E VOLTA. Capacidade em transito nao conta como disponivel
+  // — sem isso a projecao enxerga frota que esta na estrada.
+  //
+  // Os pacotes entram no MEIO da simulacao, no primeiro momento em que cabem: e assim que sai o
+  // cronograma de "use o +30% por volta da hora 11".
+  function cplSimular(V, destCoord, horas, comProducao, inv) {
     const [dx, dy] = destCoord.split('|').map(Number);
     const R = { wood: Math.max(0, config.market.reserveWood || 0),
                 stone: Math.max(0, config.market.reserveStone || 0),
@@ -5856,30 +5910,48 @@
       const v = V[c]; if (!v.merc) return;
       const [a, b] = c.split('|').map(Number);
       const d = Math.sqrt((a - dx) * (a - dx) + (b - dy) * (b - dy));
-      S.push({ v: v, wood: v.wood, stone: v.stone, iron: v.iron, d: d,
+      S.push({ v: v, coord: c, cap: v.cap, wood: v.wood, stone: v.stone, iron: v.iron,
                ida: (d * CPL_MIN_CAMPO) / 60, rt: (2 * d * CPL_MIN_CAMPO) / 60,
                livre: v.merc, volta: [] });
     });
+    // Fila de pacotes por usar, do maior pro menor.
+    const fila = [];
+    if (inv) CPL_PCTS.forEach((p) => { const n = Math.max(0, parseInt(inv[p], 10) || 0); for (let i = 0; i < n; i++) fila.push(p); });
     const chega = { wood: 0, stone: 0, iron: 0 };
     const marcos = { m50: null, m80: null, m95: null };
-    let total = 0;
-    S.forEach((s) => ['wood', 'stone', 'iron'].forEach((k) => { total += Math.max(0, s[k] - R[k]); }));
-    if (comProducao) S.forEach((s) => { total += (s.v.pw + s.v.ps + s.v.pi) * horas; });
+    const agenda = [];
+    let potencial = 0;
+    S.forEach((s) => ['wood', 'stone', 'iron'].forEach((k) => { potencial += Math.max(0, s[k] - R[k]); }));
+    if (comProducao) S.forEach((s) => { potencial += (s.v.pw + s.v.ps + s.v.pi) * horas; });
+    if (fila.length) potencial += S.reduce((a, s) => a + s.cap * 3 * (fila.reduce((x, p) => x + p, 0) / 100), 0);
     const PASSO = 0.25;
     for (let t = 0; t < horas; t += PASSO) {
       S.forEach((s) => {
         s.volta = s.volta.filter((x) => { if (x <= t) { s.livre += s.v.merc; return false; } return true; });
         if (comProducao) {
-          s.wood = Math.min(s.v.cap, s.wood + s.v.pw * PASSO);
-          s.stone = Math.min(s.v.cap, s.stone + s.v.ps * PASSO);
-          s.iron = Math.min(s.v.cap, s.iron + s.v.pi * PASSO);
+          s.wood = Math.min(s.cap, s.wood + s.v.pw * PASSO);
+          s.stone = Math.min(s.cap, s.stone + s.v.ps * PASSO);
+          s.iron = Math.min(s.cap, s.iron + s.v.pi * PASSO);
         }
+      });
+      // Pacote entra assim que couber sem estourar a tolerancia. Um por passo, pra o cronograma
+      // ficar legivel e pra o proximo ser avaliado ja com o efeito do anterior.
+      if (fila.length) {
+        const d = cplDesperdicio(S, fila[0]);
+        if (d.frac <= CPL_TOLERANCIA) {
+          const p = fila.shift();
+          cplAplicarPacote(S, p);
+          const livre = 1 - (S.reduce((a, s) => a + s.wood + s.stone + s.iron, 0) / S.reduce((a, s) => a + s.cap * 3, 0));
+          agenda.push({ h: t, pct: p, livreDepois: livre });
+        }
+      }
+      S.forEach((s) => {
         if (s.livre < CPL_CARGA) return;
         const sobra = {}; let tem = 0;
         ['wood', 'stone', 'iron'].forEach((k) => { sobra[k] = Math.max(0, s[k] - R[k]); tem += sobra[k]; });
         if (tem < CPL_CARGA) return;
-        // Mesma regra do envio real (racaoCarteira): enche o mercador pegando sempre o recurso
-        // mais atrasado em relacao a razao, contando o que JA chegou.
+        // Mesma regra do envio real (racaoCarteira): sempre o recurso mais atrasado na razao,
+        // contando o que JA chegou — a razao e do destino, nao de cada comando.
         const env = { wood: 0, stone: 0, iron: 0 };
         let resta = Math.min(s.livre, tem);
         while (resta >= CPL_CARGA) {
@@ -5897,22 +5969,21 @@
         const carga = env.wood + env.stone + env.iron;
         if (carga < CPL_CARGA) return;
         ['wood', 'stone', 'iron'].forEach((k) => { s[k] -= env[k]; });
-        // Chegada FORA da janela nao conta: o recurso saiu mas nao vira moeda a tempo.
+        // Chegada FORA da janela nao conta: saiu, mas nao vira moeda a tempo.
         if (t + s.ida <= horas) ['wood', 'stone', 'iron'].forEach((k) => { chega[k] += env[k]; });
         s.livre -= carga; s.volta.push(t + s.rt);
       });
       const soma = chega.wood + chega.stone + chega.iron;
-      if (total > 0) {
-        if (marcos.m50 == null && soma / total >= 0.5) marcos.m50 = t;
-        if (marcos.m80 == null && soma / total >= 0.8) marcos.m80 = t;
-        if (marcos.m95 == null && soma / total >= 0.95) marcos.m95 = t;
+      if (potencial > 0) {
+        if (marcos.m50 == null && soma / potencial >= 0.5) marcos.m50 = t;
+        if (marcos.m80 == null && soma / potencial >= 0.8) marcos.m80 = t;
+        if (marcos.m95 == null && soma / potencial >= 0.95) marcos.m95 = t;
       }
     }
-    return { chega: chega, marcos: marcos, potencial: total, origens: S.length };
+    return { chega: chega, marcos: marcos, origens: S.length, agenda: agenda, sobraram: fila.slice() };
   }
 
-  // Distancia PONDERADA PELO EXCEDENTE — o criterio de sede. Aldeia perto de muita gente pobre
-  // vale menos que aldeia perto de poucos armazens cheios, e a media simples nao ve isso.
+  // Distancia PONDERADA PELO EXCEDENTE — o criterio de sede.
   function cplDistPonderada(V, destCoord) {
     const [dx, dy] = destCoord.split('|').map(Number);
     const R = { wood: config.market.reserveWood || 0, stone: config.market.reserveStone || 0, iron: config.market.reserveIron || 0 };
@@ -5928,29 +5999,103 @@
     return se ? sp / se : Infinity;
   }
 
+  function cplMoedas(chega, custo) {
+    return Math.min(Math.floor(chega.wood / custo.wood), Math.floor(chega.stone / custo.stone),
+                    Math.floor(chega.iron / custo.iron));
+  }
+
   async function cplPlanejar() {
     if (_cplCarregando) return;
+    const c = cplCfg();
     _cplCarregando = true; _cplErr = null; _cplPlano = null; cplRender();
     try {
       const V = await cplLerAldeias();
       _cplDados = V; _cplAt = Date.now();
       const destAtual = (config.market.destCoords || [])[0] || null;
-      // Ranking de sedes: so aldeias suas, pelo criterio ponderado.
-      const rank = Object.keys(V).map((c) => ({ coord: c, nome: V[c].nome, d: cplDistPonderada(V, c) }))
+      const rank = Object.keys(V).map((k) => ({ coord: k, nome: V[k].nome, d: cplDistPonderada(V, k) }))
         .filter((x) => isFinite(x.d)).sort((a, b) => a.d - b.d);
-      const sede = destAtual && V[destAtual] ? destAtual : (rank[0] && rank[0].coord);
+      const sede = (destAtual && V[destAtual]) ? destAtual : (rank[0] && rank[0].coord);
       if (!sede) throw new Error('não consegui escolher uma sede');
-      const horas = Math.max(1, parseFloat(config.market.cplHoras) || CPL_JANELA_H);
-      const semP = cplSimular(V, sede, horas, false);
-      const comP = cplSimular(V, sede, horas, true);
+      const horas = Math.max(1, parseFloat(c.cplHoras) || 48);
+      const comPac = cplSimular(V, sede, horas, true, c.cplInv);
+      const semPac = cplSimular(V, sede, horas, true, null);
       let ac = null;
-      try { ac = await cplLerAcademia((await getAllVillagesCached()).filter((x) => x.coord === sede).map((x) => x.vid)[0]); }
-      catch (e) { /* sem Academia lida: mostra so o recurso */ }
-      _cplPlano = { sede: sede, sedeNome: V[sede].nome, destAtual: destAtual, rank: rank.slice(0, 4),
-                    horas: horas, semP: semP, comP: comP, ac: ac,
-                    temProducao: Object.values(V).some((v) => v.pw > 0) };
+      try {
+        const vid = (await getAllVillagesCached()).filter((x) => x.coord === sede).map((x) => x.vid)[0];
+        if (vid) ac = await cplLerAcademia(vid);
+      } catch (e) { /* segue sem a Academia */ }
+      _cplPlano = { sede: sede, sedeNome: V[sede].nome, destAtual: destAtual, rank: rank,
+                    horas: horas, comPac: comPac, semPac: semPac, ac: ac,
+                    temProducao: Object.keys(V).some((k) => V[k].pw > 0) };
     } catch (e) { _cplErr = e.message || String(e); }
     _cplCarregando = false; cplRender();
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // PAINEL AO VIVO. Alimentado pelo PROPRIO ciclo da Cunhagem (075-mercado), que ja le o mercado
+  // de cada doadora — entao isto custa ZERO requisicao. Com a Cunhagem desligada, o estado fica
+  // congelado na ultima leitura, e a tela diz isso.
+  function cplVivoRegistrar(lista) {
+    if (!lista || !lista.length) return;
+    _cplVivo = { at: Date.now(), lista: lista };
+    try { cplVivoRender(); } catch (e) { /* a tela pode nao estar aberta */ }
+    return _cplVivo;
+  }
+
+  function cplVivoSugestao() {
+    if (!_cplVivo) return null;
+    const c = cplCfg();
+    const r = cplQuaisCabem(_cplVivo.lista, c.cplInv);
+    const capT = _cplVivo.lista.reduce((a, v) => a + v.cap * 3, 0);
+    const usado = _cplVivo.lista.reduce((a, v) => a + v.wood + v.stone + v.iron, 0);
+    return { cabem: r.cabem, segura: r.segura, livre: capT ? 1 - usado / capT : 0, at: _cplVivo.at };
+  }
+
+  // Usado um pacote: baixa do inventario. Nao da pra detectar sozinho — e por isso que o
+  // caminho e sugerir primeiro e automatizar depois, quando a sugestao ja tiver se provado.
+  function cplUsouPacote(pct) {
+    const c = cplCfg();
+    c.cplInv[pct] = Math.max(0, (parseInt(c.cplInv[pct], 10) || 0) - 1);
+    save(); cplVivoRender(); cplRenderInv();
+  }
+
+  function cplVivoRender() {
+    const box = document.getElementById('twmgr-cpl-vivo'); if (!box) return;
+    const c = cplCfg();
+    const temInv = CPL_PCTS.some((p) => (parseInt(c.cplInv[p], 10) || 0) > 0);
+    if (!temInv) { box.innerHTML = '<span class="twmgr-lbl">Preencha o inventário acima pra eu sugerir o momento de cada pacote.</span>'; return; }
+    const s = cplVivoSugestao();
+    if (!s) {
+      box.innerHTML = '<div style="font-size:10px;color:#a2643a">Sem leitura ainda. O painel se alimenta do ciclo da <b>Cunhagem</b> — '
+        + 'ligue ela (ou use ⚖️ Equilíbrio › diagnóstico) e a sugestão aparece no fim do primeiro ciclo.</div>';
+      return;
+    }
+    const idade = Math.round((Date.now() - s.at) / 60000);
+    const chip = (p, on) => '<button class="twmgr-btn ' + (on ? 'twmgr-go' : 'twmgr-ghost') + '" data-cplusou="' + p
+      + '" style="font-size:10px;padding:2px 8px;margin:2px 3px 0 0"' + (on ? '' : ' disabled') + '>+' + p + '%'
+      + (on ? ' · usei' : '') + '</button>';
+    box.innerHTML =
+      '<div style="font-size:10px;color:#6f6153;margin-bottom:4px">espaço livre médio <b>' + Math.round(s.livre * 100)
+        + '%</b> <span style="color:#8a7d6d">· lido há ' + idade + ' min</span></div>' +
+      (s.cabem.length
+        ? '<div style="font-size:11px;color:#2e7d3a;font-weight:600">USE AGORA</div><div>'
+          + s.cabem.map((p) => chip(p, true)).join('') + '</div>'
+          + '<div style="font-size:9px;color:#8a7d6d;margin-top:2px">Clique depois de usar no jogo — eu não consigo detectar sozinho.</div>'
+        : '<div style="font-size:11px;color:#a2643a;font-weight:600">SEGURE TODOS</div>'
+          + '<div style="font-size:10px;color:#6f6153">nenhum cabe sem desperdiçar mais de '
+          + Math.round(CPL_TOLERANCIA * 100) + '%. Deixe a Cunhagem drenar mais.</div>') +
+      (s.segura.length
+        ? '<div style="font-size:10px;color:#6f6153;margin-top:5px">segurando: '
+          + s.segura.slice(0, 6).map((x) => '+' + x.pct + '% <span style="color:#b03030">(perderia '
+            + Math.round(x.perdaFrac * 100) + '%)</span>').join(' · ') + '</div>'
+        : '');
+    box.querySelectorAll('[data-cplusou]').forEach((b) => b.addEventListener('click',
+      () => cplUsouPacote(parseInt(b.getAttribute('data-cplusou'), 10))));
+  }
+
+  function cplRenderInv() {
+    const c = cplCfg();
+    CPL_PCTS.forEach((p) => { const el = document.getElementById('twmgr-cpl-inv-' + p); if (el) el.value = c.cplInv[p] || 0; });
   }
 
   function cplRender() {
@@ -5958,55 +6103,79 @@
     if (_cplCarregando) { box.innerHTML = '<span class="twmgr-lbl">lendo aldeias, minas e Academia…</span>'; return; }
     if (_cplErr) { box.innerHTML = '<span style="color:#b03030;font-size:10px">' + esc(_cplErr) + '</span>'; return; }
     if (!_cplPlano) { box.innerHTML = '<span class="twmgr-lbl">Clique em <b>Projetar</b>.</span>'; return; }
-    const p = _cplPlano, r = p.comP;
+    const p = _cplPlano, c = cplCfg();
     const hm = (h) => (h == null ? '—' : (h < 1 ? Math.round(h * 60) + 'min' : (Math.round(h * 10) / 10) + 'h'));
-    const custo = (p.ac && p.ac.custo) || { wood: 28000, stone: 30000, iron: 25000 };
-    const moedas = Math.min(Math.floor(r.chega.wood / custo.wood), Math.floor(r.chega.stone / custo.stone),
-                            Math.floor(r.chega.iron / custo.iron));
-    const moedasSemP = p.semP ? Math.min(Math.floor(p.semP.chega.wood / custo.wood),
-      Math.floor(p.semP.chega.stone / custo.stone), Math.floor(p.semP.chega.iron / custo.iron)) : 0;
-    const totalAtual = (p.ac && p.ac.total) || null;
-    const limite = (p.ac && p.ac.limite != null) ? (p.ac.limite - 1) : null;
-    const nob = (totalAtual != null && limite != null) ? cplNobres(totalAtual, moedas, limite) : null;
-    // Qual recurso trava — e a pergunta que decide se vale mexer em mina ou em mercado.
-    const porRec = { madeira: r.chega.wood / custo.wood, argila: r.chega.stone / custo.stone, ferro: r.chega.iron / custo.iron };
+    // Custo COM e SEM bandeira, sempre os dois. A Academia da o que esta valendo agora; o outro
+    // e derivado pelo desconto configurado — assim a comparacao existe mesmo antes de ativar.
+    const lido = (p.ac && p.ac.custo) || null;
+    const desc = Math.max(0, Math.min(95, parseFloat(c.cplDesconto) || 0)) / 100;
+    const base = {}, comB = {};
+    const padrao = { wood: 28000, stone: 30000, iron: 25000 };
+    ['wood', 'stone', 'iron'].forEach((k) => {
+      const v = lido ? lido[k] : padrao[k];
+      // Heuristica: se o custo lido ja e menor que o padrao do mundo, a bandeira ESTA ativa.
+      const jaComDesconto = lido && v < padrao[k] * 0.95;
+      base[k] = jaComDesconto ? Math.round(v / (1 - desc)) : v;
+      comB[k] = jaComDesconto ? v : Math.round(v * (1 - desc));
+    });
+    const linha = (r, custo) => {
+      const m = cplMoedas(r.chega, custo);
+      const n = cplNobres(p.ac && p.ac.total, m, p.ac && p.ac.limite);
+      return { m: m, n: n };
+    };
+    const cen = [
+      { rot: 'com pacotes · <b>com bandeira</b>', r: p.comPac, cu: comB, forte: true },
+      { rot: 'com pacotes · sem bandeira', r: p.comPac, cu: base },
+      { rot: 'só drenar · com bandeira', r: p.semPac, cu: comB },
+      { rot: 'só drenar · sem bandeira', r: p.semPac, cu: base },
+    ].map((x) => Object.assign(x, linha(x.r, x.cu)));
+    const r = p.comPac;
+    const porRec = { madeira: r.chega.wood / comB.wood, argila: r.chega.stone / comB.stone, ferro: r.chega.iron / comB.iron };
     const gargalo = Object.keys(porRec).sort((a, b) => porRec[a] - porRec[b])[0];
-    const trocaSede = p.rank[0] && p.rank[0].coord !== p.sede
-      ? p.rank.filter((x) => x.coord !== p.sede)[0] : null;
+    const alt = p.rank.filter((x) => x.coord !== p.sede)[0];
+    const distSede = cplDistPonderada(_cplDados, p.sede);
     box.innerHTML =
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:6px;margin-bottom:7px">' +
-        ['<b style="font-size:15px;color:#a2643a">' + fmtN(moedas) + '</b><br>moeda(s)',
-         (nob != null ? '<b style="font-size:15px;color:#2e7d3a">+' + nob + '</b><br>nobre(s)' : '<span style="color:#8a7d6d">—</span><br>nobres'),
-         '<b style="font-size:15px">' + hm(r.marcos.m80) + '</b><br>80% chega',
-         '<b style="font-size:15px">' + r.origens + '</b><br>origens'
-        ].map((h) => '<div style="background:#fffdf8;border:1px solid #e6dcc9;border-radius:6px;padding:6px;text-align:center;font-size:9px;color:#6f6153">' + h + '</div>').join('') +
-      '</div>' +
-      '<table class="twmgr-bld-tab" style="width:100%"><tbody>' +
-      '<tr><td style="color:#6f6153">Sede</td><td><b>' + esc(p.sedeNome) + '</b> ' + esc(p.sede) +
-        (p.destAtual === p.sede ? ' <span style="color:#2e7d3a">(destino atual)</span>' : ' <span style="color:#a2643a">(sugerida)</span>') + '</td></tr>' +
-      (trocaSede ? '<tr><td style="color:#6f6153">Alternativa</td><td>' + esc(trocaSede.nome) + ' ' + esc(trocaSede.coord)
-        + ' <span style="color:#8a7d6d">— dist. ponderada ' + (Math.round(trocaSede.d * 10) / 10) + ' contra '
-        + (Math.round(cplDistPonderada(_cplDados, p.sede) * 10) / 10) + ' da atual</span></td></tr>' : '') +
-      '<tr><td style="color:#6f6153">Chega em ' + p.horas + 'h</td><td>' +
+      '<table class="twmgr-bld-tab" style="width:100%"><thead><tr>' +
+        '<th>cenário em ' + p.horas + 'h</th><th style="width:74px">moedas</th><th style="width:62px">nobres</th></tr></thead><tbody>' +
+      cen.map((x, i) => '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '"' + (x.forte ? ' style="background:#eef7ee"' : '') + '>' +
+        '<td>' + x.rot + '</td><td style="font-variant-numeric:tabular-nums"><b>' + fmtN(x.m) + '</b></td>' +
+        '<td style="color:' + (x.forte ? '#2e7d3a' : '#6f6153') + '"><b>' + (x.n == null ? '—' : '+' + x.n) + '</b></td></tr>').join('') +
+      '</tbody></table>' +
+      (p.ac && p.ac.total == null ? '<div style="font-size:9px;color:#a2643a;margin-top:2px">Não li o total de moedas da Academia — a coluna de nobres fica vazia.</div>' : '') +
+      '<table class="twmgr-bld-tab" style="width:100%;margin-top:6px"><tbody>' +
+      '<tr><td style="color:#6f6153;width:96px">Sede</td><td><b>' + esc(p.sedeNome) + '</b> ' + esc(p.sede) +
+        (p.destAtual === p.sede ? ' <span style="color:#2e7d3a">(destino atual)</span>' : ' <span style="color:#a2643a">(sugerida)</span>') +
+        ' <span style="color:#8a7d6d">· dist. ponderada ' + (Math.round(distSede * 10) / 10) + '</span></td></tr>' +
+      (alt ? '<tr><td style="color:#6f6153">Alternativa</td><td>' + esc(alt.nome) + ' ' + esc(alt.coord)
+        + ' <span style="color:#8a7d6d">· ' + (Math.round(alt.d * 10) / 10) + '</span></td></tr>' : '') +
+      '<tr><td style="color:#6f6153">Chega</td><td>' +
         '<span style="color:#8a6a44">' + fmtN(Math.round(r.chega.wood)) + '</span> / ' +
         '<span style="color:#c1743c">' + fmtN(Math.round(r.chega.stone)) + '</span> / ' +
         '<span style="color:#5f7382">' + fmtN(Math.round(r.chega.iron)) + '</span></td></tr>' +
       '<tr><td style="color:#6f6153">Ritmo</td><td>50% em ' + hm(r.marcos.m50) + ' · 80% em ' + hm(r.marcos.m80)
         + ' · 95% em ' + hm(r.marcos.m95) + '</td></tr>' +
-      '<tr><td style="color:#6f6153">Custo da moeda</td><td>' + fmtN(custo.wood) + ' / ' + fmtN(custo.stone) + ' / ' + fmtN(custo.iron) +
-        (p.ac && p.ac.custo ? ' <span style="color:#2e7d3a">(lido da Academia — desconto já incluso)</span>'
-                            : ' <span style="color:#a2643a">(padrão; não consegui ler a Academia)</span>') + '</td></tr>' +
-      '<tr><td style="color:#6f6153">Trava</td><td><b style="color:#b03030">' + gargalo + '</b>' +
-        ' <span style="color:#8a7d6d">— é ele que limita a cunhagem; sobra dos outros dois fica parada</span></td></tr>' +
-      (p.temProducao
-        ? '<tr><td style="color:#6f6153">Produção</td><td>vale <b>+' + fmtN(moedas - moedasSemP) + '</b> moeda(s) na janela'
-          + ' <span style="color:#8a7d6d">(sem contar ela: ' + fmtN(moedasSemP) + ')</span></td></tr>'
-        : '<tr><td style="color:#6f6153">Produção</td><td><span style="color:#a2643a">não consegui ler os níveis de mina — a projeção está por baixo</span></td></tr>') +
+      '<tr><td style="color:#6f6153">Custo/moeda</td><td>' + fmtN(comB.wood) + '/' + fmtN(comB.stone) + '/' + fmtN(comB.iron)
+        + ' com bandeira · ' + fmtN(base.wood) + '/' + fmtN(base.stone) + '/' + fmtN(base.iron) + ' sem'
+        + (lido ? ' <span style="color:#2e7d3a">(lido da Academia)</span>' : ' <span style="color:#a2643a">(padrão — não li a Academia)</span>') + '</td></tr>' +
+      '<tr><td style="color:#6f6153">Trava</td><td><b style="color:#b03030">' + gargalo + '</b>'
+        + ' <span style="color:#8a7d6d">— é ele que limita; a sobra dos outros fica parada</span></td></tr>' +
+      (p.temProducao ? '' : '<tr><td style="color:#6f6153">Produção</td><td><span style="color:#a2643a">não li os níveis de mina — a projeção está por baixo</span></td></tr>') +
       '</tbody></table>' +
-      '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">Projeção com mercador a ' + CPL_MIN_CAMPO
-      + ' min/campo, respeitando a <b>reserva</b> configurada acima e a mesma razão dos envios reais. '
-      + 'Simula ida-e-volta de cada mercador — capacidade em trânsito não conta como disponível. '
-      + 'Lido às ' + new Date(_cplAt).toLocaleTimeString('pt-BR') + '.</div>';
+      (r.agenda.length
+        ? '<div style="font-size:10px;color:#6f6153;margin-top:7px"><b>Cronograma dos pacotes</b> — o momento em que cada um passa a caber sem desperdiçar:</div>' +
+          '<table class="twmgr-bld-tab" style="width:100%"><thead><tr><th style="width:60px">hora</th><th style="width:60px">pacote</th><th>espaço livre depois</th></tr></thead><tbody>' +
+          r.agenda.map((a, i) => '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
+            '<td style="font-variant-numeric:tabular-nums">' + hm(a.h) + '</td>' +
+            '<td><b style="color:#a2643a">+' + a.pct + '%</b></td>' +
+            '<td style="color:#6f6153">' + Math.round(a.livreDepois * 100) + '%</td></tr>').join('') +
+          '</tbody></table>' +
+          (r.sobraram.length ? '<div style="font-size:9px;color:#b03030;margin-top:2px">' + r.sobraram.length
+            + ' pacote(s) não chegam a caber em ' + p.horas + 'h: ' + r.sobraram.map((x) => '+' + x + '%').join(', ')
+            + '. Aumente a janela ou aceite o desperdício.</div>' : '')
+        : '<div style="font-size:9px;color:#8a7d6d;margin-top:6px">Sem pacotes no inventário — preencha acima pra ver o cronograma.</div>') +
+      '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">Mercador a ' + CPL_MIN_CAMPO
+      + ' min/campo, <b>ida e volta</b> simuladas por mercador. Respeita a reserva e a razão configuradas. Lido às '
+      + new Date(_cplAt).toLocaleTimeString('pt-BR') + '.</div>';
   }
   // ==================== CONSTRUÇÕES (modelos nomeados aplicados por aldeia) ===============
   // População que cada edifício ocupa, lida do próprio mundo. Os valores variam por servidor,
@@ -15119,12 +15288,25 @@
         // perguntas que se faz ANTES de ligar: qual sede, quanto chega, quantos nobres dá.
         '<div id="twmgr-sub-cplano" style="display:none">' +
         sec('🎯 Projeção da cunhagem',
-            '<div style="font-size:10px;color:#8a7d6d;margin-bottom:5px">Simula a operação com o <b>tempo correndo</b>: cada mercador sai, viaja, entrega e só fica livre de novo depois da <b>ida e volta</b>. Respeita a reserva e a razão configuradas acima. O custo da moeda é lido da <b>Academia</b> da sede — se a bandeira de desconto estiver ativa, ela já entra na conta.</div>' +
+            '<div style="font-size:10px;color:#8a7d6d;margin-bottom:5px">Simula com o <b>tempo correndo</b>: cada mercador sai, viaja, entrega e só fica livre depois da <b>ida e volta</b>. Respeita a reserva e a razão configuradas acima. O custo da moeda é lido da <b>Academia</b> da sede.</div>' +
             '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;flex-wrap:wrap">' +
               '<button id="twmgr-cpl-go" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">🎯 Projetar</button>' +
-              '<span style="font-size:10px;color:#6f6153">janela <input id="twmgr-cpl-h" class="twmgr-inp" type="number" min="1" max="336" style="width:56px;font-size:10px;padding:1px"> h</span>' +
+              '<span style="font-size:10px;color:#6f6153">janela <input id="twmgr-cpl-h" class="twmgr-inp" type="number" min="1" max="336" style="width:52px;font-size:10px;padding:1px"> h</span>' +
+              '<span style="font-size:10px;color:#6f6153" title="Quanto a bandeira corta do custo da moeda. A tela sempre mostra as duas colunas, com e sem.">bandeira −<input id="twmgr-cpl-desc" class="twmgr-inp" type="number" min="0" max="95" style="width:46px;font-size:10px;padding:1px">%</span>' +
+            '</div>' +
+            '<div style="font-size:10px;color:#6f6153;margin-bottom:3px">Pacotes de recurso no inventário <span style="color:#8a7d6d">— digite uma vez; eu não consigo ler do jogo</span></div>' +
+            '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">' +
+              '<span style="font-size:10px;color:#6f6153">+30% <input id="twmgr-cpl-inv-30" class="twmgr-inp" type="number" min="0" style="width:42px;font-size:10px;padding:1px"></span>' +
+              '<span style="font-size:10px;color:#6f6153">+15% <input id="twmgr-cpl-inv-15" class="twmgr-inp" type="number" min="0" style="width:42px;font-size:10px;padding:1px"></span>' +
+              '<span style="font-size:10px;color:#6f6153">+10% <input id="twmgr-cpl-inv-10" class="twmgr-inp" type="number" min="0" style="width:42px;font-size:10px;padding:1px"></span>' +
+              '<span style="font-size:10px;color:#6f6153">+5% <input id="twmgr-cpl-inv-5" class="twmgr-inp" type="number" min="0" style="width:42px;font-size:10px;padding:1px"></span>' +
+              '<span style="font-size:10px;color:#6f6153">+2% <input id="twmgr-cpl-inv-2" class="twmgr-inp" type="number" min="0" style="width:42px;font-size:10px;padding:1px"></span>' +
+              '<span style="font-size:10px;color:#6f6153">+1% <input id="twmgr-cpl-inv-1" class="twmgr-inp" type="number" min="0" style="width:42px;font-size:10px;padding:1px"></span>' +
             '</div>' +
             '<div id="twmgr-cpl-out"></div>') +
+        sec('⏱ Ao vivo — quando usar cada pacote',
+            '<div style="font-size:10px;color:#8a7d6d;margin-bottom:5px">Atualiza a cada ciclo da <b>Cunhagem</b>, usando a leitura que ela já faz (custo zero). Com a Cunhagem desligada, fica congelado na última leitura.</div>' +
+            '<div id="twmgr-cpl-vivo"></div>') +
         '</div>' +
         sec('Ritmo (compartilhado pelos modos ligados)', '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-mk-int" class="twmgr-inp" type="number" min="1" value="10" style="width:66px"></div>') +
         modLog('market') +
@@ -15623,18 +15805,36 @@
     document.getElementById('twmgr-mk-eq-diag').addEventListener('click', equilibrioDiagnostico);
     equilibrioRenderSaude();   // mostra o diagnóstico salvo da última vez, sem esperar um novo
     document.getElementById('twmgr-mk-pac-go').addEventListener('click', calcularPacotesUI);
-    // Projeção da cunhagem (076-cunhagem-plano). A janela em horas é config, não constante:
-    // 48h é o caso do usuário, mas quem tem bandeira de outra duração precisa de outro número.
+    // Projeção da cunhagem (076-cunhagem-plano). Janela, desconto e inventário são config:
+    // 48h é o caso de hoje, mas bandeira de outra duração e outro inventário pedem outros números.
     (function () {
-      const h = document.getElementById('twmgr-cpl-h'); if (!h) return;
-      if (config.market.cplHoras == null) config.market.cplHoras = 48;
-      h.value = config.market.cplHoras;
-      h.addEventListener('change', () => {
-        config.market.cplHoras = Math.max(1, Math.min(336, parseInt(h.value, 10) || 48));
-        h.value = config.market.cplHoras; save();
+      const c = cplCfg();
+      const h = document.getElementById('twmgr-cpl-h');
+      if (h) {
+        h.value = c.cplHoras;
+        h.addEventListener('change', () => {
+          c.cplHoras = Math.max(1, Math.min(336, parseInt(h.value, 10) || 48)); h.value = c.cplHoras; save();
+        });
+      }
+      const d = document.getElementById('twmgr-cpl-desc');
+      if (d) {
+        d.value = c.cplDesconto;
+        d.addEventListener('change', () => {
+          c.cplDesconto = Math.max(0, Math.min(95, parseFloat((d.value || '').replace(',', '.')) || 0));
+          d.value = c.cplDesconto; save(); cplRender();
+        });
+      }
+      [30, 15, 10, 5, 2, 1].forEach((p) => {
+        const el = document.getElementById('twmgr-cpl-inv-' + p); if (!el) return;
+        el.value = c.cplInv[p] || 0;
+        el.addEventListener('change', () => {
+          c.cplInv[p] = Math.max(0, parseInt(el.value, 10) || 0); el.value = c.cplInv[p];
+          save(); cplVivoRender();
+        });
       });
       const g = document.getElementById('twmgr-cpl-go');
       if (g) g.addEventListener('click', cplPlanejar);
+      cplVivoRender();
     })();
     renderPacotes();           // só desenha o estado atual; a leitura é sob clique
 

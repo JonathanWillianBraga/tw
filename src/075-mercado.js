@@ -218,6 +218,8 @@
     const destSet = {}; vils.forEach((v) => { if (v.coord && destCoords.includes(v.coord)) destSet[v.vid] = true; });
 
     let count = 0; const tot = { wood: 0, stone: 0, iron: 0 };
+    // Retrato dos armazens deste ciclo, pro planejador sugerir o momento dos pacotes.
+    const foto = [];
     // Quem nao mandou nada, e quem mandou menos do que podia — por causa de qual recurso.
     // Quantas aldeias nao tinham nada acima da reserva, e quantas nao encheram o mercador.
     let semSobra = 0, parcial = 0;
@@ -229,6 +231,9 @@
       const coord = destCoords.map((c) => ({ c: c, d: coordDist(v.coord, c) })).sort((a, b) => a.d - b.d)[0].c;   // destino mais perto
       let state;
       try { state = await getMarketState(v.vid); } catch (e) { pushLog('Cunhagem em ' + v.name + ': erro ao ler o mercado (' + (e.message || e) + ').', 'err', 'market'); continue; }
+      // Alimenta o painel AO VIVO do planejador (076). A leitura ja aconteceu pro envio, entao
+      // isto custa ZERO requisicao — e e o que permite dizer "use o +30% agora" no meio do ciclo.
+      if (state.storage) foto.push({ coord: v.coord, cap: state.storage, wood: state.wood, stone: state.stone, iron: state.iron });
       if (!state.capacity) continue;
       const amounts = racaoCarteira(state.capacity, state, reserve, weights, tot);
       const carga = amounts.wood + amounts.stone + amounts.iron;
@@ -263,6 +268,7 @@
     // A PROPORCAO QUE DE FATO CHEGOU. E a unica medida que importa aqui — a razao e do destino,
     // nao de cada comando. Se ela sair torta, o numero aparece no log em vez de virar surpresa
     // no armazem duas semanas depois.
+    try { if (foto.length) cplVivoRegistrar(foto); } catch (e) { /* planejador e opcional */ }
     const somaTot = tot.wood + tot.stone + tot.iron;
     const pc = (k) => (somaTot ? Math.round(tot[k] / somaTot * 1000) / 10 : 0);
     const somaW = weights.wood + weights.stone + weights.iron;

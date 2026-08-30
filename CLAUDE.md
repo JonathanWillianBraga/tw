@@ -100,6 +100,7 @@ Chaves de módulo (`wall`, `map`) seguem valendo em `config`, `refreshCards` e `
 | `050-envio` | primitivas de ataque/apoio compartilhadas (era o módulo Fakes) |
 | `060-planner` `065-blindagem` `070-paladino` | coordenado (a Blindagem é uma seção DENTRO da aba dele), paladino |
 | `075-mercado` `080-edificios` `082-pesquisa` `085-obra` | mercado, **Construções** (rotulado assim na UI), pesquisa do Ferreiro, obra |
+| `076-cunhagem-plano` | projecao da cunhagem (`cpl*`): melhor sede, quanto chega na janela, moedas e nobres — simula ida-e-volta do mercador |
 | `087-nobre-descarte` | descarte de nobre inutil: manda numa barbara perto ou dispensa (`mode=decommission`) |
 | `095-saque-tplB` `100-barbaros-mapa` | saque template B, bárbaros do mapa (o `090-bb`/Cultivo foi aposentado na v11.15.0) |
 | `110-cadeado` `120-etiqueta` | reserva de bárbara, auto-rótulo |

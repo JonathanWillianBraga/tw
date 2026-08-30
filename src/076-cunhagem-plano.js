@@ -274,7 +274,12 @@
         while (mudou && fila.length) {
           mudou = false;
           // fila ja vem ordenada do menor pro maior
-          const i = fila.findIndex((x) => cplDesperdicio(S, x) <= CPL_TOLERANCIA);
+          // `.frac`, e nao o objeto. `cplDesperdicio` devolve {quer,cabe,perda,frac}, e
+          // comparar o OBJETO com um numero da sempre false — nenhum pacote era liberado, a
+          // agenda saia vazia e a linha "com pacotes" mostrava o mesmo numero de "so drenar".
+          // Pior: `potencial` ja contava o volume dos pacotes, entao os marcos de 50/80/95%
+          // nunca eram atingidos e o Ritmo saia todo em travessao.
+          const i = fila.findIndex((x) => cplDesperdicio(S, x).frac <= CPL_TOLERANCIA);
           if (i >= 0) {
             const pct = fila[i], perda = cplDesperdicio(S, pct).frac;
             fila.splice(i, 1);

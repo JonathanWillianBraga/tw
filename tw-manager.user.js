@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.242.0
+// @version      11.243.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.242.0';
+  const VERSION = '11.243.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -6038,7 +6038,12 @@
         while (mudou && fila.length) {
           mudou = false;
           // fila ja vem ordenada do menor pro maior
-          const i = fila.findIndex((x) => cplDesperdicio(S, x) <= CPL_TOLERANCIA);
+          // `.frac`, e nao o objeto. `cplDesperdicio` devolve {quer,cabe,perda,frac}, e
+          // comparar o OBJETO com um numero da sempre false — nenhum pacote era liberado, a
+          // agenda saia vazia e a linha "com pacotes" mostrava o mesmo numero de "so drenar".
+          // Pior: `potencial` ja contava o volume dos pacotes, entao os marcos de 50/80/95%
+          // nunca eram atingidos e o Ritmo saia todo em travessao.
+          const i = fila.findIndex((x) => cplDesperdicio(S, x).frac <= CPL_TOLERANCIA);
           if (i >= 0) {
             const pct = fila[i], perda = cplDesperdicio(S, pct).frac;
             fila.splice(i, 1);

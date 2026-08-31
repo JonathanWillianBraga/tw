@@ -326,7 +326,7 @@
   function showTab(name) {
     // LISTA FIXA: aba nova precisa entrar AQUI também, senão o botão acende e o conteúdo nunca
     // aparece — o div fica em display:none pra sempre. Foi o que aconteceu com 'rel' na v11.192.0.
-    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'paladin', 'etiqueta', 'obra', 'apoios', 'rel', 'log'].forEach((n) => {
+    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'paladin', 'etiqueta', 'obra', 'apoios', 'rel', 'flags', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -393,7 +393,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + tabBtn('apoios', '🛡️', 'Apoios') + tabBtn('rel', '💎', 'Relíquias') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + tabBtn('apoios', '🛡️', 'Apoios') + tabBtn('rel', '💎', 'Relíquias') + tabBtn('flags', '🚩', 'Bandeiras') + '</div>' +
       // Telas de modelo: overlay DENTRO do painel, nao aba nova. Ficam fora do #twmgr-body pra
       // cobrir o painel inteiro (inclusive a barra de abas) enquanto abertas -- e uma tela cheia
       // de edicao, entao trocar de aba no meio nao faz sentido.
@@ -1005,6 +1005,17 @@
         '<div id="twmgr-rel-corpo"></div>' +
         modLog('rel') +
       '</div>' +
+      '<div id="twmgr-tab-flags" style="display:none">' +
+        hint('🚩 Uma aldeia só usa <b>uma</b> bandeira, então a pergunta não é qual bandeira é boa — é <b>qual vai em qual aldeia</b>. Cada uma ganha um preço em recurso/hora: a de <b>Recurso</b> vale <i>% × produção dos três prédios</i> e dura pra sempre; a de <b>Recrutamento</b> vale <i>% × quanta tropa a aldeia consegue produzir</i> e só até a fazenda encher. Daí sai sozinho que fazenda cheia pede Recurso e estábulo bom com espaço pede Recrutamento. <b>Trocar é de graça</b> e a antiga volta pro estoque na hora, mas cada aldeia fica <b>24h</b> sem poder trocar de novo.') +
+        '<div class="twmgr-row" style="margin-bottom:6px">' +
+          '<button id="twmgr-bnd-ler" class="twmgr-btn twmgr-ghost" style="flex:1">↻ Analisar</button>' +
+          '<span style="font-size:10px;color:#8a7d6d;margin-left:8px">janela</span>' +
+          '<input id="twmgr-bnd-horizonte" class="twmgr-inp" type="number" min="1" style="width:56px;margin-left:4px">' +
+          '<span style="font-size:10px;color:#8a7d6d;margin-left:4px">h</span>' +
+        '</div>' +
+        '<div id="twmgr-bnd-corpo"></div>' +
+        modLog('flags') +
+      '</div>' +
       '<div id="twmgr-tab-apoios" style="display:none">' +
         hint('🛡️ O jogo só mostra tropa fora agrupada por <b>origem</b> — "a aldeia 001 tem 1999 lanças fora". Nunca por <b>destino</b>. Esta tela inverte: uma linha por aldeia que você está apoiando, com o total somado; clique pra ver quais aldeias suas mandaram. A leitura <b>fica guardada</b> e só é refeita quando você clica em <b>↻ Ler apoios</b> — ela custa uma requisição por aldeia sua com tropa fora.') +
         sec('Apoios enviados',
@@ -1058,6 +1069,7 @@
     document.getElementById('twmgr-cap-brw').addEventListener('change', async () => { if (document.getElementById('twmgr-cap-brw').checked) await ensureNotifyPermission(); });
     document.getElementById('twmgr-cap-test').addEventListener('click', testCaptchaNotif);
     document.getElementById('twmgr-rel-ler').addEventListener('click', relAnalisar);
+    bndLigarControles();
     renderReliquias();
     document.getElementById('twmgr-bkp-exp').addEventListener('click', bkpExportar);
     document.getElementById('twmgr-bkp-imp').addEventListener('click', bkpImportar);

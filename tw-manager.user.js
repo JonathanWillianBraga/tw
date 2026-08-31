@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.250.0
+// @version      11.251.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.250.0';
+  const VERSION = '11.251.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -13033,11 +13033,16 @@
   //     icone conta 27 aldeias com Recurso onde ha 56 - foi o meu primeiro erro aqui.
   //   . `overview_villages` e STATEFUL por grupo no servidor (ver 040-tropas.js): sempre `group=0`.
   //
-  // ESCOPO DO MVP: so Recurso x Recrutamento.
-  //   . Capacidade de saque ficou de fora a pedido do usuario - com muita gente farmando e poucas
-  //     barbaras, mais carga nao paga.
-  //   . Ataque/Defesa ficam so no contador: trocar pra Ataque quando sai ataque grande e outra
-  //     ideia boa, mas e outro ciclo de vida (temporario, por operacao) e entra depois.
+  // ESCOPO: a disputa por valor e so entre Recurso e Recrutamento. O resto tem regra fixa.
+  //   . MOEDA e INTOCAVEL. Aldeia com a bandeira de menor custo de moeda e a sede de cunhagem, e o
+  //     modulo nunca mexe nela — o desconto vale mais que qualquer % de producao. Ordem do dono da
+  //     conta, e a unica excecao dura daqui.
+  //   . SAQUE e so SOBRA: entra quando acabou Recurso e Recrutamento, pra aldeia nao ficar sem
+  //     bandeira nenhuma. Nao disputa por valor porque nesta conta ela nao paga (muita gente
+  //     farmando, poucas barbaras).
+  //   . ATAQUE, DEFESA, SORTE e POPULACAO so aparecem no contador, com a sugestao de fusao. Trocar
+  //     pra Ataque quando sai um ataque grande e uma boa ideia, mas e outro ciclo de vida
+  //     (temporario, por operacao) e entra depois.
 
   const BND_TIPO = { 1: 'Recurso', 2: 'Recrutamento', 3: 'Ataque', 4: 'Defesa',
                      5: 'Sorte', 6: 'Populacao', 7: 'Moeda', 8: 'Saque' };
@@ -13049,6 +13054,8 @@
   const BND_ESCALA_PADRAO = 0.6627;          // f(nivel) / 0.944^nivel, medido no br143
   const BND_HORIZONTE_PADRAO = 168;          // horas de janela pra comparar Recurso x Recrutamento
   const BND_AMOSTRA_CALIB = 4;               // aldeias lidas pra calibrar o tempo de recrutamento
+  const BND_INTOCAVEL = 7;                   // Menores custos de moeda: o modulo NUNCA mexe (ver bndPlanejar)
+  const BND_SOBRA = 8;                       // Capacidade de saque: so como ultimo recurso, quando acaba o resto
   const BND_PREDIO = { spear: 'bar', sword: 'bar', axe: 'bar', archer: 'bar',
                        spy: 'sta', light: 'sta', marcher: 'sta', heavy: 'sta',
                        ram: 'gar', catapult: 'gar' };
@@ -13330,6 +13337,26 @@
     return cabeca + contra + (porque ? ' - ' + porque : '');
   }
 
+  // Fusao: 3 do mesmo tipo E nivel viram 1 do nivel seguinte.
+  //
+  // NAO vale pra Recurso nem pra Recrutamento, e o usuario foi explicito: nao ha bandeira
+  // sobrando. Fundir troca COBERTURA por nivel (3 aldeias servidas viram 1), e com 80 aldeias
+  // disputando 89 bandeiras uteis isso e prejuizo. Nos tipos que ficam parados na gaveta e o
+  // contrario: eles ja nao cobrem nada, entao subir de nivel e o unico uso que resta — juntar uma
+  // de Ataque forte pra usar numa operacao, por exemplo.
+  //
+  // Isto e SUGESTAO. O modulo nao funde nada sozinho.
+  function bndFusao(niveis) {
+    const n = [0];
+    for (let i = 1; i <= 9; i++) n[i] = parseInt((niveis || {})[i], 10) || 0;
+    for (let i = 1; i < 9; i++) {
+      const sobe = Math.floor(n[i] / 3);
+      if (sobe > 0) { n[i] -= sobe * 3; n[i + 1] += sobe; }
+    }
+    return n;
+  }
+  function bndMelhorNivel(n) { for (let i = 9; i >= 1; i--) if ((n[i] || 0) > 0) return i; return 0; }
+
   // ---------- plano ----------
 
   // Guloso, e guloso basta. Como todo ganho tem a forma `base x pct`, a atribuicao otima de um
@@ -13349,6 +13376,15 @@
     const vilas = Object.keys(cen).map((k) => cen[k]);
     vilas.forEach((v) => { if (v.tipo === 1 || v.tipo === 2) pool[v.tipo].push(v.pct); });
     pool[1].sort((a, b) => b - a); pool[2].sort((a, b) => b - a);
+    // Saque entra so como SOBRA, fora da disputa por valor: o usuario mediu que nao paga (muita
+    // gente farmando, poucas barbaras). Serve pra aldeia nao ficar SEM bandeira quando o Recurso
+    // e o Recrutamento acabarem — nesse ponto qualquer bonus e melhor que nenhum.
+    const sobra = [];
+    const nsq = estoque[BND_SOBRA] || {};
+    Object.keys(nsq).forEach((n) => { for (let k = 0; k < nsq[n]; k++) sobra.push(+n); });
+    vilas.forEach((v) => { if (v.tipo === BND_SOBRA && v.nivel) sobra.push(v.nivel); });
+    sobra.sort((a, b) => b - a);
+    let iS = 0;
 
     const ordem = vilas.slice().sort((a, b) => {
       const ma = Math.max(bndGanho(a, 1, 1), bndGanho(a, 2, 1));
@@ -13357,14 +13393,31 @@
     });
     let i1 = 0, i2 = 0;
     ordem.forEach((v) => {
+      // A BANDEIRA DE MOEDA E INTOCAVEL. Ela e a sede de cunhagem: o desconto no custo da moeda
+      // vale muito mais que qualquer % de producao, e ela nao entra em conta nenhuma aqui. Ordem
+      // do usuario, e a unica excecao dura do modulo.
+      if (v.tipo === BND_INTOCAVEL) {
+        v.novoTipo = v.tipo; v.novoPct = v.pct; v.altTipo = 0;
+        v.ganho = 0; v.ganhoHoje = 0; v.delta = 0; v.muda = false; v.intocavel = true;
+        v.motivo = 'bandeira de moeda — o modulo nunca mexe nesta aldeia';
+        return;
+      }
       const g1 = i1 < pool[1].length ? bndGanho(v, 1, pool[1][i1]) : -1;
       const g2 = i2 < pool[2].length ? bndGanho(v, 2, pool[2][i2]) : -1;
       // Bandeira acabou pra esta aldeia. Zerar os campos aqui e nao deixar undefined: a tela soma
       // `ganhoHoje` de todas, e um undefined no meio vira NaN e apaga o resumo inteiro.
       if (g1 < 0 && g2 < 0) {
-        v.novoTipo = 0; v.novoPct = 0; v.ganho = 0;
-        v.ganhoHoje = bndGanho(v, v.tipo, v.pct); v.delta = 0; v.muda = false;
-        v.altTipo = 0; v.motivo = 'acabou bandeira pra esta aldeia';
+        // Acabou Recurso e Recrutamento. Cai pra Saque em vez de deixar a aldeia pelada — o valor
+        // nao entra na conta (nao ha modelo pra ele), entao o ganho fica zerado de proposito, e
+        // nao inventado.
+        v.ganhoHoje = bndGanho(v, v.tipo, v.pct); v.ganho = 0; v.delta = 0; v.altTipo = 0;
+        if (iS < sobra.length && v.tipo !== BND_SOBRA) {
+          v.novoTipo = BND_SOBRA; v.novoNivel = sobra[iS++]; v.novoPct = 0; v.muda = true;
+          v.motivo = 'nao sobrou Recurso nem Recrutamento — Saque so pra nao ficar sem bandeira';
+        } else {
+          v.novoTipo = 0; v.novoPct = 0; v.muda = false;
+          v.motivo = 'acabou bandeira pra esta aldeia';
+        }
         return;
       }
       // Guarda a opcao que PERDEU antes de mexer nos indices: `pool[t][i]` depois do ++ ja e a
@@ -13434,15 +13487,15 @@
   function bndSimularCadeia(vilas, livre) {
     const est = JSON.parse(JSON.stringify(livre || {}));
     const feito = {};
-    const tem = (t, p) => { const n = bndNivelDoPct(t, p); return n > 0 && ((est[t] || {})[n] || 0) > 0; };
+    const tem = (v) => { const n = bndNivelAlvo(v); return n > 0 && ((est[v.novoTipo] || {})[n] || 0) > 0; };
     for (;;) {
-      const fila = vilas.filter((v) => v.muda && !v.cooldown && !feito[v.vid] && v.novoTipo && tem(v.novoTipo, v.novoPct))
+      const fila = vilas.filter((v) => v.muda && !v.cooldown && !feito[v.vid] && v.novoTipo && tem(v))
         .sort((a2, b2) => (b2.delta || 0) - (a2.delta || 0));
       if (!fila.length) break;
       const v = fila[0];
-      const nN = bndNivelDoPct(v.novoTipo, v.novoPct);
+      const nN = bndNivelAlvo(v);
       est[v.novoTipo][nN]--;
-      const nA = v.tipo ? bndNivelDoPct(v.tipo, v.pct) : 0;
+      const nA = v.tipo ? v.nivel : 0;
       if (nA) { est[v.tipo] = est[v.tipo] || {}; est[v.tipo][nA] = (est[v.tipo][nA] || 0) + 1; }
       feito[v.vid] = 1;
     }
@@ -13450,20 +13503,34 @@
     return Object.keys(feito).length;
   }
 
+  // Nivel alvo da linha. Recurso e Recrutamento saem da escada de %; Saque nao tem % legivel na
+  // tela, entao o plano ja guarda o nivel direto em `novoNivel`.
+  function bndNivelAlvo(v) {
+    if (v.novoNivel) return v.novoNivel;
+    return bndNivelDoPct(v.novoTipo, v.novoPct);
+  }
+
   function bndPronta(v) {
     if (!v.muda || v.cooldown || !v.novoTipo) return false;
-    const n = bndNivelDoPct(v.novoTipo, v.novoPct);
+    const n = bndNivelAlvo(v);
     return n > 0 && (((_bndLivre || {})[v.novoTipo] || {})[n] || 0) > 0;
   }
 
   // Move a contabilidade do estoque depois de uma troca: a nova sai de circulacao e a antiga
   // volta. Sem isso o laco da cadeia nao enxerga que acabou de destravar a proxima aldeia.
-  function bndContabilizar(tipoAntigo, pctAntigo, tipoNovo, pctNovo) {
+  // Fala em NIVEL e nao em %: a de Saque nao tem % legivel na tela, e o nivel da bandeira que a
+  // aldeia ja usa vem direto do censo — deduzir da porcentagem sobraria um zero e o estoque
+  // sairia do lugar sem ninguem perceber.
+  function bndContabilizar(tipoAntigo, nivelAntigo, tipoNovo, nivelNovo) {
     if (!_bndLivre) return;
-    const nN = bndNivelDoPct(tipoNovo, pctNovo);
-    if (nN) { _bndLivre[tipoNovo] = _bndLivre[tipoNovo] || {}; _bndLivre[tipoNovo][nN] = Math.max(0, (_bndLivre[tipoNovo][nN] || 0) - 1); }
-    const nA = tipoAntigo ? bndNivelDoPct(tipoAntigo, pctAntigo) : 0;
-    if (nA) { _bndLivre[tipoAntigo] = _bndLivre[tipoAntigo] || {}; _bndLivre[tipoAntigo][nA] = (_bndLivre[tipoAntigo][nA] || 0) + 1; }
+    if (nivelNovo) {
+      _bndLivre[tipoNovo] = _bndLivre[tipoNovo] || {};
+      _bndLivre[tipoNovo][nivelNovo] = Math.max(0, (_bndLivre[tipoNovo][nivelNovo] || 0) - 1);
+    }
+    if (tipoAntigo && nivelAntigo) {
+      _bndLivre[tipoAntigo] = _bndLivre[tipoAntigo] || {};
+      _bndLivre[tipoAntigo][nivelAntigo] = (_bndLivre[tipoAntigo][nivelAntigo] || 0) + 1;
+    }
   }
 
 
@@ -13592,10 +13659,12 @@
     }).filter((x) => x.n > 0);
 
     const linhas = D.vilas.slice().sort((a, b) => (b.delta || 0) - (a.delta || 0)).map((v, i) => {
-      const de = v.tipo ? (BND_TIPO[v.tipo] + ' ' + v.pct + '%') : '<i style="color:#b03030">sem bandeira</i>';
-      const para = v.novoTipo ? (BND_TIPO[v.novoTipo] + ' ' + v.novoPct + '%') : '—';
+      const de = v.tipo
+        ? (BND_TIPO[v.tipo] + ' ' + (v.pct ? v.pct + '%' : 'nv' + v.nivel)) : '<i style="color:#b03030">sem bandeira</i>';
+      const para = v.novoTipo
+        ? (BND_TIPO[v.novoTipo] + ' ' + (v.novoPct ? v.novoPct + '%' : 'nv' + bndNivelAlvo(v))) : '—';
       const igual = !v.muda;
-      const nivel = v.novoTipo ? bndNivelDoPct(v.novoTipo, v.novoPct) : 0;
+      const nivel = v.novoTipo ? bndNivelAlvo(v) : 0;
       return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '"' + (igual ? ' style="opacity:.5"' : '') + '>' +
         '<td style="white-space:nowrap">' + v.nome + ' <span style="color:#8a7d6d">' + v.coord + '</span></td>' +
         '<td style="white-space:nowrap">' + de + '</td>' +
@@ -13636,12 +13705,39 @@
         'Producao da mina a <b>' + D.fator.toFixed(2).replace('.', ',') + '×</b> a tabela e tempo de recrutamento ' +
         'calibrado na sua conta — os dois medidos, nenhum chutado. Janela de comparacao: <b>' +
         D.horizonte + 'h</b> (Recurso vale pra sempre; recrutamento so ate a fazenda encher).' +
-        (estOutras.length ? '<br>Parado na gaveta, fora do MVP: ' +
-          estOutras.map((x) => '<b>' + x.n + '</b> de ' + (BND_TIPO[x.t] || x.t)).join(', ') +
-          (Object.keys(outras).length ? ' · em uso hoje: ' +
-            Object.keys(outras).map((t) => outras[t] + ' de ' + (BND_TIPO[t] || t)).join(', ') : '') : '') +
         '<br>Lido as ' + new Date(_bndAt).toLocaleTimeString('pt-BR') + '.' +
       '</div>';
+
+    // Painel dos tipos que o modulo NAO decide. Contador e sugestao de fusao, nada mais — o
+    // usuario quer decidir Ataque/Defesa na mao, por operacao, e Sorte/Populacao ele considera
+    // atoa. Fundir aqui nao custa cobertura porque essas ja nao cobrem aldeia nenhuma.
+    const gaveta = Object.keys(D.estoque).map((t) => +t)
+      .filter((t) => t !== 1 && t !== 2)
+      .map((t) => {
+        const niveis = D.estoque[t] || {};
+        let total = 0; Object.keys(niveis).forEach((k) => { total += niveis[k]; });
+        const dep = bndFusao(niveis);
+        // `niveis` vem com chave de texto ("1","2"...) do setFlagCounts; bndMelhorNivel indexa por
+        // numero, entao a lista e remontada por posicao em vez de passar o objeto cru.
+        const atual = [0].concat([1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => niveis[i] || 0));
+        return { t: t, total: total, hoje: bndMelhorNivel(atual), depois: bndMelhorNivel(dep), emUso: outras[t] || 0 };
+      }).filter((x) => x.total > 0 || x.emUso > 0);
+    if (gaveta.length) {
+      const linhasG = gaveta.map((x, i) => '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
+        '<td>' + (BND_TIPO[x.t] || x.t) + (x.t === BND_INTOCAVEL ? ' <span title="o modulo nunca troca a bandeira de uma aldeia que esteja com esta" style="color:#a2643a">🔒</span>' : '') + '</td>' +
+        '<td style="font-variant-numeric:tabular-nums">' + x.total + '</td>' +
+        '<td style="font-variant-numeric:tabular-nums">' + (x.emUso || '—') + '</td>' +
+        '<td>nv' + x.hoje + '</td>' +
+        '<td>' + (x.depois > x.hoje ? '<b style="color:#2e7d3a">nv' + x.depois + '</b>' : '<span style="color:#8a7d6d">nv' + x.depois + '</span>') + '</td>' +
+      '</tr>').join('');
+      box.insertAdjacentHTML('beforeend',
+        '<div style="margin-top:9px"><div style="font-size:10px;color:#6f6153;margin-bottom:3px">'
+        + '<b>Parado na gaveta</b> — o módulo não mexe nestas. Fundir junta 3 do mesmo nível em 1 do nível seguinte;'
+        + ' aqui não custa nada porque elas não estão cobrindo aldeia nenhuma.</div>'
+        + '<table class="twmgr-bld-tab" style="width:100%"><thead><tr><th>tipo</th><th style="width:52px">tenho</th>'
+        + '<th style="width:52px">em uso</th><th style="width:66px">melhor hoje</th><th style="width:82px">fundindo dá</th>'
+        + '</tr></thead><tbody>' + linhasG + '</tbody></table></div>');
+    }
 
     box.querySelectorAll('.twmgr-bnd-go').forEach((b) => {
       b.addEventListener('click', () => bndTrocar(b.getAttribute('data-vid'), +b.getAttribute('data-tipo'), +b.getAttribute('data-nivel'), b));
@@ -13657,8 +13753,9 @@
     try {
       await bndAplicar(vid, tipo, nivel);
       if (v) {
-        bndContabilizar(v.tipo, v.pct, tipo, bndPctDoNivel(tipo, nivel));
-        v.tipo = tipo; v.pct = bndPctDoNivel(tipo, nivel); v.muda = false; v.delta = 0; v.cooldown = true;
+        bndContabilizar(v.tipo, v.nivel, tipo, nivel);
+        v.tipo = tipo; v.nivel = nivel; v.pct = bndPctDoNivel(tipo, nivel);
+        v.muda = false; v.delta = 0; v.cooldown = true;
       }
       pushLog('Bandeiras: ' + ((v && v.nome) || vid) + ' recebeu ' + BND_TIPO[tipo] + ' '
         + bndPctDoNivel(tipo, nivel) + '%.', 'ok', 'flags');
@@ -13692,9 +13789,11 @@
       const v = fila[0];
       if (btn) btn.textContent = 'aplicando ' + (ok + 1) + '/' + alvo.length + '…';
       try {
-        await bndAplicar(v.vid, v.novoTipo, bndNivelDoPct(v.novoTipo, v.novoPct));
-        bndContabilizar(v.tipo, v.pct, v.novoTipo, v.novoPct);
-        v.tipo = v.novoTipo; v.pct = v.novoPct; v.muda = false; v.delta = 0; v.cooldown = true;
+        const nAlvo = bndNivelAlvo(v);
+        await bndAplicar(v.vid, v.novoTipo, nAlvo);
+        bndContabilizar(v.tipo, v.nivel, v.novoTipo, nAlvo);
+        v.tipo = v.novoTipo; v.nivel = nAlvo; v.pct = v.novoPct;
+        v.muda = false; v.delta = 0; v.cooldown = true;
         ok++;
       } catch (e) {
         erro++;

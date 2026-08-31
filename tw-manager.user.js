@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.249.0
+// @version      11.250.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.249.0';
+  const VERSION = '11.250.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -13298,19 +13298,36 @@
     return Math.max(0, depois - antes) * v.janela;
   }
 
-  function bndMotivo(v, tipo) {
-    if (tipo === 1) {
-      if (v.livre <= 0) return 'fazenda no teto - recrutar nao anda, o valor esta todo na producao';
-      if (!v.consumo) return (v.alvos ? 'sem quartel/estabulo/oficina' : 'sem modelo de tropas') + ' - so a producao rende aqui';
-      if (v.janela < 0.35) return 'fazenda quase cheia (' + Math.round(v.horasEncher) + 'h pra encher) - a de recrutamento renderia pouco tempo';
-      return 'produz ' + fmtN(Math.round(v.prod)) + '/h, mais do que a de recrutamento renderia';
-    }
-    if (tipo === 2) {
-      if (v.consumo > v.entrada) return 'os predios consomem mais do que entra, mas ainda e o melhor uso aqui';
-      return 'estabulo ' + v.sta + ', quartel ' + v.bar + ', ' + fmtN(v.livre) + ' de fazenda livre ('
+  // Motivo em uma frase, sempre comparando as DUAS opcoes na MESMA unidade.
+  //
+  // A primeira versao dizia "produz 5.544/h, mais do que a de recrutamento renderia". Aquilo
+  // comparava a producao TOTAL da aldeia com o GANHO de uma bandeira - duas grandezas que nao se
+  // comparam, do tamanho de dizer "essa aldeia tem 24.000 de fazenda, mais do que a bandeira
+  // renderia". Quem lia via um numero grande e nao sabia de onde ele vinha.
+  //
+  // A frase certa diz quanto rende a escolhida, quanto renderia a perdedora, e POR QUE a
+  // perdedora rende pouco - que e a unica parte que o usuario nao consegue deduzir sozinho.
+  function bndMotivo(v) {
+    if (!v.novoTipo) return 'acabou bandeira pra esta aldeia';
+    const dia = (x) => fmtN(Math.round((x || 0) * 24));
+    const cabeca = BND_TIPO[v.novoTipo] + ' ' + v.novoPct + '% rende ' + dia(v.ganho) + '/dia aqui';
+    const contra = v.altTipo
+      ? ('; ' + BND_TIPO[v.altTipo] + ' ' + v.altPct + '% renderia ' + dia(v.altGanho))
+      : '';
+    let porque = '';
+    if (v.altTipo === 2) {
+      // A perdedora foi a de recrutamento: explica qual dos tetos dela pesou.
+      if (v.livre <= 0) porque = 'fazenda no teto, recrutar nao anda';
+      else if (!v.alvos) porque = 'esta aldeia nao esta em nenhum modelo de tropas';
+      else if (!v.consumo) porque = 'sem quartel, estabulo ou oficina pra recrutar';
+      else if (v.consumo >= v.entrada) porque = 'os predios ja consomem tudo que entra, acelerar nao produz mais';
+      else if (v.janela < 0.5) porque = 'a fazenda enche em ' + Math.round(v.horasEncher) + 'h e a de recrutamento para de valer ali';
+      else porque = 'esta aldeia planta muito';
+    } else if (v.altTipo === 1) {
+      porque = 'estabulo ' + v.sta + ', ' + fmtN(v.livre) + ' de fazenda livre ('
         + (v.horasEncher > 48 ? Math.round(v.horasEncher / 24) + ' dias' : Math.round(v.horasEncher) + 'h') + ' pra encher)';
     }
-    return '';
+    return cabeca + contra + (porque ? ' - ' + porque : '');
   }
 
   // ---------- plano ----------
@@ -13346,16 +13363,26 @@
       // `ganhoHoje` de todas, e um undefined no meio vira NaN e apaga o resumo inteiro.
       if (g1 < 0 && g2 < 0) {
         v.novoTipo = 0; v.novoPct = 0; v.ganho = 0;
-        v.ganhoHoje = bndGanho(v, v.tipo, v.pct); v.delta = 0; v.muda = false; v.motivo = 'acabou bandeira pra esta aldeia';
+        v.ganhoHoje = bndGanho(v, v.tipo, v.pct); v.delta = 0; v.muda = false;
+        v.altTipo = 0; v.motivo = 'acabou bandeira pra esta aldeia';
         return;
       }
-      if (g1 >= g2) { v.novoTipo = 1; v.novoPct = pool[1][i1++]; }
-      else { v.novoTipo = 2; v.novoPct = pool[2][i2++]; }
+      // Guarda a opcao que PERDEU antes de mexer nos indices: `pool[t][i]` depois do ++ ja e a
+      // proxima bandeira da fila, e nao a que foi comparada.
+      const p1 = i1 < pool[1].length ? pool[1][i1] : 0;
+      const p2 = i2 < pool[2].length ? pool[2][i2] : 0;
+      if (g1 >= g2) {
+        v.novoTipo = 1; v.novoPct = pool[1][i1++];
+        v.altTipo = p2 ? 2 : 0; v.altPct = p2; v.altGanho = Math.max(0, g2);
+      } else {
+        v.novoTipo = 2; v.novoPct = pool[2][i2++];
+        v.altTipo = p1 ? 1 : 0; v.altPct = p1; v.altGanho = Math.max(0, g1);
+      }
       v.ganho = bndGanho(v, v.novoTipo, v.novoPct);
       v.ganhoHoje = bndGanho(v, v.tipo, v.pct);
       v.delta = v.ganho - v.ganhoHoje;
       v.muda = (v.novoTipo !== v.tipo || v.novoPct !== v.pct);
-      v.motivo = bndMotivo(v, v.novoTipo);
+      v.motivo = bndMotivo(v);
     });
     return vilas;
   }
@@ -13603,7 +13630,7 @@
         '<button id="twmgr-bnd-todas" class="twmgr-btn twmgr-ghost" style="flex:1"'
         + (agora ? '' : ' disabled') + '>✓ Aplicar o plano (' + agora + ' aldeias, em cadeia)</button></div>' : '') +
       '<table class="twmgr-bld-tab" style="width:100%"><thead><tr>' +
-        '<th>aldeia</th><th>hoje</th><th>sugerida</th><th style="width:82px">ganho</th><th>por que</th><th></th>' +
+        '<th>aldeia</th><th>hoje</th><th>sugerida</th><th style="width:88px" title="quanto a TROCA acrescenta: o valor da sugerida menos o da que ja esta la. Linha que fica como esta nao acrescenta nada, por isso o traco.">ganho da troca</th><th>por que</th><th></th>' +
       '</tr></thead><tbody>' + linhas + '</tbody></table>' +
       '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">' +
         'Producao da mina a <b>' + D.fator.toFixed(2).replace('.', ',') + '×</b> a tabela e tempo de recrutamento ' +

@@ -19,6 +19,67 @@
   const CPL_PROD = [0, 30, 35, 41, 47, 55, 64, 74, 86, 100, 117, 136, 158, 184, 214, 249, 289,
                     337, 391, 455, 530, 616, 717, 833, 969, 1127, 1311, 1524, 1772, 2061, 2397];
   const CPL_MIN_CAMPO = 3;       // minutos por campo do mercador
+  // A TABELA ACIMA E A DO JOGO A VELOCIDADE 1, e ate a v11.246.0 o modulo somava ela CRUA. O br143
+  // roda a producao a 2x, entao a projecao enxergava METADE do que as minas produzem — medido em
+  // 4 aldeias, fator 2,00 cravado nas tres minas depois de descontar a bandeira.
+  //
+  // Nao da pra hardcodar 2: em outro mundo o fator e outro, e a constante errada mente calada. Entao
+  // ele e MEDIDO na aldeia aberta, de graca: `game_data.village` ja traz `wood_prod` (recurso por
+  // SEGUNDO, real) e `bonus.wood` (multiplicador FINAL da aldeia — bandeira e bonus permanente ja
+  // embutidos). Dividindo o real pela tabela e pelo multiplicador sobra so o fator do mundo.
+  function cplFatorMundo() {
+    try {
+      const v = (window.game_data || {}).village || {};
+      const b = v.buildings || {}, bon = v.bonus || {};
+      const fs = [];
+      [['wood', 'wood_prod'], ['stone', 'stone_prod'], ['iron', 'iron_prod']].forEach((par) => {
+        const base = CPL_PROD[Math.min(30, parseInt(b[par[0]], 10) || 0)] || 0;
+        const real = (+v[par[1]] || 0) * 3600;
+        // `bonus` traz SO o recurso que tem bonus: aldeia com +10% de madeira vem {wood:1.1} e
+        // nada pra pedra. Ausente = 1, nao = zero.
+        const mult = +bon[par[0]] || 1;
+        if (base > 0 && real > 0) fs.push(real / (base * mult));
+      });
+      if (!fs.length) return 1;
+      // Mediana das tres: um recurso com nivel ou bonus fora do padrao nao contamina o fator.
+      fs.sort((a, b2) => a - b2);
+      const f = fs[Math.floor(fs.length / 2)];
+      // Fator implausivel = o game_data mudou de forma. Ai o conservador e NAO multiplicar, em vez
+      // de inflar a projecao inteira com um numero que ninguem conferiu.
+      return (f >= 0.5 && f <= 10) ? f : 1;
+    } catch (e) { return 1; }
+  }
+
+  // MULTIPLICADOR POR ALDEIA. A bandeira de "Producao de recursos" multiplica os TRES predios
+  // (bosque, poco e mina), e o jogo entrega o numero final em `game_data.village.bonus` — mas so
+  // da aldeia ABERTA. Em massa, o pedaco da bandeira sai da visao geral de Pesquisa, que traz a
+  // descricao ("6% Recursos") das 80 aldeias numa requisicao so.
+  //
+  // O QUE ISSO NAO PEGA: bonus PERMANENTE de aldeia (medi uma com +20% de ferro sozinho). Sao
+  // poucas, e o erro fica pra BAIXO — o lado certo de errar numa projecao.
+  async function cplLerBandeiraRecurso() {
+    const out = {};
+    try {
+      // `group=0` FIXO: overview_villages e stateful por grupo no servidor (ver 040-tropas.js).
+      const r = await fetch('/game.php?village=' + CUR_VID
+        + '&screen=overview_villages&mode=tech&group=0&page=-1', { credentials: 'include' });
+      const d = new DOMParser().parseFromString(await r.text(), 'text/html');
+      d.querySelectorAll('td.flag_info').forEach((td) => {
+        const tr = td.closest('tr'); if (!tr) return;
+        const lbl = tr.querySelector('.quickedit-label');
+        const coord = ((((lbl && lbl.textContent) || '')).match(/\d{1,3}\|\d{1,3}/) || [''])[0];
+        if (!coord) return;
+        // Classificar pelo TEXTO, nunca pelo icone: o `img src` daquela coluna e o NIVEL da
+        // bandeira, nao o tipo. Quem le o icone conta 27 aldeias com Recurso onde ha 56.
+        const t = (td.textContent || '').replace(/\s+/g, ' ');
+        if (!/recursos/i.test(t)) return;   // so a de Recurso mexe em producao
+        const p = parseInt((t.match(/(\d+)\s*%/) || [0, 0])[1], 10) || 0;
+        if (p > 0) out[coord] = 1 + p / 100;
+      });
+    } catch (e) { /* sem bandeira: projecao sai conservadora, nunca inflada */ }
+    return out;
+  }
+
   const CPL_CARGA = 1000;        // capacidade de um mercador
   // Desperdicio aceitavel pra liberar um pacote. 3% parecia otimo numa medicao anterior, mas
   // ela foi feita com a conta em 59% de lotacao e outro destino, e nao generalizou: com 61% e
@@ -27,6 +88,7 @@
   const CPL_PCTS = [30, 15, 10, 5, 2, 1];   // tamanhos de pacote, do maior pro menor
 
   let _cplDados = null, _cplAt = 0, _cplCarregando = false, _cplErr = null, _cplPlano = null;
+  let _cplFator = 1;             // fator de producao do mundo, medido (ver cplFatorMundo)
   // Estado AO VIVO: alimentado pelo proprio ciclo da Cunhagem, sem requisicao extra.
   let _cplVivo = null;
   // Ultima leitura de lotacao, pro painel mostrar mesmo com tudo desligado.
@@ -107,6 +169,16 @@
         }
       }
     } catch (e) { /* sem producao: segue conservador, e a tela DIZ que esta por baixo */ }
+    // Producao REAL = tabela x fator do mundo x multiplicador da aldeia. Tem que entrar AQUI, antes
+    // do saque/coleta: aquilo ja vem medido em recurso de verdade e nao pode ser multiplicado de novo.
+    const _fator = cplFatorMundo();
+    const _mult = await cplLerBandeiraRecurso();
+    Object.keys(V).forEach((c) => {
+      const m = _fator * (_mult[c] || 1);
+      V[c].pw = Math.round(V[c].pw * m); V[c].ps = Math.round(V[c].ps * m); V[c].pi = Math.round(V[c].pi * m);
+      V[c].mult = m;
+    });
+    _cplFator = _fator;
     // Saque e coleta entram como se fossem producao extra da aldeia, repartidos na proporcao da
     // CAPACIDADE de armazem (ver cplEntradaExtra pro porque desse proxy) e divididos em tres
     // partes iguais entre os recursos. Somar aqui, e nao na simulacao, faz TODAS as contas que
@@ -800,6 +872,8 @@
             + '. Aumente a janela ou aceite o desperdício.</div>' : '')
         : '<div style="font-size:9px;color:#8a7d6d;margin-top:6px">Sem pacotes no inventário — preencha acima pra ver o cronograma.</div>') +
       '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">Mercador a ' + CPL_MIN_CAMPO
-      + ' min/campo, <b>ida e volta</b> simuladas por mercador. Respeita a reserva e a razão configuradas. Lido às '
+      + ' min/campo, <b>ida e volta</b> simuladas por mercador. Produção da mina a <b>'
+      + _cplFator.toFixed(2).replace('.', ',') + '×</b> a tabela (medido no mundo) e já com a bandeira de Recurso de cada aldeia.'
+      + ' Respeita a reserva e a razão configuradas. Lido às '
       + new Date(_cplAt).toLocaleTimeString('pt-BR') + '.</div>';
   }

@@ -60,6 +60,7 @@
 
   let _bndDados = null, _bndAt = 0, _bndCarregando = false, _bndErr = null;
   let _bndEscada = null;         // nivel -> %, deduzida do censo (ver bndEscada)
+  let _bndLivre = null;          // {tipo: {nivel: quantas SOBRANDO}} - ver bndPronta
 
   function bndCfg() {
     if (!config.flags) config.flags = {};
@@ -391,6 +392,55 @@
 
   // ---------- execucao ----------
 
+  // A ARMADILHA QUE QUASE PASSOU: o plano escolhe bandeiras do POOL (as livres MAIS as que ja
+  // estao em uso), porque trocar devolve a antiga na hora e portanto tudo esta em jogo. So que o
+  // jogo so deixa atribuir o que esta LIVRE agora. Nesta conta ha 0 bandeira de Recurso livre -
+  // as 56 estao todas em aldeias - entao a melhor sugestao da tela ("001 vai de 4% pra 14%")
+  // falharia sozinha: aquele 14% so existe preso em outra aldeia.
+  //
+  // O plano inteiro CONTINUA valido: ele e uma redistribuicao, e so precisa ser executado em
+  // CADEIA. Alguem que sai de Recurso pra Recrutamento (que tem sobra) libera um Recurso, que
+  // libera o proximo, e assim por diante. Por isso a execucao e um laco que repassa a lista ate
+  // parar de progredir, em vez de uma varredura unica.
+  // Roda a cadeia A SECO e marca quem ela realmente alcanca. Sem isso a tela prometeria 60 trocas
+  // e entregaria 38: as que dependem de uma bandeira presa numa aldeia em cooldown de 24h ficam
+  // pra proxima rodada, e o usuario so descobriria clicando e vendo linhas que nao mexem.
+  function bndSimularCadeia(vilas, livre) {
+    const est = JSON.parse(JSON.stringify(livre || {}));
+    const feito = {};
+    const tem = (t, p) => { const n = bndNivelDoPct(t, p); return n > 0 && ((est[t] || {})[n] || 0) > 0; };
+    for (;;) {
+      const fila = vilas.filter((v) => v.muda && !v.cooldown && !feito[v.vid] && v.novoTipo && tem(v.novoTipo, v.novoPct))
+        .sort((a2, b2) => (b2.delta || 0) - (a2.delta || 0));
+      if (!fila.length) break;
+      const v = fila[0];
+      const nN = bndNivelDoPct(v.novoTipo, v.novoPct);
+      est[v.novoTipo][nN]--;
+      const nA = v.tipo ? bndNivelDoPct(v.tipo, v.pct) : 0;
+      if (nA) { est[v.tipo] = est[v.tipo] || {}; est[v.tipo][nA] = (est[v.tipo][nA] || 0) + 1; }
+      feito[v.vid] = 1;
+    }
+    vilas.forEach((v) => { v.alcancavel = !!feito[v.vid]; });
+    return Object.keys(feito).length;
+  }
+
+  function bndPronta(v) {
+    if (!v.muda || v.cooldown || !v.novoTipo) return false;
+    const n = bndNivelDoPct(v.novoTipo, v.novoPct);
+    return n > 0 && (((_bndLivre || {})[v.novoTipo] || {})[n] || 0) > 0;
+  }
+
+  // Move a contabilidade do estoque depois de uma troca: a nova sai de circulacao e a antiga
+  // volta. Sem isso o laco da cadeia nao enxerga que acabou de destravar a proxima aldeia.
+  function bndContabilizar(tipoAntigo, pctAntigo, tipoNovo, pctNovo) {
+    if (!_bndLivre) return;
+    const nN = bndNivelDoPct(tipoNovo, pctNovo);
+    if (nN) { _bndLivre[tipoNovo] = _bndLivre[tipoNovo] || {}; _bndLivre[tipoNovo][nN] = Math.max(0, (_bndLivre[tipoNovo][nN] || 0) - 1); }
+    const nA = tipoAntigo ? bndNivelDoPct(tipoAntigo, pctAntigo) : 0;
+    if (nA) { _bndLivre[tipoAntigo] = _bndLivre[tipoAntigo] || {}; _bndLivre[tipoAntigo][nA] = (_bndLivre[tipoAntigo][nA] || 0) + 1; }
+  }
+
+
   // Atribuir e um POST so: `screen=flags&ajaxaction=assign_flag` com flag_type, level e village_id.
   // Nao existe "remover antes" - atribuir por cima ja devolve a antiga pro estoque.
   async function bndAplicar(vid, tipo, nivel) {
@@ -467,13 +517,16 @@
         v.janela = v.livre <= 0 ? 0 : Math.min(1, v.horasEncher / H);
       });
 
+      _bndLivre = JSON.parse(JSON.stringify(estoque));
       const vilas = bndPlanejar(cen, estoque);
+      const alcanca = bndSimularCadeia(vilas, _bndLivre);
       _bndDados = { vilas: vilas, estoque: estoque, cal: cal, fator: fator, horizonte: H };
       _bndAt = Date.now();
       const mudam = vilas.filter((v) => v.muda).length;
       const ganho = vilas.reduce((a, v) => a + Math.max(0, v.delta || 0), 0);
-      pushLog('Bandeiras: ' + vilas.length + ' aldeias lidas, ' + mudam + ' com bandeira melhor disponivel ('
-        + fmtN(Math.round(ganho * 24)) + ' recursos/dia).', 'ok', 'flags');
+      pushLog('Bandeiras: ' + vilas.length + ' aldeias lidas, ' + mudam + ' com bandeira melhor ('
+        + fmtN(Math.round(ganho * 24)) + ' recursos/dia) - ' + alcanca + ' dao pra trocar nesta rodada.',
+        'ok', 'flags');
     } catch (e) {
       _bndErr = e.message || String(e);
       pushLog('Bandeiras: a leitura falhou - ' + _bndErr, 'err', 'flags');
@@ -499,6 +552,8 @@
     const ganhoDia = D.vilas.reduce((a, v) => a + Math.max(0, v.delta || 0), 0) * 24;
     const travadas = mudam.filter((v) => v.cooldown).length;
     const hojeH = D.vilas.reduce((a, v) => a + (v.ganhoHoje || 0), 0);
+    const agora = mudam.filter((v) => v.alcancavel).length;
+    const esperam = mudam.length - agora;
     const novoH = D.vilas.reduce((a, v) => a + (v.ganho || 0), 0);
 
     // Contador dos tipos que o MVP nao mexe - o usuario pediu pra ver Ataque/Defesa sem que o
@@ -524,8 +579,12 @@
         '<td style="font-size:9px;color:#6f6153">' + (v.motivo || '') + '</td>' +
         '<td style="width:64px">' + (igual ? '' : (v.cooldown
             ? '<span title="essa aldeia trocou de bandeira nas ultimas 24h" style="font-size:9px;color:#a2643a">⏳ 24h</span>'
-            : '<button class="twmgr-btn twmgr-ghost twmgr-bnd-go" data-vid="' + v.vid + '" data-tipo="' + v.novoTipo
-              + '" data-nivel="' + nivel + '" style="padding:2px 8px;font-size:10px">aplicar</button>')) + '</td>' +
+            : (bndPronta(v)
+              ? '<button class="twmgr-btn twmgr-ghost twmgr-bnd-go" data-vid="' + v.vid + '" data-tipo="' + v.novoTipo
+                + '" data-nivel="' + nivel + '" style="padding:2px 8px;font-size:10px">aplicar</button>'
+              : (v.alcancavel
+                ? '<span title="a bandeira que ela quer esta em outra aldeia que troca antes. O botao de cima resolve na ordem certa." style="font-size:9px;color:#6f6153">na fila</span>'
+                : '<span title="a bandeira que ela quer esta presa numa aldeia em cooldown de 24h. Rode de novo amanha." style="font-size:9px;color:#a2643a">⏳ proxima rodada</span>')))) + '</td>' +
       '</tr>';
     }).join('');
 
@@ -538,10 +597,12 @@
         '<span style="font-size:10px;color:#8a7d6d">hoje as bandeiras rendem ' + fmtN(Math.round(hojeH)) +
         '/h; o plano rende ' + fmtN(Math.round(novoH)) + '/h.' +
         (travadas ? ' <b style="color:#a2643a">' + travadas + '</b> esperando o cooldown de 24h.' : '') + '</span>' +
+        (esperam ? '<br><span style="font-size:10px;color:#a2643a">' + agora + ' dao pra trocar agora; <b>' + esperam
+          + '</b> esperam uma aldeia liberar a bandeira que elas querem — rode de novo quando o cooldown vencer.</span>' : '') +
       '</div>' +
       (mudam.length ? '<div class="twmgr-row" style="margin-bottom:6px">' +
-        '<button id="twmgr-bnd-todas" class="twmgr-btn twmgr-ghost" style="flex:1">✓ Aplicar as ' +
-        (mudam.length - travadas) + ' que dao pra trocar agora</button></div>' : '') +
+        '<button id="twmgr-bnd-todas" class="twmgr-btn twmgr-ghost" style="flex:1"'
+        + (agora ? '' : ' disabled') + '>✓ Aplicar o plano (' + agora + ' aldeias, em cadeia)</button></div>' : '') +
       '<table class="twmgr-bld-tab" style="width:100%"><thead><tr>' +
         '<th>aldeia</th><th>hoje</th><th>sugerida</th><th style="width:82px">ganho</th><th>por que</th><th></th>' +
       '</tr></thead><tbody>' + linhas + '</tbody></table>' +
@@ -569,7 +630,10 @@
     const v = (_bndDados ? _bndDados.vilas : []).filter((x) => String(x.vid) === String(vid))[0];
     try {
       await bndAplicar(vid, tipo, nivel);
-      if (v) { v.tipo = tipo; v.pct = bndPctDoNivel(tipo, nivel); v.muda = false; v.delta = 0; v.cooldown = true; }
+      if (v) {
+        bndContabilizar(v.tipo, v.pct, tipo, bndPctDoNivel(tipo, nivel));
+        v.tipo = tipo; v.pct = bndPctDoNivel(tipo, nivel); v.muda = false; v.delta = 0; v.cooldown = true;
+      }
       pushLog('Bandeiras: ' + ((v && v.nome) || vid) + ' recebeu ' + BND_TIPO[tipo] + ' '
         + bndPctDoNivel(tipo, nivel) + '%.', 'ok', 'flags');
       bndRender();
@@ -579,29 +643,46 @@
     }
   }
 
-  // Aplica na ordem do MAIOR ganho primeiro. Se o usuario interromper no meio (ou o jogo travar
-  // alguma), o que ja foi feito e a parte que mais valia - e nao um pedaco aleatorio.
+  // Aplica em CADEIA, sempre pegando primeiro o maior ganho que esteja destravado. Cada troca
+  // devolve a bandeira antiga pro estoque e pode destravar outra aldeia, entao a lista e
+  // repassada ate nao sair mais nada - nao da pra resolver numa varredura unica.
+  //
+  // Comecar pelo maior ganho tambem e o que torna a interrupcao segura: se o usuario fechar a aba
+  // no meio, o que ja foi feito e a parte que mais valia, e nao um pedaco aleatorio.
   async function bndAplicarTodas() {
     if (!_bndDados) return;
-    const fila = _bndDados.vilas.filter((v) => v.muda && !v.cooldown).sort((a, b) => (b.delta || 0) - (a.delta || 0));
-    if (!fila.length) return;
+    const alvo = _bndDados.vilas.filter((v) => v.muda && !v.cooldown && v.alcancavel);
+    if (!alvo.length) return;
     const btn = document.getElementById('twmgr-bnd-todas');
-    if (!window.confirm('Trocar a bandeira de ' + fila.length + ' aldeias?\n\nCada uma fica 24h sem poder trocar de novo.')) return;
-    let ok = 0, erro = 0;
-    for (let i = 0; i < fila.length; i++) {
-      const v = fila[i];
-      if (btn) btn.textContent = 'aplicando ' + (i + 1) + '/' + fila.length + '…';
+    if (!window.confirm('Trocar a bandeira de ate ' + alvo.length + ' aldeias?'
+      + String.fromCharCode(10, 10) + 'Cada uma fica 24h sem poder trocar de novo.')) return;
+    let ok = 0, erro = 0, rodada = 0;
+    for (;;) {
+      const fila = _bndDados.vilas.filter(bndPronta).sort((a, b) => (b.delta || 0) - (a.delta || 0));
+      if (!fila.length) break;
+      rodada++;
+      // So a PRIMEIRA de cada passada: aplicar a fila inteira usaria um estoque ja vencido, porque
+      // cada troca muda o que esta livre pras seguintes.
+      const v = fila[0];
+      if (btn) btn.textContent = 'aplicando ' + (ok + 1) + '/' + alvo.length + '…';
       try {
         await bndAplicar(v.vid, v.novoTipo, bndNivelDoPct(v.novoTipo, v.novoPct));
+        bndContabilizar(v.tipo, v.pct, v.novoTipo, v.novoPct);
         v.tipo = v.novoTipo; v.pct = v.novoPct; v.muda = false; v.delta = 0; v.cooldown = true;
         ok++;
       } catch (e) {
         erro++;
+        // Marca como resolvida pra nao repetir a mesma falha pra sempre no laco.
+        v.muda = false;
         pushLog('Bandeiras: ' + v.nome + ' nao trocou - ' + (e.message || e), 'err', 'flags');
       }
       await sleep(420);
     }
-    pushLog('Bandeiras: ' + ok + ' trocada(s)' + (erro ? ', ' + erro + ' com erro' : '') + '.', ok ? 'ok' : 'err', 'flags');
+    const presas = _bndDados.vilas.filter((v) => v.muda && !v.cooldown).length;
+    pushLog('Bandeiras: ' + ok + ' trocada(s)' + (erro ? ', ' + erro + ' com erro' : '')
+      + (presas ? ', ' + presas + ' sem bandeira livre pra receber (a cadeia parou)' : '') + '.',
+      ok ? 'ok' : 'err', 'flags');
+    if (btn) btn.textContent = '✓ Aplicar o plano';
     bndRender();
   }
 

@@ -721,7 +721,8 @@
                   : '') + '.')
           + '</span>'
           + (L.cheios ? '<br><span style="font-size:10px;color:#b03030">' + L.cheios + ' de ' + L.total
-             + ' depósitos já no teto — esses estão jogando produção fora agora.</span>' : '')
+             + ' depósitos no teto</span> <span style="font-size:9px;color:#8a7d6d">(madeira, argila e ferro contam separado: '
+             + Math.round(L.total / 3) + ' aldeias × 3)</span><span style="font-size:10px;color:#b03030"> — esses estão jogando produção fora agora.</span>' : '')
           + '</div>' : '') +
       '<table class="twmgr-bld-tab" style="width:100%"><thead><tr>' +
         '<th>cenário em ' + p.horas + 'h</th><th style="width:74px">moedas</th><th style="width:62px">nobres</th></tr></thead><tbody>' +

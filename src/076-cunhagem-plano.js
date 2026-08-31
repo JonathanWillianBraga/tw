@@ -8,9 +8,11 @@
   //
   //   · A SEDE nao e a aldeia central do mapa: e a que minimiza a distancia PONDERADA PELO
   //     EXCEDENTE. Perto de muita gente pobre vale menos que perto de poucos armazens cheios.
-  //   · O GARGALO quase nunca e o recurso, e a FROTA. Medido nesta conta: 13,3M de producao em
-  //     48h renderam +217 moedas, porque os mercadores ja saturavam. Projecao que ignora a
-  //     ida-e-volta erra pra cima com folga.
+  //   · QUEM E O GARGALO MUDA, e a tela tem que dizer qual e. Ja foi a FROTA (medido: 13,3M de
+  //     producao em 48h renderam so +217 moedas) — mas aquilo foi medido com a frota da simulacao
+  //     inflada por um bug de retorno e com a producao das minas pela metade. Refeito na v11.255.0:
+  //     a frota move ~254M em 48h e ha ~70M pra mover, entao hoje o gargalo e RECURSO, e um recurso
+  //     so — o que a razao da moeda pede mais e a conta produz menos.
   //   · O CUSTO DA MOEDA vem da Academia, nao de constante — a bandeira entra sozinha na conta.
   //   · O NOBRE encarece: o limite N custa `1+2+...+N` ACUMULADO. Dobrar moeda NAO dobra nobre.
   //   · O PACOTE de X% so rende se houver X% de espaco livre. Usado com armazem cheio, mais da
@@ -353,13 +355,24 @@
     // menor-primeiro encalhava o +30%; maior-primeiro nao.
     if (inv) CPL_PCTS.forEach((p) => { const n = Math.max(0, parseInt(inv[p], 10) || 0); for (let i = 0; i < n; i++) fila.push(p); });
     const chega = { wood: 0, stone: 0, iron: 0 };
+    // Custo da razao travada, que a simulacao antiga nao enxergava: quanto de mercador ficou
+    // parado porque a proporcao nao fechava, e qual recurso travou.
+    let bloqueada = 0;
+    const travou = {};
     const marcos = { m50: null, m80: null, m95: null };
     const linha = [];
     const agenda = [];
     const PASSO = 0.25;
     for (let t = 0; t < horas; t += PASSO) {
       S.forEach((s) => {
-        s.volta = s.volta.filter((x) => { if (x <= t) { s.livre += s.v.merc; return false; } return true; });
+        // A VIAGEM DEVOLVE A CARGA QUE LEVOU, nao a frota inteira.
+        //
+        // Estava `s.livre += s.v.merc`: saia `carga` e voltava o total de mercadores da aldeia. Cada
+        // ida-e-volta inflava a frota, e ela crescia sem teto — medido no estado real, o pico chegou
+        // a 65x a frota de verdade. Nao mudou as moedas AQUI porque nesta conta o gargalo e recurso,
+        // nao mercador (a frota move ~254M em 48h e ha ~70M pra mover), mas numa janela curta ou com
+        // as origens longe a projecao prometeria transporte que nao existe.
+        s.volta = s.volta.filter((x) => { if (x.t <= t) { s.livre += x.carga; return false; } return true; });
         if (comProducao) {
           s.wood = Math.min(s.cap, s.wood + s.v.pw * PASSO);
           s.stone = Math.min(s.cap, s.stone + s.v.ps * PASSO);
@@ -424,31 +437,36 @@
       }
       S.forEach((s) => {
         if (s.livre < CPL_CARGA) return;
-        const sobra = {}; let tem = 0;
-        ['wood', 'stone', 'iron'].forEach((k) => { sobra[k] = Math.max(0, s[k] - R[k]); tem += sobra[k]; });
+        let tem = 0;
+        ['wood', 'stone', 'iron'].forEach((k) => { tem += Math.max(0, s[k] - R[k]); });
         if (tem < CPL_CARGA) return;
-        // Mesma regra do envio real (racaoCarteira): sempre o recurso mais atrasado na razao,
-        // contando o que JA chegou — a razao e do destino, nao de cada comando.
-        const env = { wood: 0, stone: 0, iron: 0 };
-        let resta = Math.min(s.livre, tem);
-        while (resta >= CPL_CARGA) {
-          let alvo = null, pior = Infinity;
-          ['wood', 'stone', 'iron'].forEach((k) => {
-            if (sobra[k] - env[k] <= 0) return;
-            const razao = (chega[k] + env[k]) / W[k];
-            if (razao < pior) { pior = razao; alvo = k; }
-          });
-          if (!alvo) break;
-          const leva = Math.min(CPL_CARGA, resta, sobra[alvo] - env[alvo]);
-          if (leva <= 0) break;
-          env[alvo] += leva; resta -= leva;
-        }
+        // A MESMA `racaoDoador` DO ENVIO REAL — e nao uma reimplementacao.
+        //
+        // Ate a v11.254 isto simulava a `racaoCarteira`: "manda o recurso que o DESTINO esta mais
+        // atrasado, com o que a aldeia tiver". Aquela regra foi aposentada na v11.239.0, por
+        // decisao do usuario, e trocada pela razao travada POR DOADORA — cada mercador sai na
+        // proporcao exata da moeda, limitado pelo recurso que aquela aldeia tem menos.
+        //
+        // A simulacao ficou pra tras e o efeito nao era cosmetico: ela acusava o encalhe no
+        // DESTINO ("10,6M ficam parados la"), quando com a razao travada o que chega ja vem
+        // pareado e o que sobra fica na ORIGEM. Foi o usuario quem apontou — a tela estava
+        // mandando olhar pro lugar errado.
+        //
+        // Chamar a funcao de verdade, e nao copiar a regra, e o que impede a divergencia de
+        // voltar na proxima vez que a razao mudar.
+        const env = racaoDoador(s.livre, s, R, W);
         const carga = env.wood + env.stone + env.iron;
-        if (carga < CPL_CARGA) return;
+        if (carga < CPL_CARGA) {
+          // Tinha sobra e tinha mercador livre, mas a razao travou: e frota parada esperando o
+          // recurso que falta. Sem medir isto, o custo da razao travada fica invisivel.
+          bloqueada += s.livre * PASSO;
+          if (env._gargalo && env._gargalo !== 'mercador') travou[env._gargalo] = (travou[env._gargalo] || 0) + 1;
+          return;
+        }
         ['wood', 'stone', 'iron'].forEach((k) => { s[k] -= env[k]; });
         // Chegada FORA da janela nao conta: saiu, mas nao vira moeda a tempo.
         if (t + s.ida <= horas) ['wood', 'stone', 'iron'].forEach((k) => { chega[k] += env[k]; });
-        s.livre -= carga; s.volta.push(t + s.rt);
+        s.livre -= carga; s.volta.push({ t: t + s.rt, carga: carga });
       });
       // Guarda a linha do tempo em vez de comparar contra o POTENCIAL TEORICO. O potencial
       // incluia o volume dos pacotes; quando um encalhava, a soma nunca chegava a 80% e o
@@ -465,7 +483,15 @@
         if (marcos.m95 == null && x.soma / totalFim >= 0.95) marcos.m95 = x.h;
       });
     }
-    return { chega: chega, marcos: marcos, origens: S.length, agenda: agenda, sobraram: fila.slice() };
+    // O QUE FICOU NA ORIGEM. Com a razao travada por doadora e aqui que sobra recurso sem par —
+    // nao no destino. E a resposta pratica muda junto: nao adianta olhar o armazem da sede, o que
+    // falta e producao do recurso que travou, na conta inteira.
+    const parado = { wood: 0, stone: 0, iron: 0 };
+    S.forEach((x) => { ['wood', 'stone', 'iron'].forEach((k) => { parado[k] += Math.max(0, x[k] - R[k]); }); });
+    // Frota-hora total das origens, pra transformar `bloqueada` em porcentagem legivel.
+    const frotaH = S.reduce((a, x) => a + x.v.merc, 0) * horas;
+    return { chega: chega, marcos: marcos, origens: S.length, agenda: agenda, sobraram: fila.slice(),
+             parado: parado, bloqueadaPct: frotaH > 0 ? bloqueada / frotaH : 0, travou: travou };
   }
 
   // Distancia PONDERADA PELO EXCEDENTE — o criterio de sede.
@@ -788,19 +814,34 @@
       alertas += al('bad', '!', '<b>' + L.cheios + ' de ' + L.total + ' depósitos no teto</b> — esses estão jogando produção fora agora. '
         + '<em>Madeira, argila e ferro contam separado: ' + Math.round(L.total / 3) + ' aldeias × 3.</em>');
     }
-    // Sobra sem par: o medo original do usuario ("3kk de madeira com 400mil de ferro"). A trava
-    // nomeia o recurso; isto diz o TAMANHO do encalhe, que e o que decide se vale mexer na mina.
+    // O QUE SOBRA — e ONDE. Com a razao travada por doadora, o mercador so sai na proporcao exata
+    // da moeda: o que chega ja vem pareado, e o excedente fica NA ORIGEM. A versao anterior desta
+    // tela acusava o encalhe no destino, porque simulava a regra antiga — mandava olhar pro lugar
+    // errado. Agora o alerta aponta pros dois efeitos reais: recurso preso nas origens e frota
+    // parada esperando o par.
     (function () {
-      const m = melhorCen.m;
-      const sob = { madeira: r.chega.wood - m * comB.wood, argila: r.chega.stone - m * comB.stone,
-                    ferro: r.chega.iron - m * comB.iron };
-      const tot = sob.madeira + sob.argila + sob.ferro;
-      const pior = Object.keys(sob).sort((a, b) => sob[b] - sob[a])[0];
-      if (tot > m * (comB.wood + comB.stone + comB.iron) * 0.05) {
-        alertas += al('warn', '⚖', '<b>' + fmtN(Math.round(tot)) + ' ficam parados</b> no destino, sobretudo <b>' + pior + '</b>. '
-          + 'Quem trava é o <b>' + gargalo + '</b> — para converter isso você precisa de mais ' + gargalo + ', não de mais bandeira.');
+      const PT = { wood: 'madeira', stone: 'argila', iron: 'ferro' };
+      const par = r.parado || { wood: 0, stone: 0, iron: 0 };
+      const tot = par.wood + par.stone + par.iron;
+      const pior = ['wood', 'stone', 'iron'].sort((a, b) => par[b] - par[a])[0];
+      const disp = Object.keys(_cplDados || {}).reduce((a, k) =>
+        a + Math.max(0, _cplDados[k].wood - (config.market.reserveWood || 0))
+          + Math.max(0, _cplDados[k].stone - (config.market.reserveStone || 0))
+          + Math.max(0, _cplDados[k].iron - (config.market.reserveIron || 0)), 0);
+      if (tot > disp * 0.08) {
+        alertas += al('warn', '⚖', '<b>' + fmtN(Math.round(tot)) + ' ficam parados nas origens</b>, sobretudo <b>'
+          + PT[pior] + '</b> — o mercador só sai na proporção da moeda, e sem <b>' + gargalo + '</b> pra parear '
+          + 'esse resto não embarca. <em>Não adianta olhar o armazém da sede: falta produção de ' + gargalo
+          + ' na conta inteira.</em>');
       } else {
-        alertas += al('good', '⚖', 'A mistura está bem casada: sobra pouco sem par. Quem trava é o <b>' + gargalo + '</b>.');
+        alertas += al('good', '⚖', 'Quase nada sobra sem par nas origens — a mistura está bem casada. Quem trava é o <b>'
+          + gargalo + '</b>.');
+      }
+      const bl = r.bloqueadaPct || 0;
+      if (bl > 0.05) {
+        alertas += al('warn', '🐴', '<b>' + Math.round(bl * 100) + '% da frota</b> ficou parada na janela: tinha recurso '
+          + 'acima da reserva e mercador livre, mas a proporção não fechava. <em>É o preço da razão travada — em troca, '
+          + 'nada chega no destino sem par.</em>');
       }
     })();
     if (p.meiaReserva) {

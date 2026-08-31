@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.251.0
+// @version      11.252.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.251.0';
+  const VERSION = '11.252.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -13632,85 +13632,165 @@
 
   // ---------- tela ----------
 
+  // A tabela padrao do painel (.twmgr-bld-tab) e `table-layout:fixed` com `nowrap` + ellipsis em
+  // toda celula — desenhada pra caber em painel estreito. Aqui ela servia mal: a coluna "por que" e
+  // uma frase inteira e saia CORTADA justamente na parte que explica a decisao, que e a razao de a
+  // coluna existir. E as ~54 linhas "manter" ocupavam metade da tela sem oferecer acao nenhuma.
+  //
+  // Trocada por cartoes agrupados por SITUACAO. Cartao quebra linha, entao a frase cabe inteira em
+  // qualquer largura; e o agrupamento poe na frente o unico grupo onde ha o que fazer, com o resto
+  // recolhido.
+  function bndCss() {
+    if (document.getElementById('twmgr-bnd-css')) return;
+    const st = document.createElement('style'); st.id = 'twmgr-bnd-css';
+    st.textContent = [
+      '.bnd-hero{border:1px solid #e6dcc9;background:linear-gradient(180deg,#fffdf8,#fbf6ec);border-radius:8px;padding:9px 10px;margin-bottom:7px}',
+      '.bnd-hero-n{font-size:19px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}',
+      '.bnd-hero-l{font-size:10px;color:#6f6153;margin-top:1px}',
+      '.bnd-hero-b{display:flex;gap:14px;margin-top:7px;padding-top:7px;border-top:1px solid #ece4d8;flex-wrap:wrap}',
+      '.bnd-kpi{font-size:9px;color:#8a7d6d;line-height:1.3}',
+      '.bnd-kpi b{display:block;font-size:12px;color:#463b30;font-variant-numeric:tabular-nums;font-weight:600}',
+      '.bnd-grp{margin-top:8px}',
+      '.bnd-grp-h{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;padding:3px 2px;font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#8a7d6d}',
+      '.bnd-grp-h:hover{color:#6f6153}',
+      '.bnd-grp-n{background:#efe7da;color:#6f6153;border-radius:9px;padding:0 6px;font-size:9px;letter-spacing:0;font-weight:600}',
+      '.bnd-ar{font-size:8px;width:8px;display:inline-block}',
+      '.bnd-grp-h.on-go{color:#2e7d3a}.bnd-grp-h.on-go .bnd-grp-n{background:#dcefdc;color:#2e7d3a}',
+      '.bnd-grp-h.on-wait{color:#a2643a}.bnd-grp-h.on-wait .bnd-grp-n{background:#f6e6d5;color:#a2643a}',
+      '.bnd-card{background:#fff;border:1px solid #ece4d8;border-radius:7px;padding:6px 8px;margin-bottom:4px}',
+      '.bnd-card.is-ok{background:#fbfaf7;border-color:#f0e9dd}',
+      '.bnd-r1{display:flex;align-items:baseline;gap:6px}',
+      '.bnd-nome{font-size:11px;font-weight:600;color:#463b30;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.bnd-nome em{font-style:normal;font-weight:400;color:#a89b8a;font-size:9px;margin-left:4px}',
+      '.bnd-ganho{font-size:11px;font-weight:700;color:#2e7d3a;font-variant-numeric:tabular-nums;white-space:nowrap}',
+      '.bnd-r2{display:flex;align-items:center;gap:5px;margin-top:4px;flex-wrap:wrap}',
+      '.bnd-chip{font-size:9px;padding:1px 6px;border-radius:9px;border:1px solid transparent;white-space:nowrap}',
+      '.bnd-t1{background:#eef5e6;border-color:#d6e6c4;color:#4a6b2f}',
+      '.bnd-t2{background:#e8eff7;border-color:#c8dbeb;color:#2f5673}',
+      '.bnd-t8{background:#f7f1e6;border-color:#e8dcc4;color:#7a6134}',
+      '.bnd-t0{background:#fbeaea;border-color:#eecfcf;color:#a33}',
+      '.bnd-tx{background:#f2efe9;border-color:#e4ded3;color:#6f6153}',
+      '.bnd-seta{color:#b9ad9b;font-size:10px}',
+      '.bnd-acao{margin-left:auto;white-space:nowrap}',
+      '.bnd-tag{font-size:9px;white-space:nowrap}',
+      '.bnd-pq{font-size:9px;color:#8a7d6d;line-height:1.4;margin-top:4px}',
+      '.bnd-rodape{font-size:9px;color:#8a7d6d;line-height:1.45;margin-top:9px;padding-top:7px;border-top:1px solid #ece4d8}'
+    ].join('');
+    document.head.appendChild(st);
+  }
+
+  function bndChipCls(tipo) {
+    if (tipo === 1 || tipo === 2 || tipo === 8) return 'bnd-t' + tipo;
+    return tipo ? 'bnd-tx' : 'bnd-t0';
+  }
+  function bndRotulo(tipo, pct, nivel) {
+    if (!tipo) return 'sem bandeira';
+    return BND_TIPO[tipo] + ' ' + (pct ? pct + '%' : 'nv' + nivel);
+  }
+
+  function bndCartao(v) {
+    const nivel = v.novoTipo ? bndNivelAlvo(v) : 0;
+    let acao = '';
+    if (v.intocavel) acao = '<span class="bnd-tag" style="color:#a2643a" title="ordem sua: o modulo nunca mexe na aldeia que estiver com a bandeira de moeda">&#128274; intocavel</span>';
+    else if (!v.muda) acao = '';
+    else if (v.cooldown) acao = '<span class="bnd-tag" style="color:#a2643a" title="essa aldeia trocou de bandeira nas ultimas 24h">&#9203; 24h</span>';
+    else if (bndPronta(v)) acao = '<button class="twmgr-btn twmgr-ghost twmgr-bnd-go" data-vid="' + v.vid
+      + '" data-tipo="' + v.novoTipo + '" data-nivel="' + nivel + '" style="padding:2px 9px;font-size:10px">aplicar</button>';
+    else if (v.alcancavel) acao = '<span class="bnd-tag" style="color:#6f6153" title="a bandeira que ela quer esta em outra aldeia que troca antes — o botao de cima resolve na ordem certa">na fila</span>';
+    else acao = '<span class="bnd-tag" style="color:#a2643a" title="a bandeira que ela quer esta presa numa aldeia em cooldown de 24h">&#9203; proxima rodada</span>';
+
+    const chip = (t, pc, nv, forte) => '<span class="bnd-chip ' + bndChipCls(t) + '">'
+      + (forte ? '<b>' : '') + bndRotulo(t, pc, nv) + (forte ? '</b>' : '') + '</span>';
+    const transicao = v.muda
+      ? (chip(v.tipo, v.pct, v.nivel) + '<span class="bnd-seta">&rarr;</span>' + chip(v.novoTipo, v.novoPct, nivel, 1))
+      : (chip(v.tipo, v.pct, v.nivel) + '<span class="bnd-tag" style="color:#a89b8a">ja esta na melhor</span>');
+
+    return '<div class="bnd-card' + (v.muda ? '' : ' is-ok') + '">' +
+      '<div class="bnd-r1"><span class="bnd-nome">' + v.nome + '<em>' + v.coord + '</em></span>' +
+        (v.delta > 0 ? '<span class="bnd-ganho">+' + fmtN(Math.round(v.delta * 24))
+          + '<span style="font-weight:400;color:#8a7d6d">/dia</span></span>' : '') +
+      '</div>' +
+      '<div class="bnd-r2">' + transicao + '<span class="bnd-acao">' + acao + '</span></div>' +
+      (v.motivo ? '<div class="bnd-pq">' + v.motivo + '</div>' : '') +
+    '</div>';
+  }
+
+  // Aberto/fechado dos grupos: so na sessao. Nao merece ir pro config nem pro backup.
+  const _bndAberto = { go: 1, wait: 1, ok: 0 };
+
+  function bndGrupo(id, cls, titulo, lista) {
+    if (!lista.length) return '';
+    const aberto = !!_bndAberto[id];
+    return '<div class="bnd-grp">' +
+      '<div class="bnd-grp-h ' + cls + '" data-grp="' + id + '">' +
+        '<span class="bnd-ar">' + (aberto ? '&#9662;' : '&#9656;') + '</span>' + titulo +
+        '<span class="bnd-grp-n">' + lista.length + '</span>' +
+      '</div>' +
+      '<div id="twmgr-bnd-g-' + id + '"' + (aberto ? '' : ' style="display:none"') + '>' +
+        lista.map(bndCartao).join('') +
+      '</div>' +
+    '</div>';
+  }
+
   function bndRender() {
     const box = document.getElementById('twmgr-bnd-corpo'); if (!box) return;
-    if (_bndCarregando) { box.innerHTML = '<div style="font-size:11px;color:#8a7d6d;padding:8px">Lendo as aldeias…</div>'; return; }
+    bndCss();
+    if (_bndCarregando) { box.innerHTML = '<div style="font-size:11px;color:#8a7d6d;padding:8px">Lendo as aldeias&hellip;</div>'; return; }
     if (_bndErr) { box.innerHTML = '<div style="font-size:11px;color:#b03030;padding:8px">' + _bndErr + '</div>'; return; }
     if (!_bndDados) {
-      box.innerHTML = '<div style="font-size:11px;color:#8a7d6d;padding:8px">Clique em <b>Analisar</b> - custa 6 requisicoes e nao muda nada sozinho.</div>';
+      box.innerHTML = '<div style="font-size:11px;color:#8a7d6d;padding:8px">Clique em <b>Analisar</b> &mdash; custa 6 requisi&ccedil;&otilde;es e n&atilde;o muda nada sozinho.</div>';
       return;
     }
     const D = _bndDados;
-    const mudam = D.vilas.filter((v) => v.muda);
-    const ganhoDia = D.vilas.reduce((a, v) => a + Math.max(0, v.delta || 0), 0) * 24;
-    const travadas = mudam.filter((v) => v.cooldown).length;
-    const hojeH = D.vilas.reduce((a, v) => a + (v.ganhoHoje || 0), 0);
-    const agora = mudam.filter((v) => v.alcancavel).length;
-    const esperam = mudam.length - agora;
-    const novoH = D.vilas.reduce((a, v) => a + (v.ganho || 0), 0);
+    const ord = D.vilas.slice().sort((a, b) => (b.delta || 0) - (a.delta || 0));
+    const mudam = ord.filter((v) => v.muda);
+    const prontas = mudam.filter((v) => !v.cooldown && v.alcancavel);
+    const esperando = mudam.filter((v) => v.cooldown || !v.alcancavel);
+    const certas = ord.filter((v) => !v.muda);
+    const ganhoDia = ord.reduce((a, v) => a + Math.max(0, v.delta || 0), 0) * 24;
+    const ganhoAgora = prontas.reduce((a, v) => a + Math.max(0, v.delta || 0), 0) * 24;
+    const hojeH = ord.reduce((a, v) => a + (v.ganhoHoje || 0), 0);
+    const novoH = ord.reduce((a, v) => a + (v.ganho || 0), 0);
 
-    // Contador dos tipos que o MVP nao mexe - o usuario pediu pra ver Ataque/Defesa sem que o
-    // modulo decida por ele.
     const outras = {};
     D.vilas.forEach((v) => { if (v.tipo && v.tipo !== 1 && v.tipo !== 2) outras[v.tipo] = (outras[v.tipo] || 0) + 1; });
-    const estOutras = Object.keys(D.estoque).filter((t) => +t !== 1 && +t !== 2).map((t) => {
-      let n = 0; Object.keys(D.estoque[t]).forEach((k) => { n += D.estoque[t][k]; });
-      return { t: +t, n: n };
-    }).filter((x) => x.n > 0);
-
-    const linhas = D.vilas.slice().sort((a, b) => (b.delta || 0) - (a.delta || 0)).map((v, i) => {
-      const de = v.tipo
-        ? (BND_TIPO[v.tipo] + ' ' + (v.pct ? v.pct + '%' : 'nv' + v.nivel)) : '<i style="color:#b03030">sem bandeira</i>';
-      const para = v.novoTipo
-        ? (BND_TIPO[v.novoTipo] + ' ' + (v.novoPct ? v.novoPct + '%' : 'nv' + bndNivelAlvo(v))) : '—';
-      const igual = !v.muda;
-      const nivel = v.novoTipo ? bndNivelAlvo(v) : 0;
-      return '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '"' + (igual ? ' style="opacity:.5"' : '') + '>' +
-        '<td style="white-space:nowrap">' + v.nome + ' <span style="color:#8a7d6d">' + v.coord + '</span></td>' +
-        '<td style="white-space:nowrap">' + de + '</td>' +
-        '<td style="white-space:nowrap"><b>' + (igual ? '<span style="color:#6f6153">manter</span>' : para) + '</b></td>' +
-        '<td style="font-variant-numeric:tabular-nums;white-space:nowrap;color:' + (v.delta > 0 ? '#2e7d3a' : '#8a7d6d') + '">' +
-          (v.delta > 0 ? '+' + fmtN(Math.round(v.delta * 24)) + '/dia' : '—') + '</td>' +
-        '<td style="font-size:9px;color:#6f6153">' + (v.motivo || '') + '</td>' +
-        '<td style="width:64px">' + (igual ? '' : (v.cooldown
-            ? '<span title="essa aldeia trocou de bandeira nas ultimas 24h" style="font-size:9px;color:#a2643a">⏳ 24h</span>'
-            : (bndPronta(v)
-              ? '<button class="twmgr-btn twmgr-ghost twmgr-bnd-go" data-vid="' + v.vid + '" data-tipo="' + v.novoTipo
-                + '" data-nivel="' + nivel + '" style="padding:2px 8px;font-size:10px">aplicar</button>'
-              : (v.alcancavel
-                ? '<span title="a bandeira que ela quer esta em outra aldeia que troca antes. O botao de cima resolve na ordem certa." style="font-size:9px;color:#6f6153">na fila</span>'
-                : '<span title="a bandeira que ela quer esta presa numa aldeia em cooldown de 24h. Rode de novo amanha." style="font-size:9px;color:#a2643a">⏳ proxima rodada</span>')))) + '</td>' +
-      '</tr>';
-    }).join('');
 
     box.innerHTML =
-      '<div style="border:1px solid #e6dcc9;background:#fffdf8;border-radius:6px;padding:7px;margin-bottom:6px">' +
-        '<b style="font-size:14px;color:' + (ganhoDia > 0 ? '#2e7d3a' : '#6f6153') + '">' +
-        (ganhoDia > 0 ? '+' + fmtN(Math.round(ganhoDia)) : '0') + '</b>' +
-        '<span style="font-size:10px;color:#6f6153"> recursos/dia se arrumar tudo · ' +
-        mudam.length + ' de ' + D.vilas.length + ' aldeias na bandeira errada</span><br>' +
-        '<span style="font-size:10px;color:#8a7d6d">hoje as bandeiras rendem ' + fmtN(Math.round(hojeH)) +
-        '/h; o plano rende ' + fmtN(Math.round(novoH)) + '/h.' +
-        (travadas ? ' <b style="color:#a2643a">' + travadas + '</b> esperando o cooldown de 24h.' : '') + '</span>' +
-        (esperam ? '<br><span style="font-size:10px;color:#a2643a">' + agora + ' dao pra trocar agora; <b>' + esperam
-          + '</b> esperam uma aldeia liberar a bandeira que elas querem — rode de novo quando o cooldown vencer.</span>' : '') +
+      '<div class="bnd-hero">' +
+        '<div class="bnd-hero-n" style="color:' + (ganhoDia > 0 ? '#2e7d3a' : '#6f6153') + '">' +
+          (ganhoDia > 0 ? '+' + fmtN(Math.round(ganhoDia)) : '0') +
+          '<span style="font-size:11px;font-weight:400;color:#8a7d6d"> recursos/dia</span></div>' +
+        '<div class="bnd-hero-l">se todas as ' + mudam.length + ' aldeias fora do lugar forem arrumadas</div>' +
+        '<div class="bnd-hero-b">' +
+          '<div class="bnd-kpi"><b style="color:#2e7d3a">' + prontas.length + '</b>d&aacute; pra trocar agora</div>' +
+          '<div class="bnd-kpi"><b style="color:#a2643a">' + esperando.length + '</b>esperando</div>' +
+          '<div class="bnd-kpi"><b>' + certas.length + '</b>j&aacute; certas</div>' +
+          '<div class="bnd-kpi"><b>' + fmtN(Math.round(hojeH)) + ' &rarr; ' + fmtN(Math.round(novoH)) + '</b>recursos/h hoje &rarr; no plano</div>' +
+        '</div>' +
       '</div>' +
-      (mudam.length ? '<div class="twmgr-row" style="margin-bottom:6px">' +
-        '<button id="twmgr-bnd-todas" class="twmgr-btn twmgr-ghost" style="flex:1"'
-        + (agora ? '' : ' disabled') + '>✓ Aplicar o plano (' + agora + ' aldeias, em cadeia)</button></div>' : '') +
-      '<table class="twmgr-bld-tab" style="width:100%"><thead><tr>' +
-        '<th>aldeia</th><th>hoje</th><th>sugerida</th><th style="width:88px" title="quanto a TROCA acrescenta: o valor da sugerida menos o da que ja esta la. Linha que fica como esta nao acrescenta nada, por isso o traco.">ganho da troca</th><th>por que</th><th></th>' +
-      '</tr></thead><tbody>' + linhas + '</tbody></table>' +
-      '<div style="font-size:9px;color:#8a7d6d;margin-top:7px">' +
-        'Producao da mina a <b>' + D.fator.toFixed(2).replace('.', ',') + '×</b> a tabela e tempo de recrutamento ' +
-        'calibrado na sua conta — os dois medidos, nenhum chutado. Janela de comparacao: <b>' +
-        D.horizonte + 'h</b> (Recurso vale pra sempre; recrutamento so ate a fazenda encher).' +
-        '<br>Lido as ' + new Date(_bndAt).toLocaleTimeString('pt-BR') + '.' +
+      (mudam.length ? '<div class="twmgr-row" style="margin-bottom:2px">' +
+        '<button id="twmgr-bnd-todas" class="twmgr-btn twmgr-ghost" style="flex:1"' + (prontas.length ? '' : ' disabled') + '>' +
+        (prontas.length
+          ? '&#10003; Aplicar as ' + prontas.length + ' prontas &nbsp;<span style="color:#2e7d3a">+' + fmtN(Math.round(ganhoAgora)) + '/dia</span>'
+          : 'Nenhuma pronta agora') +
+        '</button></div>' : '') +
+      (mudam.length && !prontas.length
+        ? '<div style="font-size:9px;color:#a2643a;margin-bottom:2px">A cadeia n&atilde;o consegue come&ccedil;ar: toda bandeira que essas aldeias querem est&aacute; presa em alguma que trocou nas &uacute;ltimas 24h. Rode de novo quando o cooldown vencer.</div>'
+        : '') +
+      bndGrupo('go', 'on-go', 'D&aacute; pra trocar agora', prontas) +
+      bndGrupo('wait', 'on-wait', 'Esperando liberar', esperando) +
+      bndGrupo('ok', '', 'J&aacute; est&atilde;o na melhor', certas) +
+      '<div class="bnd-rodape">' +
+        'Produ&ccedil;&atilde;o da mina a <b>' + D.fator.toFixed(2).replace('.', ',') + '&times;</b> a tabela e tempo de ' +
+        'recrutamento calibrado na sua conta &mdash; os dois medidos, nenhum chutado.<br>' +
+        'Janela de compara&ccedil;&atilde;o <b>' + D.horizonte + 'h</b>: Recurso rende pra sempre, recrutamento s&oacute; at&eacute; a ' +
+        'fazenda encher. Janela maior favorece Recurso.<br>' +
+        'Lido &agrave;s ' + new Date(_bndAt).toLocaleTimeString('pt-BR') + '.' +
       '</div>';
 
-    // Painel dos tipos que o modulo NAO decide. Contador e sugestao de fusao, nada mais — o
-    // usuario quer decidir Ataque/Defesa na mao, por operacao, e Sorte/Populacao ele considera
-    // atoa. Fundir aqui nao custa cobertura porque essas ja nao cobrem aldeia nenhuma.
+    // Painel dos tipos que o modulo NAO decide. Contador e sugestao de fusao, nada mais — o usuario
+    // quer decidir Ataque/Defesa na mao, por operacao, e Sorte/Populacao ele considera atoa. Fundir
+    // aqui nao custa cobertura porque essas ja nao cobrem aldeia nenhuma.
     const gaveta = Object.keys(D.estoque).map((t) => +t)
       .filter((t) => t !== 1 && t !== 2)
       .map((t) => {
@@ -13721,23 +13801,42 @@
         // numero, entao a lista e remontada por posicao em vez de passar o objeto cru.
         const atual = [0].concat([1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => niveis[i] || 0));
         return { t: t, total: total, hoje: bndMelhorNivel(atual), depois: bndMelhorNivel(dep), emUso: outras[t] || 0 };
-      }).filter((x) => x.total > 0 || x.emUso > 0);
+      }).filter((x) => x.total > 0 || x.emUso > 0)
+      .sort((a, b) => (b.depois - b.hoje) - (a.depois - a.hoje) || b.total - a.total);
     if (gaveta.length) {
       const linhasG = gaveta.map((x, i) => '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
-        '<td>' + (BND_TIPO[x.t] || x.t) + (x.t === BND_INTOCAVEL ? ' <span title="o modulo nunca troca a bandeira de uma aldeia que esteja com esta" style="color:#a2643a">🔒</span>' : '') + '</td>' +
+        '<td>' + (BND_TIPO[x.t] || x.t) + (x.t === BND_INTOCAVEL
+          ? ' <span title="o modulo nunca troca a bandeira de uma aldeia que esteja com esta" style="color:#a2643a">&#128274;</span>' : '') + '</td>' +
         '<td style="font-variant-numeric:tabular-nums">' + x.total + '</td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + (x.emUso || '—') + '</td>' +
+        '<td style="font-variant-numeric:tabular-nums">' + (x.emUso || '&mdash;') + '</td>' +
         '<td>nv' + x.hoje + '</td>' +
-        '<td>' + (x.depois > x.hoje ? '<b style="color:#2e7d3a">nv' + x.depois + '</b>' : '<span style="color:#8a7d6d">nv' + x.depois + '</span>') + '</td>' +
+        '<td>' + (x.depois > x.hoje
+          ? '<b style="color:#2e7d3a">nv' + x.depois + '</b>'
+          : '<span style="color:#a89b8a">&mdash;</span>') + '</td>' +
       '</tr>').join('');
       box.insertAdjacentHTML('beforeend',
-        '<div style="margin-top:9px"><div style="font-size:10px;color:#6f6153;margin-bottom:3px">'
-        + '<b>Parado na gaveta</b> — o módulo não mexe nestas. Fundir junta 3 do mesmo nível em 1 do nível seguinte;'
-        + ' aqui não custa nada porque elas não estão cobrindo aldeia nenhuma.</div>'
-        + '<table class="twmgr-bld-tab" style="width:100%"><thead><tr><th>tipo</th><th style="width:52px">tenho</th>'
-        + '<th style="width:52px">em uso</th><th style="width:66px">melhor hoje</th><th style="width:82px">fundindo dá</th>'
-        + '</tr></thead><tbody>' + linhasG + '</tbody></table></div>');
+        '<div class="bnd-grp"><div class="bnd-grp-h" data-grp="gav">'
+        + '<span class="bnd-ar">' + (_bndAberto.gav ? '&#9662;' : '&#9656;') + '</span>Parado na gaveta'
+        + '<span class="bnd-grp-n">' + gaveta.length + '</span></div>'
+        + '<div id="twmgr-bnd-g-gav"' + (_bndAberto.gav ? '' : ' style="display:none"') + '>'
+        + '<div style="font-size:9px;color:#8a7d6d;line-height:1.4;margin:2px 0 4px">O m&oacute;dulo n&atilde;o mexe nestas. '
+        + 'Fundir junta <b>3 do mesmo n&iacute;vel em 1 do seguinte</b> &mdash; aqui n&atilde;o custa nada, porque elas j&aacute; n&atilde;o cobrem aldeia nenhuma. '
+        + 'Em Recurso e Recrutamento custaria: trocaria cobertura por n&iacute;vel.</div>'
+        + '<table class="twmgr-bld-tab" style="width:100%"><thead><tr><th>tipo</th><th style="width:46px">tenho</th>'
+        + '<th style="width:52px">em uso</th><th style="width:60px">melhor</th><th style="width:76px">fundindo</th>'
+        + '</tr></thead><tbody>' + linhasG + '</tbody></table></div></div>');
     }
+
+    box.querySelectorAll('.bnd-grp-h').forEach((h) => {
+      h.addEventListener('click', () => {
+        const id = h.getAttribute('data-grp');
+        _bndAberto[id] = _bndAberto[id] ? 0 : 1;
+        const corpo = document.getElementById('twmgr-bnd-g-' + id);
+        if (corpo) corpo.style.display = _bndAberto[id] ? '' : 'none';
+        const ar = h.querySelector('.bnd-ar');
+        if (ar) ar.innerHTML = _bndAberto[id] ? '&#9662;' : '&#9656;';
+      });
+    });
 
     box.querySelectorAll('.twmgr-bnd-go').forEach((b) => {
       b.addEventListener('click', () => bndTrocar(b.getAttribute('data-vid'), +b.getAttribute('data-tipo'), +b.getAttribute('data-nivel'), b));

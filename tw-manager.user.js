@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.253.0
+// @version      11.254.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.253.0';
+  const VERSION = '11.254.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -6421,13 +6421,72 @@
     CPL_PCTS.forEach((p) => { const el = document.getElementById('twmgr-cpl-inv-' + p); if (el) el.value = c.cplInv[p] || 0; });
   }
 
+  // A tela era uma lista chave-valor de ~14 linhas, todas com o mesmo peso: o numero que responde
+  // a pergunta ("quantos nobres isso vira?") tinha o mesmo destaque que "Origens: 79 de 79". E os
+  // avisos que mudam a decisao — sede sem Academia, deposito no teto, recurso encalhado — ficavam
+  // em cinza de 9px no meio do resto.
+  //
+  // Reorganizada em cinco blocos, do que decide pro que detalha: RESPOSTA, AS DUAS ALAVANCAS
+  // (pacote e bandeira), ONDE CUNHAR, O QUE ESTA ATRAPALHANDO e DE ONDE VEM O RECURSO. Mesma
+  // informacao, nada cortado.
+  function cplCss() {
+    if (document.getElementById('twmgr-cpl-css')) return;
+    const st = document.createElement('style'); st.id = 'twmgr-cpl-css';
+    st.textContent = [
+      '.cpl-hero{border:1px solid #e6dcc9;background:linear-gradient(180deg,#fffdf8,#fbf6ec);border-radius:8px;padding:9px 10px;margin-bottom:7px}',
+      '.cpl-hero-r{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}',
+      '.cpl-big{font-size:21px;font-weight:700;line-height:1.05;font-variant-numeric:tabular-nums;color:#2e7d3a}',
+      '.cpl-big small{font-size:11px;font-weight:400;color:#8a7d6d;margin-left:3px}',
+      '.cpl-big2{font-size:15px;font-weight:700;line-height:1.05;font-variant-numeric:tabular-nums;color:#463b30}',
+      '.cpl-hero-l{font-size:10px;color:#6f6153;margin-top:2px}',
+      '.cpl-kpis{display:flex;gap:11px;margin-top:7px;padding-top:7px;border-top:1px solid #ece4d8;flex-wrap:wrap}',
+      '.cpl-kpi{font-size:9px;color:#8a7d6d;line-height:1.3}',
+      '.cpl-kpi b{display:block;font-size:12px;color:#463b30;font-variant-numeric:tabular-nums;font-weight:600}',
+      '.cpl-sec{font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#8a7d6d;margin:9px 0 4px;display:flex;align-items:center;gap:6px}',
+      '.cpl-sec.clic{cursor:pointer;user-select:none}.cpl-sec.clic:hover{color:#6f6153}',
+      '.cpl-ar{font-size:8px;width:8px;display:inline-block}',
+      // Grade 2x2 das alavancas: pacote (linha) x bandeira (coluna). Assim as duas decisoes ficam
+      // legiveis de relance, o que uma lista de 4 linhas nao entrega.
+      '.cpl-mx{display:grid;grid-template-columns:auto 1fr 1fr;gap:1px;background:#ece4d8;border:1px solid #ece4d8;border-radius:7px;overflow:hidden}',
+      '.cpl-mx>div{background:#fff;padding:5px 7px}',
+      '.cpl-mx .h{background:#f6f1e8;font-size:9px;color:#6f6153;font-weight:600;text-align:center}',
+      '.cpl-mx .hl{background:#f6f1e8;font-size:9px;color:#6f6153;font-weight:600;display:flex;align-items:center}',
+      '.cpl-mx .c{text-align:center}',
+      '.cpl-mx .c.best{background:#f1f8f1}',
+      '.cpl-mx .c b{display:block;font-size:13px;font-variant-numeric:tabular-nums;color:#463b30}',
+      '.cpl-mx .c.best b{color:#2e7d3a}',
+      '.cpl-mx .c span{font-size:9px;color:#8a7d6d}',
+      '.cpl-al{display:flex;gap:6px;align-items:flex-start;font-size:10px;line-height:1.4;padding:5px 7px;border-radius:6px;margin-bottom:3px;border:1px solid transparent}',
+      '.cpl-al i{font-style:normal;flex:none;width:12px;text-align:center}',
+      '.cpl-al.bad{background:#fdf2f2;border-color:#eecfcf;color:#8a3232}',
+      '.cpl-al.warn{background:#fdf7ef;border-color:#eddcc4;color:#8a5d2a}',
+      '.cpl-al.good{background:#f2f8f2;border-color:#d3e6d3;color:#31703c}',
+      '.cpl-al.flat{background:#fffdf8;border-color:#ece4d8;color:#6f6153}',
+      '.cpl-al b{color:inherit}',
+      '.cpl-al em{font-style:normal;color:#8a7d6d}',
+      '.cpl-kv{display:flex;gap:8px;font-size:10px;padding:3px 2px;border-bottom:1px solid #f4efe6;line-height:1.45}',
+      '.cpl-kv:last-child{border-bottom:0}',
+      '.cpl-kv>span:first-child{color:#8a7d6d;flex:none;width:86px}',
+      '.cpl-kv>span:last-child{color:#463b30;flex:1;min-width:0}',
+      '.cpl-res{font-variant-numeric:tabular-nums}',
+      '.cpl-w{color:#8a6a44}.cpl-s{color:#c1743c}.cpl-i{color:#5f7382}',
+      '.cpl-rod{font-size:9px;color:#8a7d6d;line-height:1.45;margin-top:9px;padding-top:7px;border-top:1px solid #ece4d8}'
+    ].join('');
+    document.head.appendChild(st);
+  }
+
+  // Aberto/fechado das secoes recolhiveis. So na sessao.
+  const _cplAberto = { crono: 1, det: 0 };
+
   function cplRender() {
     const box = document.getElementById('twmgr-cpl-out'); if (!box) return;
+    cplCss();
     if (_cplCarregando) { box.innerHTML = '<span class="twmgr-lbl">lendo aldeias, minas e Academia…</span>'; return; }
     if (_cplErr) { box.innerHTML = '<span style="color:#b03030;font-size:10px">' + esc(_cplErr) + '</span>'; return; }
     if (!_cplPlano) { box.innerHTML = '<span class="twmgr-lbl">Clique em <b>Projetar</b>.</span>'; return; }
     const p = _cplPlano, c = cplCfg();
     const hm = (h) => (h == null ? '—' : (h < 1 ? Math.round(h * 60) + 'min' : (Math.round(h * 10) / 10) + 'h'));
+    const dias = (h) => (h == null || !isFinite(h) ? '—' : (h < 24 ? Math.round(h) + 'h' : Math.round(h / 24) + ' dia(s)'));
     // Custo COM e SEM bandeira, sempre os dois. A Academia da o que esta valendo agora; o outro
     // e derivado pelo desconto configurado — assim a comparacao existe mesmo antes de ativar.
     const lido = (p.ac && p.ac.custo) || null;
@@ -6441,189 +6500,192 @@
       base[k] = jaComDesconto ? Math.round(v / (1 - desc)) : v;
       comB[k] = jaComDesconto ? v : Math.round(v * (1 - desc));
     });
-    const linha = (r, custo) => {
-      const m = cplMoedas(r.chega, custo);
-      const n = cplNobres(p.ac && p.ac.limite, p.ac && p.ac.guardadas, m);
-      return { m: m, n: n };
+    const cel = (rec, custo) => {
+      const m = cplMoedas(rec.chega, custo);
+      return { m: m, n: cplNobres(p.ac && p.ac.limite, p.ac && p.ac.guardadas, m) };
     };
-    const cen = [
-      { rot: 'com pacotes · <b>com bandeira</b>', r: p.comPac, cu: comB, forte: true },
-      { rot: 'com pacotes · sem bandeira', r: p.comPac, cu: base },
-      { rot: 'só drenar · com bandeira', r: p.semPac, cu: comB },
-      { rot: 'só drenar · sem bandeira', r: p.semPac, cu: base },
-    ].map((x) => Object.assign(x, linha(x.r, x.cu)));
+    const mx = {
+      pacB: cel(p.comPac, comB), pacS: cel(p.comPac, base),
+      secB: cel(p.semPac, comB), secS: cel(p.semPac, base)
+    };
+    const melhorCen = mx.pacB;
     const r = p.comPac;
     const porRec = { madeira: r.chega.wood / comB.wood, argila: r.chega.stone / comB.stone, ferro: r.chega.iron / comB.iron };
     const gargalo = Object.keys(porRec).sort((a, b) => porRec[a] - porRec[b])[0];
-    const alt = p.rank.filter((x) => x.coord !== p.sede)[0];
     const distSede = cplDistPonderada(_cplDados, p.sede);
-    // LOTACAO em cima de tudo: e ela que responde "comeco agora ou espero?", e a resposta muda
-    // o resto da tela. Sem isso o usuario le a projecao sem saber se e a hora de agir.
     const alvoPct = Math.max(1, Math.min(99, parseFloat(c.cplAlvoPct) || 80));
     const L = _cplLot;
+    const cheio = L && L.pct >= alvoPct / 100;
     const prodH = Object.keys(_cplDados || {}).reduce((a, k) => a + _cplDados[k].pw + _cplDados[k].ps + _cplDados[k].pi, 0);
     let eta = null;
     if (L && prodH > 0 && L.pct < alvoPct / 100) {
       // Estimativa GROSSA e assumidamente otimista: ignora que aldeia cheia para de acumular.
-      // Serve pra ordem de grandeza ("horas ou dias"), nao pra marcar hora.
       const falta = (alvoPct / 100 - L.pct) * (_cplDados ? Object.keys(_cplDados).reduce((a, k) => a + _cplDados[k].cap * 3, 0) : 0);
       eta = falta / prodH;
     }
+    const ex = cplEntradaExtra();
+    const minaH = Object.keys(_cplDados || {}).reduce((a, k) =>
+      a + (_cplDados[k].pw + _cplDados[k].ps + _cplDados[k].pi) - (_cplDados[k].extraH || 0), 0);
+    const totH = minaH + ex.porHora;
+    const res3 = (w, s, i) => '<span class="cpl-res"><span class="cpl-w">' + fmtN(Math.round(w)) + '</span> / '
+      + '<span class="cpl-s">' + fmtN(Math.round(s)) + '</span> / '
+      + '<span class="cpl-i">' + fmtN(Math.round(i)) + '</span></span>';
+    const al = (tipo, ico, txt) => '<div class="cpl-al ' + tipo + '"><i>' + ico + '</i><span>' + txt + '</span></div>';
+    const kv = (k, v) => '<div class="cpl-kv"><span>' + k + '</span><span>' + v + '</span></div>';
+
+    // ---- ALERTAS: só o que muda a decisão, e nessa ordem de gravidade.
+    let alertas = '';
+    if (p.sedeSnob != null && p.sedeSnob < 1) {
+      alertas += al('bad', '⛔', '<b>A sede não tem Academia</b> — não há onde cunhar o que chegar. '
+        + 'Escolha outra sede ou construa antes de rodar.');
+    }
+    if (!p.ac || p.ac.limite == null) {
+      alertas += al('warn', '?', 'Não li o limite de nobres da Academia da sede — a projeção mostra moedas, mas não quantos nobres viram.');
+    }
+    alertas += cheio
+      ? al('good', '✓', '<b>Hora de rodar.</b> ' + Math.round(L.pct * 100) + '% dos armazéns ocupados (alvo ' + alvoPct + '%). '
+          + 'Esperar mais satura — a produção das aldeias cheias passa a transbordar sem virar moeda.')
+      : (L ? al('warn', '⏳', 'Ainda enchendo: <b>' + Math.round(L.pct * 100) + '%</b> dos armazéns, alvo ' + alvoPct + '%'
+          + (eta != null && eta > 0 && isFinite(eta) ? ' — chega lá em ~<b>' + dias(eta) + '</b> <em>(estimativa otimista: '
+            + 'ignora aldeia que enche e para de acumular)</em>' : '') + '.') : '');
+    if (L && L.cheios) {
+      alertas += al('bad', '!', '<b>' + L.cheios + ' de ' + L.total + ' depósitos no teto</b> — esses estão jogando produção fora agora. '
+        + '<em>Madeira, argila e ferro contam separado: ' + Math.round(L.total / 3) + ' aldeias × 3.</em>');
+    }
+    // Sobra sem par: o medo original do usuario ("3kk de madeira com 400mil de ferro"). A trava
+    // nomeia o recurso; isto diz o TAMANHO do encalhe, que e o que decide se vale mexer na mina.
+    (function () {
+      const m = melhorCen.m;
+      const sob = { madeira: r.chega.wood - m * comB.wood, argila: r.chega.stone - m * comB.stone,
+                    ferro: r.chega.iron - m * comB.iron };
+      const tot = sob.madeira + sob.argila + sob.ferro;
+      const pior = Object.keys(sob).sort((a, b) => sob[b] - sob[a])[0];
+      if (tot > m * (comB.wood + comB.stone + comB.iron) * 0.05) {
+        alertas += al('warn', '⚖', '<b>' + fmtN(Math.round(tot)) + ' ficam parados</b> no destino, sobretudo <b>' + pior + '</b>. '
+          + 'Quem trava é o <b>' + gargalo + '</b> — para converter isso você precisa de mais ' + gargalo + ', não de mais bandeira.');
+      } else {
+        alertas += al('good', '⚖', 'A mistura está bem casada: sobra pouco sem par. Quem trava é o <b>' + gargalo + '</b>.');
+      }
+    })();
+    if (p.meiaReserva) {
+      const m2 = cplMoedas(p.meiaReserva.chega, comB);
+      const n2 = cplNobres(p.ac && p.ac.limite, p.ac && p.ac.guardadas, m2);
+      const dm = m2 - melhorCen.m, dn = (n2 != null && melhorCen.n != null) ? n2 - melhorCen.n : null;
+      const trava = (config.market.reserveWood + config.market.reserveStone + config.market.reserveIron) * (p.totalAldeias || 0);
+      alertas += dm > 0
+        ? al('warn', '🔒', '<b>' + fmtN(trava) + '</b> congelados pela reserva ('
+            + fmtN(config.market.reserveWood) + '/' + fmtN(config.market.reserveStone) + '/' + fmtN(config.market.reserveIron)
+            + ' por aldeia). Pela metade renderia <b>+' + fmtN(dm) + '</b> moeda(s)'
+            + (dn ? ' e <b>+' + dn + '</b> nobre(s)' : '') + ' — <em>o custo é deixar as aldeias mais expostas.</em>')
+        : al('flat', '🔒', '<b>' + fmtN(trava) + '</b> congelados pela reserva, mas baixar não renderia nada — a frota já é o gargalo.');
+    }
+    if (r.origens < (p.totalAldeias || 1) - 1) {
+      alertas += al('warn', '🐴', 'Só <b>' + r.origens + ' de ' + ((p.totalAldeias || 1) - 1) + '</b> aldeias participam — '
+        + 'as demais não têm mercador livre para a janela.');
+    }
+    if (r.sobraram.length) {
+      alertas += al('warn', '📦', '<b>' + r.sobraram.length + ' pacote(s)</b> não chegam a caber em ' + p.horas + 'h: '
+        + r.sobraram.map((x) => '+' + x + '%').join(', ') + '. Aumente a janela ou aceite o desperdício.');
+    }
+
+    // ---- ONDE CUNHAR
+    const pctPerto = (d) => (distSede > 0 ? Math.round((1 - d / distSede) * 100) : 0);
+    const sugestao = (x, rot) => {
+      if (!x) return '';
+      if (x.coord === p.sede) return kv(rot, '<b>é a sede atual</b> <em style="color:#2e7d3a">— nada a fazer</em>');
+      const vale = pctPerto(x.d) >= 15;
+      return kv(rot, '<b>' + esc(x.nome) + '</b> ' + esc(x.coord)
+        + ' <em>· ' + (Math.round(x.d * 10) / 10) + ' contra ' + (Math.round(distSede * 10) / 10) + ' da atual</em><br>'
+        + '<span style="color:' + (vale ? '#2e7d3a' : '#a2643a') + '">' + (vale ? 'Vale trocar' : 'Ganho pequeno')
+        + ' — ' + pctPerto(x.d) + '% mais perto</span>'
+        + (x.snob != null && x.snob < 1 ? ' <b style="color:#b03030">· SEM Academia</b> <em>(teria que construir)</em>' : ''));
+    };
+    let onde = kv('Sede', '<b>' + esc(p.sedeNome) + '</b> ' + esc(p.sede)
+      + (p.destAtual === p.sede ? ' <span style="color:#2e7d3a">(destino atual)</span>' : ' <span style="color:#a2643a">(sugerida)</span>')
+      + ' <em>· dist. ponderada ' + (Math.round(distSede * 10) / 10) + '</em>');
+    // DUAS SUGESTOES, porque sao duas perguntas: a melhor do mapa (geografia pura) e a melhor que
+    // JA TEM Academia — a unica acionavel hoje. Recomendar a primeira sem checar a segunda e mandar
+    // construir Academia sem dizer que esta mandando.
+    onde += sugestao(p.rank[0], 'Melhor do mapa');
+    if (p.semDadoAcad) {
+      onde += kv('Com Academia', '<span style="color:#a2643a">não consegui ler a coluna de Academia — não dá pra dizer quais podem cunhar hoje.</span>');
+    } else if (!p.rankAcad[0]) {
+      onde += kv('Com Academia', '<span style="color:#b03030">nenhuma aldeia sua tem Academia.</span>');
+    } else if (p.rank[0] && p.rankAcad[0].coord === p.rank[0].coord) {
+      onde += kv('Com Academia', '<b style="color:#2e7d3a">a melhor do mapa já tem Academia</b> — nada a construir.');
+    } else {
+      onde += sugestao(p.rankAcad[0], 'Melhor c/ Academia');
+    }
+
+    // ---- DETALHE
+    let detalhe = kv('Chega em ' + p.horas + 'h', res3(r.chega.wood, r.chega.stone, r.chega.iron));
+    detalhe += kv('Ritmo', '50% em <b>' + hm(r.marcos.m50) + '</b> · 80% em <b>' + hm(r.marcos.m80) + '</b> · 95% em <b>' + hm(r.marcos.m95) + '</b>');
+    detalhe += kv('Custo/moeda', '<b>' + fmtN(comB.wood) + '/' + fmtN(comB.stone) + '/' + fmtN(comB.iron) + '</b> com bandeira · '
+      + fmtN(base.wood) + '/' + fmtN(base.stone) + '/' + fmtN(base.iron) + ' sem'
+      + (lido ? ' <span style="color:#2e7d3a">(lido da Academia)</span>' : ' <span style="color:#a2643a">(padrão — não li a Academia)</span>'));
+    // AS TRES FONTES separadas: a projecao so contava mina, e o usuario perguntou — descobriu que
+    // ela via 36% do que entra.
+    if (!p.temProducao && !ex.porHora) {
+      detalhe += kv('Entrada', '<span style="color:#a2643a">não li os níveis de mina nem o rendimento de saque/coleta — a projeção está por baixo.</span>');
+    } else {
+      detalhe += kv('Entrada', '<b>' + fmtN(Math.round(totH)) + '</b>/h <em>= ' + fmtN(Math.round(minaH)) + ' minas'
+        + (ex.saqueDia ? ' + ' + fmtN(Math.round(ex.saqueDia / 24)) + ' saque' : '')
+        + (ex.coletaDia ? ' + ' + fmtN(Math.round(ex.coletaDia / 24)) + ' coleta' : '') + '</em>'
+        + (!p.temProducao ? '<br><span style="color:#a2643a">níveis de mina não lidos</span>' : '')
+        + ((ex.saqueDia || ex.coletaDia)
+          ? '<br><em>Saque e coleta vêm do realizado dos módulos, repartidos por capacidade de armazém e em três partes iguais — é aproximação, não medição por aldeia.</em>'
+          : (config.farm && config.farm.running) || (config.scav && config.scav.running)
+            ? '<br><span style="color:#a2643a">Saque/coleta ligados mas sem rendimento gravado ainda — rode um ciclo.</span>'
+            : '<br><em>Saque e coleta desligados — só a mina conta.</em>'));
+    }
+    detalhe += kv('Origens', r.origens + ' de ' + ((p.totalAldeias || 1) - 1) + ' aldeia(s) participam');
+
+    const cenCel = (x, best) => '<div class="c' + (best ? ' best' : '') + '"><b>' + fmtN(x.m) + '</b>'
+      + '<span>' + (x.n == null ? 'moedas' : '+' + x.n + ' nobres') + '</span></div>';
+
     box.innerHTML =
-      (L ? '<div style="border:1px solid ' + (L.pct >= alvoPct / 100 ? '#bcd9bc' : '#e6dcc9')
-          + ';background:' + (L.pct >= alvoPct / 100 ? '#eef7ee' : '#fffdf8')
-          + ';border-radius:6px;padding:7px;margin-bottom:6px">'
-          + '<b style="font-size:14px;color:' + (L.pct >= alvoPct / 100 ? '#2e7d3a' : '#a2643a') + '">'
-          + Math.round(L.pct * 100) + '%</b> <span style="font-size:10px;color:#6f6153">dos armazéns ocupados'
-          + ' · alvo ' + alvoPct + '%</span><br>'
-          + '<span style="font-size:10px;color:' + (L.pct >= alvoPct / 100 ? '#2e7d3a' : '#6f6153') + '">'
-          + (L.pct >= alvoPct / 100
-              ? '<b>Hora de rodar.</b> Esperar mais satura — a produção das aldeias cheias passa a transbordar sem virar moeda.'
-              : 'Ainda enchendo' + (eta != null && eta > 0 && isFinite(eta)
-                  ? ' — chega ao alvo em ~' + (eta < 24 ? Math.round(eta) + 'h' : Math.round(eta / 24) + ' dia(s)')
-                    + ' <span style="color:#8a7d6d">(estimativa otimista: ignora aldeia que enche e para de acumular)</span>'
-                  : '') + '.')
-          + '</span>'
-          + (L.cheios ? '<br><span style="font-size:10px;color:#b03030">' + L.cheios + ' de ' + L.total
-             + ' depósitos no teto</span> <span style="font-size:9px;color:#8a7d6d">(madeira, argila e ferro contam separado: '
-             + Math.round(L.total / 3) + ' aldeias × 3)</span><span style="font-size:10px;color:#b03030"> — esses estão jogando produção fora agora.</span>' : '')
-          + '</div>' : '') +
-      '<table class="twmgr-bld-tab" style="width:100%"><thead><tr>' +
-        '<th>cenário em ' + p.horas + 'h</th><th style="width:74px">moedas</th><th style="width:62px">nobres</th></tr></thead><tbody>' +
-      cen.map((x, i) => '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '"' + (x.forte ? ' style="background:#eef7ee"' : '') + '>' +
-        '<td>' + x.rot + '</td><td style="font-variant-numeric:tabular-nums"><b>' + fmtN(x.m) + '</b></td>' +
-        '<td style="color:' + (x.forte ? '#2e7d3a' : '#6f6153') + '"><b>' + (x.n == null ? '—' : '+' + x.n) + '</b></td></tr>').join('') +
-      '</tbody></table>' +
-      (!p.ac || p.ac.limite == null ? '<div style="font-size:9px;color:#a2643a;margin-top:2px">Não li o limite de nobres da Academia da sede — a coluna de nobres fica vazia. A sede tem Academia?</div>' : '') +
-      '<table class="twmgr-bld-tab" style="width:100%;margin-top:6px"><tbody>' +
-      '<tr><td style="color:#6f6153;width:96px">Sede</td><td><b>' + esc(p.sedeNome) + '</b> ' + esc(p.sede) +
-        (p.destAtual === p.sede ? ' <span style="color:#2e7d3a">(destino atual)</span>' : ' <span style="color:#a2643a">(sugerida)</span>') +
-        ' <span style="color:#8a7d6d">· dist. ponderada ' + (Math.round(distSede * 10) / 10) + '</span></td></tr>' +
+      '<div class="cpl-hero">' +
+        '<div class="cpl-hero-r">' +
+          '<div><div class="cpl-big">' + (melhorCen.n == null ? '—' : '+' + melhorCen.n) +
+            '<small>nobres</small></div></div>' +
+          '<div><div class="cpl-big2">' + fmtN(melhorCen.m) + '<small style="font-size:10px;font-weight:400;color:#8a7d6d"> moedas</small></div></div>' +
+        '</div>' +
+        '<div class="cpl-hero-l">no melhor cenário em <b>' + p.horas + 'h</b> — com os pacotes e a bandeira de desconto</div>' +
+        '<div class="cpl-kpis">' +
+          (L ? '<div class="cpl-kpi"><b style="color:' + (cheio ? '#2e7d3a' : '#a2643a') + '">' + Math.round(L.pct * 100) + '%</b>armazéns · alvo ' + alvoPct + '%</div>' : '') +
+          '<div class="cpl-kpi"><b>' + fmtN(Math.round(totH)) + '</b>recursos/h entrando</div>' +
+          '<div class="cpl-kpi"><b>' + r.origens + '</b>aldeias doando</div>' +
+          '<div class="cpl-kpi"><b>' + hm(r.marcos.m80) + '</b>pra 80% do total chegar</div>' +
+        '</div>' +
+      '</div>' +
+      alertas +
+      '<div class="cpl-sec">As duas alavancas</div>' +
+      '<div class="cpl-mx">' +
+        '<div class="hl"></div><div class="h">com bandeira −' + Math.round(desc * 100) + '%</div><div class="h">sem bandeira</div>' +
+        '<div class="hl">com pacotes</div>' + cenCel(mx.pacB, true) + cenCel(mx.pacS) +
+        '<div class="hl">só drenar</div>' + cenCel(mx.secB) + cenCel(mx.secS) +
+      '</div>' +
+      // A grade mostra os quatro numeros, mas nao responde "quanto cada alavanca vale sozinha" —
+      // que e a pergunta que faz o usuario ir ativar a bandeira ou gastar os pacotes. Aqui a
+      // subtracao fica pronta, nas duas moedas: nobre (o que ele quer) e moeda (o que ele conta).
       (function () {
-        // DUAS SUGESTOES, porque sao duas perguntas diferentes:
-        //   · a melhor aldeia do mapa (geografia pura)
-        //   · a melhor que JA TEM ACADEMIA — a unica acionavel hoje
-        // Recomendar a primeira sem checar a segunda e mandar o usuario construir Academia sem
-        // dizer que esta mandando.
-        const pct = (d) => (distSede > 0 ? Math.round((1 - d / distSede) * 100) : 0);
-        const linhaDe = (x, rot, cor) => '<tr><td style="color:#6f6153">' + rot + '</td><td>'
-          + '<b>' + esc(x.nome) + '</b> ' + esc(x.coord)
-          + ' <span style="color:#8a7d6d">· ' + (Math.round(x.d * 10) / 10)
-          + ' contra ' + (Math.round(distSede * 10) / 10) + ' da atual</span>'
-          + (x.coord === p.sede ? ' <b style="color:#2e7d3a">— é a atual</b>'
-             : '<br><span style="color:' + cor + '">' + (pct(x.d) >= 15 ? 'Vale trocar' : 'Ganho pequeno')
-               + ' — ' + pct(x.d) + '% mais perto'
-               + (x.snob != null && x.snob < 1 ? ' · <b style="color:#b03030">SEM Academia</b> (teria que construir)' : '')
-               + '</span>')
-          + '</td></tr>';
-        let out = '';
-        const melhor = p.rank[0];
-        if (melhor) out += linhaDe(melhor, 'Melhor do mapa', pct(melhor.d) >= 15 ? '#2e7d3a' : '#a2643a');
-        if (p.semDadoAcad) {
-          out += '<tr><td style="color:#6f6153">Com Academia</td><td><span style="color:#a2643a">'
-            + 'não consegui ler a coluna de Academia — não dá pra dizer quais podem cunhar hoje.</span></td></tr>';
-        } else {
-          const melhorAc = p.rankAcad[0];
-          if (!melhorAc) {
-            out += '<tr><td style="color:#6f6153">Com Academia</td><td><span style="color:#b03030">'
-              + 'nenhuma aldeia sua tem Academia.</span></td></tr>';
-          } else if (melhor && melhorAc.coord === melhor.coord) {
-            out += '<tr><td style="color:#6f6153">Com Academia</td><td><b style="color:#2e7d3a">'
-              + 'a melhor do mapa já tem Academia</b> — nada a construir.</td></tr>';
-          } else {
-            out += linhaDe(melhorAc, 'Melhor <b>com Academia</b>', pct(melhorAc.d) >= 15 ? '#2e7d3a' : '#a2643a');
-          }
-        }
-        // A sede de hoje tem Academia? Se nao tiver, a operacao nao sai do lugar — e esse aviso
-        // vale mais que qualquer sugestao de troca.
-        if (p.sedeSnob != null && p.sedeSnob < 1) {
-          out += '<tr><td style="color:#6f6153">⚠ Atenção</td><td><b style="color:#b03030">'
-            + 'a sede atual NÃO tem Academia</b> — não há onde cunhar o que chegar.</td></tr>';
-        }
-        return out;
+        const dn = (a2, b2) => (a2.n != null && b2.n != null) ? (a2.n - b2.n) : null;
+        const peca = (rot, dm, d2) => '<b>' + rot + '</b> vale <b style="color:#2e7d3a">+'
+          + (d2 != null ? d2 + ' nobre' + (d2 === 1 ? '' : 's') : fmtN(dm) + ' moeda' + (dm === 1 ? '' : 's')) + '</b>'
+          + (d2 != null ? ' <em>(+' + fmtN(dm) + ' moedas)</em>' : '');
+        return '<div style="font-size:10px;color:#6f6153;margin-top:5px;line-height:1.45">'
+          + peca('A bandeira', mx.pacB.m - mx.pacS.m, dn(mx.pacB, mx.pacS)) + ' &middot; '
+          + peca('os pacotes', mx.pacB.m - mx.secB.m, dn(mx.pacB, mx.secB))
+          + '</div>';
       })() +
-      '<tr><td style="color:#6f6153">Chega</td><td>' +
-        '<span style="color:#8a6a44">' + fmtN(Math.round(r.chega.wood)) + '</span> / ' +
-        '<span style="color:#c1743c">' + fmtN(Math.round(r.chega.stone)) + '</span> / ' +
-        '<span style="color:#5f7382">' + fmtN(Math.round(r.chega.iron)) + '</span></td></tr>' +
-      '<tr><td style="color:#6f6153">Ritmo</td><td>50% em ' + hm(r.marcos.m50) + ' · 80% em ' + hm(r.marcos.m80)
-        + ' · 95% em ' + hm(r.marcos.m95) + '</td></tr>' +
-      '<tr><td style="color:#6f6153">Custo/moeda</td><td>' + fmtN(comB.wood) + '/' + fmtN(comB.stone) + '/' + fmtN(comB.iron)
-        + ' com bandeira · ' + fmtN(base.wood) + '/' + fmtN(base.stone) + '/' + fmtN(base.iron) + ' sem'
-        + (lido ? ' <span style="color:#2e7d3a">(lido da Academia)</span>' : ' <span style="color:#a2643a">(padrão — não li a Academia)</span>') + '</td></tr>' +
-      '<tr><td style="color:#6f6153">Trava</td><td><b style="color:#b03030">' + gargalo + '</b>'
-        + ' <span style="color:#8a7d6d">— é ele que limita a cunhagem</span></td></tr>' +
-      // O QUE SOBRA SEM PAR. Era o medo original do usuario ("3kk de madeira e argila com 400mil
-      // de ferro"). A linha "Trava" nomeia o recurso mas nao diz o TAMANHO do encalhe — e e o
-      // tamanho que decide se vale mexer em mina de ferro ou aceitar.
-      (function () {
-        const m = cen[0].m;
-        const sob = { madeira: r.chega.wood - m * comB.wood, argila: r.chega.stone - m * comB.stone,
-                      ferro: r.chega.iron - m * comB.iron };
-        const tot = sob.madeira + sob.argila + sob.ferro;
-        const pior = Object.keys(sob).sort((a, b) => sob[b] - sob[a])[0];
-        return '<tr><td style="color:#6f6153">Sobra sem par</td><td>'
-          + '<span style="color:#8a6a44">' + fmtN(Math.max(0, Math.round(sob.madeira))) + '</span> / '
-          + '<span style="color:#c1743c">' + fmtN(Math.max(0, Math.round(sob.argila))) + '</span> / '
-          + '<span style="color:#5f7382">' + fmtN(Math.max(0, Math.round(sob.ferro))) + '</span>'
-          + (tot > m * (comB.wood + comB.stone + comB.iron) * 0.05
-            ? '<br><span style="color:#b03030">' + fmtN(Math.round(tot)) + ' ficam parados no destino</span>'
-              + ' <span style="color:#8a7d6d">— sobretudo ' + pior + '. Para converter isso você precisa de mais '
-              + gargalo + ', não de mais bandeira.</span>'
-            : ' <span style="color:#2e7d3a">— pouca sobra, a mistura está bem casada</span>')
-          + '</td></tr>';
-      })() +
-      // A RESERVA como alavanca visivel.
-      (p.meiaReserva ? (function () {
-        const m2 = cplMoedas(p.meiaReserva.chega, comB);
-        const n2 = cplNobres(p.ac && p.ac.limite, p.ac && p.ac.guardadas, m2);
-        const dm = m2 - cen[0].m, dn = (n2 != null && cen[0].n != null) ? n2 - cen[0].n : null;
-        const trava = (config.market.reserveWood + config.market.reserveStone + config.market.reserveIron) * (p.totalAldeias || 0);
-        return '<tr><td style="color:#6f6153">Reserva</td><td>'
-          + fmtN(config.market.reserveWood) + '/' + fmtN(config.market.reserveStone) + '/' + fmtN(config.market.reserveIron)
-          + ' por aldeia · <b>' + fmtN(trava) + '</b> congelados no total'
-          + (dm > 0 ? '<br><span style="color:#a2643a">Pela metade renderia <b>+' + fmtN(dm) + '</b> moeda(s)'
-              + (dn ? ' e <b>+' + dn + '</b> nobre(s)' : '') + '</span>'
-              + ' <span style="color:#8a7d6d">— o custo é deixar as aldeias mais expostas.</span>'
-            : '<br><span style="color:#2e7d3a">Baixar não renderia nada — a frota já é o gargalo.</span>')
-          + '</td></tr>';
-      })() : '') +
-      // Quem ficou de fora, e por que. Sem isto "so 60 origens" vira investigacao.
-      '<tr><td style="color:#6f6153">Origens</td><td>' + r.origens + ' de ' + ((p.totalAldeias || 1) - 1)
-        + ' aldeia(s) participam'
-        + (r.origens < (p.totalAldeias || 1) - 1
-          ? ' <span style="color:#a2643a">— as demais não têm mercador livre para a janela</span>' : '')
-        + '</td></tr>' +
-      // AS TRES FONTES, separadas. Antes a tela nao dizia de onde vinha o recurso, e a projecao
-      // so contava mina — o usuario perguntou e descobriu que ela via 36% do que entra.
-      (function () {
-        const ex = cplEntradaExtra();
-        const minaH = Object.keys(_cplDados || {}).reduce((a, k) =>
-          a + (_cplDados[k].pw + _cplDados[k].ps + _cplDados[k].pi) - (_cplDados[k].extraH || 0), 0);
-        const totH = minaH + ex.porHora;
-        if (!p.temProducao && !ex.porHora) {
-          return '<tr><td style="color:#6f6153">Entrada</td><td><span style="color:#a2643a">'
-            + 'não li os níveis de mina nem o rendimento de saque/coleta — a projeção está por baixo.</span></td></tr>';
-        }
-        return '<tr><td style="color:#6f6153">Entrada</td><td>'
-          + '<b>' + fmtN(Math.round(totH)) + '</b>/h <span style="color:#8a7d6d">= '
-          + fmtN(Math.round(minaH)) + ' minas'
-          + (ex.saqueDia ? ' + ' + fmtN(Math.round(ex.saqueDia / 24)) + ' saque' : '')
-          + (ex.coletaDia ? ' + ' + fmtN(Math.round(ex.coletaDia / 24)) + ' coleta' : '')
-          + '</span>'
-          + (!p.temProducao ? '<br><span style="color:#a2643a">níveis de mina não lidos</span>' : '')
-          + ((ex.saqueDia || ex.coletaDia)
-            ? '<br><span style="color:#8a7d6d">Saque e coleta vêm do realizado dos módulos, repartidos'
-              + ' por capacidade de armazém e em três partes iguais — é aproximação, não medição por aldeia.</span>'
-            : (config.farm && config.farm.running) || (config.scav && config.scav.running)
-              ? '<br><span style="color:#a2643a">Saque/coleta ligados mas sem rendimento gravado ainda — rode um ciclo.</span>'
-              : '<br><span style="color:#8a7d6d">Saque e coleta desligados — só a mina conta.</span>')
-          + '</td></tr>';
-      })() +
-      '</tbody></table>' +
+      '<div class="cpl-sec">Onde cunhar</div>' + onde +
+      '<div class="cpl-sec clic" data-cpl="det"><span class="cpl-ar">' + (_cplAberto.det ? '▾' : '▸') + '</span>Detalhe da conta</div>' +
+      '<div id="twmgr-cpl-det"' + (_cplAberto.det ? '' : ' style="display:none"') + '>' + detalhe + '</div>' +
       (r.agenda.length
-        ? '<div style="font-size:10px;color:#6f6153;margin-top:7px"><b>Cronograma dos pacotes</b> — o momento em que cada um passa a caber sem desperdiçar:</div>' +
-          '<table class="twmgr-bld-tab" style="width:100%"><thead><tr><th style="width:60px">hora</th><th style="width:60px">pacote</th><th>espaço livre depois</th></tr></thead><tbody>' +
+        ? '<div class="cpl-sec clic" data-cpl="crono"><span class="cpl-ar">' + (_cplAberto.crono ? '▾' : '▸') + '</span>' +
+          'Cronograma dos pacotes<span style="font-weight:400;letter-spacing:0;text-transform:none">— quando cada um passa a caber</span></div>' +
+          '<div id="twmgr-cpl-crono"' + (_cplAberto.crono ? '' : ' style="display:none"') + '>' +
+          '<table class="twmgr-bld-tab" style="width:100%"><thead><tr><th style="width:56px">hora</th><th style="width:56px">pacote</th><th>espaço livre depois</th></tr></thead><tbody>' +
           r.agenda.map((a, i) => '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
             '<td style="font-variant-numeric:tabular-nums">' + hm(a.h) + '</td>' +
             '<td><b style="color:#a2643a">+' + a.pct + '%</b></td>' +
@@ -6631,16 +6693,24 @@
               + ((a.perda || 0) > 0.001
                   ? ' <span style="color:#a2643a">· perde ' + Math.round((a.perda || 0) * 100) + '%</span>'
                   : ' <span style="color:#2e7d3a">· sem desperdício</span>') + '</td></tr>').join('') +
-          '</tbody></table>' +
-          (r.sobraram.length ? '<div style="font-size:9px;color:#b03030;margin-top:2px">' + r.sobraram.length
-            + ' pacote(s) não chegam a caber em ' + p.horas + 'h: ' + r.sobraram.map((x) => '+' + x + '%').join(', ')
-            + '. Aumente a janela ou aceite o desperdício.</div>' : '')
-        : '<div style="font-size:9px;color:#8a7d6d;margin-top:6px">Sem pacotes no inventário — preencha acima pra ver o cronograma.</div>') +
-      '<div style="font-size:9px;color:#8a7d6d;margin-top:4px">Mercador a ' + CPL_MIN_CAMPO
-      + ' min/campo, <b>ida e volta</b> simuladas por mercador. Produção da mina a <b>'
-      + _cplFator.toFixed(2).replace('.', ',') + '×</b> a tabela (medido no mundo) e já com a bandeira de Recurso de cada aldeia.'
-      + ' Respeita a reserva e a razão configuradas. Lido às '
-      + new Date(_cplAt).toLocaleTimeString('pt-BR') + '.</div>';
+          '</tbody></table></div>'
+        : '<div class="cpl-al flat"><i>📦</i><span>Sem pacotes no inventário — preencha acima pra ver o cronograma.</span></div>') +
+      '<div class="cpl-rod">' +
+        'Mercador a <b>' + CPL_MIN_CAMPO + ' min/campo</b>, ida e volta simuladas por mercador. Produção da mina a <b>'
+        + _cplFator.toFixed(2).replace('.', ',') + '×</b> a tabela (medido no mundo) e já com a bandeira de Recurso de cada aldeia.<br>'
+        + 'Respeita a reserva e a razão configuradas. Lido às ' + new Date(_cplAt).toLocaleTimeString('pt-BR') + '.' +
+      '</div>';
+
+    box.querySelectorAll('.cpl-sec.clic').forEach((h) => {
+      h.addEventListener('click', () => {
+        const id = h.getAttribute('data-cpl');
+        _cplAberto[id] = _cplAberto[id] ? 0 : 1;
+        const corpo = document.getElementById('twmgr-cpl-' + id);
+        if (corpo) corpo.style.display = _cplAberto[id] ? '' : 'none';
+        const ar = h.querySelector('.cpl-ar');
+        if (ar) ar.textContent = _cplAberto[id] ? '▾' : '▸';
+      });
+    });
   }
   // ==================== CONSTRUÇÕES (modelos nomeados aplicados por aldeia) ===============
   // População que cada edifício ocupa, lida do próprio mundo. Os valores variam por servidor,

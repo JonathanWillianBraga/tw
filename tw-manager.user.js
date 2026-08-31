@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.252.0
+// @version      11.253.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.252.0';
+  const VERSION = '11.253.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -13162,7 +13162,7 @@
         cooldown: /flag_cooldown/.test(tr.getAttribute('class') || '')
       };
     });
-    if (!Object.keys(out).length) throw new Error('a visao geral de Pesquisa veio sem aldeias');
+    if (!Object.keys(out).length) throw new Error('a vis\u00e3o geral de Pesquisa veio sem aldeias');
     return out;
   }
 
@@ -13172,7 +13172,7 @@
       + '&screen=overview_villages&mode=buildings&group=0&page=-1', { credentials: 'include' });
     const db = new DOMParser().parseFromString(await rb.text(), 'text/html');
     const bt = db.querySelector('#buildings_table') || db.querySelector('table.overview_table');
-    if (!bt) throw new Error('nao achei a tabela de edificios');
+    if (!bt) throw new Error('n\u00e3o achei a tabela de edif\u00edcios');
     // Coluna pelo ICONE do cabecalho, nunca por posicao fixa: um predio a mais no mundo deslocaria
     // tudo e a conta sairia calada e errada.
     const col = {};
@@ -13227,8 +13227,8 @@
           if (v && !v.alvos) { v.alvos = t.targets || {}; v.tpl = t.name || ids[i]; }
         });
       } catch (e) {
-        pushLog('Bandeiras: nao li o grupo do modelo "' + (t.name || ids[i]) + '" ('
-          + (e.message || e) + ') - essas aldeias ficam sem conta de recrutamento.', 'err', 'flags');
+        pushLog('Bandeiras: n\u00e3o li o grupo do modelo "' + (t.name || ids[i]) + '" ('
+          + (e.message || e) + ') \u2014 essas aldeias ficam sem conta de recrutamento.', 'err', 'flags');
       }
       await sleep(150);
     }
@@ -13238,7 +13238,7 @@
     try {
       await fetch('/game.php?village=' + CUR_VID
         + '&screen=overview_villages&mode=combined&group=0&page=-1', { credentials: 'include' });
-    } catch (e) { pushLog('Bandeiras: nao consegui devolver o filtro de grupo pro 0.', 'err', 'flags'); }
+    } catch (e) { pushLog('Bandeiras: não consegui devolver o filtro de grupo pro 0.', 'err', 'flags'); }
     return cen;
   }
 
@@ -13324,17 +13324,17 @@
     let porque = '';
     if (v.altTipo === 2) {
       // A perdedora foi a de recrutamento: explica qual dos tetos dela pesou.
-      if (v.livre <= 0) porque = 'fazenda no teto, recrutar nao anda';
-      else if (!v.alvos) porque = 'esta aldeia nao esta em nenhum modelo de tropas';
-      else if (!v.consumo) porque = 'sem quartel, estabulo ou oficina pra recrutar';
-      else if (v.consumo >= v.entrada) porque = 'os predios ja consomem tudo que entra, acelerar nao produz mais';
+      if (v.livre <= 0) porque = 'fazenda no teto, recrutar n\u00e3o anda';
+      else if (!v.alvos) porque = 'esta aldeia n\u00e3o est\u00e1 em nenhum modelo de tropas';
+      else if (!v.consumo) porque = 'sem quartel, est\u00e1bulo ou oficina pra recrutar';
+      else if (v.consumo >= v.entrada) porque = 'os pr\u00e9dios j\u00e1 consomem tudo que entra, acelerar n\u00e3o produz mais';
       else if (v.janela < 0.5) porque = 'a fazenda enche em ' + Math.round(v.horasEncher) + 'h e a de recrutamento para de valer ali';
       else porque = 'esta aldeia planta muito';
     } else if (v.altTipo === 1) {
-      porque = 'estabulo ' + v.sta + ', ' + fmtN(v.livre) + ' de fazenda livre ('
+      porque = 'est\u00e1bulo ' + v.sta + ', ' + fmtN(v.livre) + ' de fazenda livre ('
         + (v.horasEncher > 48 ? Math.round(v.horasEncher / 24) + ' dias' : Math.round(v.horasEncher) + 'h') + ' pra encher)';
     }
-    return cabeca + contra + (porque ? ' - ' + porque : '');
+    return cabeca + contra + (porque ? ' \u2014 ' + porque : '');
   }
 
   // Fusao: 3 do mesmo tipo E nivel viram 1 do nivel seguinte.
@@ -13399,7 +13399,7 @@
       if (v.tipo === BND_INTOCAVEL) {
         v.novoTipo = v.tipo; v.novoPct = v.pct; v.altTipo = 0;
         v.ganho = 0; v.ganhoHoje = 0; v.delta = 0; v.muda = false; v.intocavel = true;
-        v.motivo = 'bandeira de moeda — o modulo nunca mexe nesta aldeia';
+        v.motivo = 'bandeira de moeda — o módulo nunca mexe nesta aldeia';
         return;
       }
       const g1 = i1 < pool[1].length ? bndGanho(v, 1, pool[1][i1]) : -1;
@@ -13413,7 +13413,7 @@
         v.ganhoHoje = bndGanho(v, v.tipo, v.pct); v.ganho = 0; v.delta = 0; v.altTipo = 0;
         if (iS < sobra.length && v.tipo !== BND_SOBRA) {
           v.novoTipo = BND_SOBRA; v.novoNivel = sobra[iS++]; v.novoPct = 0; v.muda = true;
-          v.motivo = 'nao sobrou Recurso nem Recrutamento — Saque so pra nao ficar sem bandeira';
+          v.motivo = 'não sobrou Recurso nem Recrutamento — Saque só pra não ficar sem bandeira';
         } else {
           v.novoTipo = 0; v.novoPct = 0; v.muda = false;
           v.motivo = 'acabou bandeira pra esta aldeia';
@@ -13549,7 +13549,7 @@
     // O jogo responde 200 com {error:"..."} quando a aldeia esta em cooldown. Tratar como sucesso
     // seria pintar de verde uma troca que nao aconteceu.
     if (j && j.error) throw new Error(String(j.error).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim());
-    if (!j) throw new Error('o jogo respondeu algo que nao e JSON (' + txt.length + ' bytes)');
+    if (!j) throw new Error('o jogo respondeu algo que n\u00e3o \u00e9 JSON (' + txt.length + ' bytes)');
     return j;
   }
 
@@ -13570,7 +13570,7 @@
       // preenche e o JS do jogo. Entao o numero sai do literal `setFlagCounts({...})`, nao do DOM.
       const htmlFlags = await fetch('/game.php?village=' + CUR_VID + '&screen=flags', { credentials: 'include' }).then((r) => r.text());
       const mFlags = htmlFlags.match(/setFlagCounts\s*\(\s*(\{[\s\S]*?\})\s*\)/);
-      if (!mFlags) throw new Error('nao achei o inventario de bandeiras na tela');
+      if (!mFlags) throw new Error('n\u00e3o achei o invent\u00e1rio de bandeiras na tela');
       const estoque = {};
       const cru = JSON.parse(mFlags[1]);
       Object.keys(cru).forEach((t) => {
@@ -13618,7 +13618,7 @@
       const mudam = vilas.filter((v) => v.muda).length;
       const ganho = vilas.reduce((a, v) => a + Math.max(0, v.delta || 0), 0);
       pushLog('Bandeiras: ' + vilas.length + ' aldeias lidas, ' + mudam + ' com bandeira melhor ('
-        + fmtN(Math.round(ganho * 24)) + ' recursos/dia) - ' + alcanca + ' dao pra trocar nesta rodada.',
+        + fmtN(Math.round(ganho * 24)) + ' recursos/dia) \u2014 ' + alcanca + ' d\u00e3o pra trocar nesta rodada.',
         'ok', 'flags');
     } catch (e) {
       _bndErr = e.message || String(e);
@@ -13691,19 +13691,19 @@
   function bndCartao(v) {
     const nivel = v.novoTipo ? bndNivelAlvo(v) : 0;
     let acao = '';
-    if (v.intocavel) acao = '<span class="bnd-tag" style="color:#a2643a" title="ordem sua: o modulo nunca mexe na aldeia que estiver com a bandeira de moeda">&#128274; intocavel</span>';
+    if (v.intocavel) acao = '<span class="bnd-tag" style="color:#a2643a" title="ordem sua: o m\u00f3dulo nunca mexe na aldeia que estiver com a bandeira de moeda">&#128274; intoc\u00e1vel</span>';
     else if (!v.muda) acao = '';
-    else if (v.cooldown) acao = '<span class="bnd-tag" style="color:#a2643a" title="essa aldeia trocou de bandeira nas ultimas 24h">&#9203; 24h</span>';
+    else if (v.cooldown) acao = '<span class="bnd-tag" style="color:#a2643a" title="essa aldeia trocou de bandeira nas \u00faltimas 24h">&#9203; 24h</span>';
     else if (bndPronta(v)) acao = '<button class="twmgr-btn twmgr-ghost twmgr-bnd-go" data-vid="' + v.vid
       + '" data-tipo="' + v.novoTipo + '" data-nivel="' + nivel + '" style="padding:2px 9px;font-size:10px">aplicar</button>';
-    else if (v.alcancavel) acao = '<span class="bnd-tag" style="color:#6f6153" title="a bandeira que ela quer esta em outra aldeia que troca antes — o botao de cima resolve na ordem certa">na fila</span>';
-    else acao = '<span class="bnd-tag" style="color:#a2643a" title="a bandeira que ela quer esta presa numa aldeia em cooldown de 24h">&#9203; proxima rodada</span>';
+    else if (v.alcancavel) acao = '<span class="bnd-tag" style="color:#6f6153" title="a bandeira que ela quer está em outra aldeia que troca antes — o botão de cima resolve na ordem certa">na fila</span>';
+    else acao = '<span class="bnd-tag" style="color:#a2643a" title="a bandeira que ela quer est\u00e1 presa numa aldeia em cooldown de 24h">&#9203; pr\u00f3xima rodada</span>';
 
     const chip = (t, pc, nv, forte) => '<span class="bnd-chip ' + bndChipCls(t) + '">'
       + (forte ? '<b>' : '') + bndRotulo(t, pc, nv) + (forte ? '</b>' : '') + '</span>';
     const transicao = v.muda
       ? (chip(v.tipo, v.pct, v.nivel) + '<span class="bnd-seta">&rarr;</span>' + chip(v.novoTipo, v.novoPct, nivel, 1))
-      : (chip(v.tipo, v.pct, v.nivel) + '<span class="bnd-tag" style="color:#a89b8a">ja esta na melhor</span>');
+      : (chip(v.tipo, v.pct, v.nivel) + '<span class="bnd-tag" style="color:#a89b8a">j\u00e1 est\u00e1 na melhor</span>');
 
     return '<div class="bnd-card' + (v.muda ? '' : ' is-ok') + '">' +
       '<div class="bnd-r1"><span class="bnd-nome">' + v.nome + '<em>' + v.coord + '</em></span>' +
@@ -13806,7 +13806,7 @@
     if (gaveta.length) {
       const linhasG = gaveta.map((x, i) => '<tr class="' + (i % 2 ? 'row_b' : 'row_a') + '">' +
         '<td>' + (BND_TIPO[x.t] || x.t) + (x.t === BND_INTOCAVEL
-          ? ' <span title="o modulo nunca troca a bandeira de uma aldeia que esteja com esta" style="color:#a2643a">&#128274;</span>' : '') + '</td>' +
+          ? ' <span title="o m\u00f3dulo nunca troca a bandeira de uma aldeia que esteja com esta" style="color:#a2643a">&#128274;</span>' : '') + '</td>' +
         '<td style="font-variant-numeric:tabular-nums">' + x.total + '</td>' +
         '<td style="font-variant-numeric:tabular-nums">' + (x.emUso || '&mdash;') + '</td>' +
         '<td>nv' + x.hoje + '</td>' +
@@ -13860,7 +13860,7 @@
         + bndPctDoNivel(tipo, nivel) + '%.', 'ok', 'flags');
       bndRender();
     } catch (e) {
-      pushLog('Bandeiras: nao troquei a de ' + ((v && v.nome) || vid) + ' - ' + (e.message || e), 'err', 'flags');
+      pushLog('Bandeiras: n\u00e3o troquei a de ' + ((v && v.nome) || vid) + ' \u2014 ' + (e.message || e), 'err', 'flags');
       if (btn) { btn.disabled = false; btn.textContent = 'aplicar'; }
     }
   }
@@ -13876,7 +13876,7 @@
     const alvo = _bndDados.vilas.filter((v) => v.muda && !v.cooldown && v.alcancavel);
     if (!alvo.length) return;
     const btn = document.getElementById('twmgr-bnd-todas');
-    if (!window.confirm('Trocar a bandeira de ate ' + alvo.length + ' aldeias?'
+    if (!window.confirm('Trocar a bandeira de at\u00e9 ' + alvo.length + ' aldeias?'
       + String.fromCharCode(10, 10) + 'Cada uma fica 24h sem poder trocar de novo.')) return;
     let ok = 0, erro = 0, rodada = 0;
     for (;;) {
@@ -13898,7 +13898,7 @@
         erro++;
         // Marca como resolvida pra nao repetir a mesma falha pra sempre no laco.
         v.muda = false;
-        pushLog('Bandeiras: ' + v.nome + ' nao trocou - ' + (e.message || e), 'err', 'flags');
+        pushLog('Bandeiras: ' + v.nome + ' n\u00e3o trocou \u2014 ' + (e.message || e), 'err', 'flags');
       }
       await sleep(420);
     }

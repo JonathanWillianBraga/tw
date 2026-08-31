@@ -107,7 +107,56 @@
         }
       }
     } catch (e) { /* sem producao: segue conservador, e a tela DIZ que esta por baixo */ }
+    // Saque e coleta entram como se fossem producao extra da aldeia, repartidos na proporcao da
+    // CAPACIDADE de armazem (ver cplEntradaExtra pro porque desse proxy) e divididos em tres
+    // partes iguais entre os recursos. Somar aqui, e nao na simulacao, faz TODAS as contas que
+    // dependem de producao herdarem a correcao de uma vez: o ETA, os marcos e as moedas.
+    const ex = cplEntradaExtra();
+    if (ex.porHora > 0) {
+      const capTot = Object.keys(V).reduce((a2, k) => a2 + V[k].cap, 0);
+      if (capTot > 0) {
+        Object.keys(V).forEach((k) => {
+          const fatia = (V[k].cap / capTot) * ex.porHora / 3;
+          V[k].pw += fatia; V[k].ps += fatia; V[k].pi += fatia;
+          V[k].extraH = fatia * 3;
+        });
+      }
+    }
     return V;
+  }
+
+  // ENTRADA QUE NAO VEM DA MINA — saque e coleta.
+  //
+  // A projecao so contava producao de mina, e o usuario perguntou o que mais entrava. Medido na
+  // conta dele, por dia:
+  //
+  //     minas ....... 6,65 M   (o unico que a projecao via)
+  //     saque ....... 6,82 M
+  //     coleta ...... 5,09 M
+  //     ------------------------
+  //     real ....... 18,6  M   -> a projecao enxergava 36% do que entra
+  //
+  // O efeito era grande nos dois numeros da tela: o ETA de "2 dias" pro alvo de lotacao virava
+  // ~19h, e a simulacao de 48h subestimava as moedas por ignorar ~500k/hora.
+  //
+  // Custo ZERO: os modulos ja gravam o realizado em `config.farm.stats.loot` e
+  // `config.scav.stats.coleta`. Prefiro `estimate` (projecao do dia inteiro) a `today`, que e o
+  // acumulado ate agora — de manha cedo `today` sai baixo e de madrugada, cheio, e a projecao
+  // ficaria refem da hora em que voce clicou.
+  //
+  // DUAS APROXIMACOES, marcadas porque nao sao medidas:
+  //   · reparto o total entre as aldeias na proporcao da CAPACIDADE DE ARMAZEM. Saque e coleta
+  //     nao caem igualmente em todas, e aldeia grande costuma render mais — mas isto e proxy,
+  //     nao leitura. Nao ha, no config, o rendimento POR ALDEIA.
+  //   · divido em tres partes iguais entre madeira/argila/ferro. A coleta e proporcional; o
+  //     saque depende do que a barbara tinha.
+  function cplEntradaExtra() {
+    const f = ((config.farm || {}).stats || {}).loot || {};
+    const sc = ((config.scav || {}).stats || {}).coleta || {};
+    const dia = (o) => Math.max(0, (o.estimate != null ? o.estimate : o.today) || 0);
+    const saque = (config.farm && config.farm.running) ? dia(f) : 0;
+    const coleta = (config.scav && config.scav.running) ? dia(sc) : 0;
+    return { saqueDia: saque, coletaDia: coleta, porHora: (saque + coleta) / 24 };
   }
 
   // Custo da moeda e estado do limite, direto da Academia. Duas licoes desta tela:
@@ -708,7 +757,32 @@
         + (r.origens < (p.totalAldeias || 1) - 1
           ? ' <span style="color:#a2643a">— as demais não têm mercador livre para a janela</span>' : '')
         + '</td></tr>' +
-      (p.temProducao ? '' : '<tr><td style="color:#6f6153">Produção</td><td><span style="color:#a2643a">não li os níveis de mina — a projeção está por baixo</span></td></tr>') +
+      // AS TRES FONTES, separadas. Antes a tela nao dizia de onde vinha o recurso, e a projecao
+      // so contava mina — o usuario perguntou e descobriu que ela via 36% do que entra.
+      (function () {
+        const ex = cplEntradaExtra();
+        const minaH = Object.keys(_cplDados || {}).reduce((a, k) =>
+          a + (_cplDados[k].pw + _cplDados[k].ps + _cplDados[k].pi) - (_cplDados[k].extraH || 0), 0);
+        const totH = minaH + ex.porHora;
+        if (!p.temProducao && !ex.porHora) {
+          return '<tr><td style="color:#6f6153">Entrada</td><td><span style="color:#a2643a">'
+            + 'não li os níveis de mina nem o rendimento de saque/coleta — a projeção está por baixo.</span></td></tr>';
+        }
+        return '<tr><td style="color:#6f6153">Entrada</td><td>'
+          + '<b>' + fmtN(Math.round(totH)) + '</b>/h <span style="color:#8a7d6d">= '
+          + fmtN(Math.round(minaH)) + ' minas'
+          + (ex.saqueDia ? ' + ' + fmtN(Math.round(ex.saqueDia / 24)) + ' saque' : '')
+          + (ex.coletaDia ? ' + ' + fmtN(Math.round(ex.coletaDia / 24)) + ' coleta' : '')
+          + '</span>'
+          + (!p.temProducao ? '<br><span style="color:#a2643a">níveis de mina não lidos</span>' : '')
+          + ((ex.saqueDia || ex.coletaDia)
+            ? '<br><span style="color:#8a7d6d">Saque e coleta vêm do realizado dos módulos, repartidos'
+              + ' por capacidade de armazém e em três partes iguais — é aproximação, não medição por aldeia.</span>'
+            : (config.farm && config.farm.running) || (config.scav && config.scav.running)
+              ? '<br><span style="color:#a2643a">Saque/coleta ligados mas sem rendimento gravado ainda — rode um ciclo.</span>'
+              : '<br><span style="color:#8a7d6d">Saque e coleta desligados — só a mina conta.</span>')
+          + '</td></tr>';
+      })() +
       '</tbody></table>' +
       (r.agenda.length
         ? '<div style="font-size:10px;color:#6f6153;margin-top:7px"><b>Cronograma dos pacotes</b> — o momento em que cada um passa a caber sem desperdiçar:</div>' +

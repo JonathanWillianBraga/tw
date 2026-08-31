@@ -772,8 +772,26 @@
     };
     const melhorCen = mx.pacB;
     const r = p.comPac;
-    const porRec = { madeira: r.chega.wood / comB.wood, argila: r.chega.stone / comB.stone, ferro: r.chega.iron / comB.iron };
-    const gargalo = Object.keys(porRec).sort((a, b) => porRec[a] - porRec[b])[0];
+    // QUEM TRAVA — medido na simulacao, nao deduzido do que chegou.
+    //
+    // Antes era `min(chega[k] / custo[k])`: o recurso que rendia menos moedas. Isso funcionava com
+    // a regra antiga, em que o destino recebia quantidades desemparelhadas. Com a razao travada por
+    // doadora o que chega vem EXATAMENTE na proporcao da moeda — medido: 1509,6 / 1509,6 / 1509,7 —
+    // e a comparacao virou empate de ponto flutuante. A tela sorteava um recurso e dizia "falta
+    // argila" quando quem travava era o ferro em 2.383 dos 2.568 bloqueios.
+    //
+    // O sinal certo e causal e ja estava sendo contado: quantas vezes cada recurso IMPEDIU um
+    // envio. Quem trava e quem acaba primeiro na origem, nao quem rende menos no destino.
+    const PT_REC = { wood: 'madeira', stone: 'argila', iron: 'ferro' };
+    const gargalo = (function () {
+      const tv = r.travou || {};
+      const ks = Object.keys(tv).sort((a, b) => tv[b] - tv[a]);
+      if (ks.length) return PT_REC[ks[0]] || ks[0];
+      // Nunca travou (ou simulacao antiga em cache): cai no criterio de rendimento.
+      const porRec = { madeira: r.chega.wood / comB.wood, argila: r.chega.stone / comB.stone, ferro: r.chega.iron / comB.iron };
+      return Object.keys(porRec).sort((a, b) => porRec[a] - porRec[b])[0];
+    })();
+    const travTot = Object.keys(r.travou || {}).reduce((a, k) => a + r.travou[k], 0);
     const distSede = cplDistPonderada(_cplDados, p.sede);
     const alvoPct = Math.max(1, Math.min(99, parseFloat(c.cplAlvoPct) || 80));
     const L = _cplLot;
@@ -820,22 +838,32 @@
     // errado. Agora o alerta aponta pros dois efeitos reais: recurso preso nas origens e frota
     // parada esperando o par.
     (function () {
-      const PT = { wood: 'madeira', stone: 'argila', iron: 'ferro' };
       const par = r.parado || { wood: 0, stone: 0, iron: 0 };
       const tot = par.wood + par.stone + par.iron;
-      const pior = ['wood', 'stone', 'iron'].sort((a, b) => par[b] - par[a])[0];
-      const disp = Object.keys(_cplDados || {}).reduce((a, k) =>
-        a + Math.max(0, _cplDados[k].wood - (config.market.reserveWood || 0))
-          + Math.max(0, _cplDados[k].stone - (config.market.reserveStone || 0))
-          + Math.max(0, _cplDados[k].iron - (config.market.reserveIron || 0)), 0);
-      if (tot > disp * 0.08) {
-        alertas += al('warn', '⚖', '<b>' + fmtN(Math.round(tot)) + ' ficam parados nas origens</b>, sobretudo <b>'
-          + PT[pior] + '</b> — o mercador só sai na proporção da moeda, e sem <b>' + gargalo + '</b> pra parear '
-          + 'esse resto não embarca. <em>Não adianta olhar o armazém da sede: falta produção de ' + gargalo
-          + ' na conta inteira.</em>');
+      // Percentual do que PASSOU pela conta na janela (o que havia + o que foi produzido). Numero
+      // absoluto sozinho nao diz se e muito: "27 milhoes parados" assusta e pode ser 10% do fluxo.
+      const passou = Object.keys(_cplDados || {}).reduce((a, k) => {
+        const v = _cplDados[k];
+        return a + Math.max(0, v.wood - (config.market.reserveWood || 0))
+                 + Math.max(0, v.stone - (config.market.reserveStone || 0))
+                 + Math.max(0, v.iron - (config.market.reserveIron || 0))
+                 + (v.pw + v.ps + v.pi) * p.horas;
+      }, 0);
+      const pctPar = passou > 0 ? tot / passou : 0;
+      // Os que SOBRAM sao os outros dois; o que trava e justamente o que quase nao sobra.
+      const sobram = ['wood', 'stone', 'iron'].filter((k) => PT_REC[k] !== gargalo)
+        .sort((a, b) => par[b] - par[a]).map((k) => PT_REC[k]);
+      if (pctPar > 0.05) {
+        alertas += al('warn', '⚖', '<b>' + fmtN(Math.round(tot)) + ' ficam parados nas origens</b> — '
+          + Math.round(pctPar * 100) + '% de tudo que passa pela conta na janela. Sobra ' + sobram.join(' e ')
+          + ' porque acaba o <b>' + gargalo + '</b>: o mercador só sai na proporção da moeda, e sem ' + gargalo
+          + ' pra parear o resto não embarca.'
+          + (travTot ? ' <em>Foi ele que barrou ' + Math.round(100 * ((r.travou || {})[
+              gargalo === 'madeira' ? 'wood' : gargalo === 'argila' ? 'stone' : 'iron'] || 0) / travTot)
+              + '% dos envios travados.</em>' : ''));
       } else {
-        alertas += al('good', '⚖', 'Quase nada sobra sem par nas origens — a mistura está bem casada. Quem trava é o <b>'
-          + gargalo + '</b>.');
+        alertas += al('good', '⚖', 'Quase nada sobra nas origens (' + Math.round(pctPar * 100) + '% do fluxo) — '
+          + 'a mistura está bem casada. Quem acaba primeiro é o <b>' + gargalo + '</b>.');
       }
       const bl = r.bloqueadaPct || 0;
       if (bl > 0.05) {

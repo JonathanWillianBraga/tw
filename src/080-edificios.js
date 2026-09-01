@@ -160,6 +160,105 @@
   //
   // Usa o nível REAL, não o efetivo com fila de construção: considerar obra que nem ficou pronta
   // derrubaria o prédio errado.
+  // ==================== BOTAO DE PANICO ====================
+  // Cancela tudo que esta ESPERANDO na fila e deixa a obra em andamento terminar.
+  //
+  // A tela separa as duas coisas na CLASSE, nao na posicao:
+  //
+  //   tr.lit.nodrag  (+ span.timer, sem id)  -> EM CONSTRUCAO
+  //   tr.sortable_row#buildorder_N           -> ESPERANDO
+  //
+  // Meu primeiro palpite foi "a primeira linha e a que esta construindo, cancela da segunda pra
+  // frente". Errado: a linha em obra NAO e uma `buildorder_`, entao a `buildorder_1` ja e fila. Ir
+  // por posicao cancelaria uma obra em andamento por aldeia — e obra em andamento devolve recurso
+  // pela metade. Ancorar na classe e estrutural e nao depende de o jogo manter a ordem.
+  async function bldPanicoLerFila(vid) {
+    const r = await fetch('/game.php?village=' + vid + '&screen=main', { credentials: 'include' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = new DOMParser().parseFromString(await r.text(), 'text/html');
+    const q = d.querySelector('#buildqueue');
+    if (!q) return [];
+    const out = [];
+    q.querySelectorAll('tr.sortable_row').forEach((tr) => {
+      const a = tr.querySelector('a[href*="action=cancel"]'); if (!a) return;
+      const id = ((a.getAttribute('href') || '').match(/[?&]id=(\d+)/) || [])[1]; if (!id) return;
+      out.push({ id: id, nome: ((tr.cells[0] || {}).textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40) });
+    });
+    return out;
+  }
+
+  async function bldPanicoCancelar(vid, id) {
+    const r = await fetch('/game.php?village=' + vid + '&screen=main&action=cancel&id=' + id
+      + '&mode=build&h=' + CSRF, { credentials: 'include' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+  }
+
+  let _bldPanicoRodando = false;
+
+  async function bldPanico() {
+    if (_bldPanicoRodando) return;
+    const btn = document.getElementById('twmgr-bld-panico');
+    const rot = (t) => { if (btn) btn.textContent = t; };
+    _bldPanicoRodando = true;
+    if (btn) btn.disabled = true;
+    try {
+      // DESLIGA O MODULO ANTES de cancelar. Se ficasse ligado, o proximo buildTick reenfileiraria
+      // tudo que acabou de ser cancelado e o botao viraria enxugar gelo.
+      const estava = !!config.build.running;
+      if (estava) buildStop();
+
+      let vilas;
+      try { vilas = await getAllVillagesCached(); }
+      catch (e) { pushLog('Pânico: não consegui listar as aldeias (' + (e.message || e) + ').', 'err', 'build'); return; }
+
+      const achado = [];
+      for (let i = 0; i < vilas.length; i++) {
+        rot('lendo ' + (i + 1) + '/' + vilas.length + '…');
+        try {
+          const fila = await bldPanicoLerFila(vilas[i].vid);
+          if (fila.length) achado.push({ vid: vilas[i].vid, nome: vilas[i].name || vilas[i].coord, fila: fila });
+        } catch (e) {
+          pushLog('Pânico: não li a fila de ' + (vilas[i].name || vilas[i].vid) + ' — ' + (e.message || e), 'err', 'build');
+        }
+        await sleep(160);
+      }
+
+      const total = achado.reduce((a, x) => a + x.fila.length, 0);
+      if (!total) {
+        pushLog('Pânico: nenhuma aldeia tem ordem esperando na fila' + (estava ? ' — o módulo foi desligado mesmo assim.' : '.'), 'ok', 'build');
+        return;
+      }
+      // O confirm mostra o TAMANHO antes de agir. Pânico sem número é um susto, nao uma decisao.
+      if (!window.confirm('Cancelar ' + total + ' ordem(ns) em ' + achado.length + ' aldeia(s)?'
+        + String.fromCharCode(10, 10)
+        + 'A obra EM ANDAMENTO de cada aldeia não é tocada — só o que está esperando.'
+        + String.fromCharCode(10)
+        + 'O recurso das ordens em fila volta inteiro.'
+        + String.fromCharCode(10, 10)
+        + 'O módulo de Construções ' + (estava ? 'JÁ FOI DESLIGADO' : 'já estava desligado') + '.')) {
+        pushLog('Pânico: cancelado por você — nada foi mexido' + (estava ? ', mas o módulo ficou desligado.' : '.'), '', 'build');
+        return;
+      }
+
+      let ok = 0, erro = 0, feitas = 0;
+      for (const v of achado) {
+        // De TRAS pra frente: cancelar do fim da fila nunca reordena o que ainda falta cancelar.
+        for (let k = v.fila.length - 1; k >= 0; k--) {
+          feitas++;
+          rot('cancelando ' + feitas + '/' + total + '…');
+          try { await bldPanicoCancelar(v.vid, v.fila[k].id); ok++; }
+          catch (e) { erro++; pushLog('Pânico: ' + v.nome + ' / ' + v.fila[k].nome + ' — ' + (e.message || e), 'err', 'build'); }
+          await sleep(220);
+        }
+      }
+      pushLog('🛑 Pânico: ' + ok + ' ordem(ns) cancelada(s) em ' + achado.length + ' aldeia(s)'
+        + (erro ? ', ' + erro + ' com erro' : '') + '. As obras em andamento seguem.', ok ? 'ok' : 'err', 'build');
+    } finally {
+      _bldPanicoRodando = false;
+      if (btn) { btn.disabled = false; rot('🛑 Parar a fila'); }
+    }
+  }
+
   function bldExcedente(st, plan) {
     for (const it of plan) {
       if (it.en === false) continue;

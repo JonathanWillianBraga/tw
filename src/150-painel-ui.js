@@ -776,6 +776,12 @@
           '<div class="twmgr-row"><span class="twmgr-lbl">Máx na fila</span><input id="twmgr-bld-max" class="twmgr-inp" type="number" min="1" value="5" style="width:56px"></div>' +
           '<div class="twmgr-row"><span class="twmgr-lbl">Intervalo do ciclo (min)</span><input id="twmgr-bld-int" class="twmgr-inp" type="number" min="1" value="10" style="width:56px"></div>') +
         '<div class="twmgr-actions"><button id="twmgr-bld-start" class="twmgr-btn twmgr-go">▶ Construir</button><button id="twmgr-bld-stop" class="twmgr-btn twmgr-stop">■ Parar</button></div>' +
+        '<div class="twmgr-row" style="margin-top:5px">' +
+          '<button id="twmgr-bld-panico" class="twmgr-btn twmgr-stop" style="flex:1" '
+          + 'title="Cancela tudo que está ESPERANDO na fila, em todas as aldeias. A obra em andamento de cada uma continua. Desliga o módulo antes, senão o próximo ciclo reenfileira.">'
+          + '🛑 Parar a fila</button>' +
+        '</div>' +
+        '<div style="font-size:9px;color:#8a7d6d;margin-top:3px">Cancela o que está <b>esperando</b> em todas as aldeias e devolve o recurso; a obra <b>em andamento</b> de cada uma segue. Desliga o módulo junto e mostra o total antes de confirmar.</div>' +
         '<div id="twmgr-bld-status" class="twmgr-cstatus"></div>' +
         modLog('build') +
       '</div>' +
@@ -1449,6 +1455,7 @@
 
     document.getElementById('twmgr-bld-start').addEventListener('click', buildStart);
     document.getElementById('twmgr-bld-stop').addEventListener('click', buildStop);
+    document.getElementById('twmgr-bld-panico').addEventListener('click', bldPanico);
     setBuildStatus(config.build.running);
 
     // Bárbaros do Mapa (BM)

@@ -197,16 +197,39 @@
     const fila = [];
     q.querySelectorAll('tr.sortable_row').forEach((tr) => {
       const a = tr.querySelector('a[href*="action=cancel"]'); if (!a) return;
-      const id = ((a.getAttribute('href') || '').match(/[?&]id=(\d+)/) || [])[1]; if (!id) return;
+      // O id sai do `onclick` (`BuildingMain.cancel(<id>, ...)`), que e quem o jogo usa de fato;
+      // o `href` entra so como rede.
+      const id = ((a.getAttribute('onclick') || '').match(/cancel\((\d+)/) || [])[1]
+        || ((a.getAttribute('href') || '').match(/[?&]id=(\d+)/) || [])[1];
+      if (!id) return;
       fila.push({ id: id, nome: ((tr.cells[0] || {}).textContent || '').replace(/\s+/g, ' ').trim().slice(0, 34) });
     });
     return { obra: lit ? (lit.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 34) : null, fila: fila };
   }
 
+  // CANCELAR E POST, NAO O `href` DO LINK.
+  //
+  // O link da fila tem `href=...action=cancel&id=...&mode=build&h=...`, e eu usei aquilo. Testado
+  // na conta: devolve **HTTP 200 e nao cancela nada**. O href e so fallback; quem faz o trabalho e
+  // o `onclick`, que chama `BuildingMain.cancel(id, destroy)` ->
+  //
+  //     POST screen=main&ajaxaction=cancel_order&type=main&h=<csrf>
+  //     corpo: id=<ordem>&destroy=0        (destroy=1 e a fila de DEMOLICAO)
+  //
+  // E por isso a resposta e conferida pelo campo `success` do JSON, e nao pelo status HTTP: foi
+  // exatamente um 200 mentiroso que fez o botao "nao funcionar" sem nenhum erro no log.
   async function bldPanicoCancelar(vid, id) {
-    const r = await fetch('/game.php?village=' + vid + '&screen=main&action=cancel&id=' + id
-      + '&mode=build&h=' + CSRF, { credentials: 'include' });
+    const r = await fetch('/game.php?village=' + vid + '&screen=main&ajaxaction=cancel_order&type=main&h=' + CSRF, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+      body: 'id=' + encodeURIComponent(id) + '&destroy=0'
+    });
+    const txt = await r.text();
     if (!r.ok) throw new Error('HTTP ' + r.status);
+    let j = null; try { j = JSON.parse(txt); } catch (e) { /* nao-JSON cai no erro abaixo */ }
+    if (!j) throw new Error('o jogo respondeu algo que não é JSON (' + txt.length + ' bytes)');
+    if (j.error) throw new Error(String(j.error).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim());
+    if (j.success === false) throw new Error('o jogo recusou o cancelamento');
   }
 
   // Quais aldeias vale a pena abrir. A visao geral de Producao traz a coluna "Construcao" das 80

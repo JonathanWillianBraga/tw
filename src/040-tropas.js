@@ -862,6 +862,7 @@
     });
     rcRenderEditor();   // o select de grupo do modelo depende deste cache
     if (typeof fillBldTplGrupo === 'function') fillBldTplGrupo();
+    if (typeof fillBldPanicoGrupo === 'function') fillBldPanicoGrupo();
   }
 
   function readRecruitCfg() {

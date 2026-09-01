@@ -170,21 +170,37 @@
   //
   // Meu primeiro palpite foi "a primeira linha e a que esta construindo, cancela da segunda pra
   // frente". Errado: a linha em obra NAO e uma `buildorder_`, entao a `buildorder_1` ja e fila. Ir
-  // por posicao cancelaria uma obra em andamento por aldeia — e obra em andamento devolve recurso
-  // pela metade. Ancorar na classe e estrutural e nao depende de o jogo manter a ordem.
+  // por posicao cancelaria uma obra em andamento por aldeia — e essa devolve recurso pela metade,
+  // enquanto ordem em fila devolve inteiro. As duas tem link de cancelar; so a classe distingue.
+  //
+  // POR QUE ISTO E DE DOIS PASSOS, E NAO UM `confirm()`
+  //
+  // A primeira versao lia as 80 aldeias e so entao chamava `window.confirm`. Tres defeitos, e o
+  // usuario reportou como "nao funcionou":
+  //   1. a leitura leva ~60s e o unico sinal era o texto do botao — parece travado;
+  //   2. `confirm()` CONGELA a aba enquanto espera. Medido: a extensao nem conseguia injetar
+  //      script na pagina nesse estado;
+  //   3. o modulo era desligado ANTES do confirm, entao quem desistia ficava com as Construcoes
+  //      paradas sem ter pedido.
+  // Agora: passo 1 revisa e MOSTRA a lista no painel, sem tocar em nada; passo 2 executa. O
+  // modulo so e desligado no passo 2.
+
+  let _bldPanicoRodando = false, _bldPanicoPlano = null;
+
   async function bldPanicoLerFila(vid) {
     const r = await fetch('/game.php?village=' + vid + '&screen=main', { credentials: 'include' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = new DOMParser().parseFromString(await r.text(), 'text/html');
     const q = d.querySelector('#buildqueue');
-    if (!q) return [];
-    const out = [];
+    if (!q) return { obra: null, fila: [] };
+    const lit = q.querySelector('tr.lit td');
+    const fila = [];
     q.querySelectorAll('tr.sortable_row').forEach((tr) => {
       const a = tr.querySelector('a[href*="action=cancel"]'); if (!a) return;
       const id = ((a.getAttribute('href') || '').match(/[?&]id=(\d+)/) || [])[1]; if (!id) return;
-      out.push({ id: id, nome: ((tr.cells[0] || {}).textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40) });
+      fila.push({ id: id, nome: ((tr.cells[0] || {}).textContent || '').replace(/\s+/g, ' ').trim().slice(0, 34) });
     });
-    return out;
+    return { obra: lit ? (lit.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 34) : null, fila: fila };
   }
 
   async function bldPanicoCancelar(vid, id) {
@@ -193,70 +209,147 @@
     if (!r.ok) throw new Error('HTTP ' + r.status);
   }
 
-  let _bldPanicoRodando = false;
+  // Quais aldeias vale a pena abrir. A visao geral de Producao traz a coluna "Construcao" das 80
+  // numa requisicao so: coluna vazia = nada na fila, nem obra. Poupa abrir ~1/4 das aldeias e,
+  // principalmente, e um superconjunto seguro — nunca esconde aldeia que TEM fila.
+  async function bldPanicoCandidatas(grupo) {
+    let alvo = null;
+    if (grupo) {
+      try { alvo = {}; (await getVillagesInGroup(grupo)).forEach((v) => { alvo[String(v.vid)] = v; }); }
+      catch (e) { throw new Error('não li o grupo (' + (e.message || e) + ')'); }
+    }
+    const r = await fetch('/game.php?village=' + CUR_VID
+      + '&screen=overview_villages&mode=prod&group=0&page=-1', { credentials: 'include' });
+    const d = new DOMParser().parseFromString(await r.text(), 'text/html');
+    const tb = d.querySelector('#production_table') || d.querySelector('table.overview_table');
+    if (!tb) throw new Error('não achei a tabela de produção');
+    const heads = Array.prototype.map.call(tb.querySelectorAll('th'), (t) => (t.textContent || '').replace(/\s+/g, ' ').trim());
+    const iC = heads.findIndex((h) => /Constru/i.test(h));
+    const out = [];
+    tb.querySelectorAll('tr').forEach((tr) => {
+      const q = tr.querySelector('.quickedit-vn[data-id]'); if (!q) return;
+      const vid = q.getAttribute('data-id');
+      if (alvo && !alvo[vid]) return;
+      // Sem a coluna, nao da pra filtrar: abre todas em vez de esconder alguma.
+      if (iC >= 0) {
+        const c = ((tr.querySelectorAll('td')[iC] || {}).textContent || '').replace(/\s+/g, ' ').trim();
+        if (!c) return;
+      }
+      const lbl = tr.querySelector('.quickedit-label');
+      out.push({ vid: vid, nome: ((lbl && lbl.textContent) || vid).replace(/\s+/g, ' ').trim().slice(0, 28) });
+    });
+    return out;
+  }
 
-  async function bldPanico() {
+  async function bldPanicoRevisar() {
     if (_bldPanicoRodando) return;
+    _bldPanicoRodando = true;
+    _bldPanicoPlano = null;
+    const grupo = (document.getElementById('twmgr-bld-panico-grp') || {}).value || '';
     const btn = document.getElementById('twmgr-bld-panico');
     const rot = (t) => { if (btn) btn.textContent = t; };
-    _bldPanicoRodando = true;
     if (btn) btn.disabled = true;
     try {
-      // DESLIGA O MODULO ANTES de cancelar. Se ficasse ligado, o proximo buildTick reenfileiraria
-      // tudo que acabou de ser cancelado e o botao viraria enxugar gelo.
-      const estava = !!config.build.running;
-      if (estava) buildStop();
-
-      let vilas;
-      try { vilas = await getAllVillagesCached(); }
-      catch (e) { pushLog('Pânico: não consegui listar as aldeias (' + (e.message || e) + ').', 'err', 'build'); return; }
+      bldPanicoRender('Procurando aldeias com fila…');
+      let cands;
+      try { cands = await bldPanicoCandidatas(grupo); }
+      catch (e) { bldPanicoRender('<span style="color:#b03030">' + esc(e.message || String(e)) + '</span>'); return; }
+      if (!cands.length) { bldPanicoRender('Nenhuma aldeia com obra ou fila' + (grupo ? ' nesse grupo' : '') + '.'); return; }
 
       const achado = [];
-      for (let i = 0; i < vilas.length; i++) {
-        rot('lendo ' + (i + 1) + '/' + vilas.length + '…');
+      for (let i = 0; i < cands.length; i++) {
+        rot('lendo ' + (i + 1) + '/' + cands.length + '…');
+        bldPanicoRender('Lendo a fila: <b>' + (i + 1) + '</b> de ' + cands.length + ' aldeia(s)…');
         try {
-          const fila = await bldPanicoLerFila(vilas[i].vid);
-          if (fila.length) achado.push({ vid: vilas[i].vid, nome: vilas[i].name || vilas[i].coord, fila: fila });
+          const q = await bldPanicoLerFila(cands[i].vid);
+          if (q.fila.length) achado.push({ vid: cands[i].vid, nome: cands[i].nome, obra: q.obra, fila: q.fila });
         } catch (e) {
-          pushLog('Pânico: não li a fila de ' + (vilas[i].name || vilas[i].vid) + ' — ' + (e.message || e), 'err', 'build');
+          pushLog('Pânico: não li a fila de ' + cands[i].nome + ' — ' + (e.message || e), 'err', 'build');
         }
-        await sleep(160);
+        // Em SERIE e com pausa. Medido: 12 leituras em paralelo devolvem página incompleta — a
+        // varredura que eu fiz assim pra conferir viu 17 aldeias com fila onde havia 55.
+        await sleep(140);
       }
+      _bldPanicoPlano = { grupo: grupo, aldeias: achado, at: Date.now() };
+      bldPanicoRender();
+    } finally {
+      _bldPanicoRodando = false;
+      if (btn) { btn.disabled = false; rot('🛑 Revisar a fila'); }
+    }
+  }
 
-      const total = achado.reduce((a, x) => a + x.fila.length, 0);
-      if (!total) {
-        pushLog('Pânico: nenhuma aldeia tem ordem esperando na fila' + (estava ? ' — o módulo foi desligado mesmo assim.' : '.'), 'ok', 'build');
-        return;
-      }
-      // O confirm mostra o TAMANHO antes de agir. Pânico sem número é um susto, nao uma decisao.
-      if (!window.confirm('Cancelar ' + total + ' ordem(ns) em ' + achado.length + ' aldeia(s)?'
-        + String.fromCharCode(10, 10)
-        + 'A obra EM ANDAMENTO de cada aldeia não é tocada — só o que está esperando.'
-        + String.fromCharCode(10)
-        + 'O recurso das ordens em fila volta inteiro.'
-        + String.fromCharCode(10, 10)
-        + 'O módulo de Construções ' + (estava ? 'JÁ FOI DESLIGADO' : 'já estava desligado') + '.')) {
-        pushLog('Pânico: cancelado por você — nada foi mexido' + (estava ? ', mas o módulo ficou desligado.' : '.'), '', 'build');
-        return;
-      }
-
+  async function bldPanicoExecutar() {
+    if (_bldPanicoRodando || !_bldPanicoPlano) return;
+    const plano = _bldPanicoPlano;
+    const total = plano.aldeias.reduce((a, x) => a + x.fila.length, 0);
+    if (!total) return;
+    _bldPanicoRodando = true;
+    const btn = document.getElementById('twmgr-bld-panico-go');
+    try {
+      // So AGORA desliga o modulo. Fazer isso na revisao deixava as Construcoes paradas mesmo pra
+      // quem olhava a lista e desistia.
+      const estava = !!config.build.running;
+      if (estava) buildStop();
       let ok = 0, erro = 0, feitas = 0;
-      for (const v of achado) {
+      for (const v of plano.aldeias) {
         // De TRAS pra frente: cancelar do fim da fila nunca reordena o que ainda falta cancelar.
         for (let k = v.fila.length - 1; k >= 0; k--) {
           feitas++;
-          rot('cancelando ' + feitas + '/' + total + '…');
-          try { await bldPanicoCancelar(v.vid, v.fila[k].id); ok++; }
+          if (btn) btn.textContent = 'cancelando ' + feitas + '/' + total + '…';
+          bldPanicoRender('Cancelando <b>' + feitas + '</b> de ' + total + '…');
+          try { await bldPanicoCancelar(v.vid, v.fila[k].id); ok++; v.fila[k].feito = 1; }
           catch (e) { erro++; pushLog('Pânico: ' + v.nome + ' / ' + v.fila[k].nome + ' — ' + (e.message || e), 'err', 'build'); }
           await sleep(220);
         }
       }
-      pushLog('🛑 Pânico: ' + ok + ' ordem(ns) cancelada(s) em ' + achado.length + ' aldeia(s)'
-        + (erro ? ', ' + erro + ' com erro' : '') + '. As obras em andamento seguem.', ok ? 'ok' : 'err', 'build');
+      pushLog('🛑 Pânico: ' + ok + ' ordem(ns) cancelada(s) em ' + plano.aldeias.length + ' aldeia(s)'
+        + (erro ? ', ' + erro + ' com erro' : '') + '. As obras em andamento seguem'
+        + (estava ? ' e o módulo foi desligado.' : '.'), ok ? 'ok' : 'err', 'build');
+      _bldPanicoPlano = null;
+      bldPanicoRender('<b style="color:#2e7d3a">Pronto.</b> ' + ok + ' ordem(ns) cancelada(s)'
+        + (erro ? ', ' + erro + ' com erro (veja o log)' : '') + '. As obras em andamento seguem.');
     } finally {
       _bldPanicoRodando = false;
-      if (btn) { btn.disabled = false; rot('🛑 Parar a fila'); }
     }
+  }
+
+  function bldPanicoRender(msg) {
+    const box = document.getElementById('twmgr-bld-panico-out'); if (!box) return;
+    if (msg) { box.innerHTML = '<div style="font-size:10px;color:#6f6153;padding:4px 2px">' + msg + '</div>'; return; }
+    const P = _bldPanicoPlano;
+    if (!P) { box.innerHTML = ''; return; }
+    const total = P.aldeias.reduce((a, x) => a + x.fila.length, 0);
+    if (!total) {
+      box.innerHTML = '<div style="font-size:10px;color:#6f6153;padding:4px 2px">Nenhuma ordem esperando na fila'
+        + (P.grupo ? ' nesse grupo' : '') + ' — nada a cancelar.</div>';
+      return;
+    }
+    box.innerHTML =
+      '<div style="border:1px solid #eecfcf;background:#fdf2f2;border-radius:7px;padding:7px;margin-top:5px">' +
+        '<div style="font-size:11px;color:#8a3232"><b>' + total + '</b> ordem(ns) esperando em <b>'
+        + P.aldeias.length + '</b> aldeia(s).</div>' +
+        '<div style="font-size:9px;color:#8a5d2a;margin-top:2px">A obra <b>em andamento</b> de cada aldeia não é tocada. '
+        + 'O recurso das ordens em fila volta inteiro. O módulo de Construções será desligado.</div>' +
+        '<button id="twmgr-bld-panico-go" class="twmgr-btn twmgr-stop" style="width:100%;margin-top:6px">'
+        + '🛑 Cancelar as ' + total + ' ordens</button>' +
+      '</div>' +
+      '<div style="max-height:190px;overflow-y:auto;margin-top:5px">' +
+      P.aldeias.map((v) => '<div style="font-size:9px;border-bottom:1px solid #f0e9dd;padding:3px 2px">' +
+        '<b style="color:#463b30">' + esc(v.nome) + '</b>' +
+        (v.obra ? ' <span style="color:#2e7d3a">mantém ' + esc(v.obra) + '</span>' : '') +
+        '<br><span style="color:#a2643a">cancela: ' + v.fila.map((f) => esc(f.nome)).join(' · ') + '</span>' +
+      '</div>').join('') +
+      '</div>';
+    const go = document.getElementById('twmgr-bld-panico-go');
+    if (go) go.addEventListener('click', bldPanicoExecutar);
+  }
+
+  function fillBldPanicoGrupo() {
+    const sel = document.getElementById('twmgr-bld-panico-grp'); if (!sel) return;
+    const atual = sel.value || '';
+    sel.innerHTML = '<option value="">todas as aldeias</option>' + (_twGroupsCache || []).map((g) =>
+      '<option value="' + g.id + '"' + (String(atual) === String(g.id) ? ' selected' : '') + '>'
+      + esc(g.name) + '</option>').join('');
   }
 
   function bldExcedente(st, plan) {

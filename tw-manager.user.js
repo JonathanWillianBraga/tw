@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.259.0
+// @version      11.260.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.259.0';
+  const VERSION = '11.260.0';
   const KEY = 'twMgr_' + WORLD;
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
@@ -6906,6 +6906,52 @@
   // ===== Demolição =====
   // Endpoint CONFIRMADO pelo dump do usuário: é o espelho do upgrade, sem o `type=main`. O
   // `mode=destroy` é só da TELA — a ação não leva.
+  // SOBE A ULTIMA ORDEM ENFILEIRADA PRO TOPO DA ESPERA.
+  //
+  // A urgencia do Armazem/Fazenda ("se sobrar menos de X%") ja furava a ordem do MODELO, mas nao a
+  // da FILA: o item entrava no fim e so comecava depois de tudo que ja estava enfileirado. Numa
+  // aldeia com tres Quarteis na frente, o Armazem que esta jogando recurso fora A CADA HORA
+  // esperava dias — a urgencia era reconhecida e depois ignorada na pratica.
+  //
+  // Reordenar e o mesmo POST que o arraste da fila faz, e e DE GRACA:
+  //
+  //   POST screen=main&ajaxaction=buildorder_reorder&buildmode=1&h=<csrf>
+  //   corpo: buildorder[]=3&buildorder[]=1&buildorder[]=2     (a nova ordem)
+  //
+  // Cuidado pra nao confundir com `BuildingMain.change_order`, que aponta pra
+  // `ajaxaction=build_order_reduce` e passa por `Premium.check` — aquele custa ponto premium.
+  // Este e o do arraste, que nao custa nada.
+  //
+  // Os numeros sao o sufixo de `tr#buildorder_N`, ou seja POSICAO na espera, nao o id da ordem. A
+  // linha em obra (`tr.lit`) nao entra na lista e por isso nunca e mexida.
+  async function bldSubirParaTopo(vid) {
+    const r = await fetch('/game.php?village=' + vid + '&screen=main', { credentials: 'include' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = new DOMParser().parseFromString(await r.text(), 'text/html');
+    const q = d.querySelector('#buildqueue'); if (!q) return false;
+    const pos = [];
+    q.querySelectorAll('tr.sortable_row').forEach((tr) => {
+      const m = (tr.id || '').match(/^buildorder_(\d+)$/); if (m) pos.push(m[1]);
+    });
+    // Menos de dois na espera: o que acabou de entrar ja e o proximo, nao ha o que subir.
+    if (pos.length < 2) return false;
+    const nova = [pos[pos.length - 1]].concat(pos.slice(0, pos.length - 1));
+    const rr = await fetch('/game.php?village=' + vid
+      + '&screen=main&ajaxaction=buildorder_reorder&buildmode=1&h=' + CSRF, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' },
+      body: nova.map((n) => 'buildorder%5B%5D=' + n).join('&')
+    });
+    const txt = await rr.text();
+    if (!rr.ok) throw new Error('HTTP ' + rr.status);
+    let j = null; try { j = JSON.parse(txt); } catch (e) { /* nao-JSON cai abaixo */ }
+    // Confere o `success` do JSON, nao o status: cancelar ensinou que este jogo devolve 200 em
+    // acao que nao aconteceu (ver bldPanicoCancelar).
+    if (!j) throw new Error('o jogo respondeu algo que não é JSON (' + txt.length + ' bytes)');
+    if (j.success === false) throw new Error('o jogo recusou a reordenação');
+    return true;
+  }
+
   async function demolirPredio(vid, b) {
     const res = await fetch('/game.php?village=' + vid + '&screen=main&action=downgrade_building&id=' + b + '&h=' + CSRF,
       { credentials: 'include' });
@@ -7685,6 +7731,22 @@
         }
         try { await enqueueBuild(vid, r.build.b); }
         catch (e) { pushLog('Construções em ' + rotulo + ': ' + (e.message || e), 'err', 'build'); break; }
+        // URGENTE FURA A FILA DE VERDADE. Sem isto a urgencia era so uma escolha de QUAL predio
+        // enfileirar — o item ia pro fim e esperava a fila inteira. Falha aqui nao e fatal: a obra
+        // ja esta enfileirada, so nao subiu.
+        if (urgente) {
+          try {
+            if (await bldSubirParaTopo(vid)) {
+              pushLog('Construções: ' + rotulo + ' → '
+                + ((BUILD_META[r.build.b] && BUILD_META[r.build.b].name) || r.build.b)
+                + ' subiu pro topo da fila (urgente).', 'ok', 'build');
+            }
+          } catch (e) {
+            pushLog('Construções em ' + rotulo + ': não subi o urgente na fila (' + (e.message || e)
+              + ') — ele ficou no fim.', 'err', 'build');
+          }
+          await sleep(250);
+        }
         postos.push((BUILD_META[r.build.b] && BUILD_META[r.build.b].name) || r.build.b);
         built++; slots--;
         if (slots <= 0) break;

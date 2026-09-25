@@ -1731,7 +1731,7 @@
             destino: d.destino, chegaEm: jan.ate, base: jan.base, de: jan.de,
             largura: jan.largura, exato: jan.exato, at: Date.now(),
           }));
-          location.href = '/game.php?screen=place&cc_snipe=1';
+          location.href = gameUrl('/game.php?screen=place&cc_snipe=1');
         });
         d.tr.appendChild(td);
       });

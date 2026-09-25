@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.260.0
+// @version      11.261.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,8 +177,47 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.260.0';
-  const KEY = 'twMgr_' + WORLD;
+  const VERSION = '11.261.0';
+
+  // ===== SESSÃO DE TUTORIA (modo de férias) =====
+  //
+  // Quando você entra na conta de quem te pôs como substituto, o jogo NÃO troca a sessão: ele
+  // carimba `t=<id do jogador>` em toda URL e continua reconhecendo você. Requisição sem esse
+  // parâmetro age na SUA conta, não na tutorada.
+  //
+  // Medido dentro da sessão de tutoria, buscando a MESMA tela das duas formas:
+  //     screen=overview_villages...             -> 142 aldeias  (a minha)
+  //     t=919052889&screen=overview_villages... -> 102 aldeias  (a tutorada)
+  //
+  // Sem isto o script leria e ENVIARIA TROPA na conta errada enquanto você olha a outra.
+  let SITTER = '';
+  try { SITTER = new URLSearchParams(window.location.search).get('t') || ''; } catch (e) {}
+  if (!/^\d+$/.test(SITTER)) SITTER = '';
+
+  // Carimba o `t=` em toda URL do jogo. Só mexe em caminho de game.php: /map/village.txt e o RAW
+  // do GitHub do autoupdate passam intactos, e URL que já traz `t=` não ganha outro.
+  function gameUrl(u) {
+    if (!SITTER) return u;
+    const s = String(u);
+    if (!/\/game\.php/.test(s.replace(/^https?:\/\/[^/]+/, ''))) return u;
+    if (/[?&]t=\d+/.test(s)) return s;
+    return s + (s.indexOf('?') >= 0 ? '&' : '?') + 't=' + SITTER;
+  }
+
+  // SOMBRA DO fetch — isto funciona por causa da arquitetura do bundle.
+  //
+  // Os módulos compartilham UM escopo léxico (build.py concatena dentro de uma IIFE só), e as 122
+  // chamadas espalhadas são `fetch(...)` puro, sem `window.`. Declarar `fetch` aqui, antes de
+  // qualquer módulo rodar, sombreia todas de uma vez — inclusive as das ilhas cc*, que herdam este
+  // escopo por closure. Editar 122 pontos à mão deixaria alguns pra trás, e o que ficasse pra trás
+  // agiria na conta errada em silêncio.
+  //
+  // Fora de tutoria `gameUrl` devolve a URL intacta, então o caminho normal fica idêntico.
+  const fetch = (u, o) => window.fetch(gameUrl(u), o);
+
+  // Config SEPARADA por conta. `twMgr_<mundo>` sozinho fazia as duas contas dividirem modelos de
+  // construção, grupos e ids de aldeia — ids que nem existem do outro lado.
+  const KEY = 'twMgr_' + WORLD + (SITTER ? '_t' + SITTER : '');
   const LOGKEY = KEY + '_log';
   const LOCKKEY = KEY + '_lock';
   const CSRF = window.game_data.csrf;

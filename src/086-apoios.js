@@ -393,6 +393,69 @@
     return { linhas: linhas, colunas: colunas };
   }
 
+  // ── DEVOLVER TUDO: o formulario que a tela realmente tem ────────────────────
+  //
+  // O caminho do `apoiosRetirarDestino` emula o fluxo COM QUANTIDADE — os campos
+  // `withdraw_unit[away][units][u]`, que o JS do jogo cria depois que a coluna e marcada. Ele
+  // serve pra retirada parcial (esta origem, esta unidade, esta quantidade) e e caro: DOIS
+  // campos por linha de apoio.
+  //
+  // Mas a tela tem um segundo formulario, muito mais simples, que e o que o usuario usa na mao:
+  // marcar as aldeias que apoiam, marcar os tipos de tropa, e "Enviar de volta". Ele e:
+  //
+  //   POST screen=place&action=withdraw_selected_units_village_info&mode=units
+  //   corpo: village_id=<destino>
+  //          checkbox_<unidade>=on        (UM por TIPO de tropa, nao por linha)
+  //          send_back[<awayId>]=on       (UM por ALDEIA que apoia)
+  //          h=<csrf>
+  //
+  // A diferenca de tamanho decide o caso. Medido numa aldeia real, 143 origens e 1.573 linhas:
+  //     por quantidade ... ~3.158 variaveis -> truncado pelo servidor, apoio fica pela metade
+  //     send_back ........    155 variaveis -> 143 origens viraram 0 num POST so
+  //
+  // E O `checkbox_` EXPLICA O SINTOMA QUE SOBROU. Ele e preferencia de CONTA: so voltam os tipos
+  // marcados. Na conta estavam marcados axe/spy/light/ram — e o que sobrou parado foi exatamente
+  // Lanceiro e Espadachim, dois dos tipos desmarcados. Por isso aqui marco TODOS os que o
+  // formulario oferece, em vez de so os que eu achava que precisava.
+  //
+  // Quando devolver tudo e o que se quer (e e o caso da Entrega), este e o caminho certo.
+  async function apoiosDevolverTudoDestino(destId) {
+    const ler = async () => {
+      const r = await fetch('/game.php?village=' + CUR_VID + '&screen=info_village&id=' + destId,
+        { credentials: 'include', cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' na tela do destino ' + destId);
+      const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+      return Array.prototype.slice.call(doc.querySelectorAll('#content_value form'))
+        .filter((x) => /withdraw_selected_units_village_info/.test(x.getAttribute('action') || ''))[0] || null;
+    };
+    const f = await ler();
+    if (!f) return { origens: 0 };   // sem apoio MEU ali: nao e erro
+    const sb = Array.prototype.slice.call(f.querySelectorAll('input[name^="send_back["]'));
+    if (!sb.length) return { origens: 0 };
+    const cols = Array.prototype.slice.call(f.querySelectorAll('input[name^="checkbox_"]'));
+
+    const p = new URLSearchParams();
+    p.set('village_id', String(destId));
+    cols.forEach((c) => p.set(c.getAttribute('name'), 'on'));
+    sb.forEach((i) => p.set(i.getAttribute('name'), 'on'));
+    p.set('h', CSRF);
+    const r = await fetch('/game.php?village=' + CUR_VID
+      + '&screen=place&action=withdraw_selected_units_village_info&mode=units',
+      { method: 'POST', credentials: 'include', cache: 'no-store',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p.toString() });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao devolver o apoio do destino ' + destId);
+    const eb = new DOMParser().parseFromString(await r.text(), 'text/html').querySelector('.error_box');
+    if (eb) throw new Error('o jogo recusou: ' + (eb.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160));
+
+    // CONFIRMACAO POR EFEITO: a tela nao pode mais listar aldeia apoiando.
+    await sleep(900);
+    const f2 = await ler();
+    const resta = f2 ? f2.querySelectorAll('input[name^="send_back["]').length : 0;
+    if (resta) throw new Error('ainda restam ' + resta + ' de ' + sb.length
+      + ' aldeia(s) apoiando — a devolucao nao foi aceita por inteiro');
+    return { origens: sb.length };
+  }
+
   async function apoiosPatchColunasDestino(unids) {
     const p = new URLSearchParams();
     p.set('info_village_checkboxes', JSON.stringify(unids));

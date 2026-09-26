@@ -196,15 +196,13 @@
   // aparece la, entao `linhas` vazio com apoio presente significa exatamente uma coisa — o apoio
   // e de outra pessoa e eu nao posso tirar. Quem tira e o dono; o modulo avisa e para.
   async function entRetirarApoio(vid, nome) {
-    const est = await apoiosDestinoLer(vid);
-    if (!est.linhas.length) return { meu: false, origens: 0 };
-    const vistoOrg = {}, vistoU = {};
-    est.linhas.forEach((l) => { vistoOrg[l.org] = 1; vistoU[l.u] = 1; });
-    const origens = Object.keys(vistoOrg).map((v) => ({ vid: v }));
-    const unids = Object.keys(vistoU);
-    const atendidas = await apoiosRetirarDestino(vid, origens, unids);
-    return { meu: true, origens: atendidas.length, pedidas: origens.length,
-             tropa: est.linhas.reduce((s, l) => s + l.n, 0) };
+    // Aqui sempre se quer TUDO de volta, entao usa o formulario "Enviar de volta" da propria
+    // tela: um campo por aldeia que apoia, em vez de dois por linha de apoio. Numa aldeia com
+    // 143 origens isso e 155 variaveis contra ~3.158 — e a versao cara era truncada pelo
+    // servidor, deixando apoio pra tras.
+    const r = await apoiosDevolverTudoDestino(vid);
+    if (!r.origens) return { meu: false, origens: 0 };
+    return { meu: true, origens: r.origens };
   }
 
   // ===== O ciclo =====
@@ -282,8 +280,8 @@
             c.estado[v.coord].txt = 'apoio de terceiro — só o dono retira';
           } else {
             retirou++;
-            pushLog('Entrega: retirei meu apoio de ' + v.name + ' — ' + fmtN(r.tropa) + ' tropa(s) de '
-              + r.origens + ' aldeia(s) voltando. Bato quando a aldeia estiver vazia.', 'ok', 'entrega');
+            pushLog('Entrega: mandei de volta o apoio de ' + v.name + ' — ' + r.origens
+              + ' aldeia(s) recolhendo tropa. Bato quando a aldeia estiver vazia.', 'ok', 'entrega');
             c.estado[v.coord].txt = 'apoio retirado, voltando';
           }
         } catch (e) {

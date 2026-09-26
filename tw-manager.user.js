@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.267.0
+// @version      11.268.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.267.0';
+  const VERSION = '11.268.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -12372,6 +12372,69 @@
     return { linhas: linhas, colunas: colunas };
   }
 
+  // ── DEVOLVER TUDO: o formulario que a tela realmente tem ────────────────────
+  //
+  // O caminho do `apoiosRetirarDestino` emula o fluxo COM QUANTIDADE — os campos
+  // `withdraw_unit[away][units][u]`, que o JS do jogo cria depois que a coluna e marcada. Ele
+  // serve pra retirada parcial (esta origem, esta unidade, esta quantidade) e e caro: DOIS
+  // campos por linha de apoio.
+  //
+  // Mas a tela tem um segundo formulario, muito mais simples, que e o que o usuario usa na mao:
+  // marcar as aldeias que apoiam, marcar os tipos de tropa, e "Enviar de volta". Ele e:
+  //
+  //   POST screen=place&action=withdraw_selected_units_village_info&mode=units
+  //   corpo: village_id=<destino>
+  //          checkbox_<unidade>=on        (UM por TIPO de tropa, nao por linha)
+  //          send_back[<awayId>]=on       (UM por ALDEIA que apoia)
+  //          h=<csrf>
+  //
+  // A diferenca de tamanho decide o caso. Medido numa aldeia real, 143 origens e 1.573 linhas:
+  //     por quantidade ... ~3.158 variaveis -> truncado pelo servidor, apoio fica pela metade
+  //     send_back ........    155 variaveis -> 143 origens viraram 0 num POST so
+  //
+  // E O `checkbox_` EXPLICA O SINTOMA QUE SOBROU. Ele e preferencia de CONTA: so voltam os tipos
+  // marcados. Na conta estavam marcados axe/spy/light/ram — e o que sobrou parado foi exatamente
+  // Lanceiro e Espadachim, dois dos tipos desmarcados. Por isso aqui marco TODOS os que o
+  // formulario oferece, em vez de so os que eu achava que precisava.
+  //
+  // Quando devolver tudo e o que se quer (e e o caso da Entrega), este e o caminho certo.
+  async function apoiosDevolverTudoDestino(destId) {
+    const ler = async () => {
+      const r = await fetch('/game.php?village=' + CUR_VID + '&screen=info_village&id=' + destId,
+        { credentials: 'include', cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' na tela do destino ' + destId);
+      const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+      return Array.prototype.slice.call(doc.querySelectorAll('#content_value form'))
+        .filter((x) => /withdraw_selected_units_village_info/.test(x.getAttribute('action') || ''))[0] || null;
+    };
+    const f = await ler();
+    if (!f) return { origens: 0 };   // sem apoio MEU ali: nao e erro
+    const sb = Array.prototype.slice.call(f.querySelectorAll('input[name^="send_back["]'));
+    if (!sb.length) return { origens: 0 };
+    const cols = Array.prototype.slice.call(f.querySelectorAll('input[name^="checkbox_"]'));
+
+    const p = new URLSearchParams();
+    p.set('village_id', String(destId));
+    cols.forEach((c) => p.set(c.getAttribute('name'), 'on'));
+    sb.forEach((i) => p.set(i.getAttribute('name'), 'on'));
+    p.set('h', CSRF);
+    const r = await fetch('/game.php?village=' + CUR_VID
+      + '&screen=place&action=withdraw_selected_units_village_info&mode=units',
+      { method: 'POST', credentials: 'include', cache: 'no-store',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p.toString() });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ao devolver o apoio do destino ' + destId);
+    const eb = new DOMParser().parseFromString(await r.text(), 'text/html').querySelector('.error_box');
+    if (eb) throw new Error('o jogo recusou: ' + (eb.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160));
+
+    // CONFIRMACAO POR EFEITO: a tela nao pode mais listar aldeia apoiando.
+    await sleep(900);
+    const f2 = await ler();
+    const resta = f2 ? f2.querySelectorAll('input[name^="send_back["]').length : 0;
+    if (resta) throw new Error('ainda restam ' + resta + ' de ' + sb.length
+      + ' aldeia(s) apoiando — a devolucao nao foi aceita por inteiro');
+    return { origens: sb.length };
+  }
+
   async function apoiosPatchColunasDestino(unids) {
     const p = new URLSearchParams();
     p.set('info_village_checkboxes', JSON.stringify(unids));
@@ -13684,15 +13747,13 @@
   // aparece la, entao `linhas` vazio com apoio presente significa exatamente uma coisa — o apoio
   // e de outra pessoa e eu nao posso tirar. Quem tira e o dono; o modulo avisa e para.
   async function entRetirarApoio(vid, nome) {
-    const est = await apoiosDestinoLer(vid);
-    if (!est.linhas.length) return { meu: false, origens: 0 };
-    const vistoOrg = {}, vistoU = {};
-    est.linhas.forEach((l) => { vistoOrg[l.org] = 1; vistoU[l.u] = 1; });
-    const origens = Object.keys(vistoOrg).map((v) => ({ vid: v }));
-    const unids = Object.keys(vistoU);
-    const atendidas = await apoiosRetirarDestino(vid, origens, unids);
-    return { meu: true, origens: atendidas.length, pedidas: origens.length,
-             tropa: est.linhas.reduce((s, l) => s + l.n, 0) };
+    // Aqui sempre se quer TUDO de volta, entao usa o formulario "Enviar de volta" da propria
+    // tela: um campo por aldeia que apoia, em vez de dois por linha de apoio. Numa aldeia com
+    // 143 origens isso e 155 variaveis contra ~3.158 — e a versao cara era truncada pelo
+    // servidor, deixando apoio pra tras.
+    const r = await apoiosDevolverTudoDestino(vid);
+    if (!r.origens) return { meu: false, origens: 0 };
+    return { meu: true, origens: r.origens };
   }
 
   // ===== O ciclo =====
@@ -13770,8 +13831,8 @@
             c.estado[v.coord].txt = 'apoio de terceiro — só o dono retira';
           } else {
             retirou++;
-            pushLog('Entrega: retirei meu apoio de ' + v.name + ' — ' + fmtN(r.tropa) + ' tropa(s) de '
-              + r.origens + ' aldeia(s) voltando. Bato quando a aldeia estiver vazia.', 'ok', 'entrega');
+            pushLog('Entrega: mandei de volta o apoio de ' + v.name + ' — ' + r.origens
+              + ' aldeia(s) recolhendo tropa. Bato quando a aldeia estiver vazia.', 'ok', 'entrega');
             c.estado[v.coord].txt = 'apoio retirado, voltando';
           }
         } catch (e) {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.273.0
+// @version      11.274.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.273.0';
+  const VERSION = '11.274.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -13623,9 +13623,14 @@
   // faz leituras (aldeias, tropa propria, tropa presente), entao 1 minuto o dia inteiro e
   // requisicao a toa num modulo cujo trabalho leva horas de voo.
   const ENT_INTERVALO_PADRAO_MIN = 10;
-  // Quem pode ir completando o piso de populacao. So tropa de campo: explorador nao briga e
+  // Quem escolta, em ordem de preferencia. So tropa de campo: explorador nao briga e
   // ariete/catapulta servem pra muralha, nao pra escoltar.
-  const ENT_ESCOLTA = ['spear', 'sword', 'axe', 'light', 'heavy'];
+  //
+  // A ordem e por ATAQUE, nao por o que sobra: barbaro (40) e cavalaria leve (130) resolvem uma
+  // milicia; lanceiro e espadachim sao tropa de defesa e atacam com 10 e 25 — mandar 100
+  // lanceiros de escolta e quase mandar o nobre sozinho.
+  const ENT_ESCOLTA = ['axe', 'light', 'heavy', 'sword', 'spear'];
+  const ENT_ESCOLTA_PADRAO = 100;
 
   function entCfg() {
     const c = (config.entrega = config.entrega || {});
@@ -13638,6 +13643,15 @@
     // O teto e a unica coisa aqui que o usuario pode estragar sem perceber: acima de 20 a conquista
     // com 1 nobre deixa de ser garantida. Deixo passar (a escolha e dele) mas a tela avisa.
     c.teto = Math.max(1, Math.min(99, parseInt(c.teto, 10) || ENT_TETO_PADRAO));
+    // ESCOLTA. O piso de fake NAO e escolta: ele so garante que o jogo aceite o ataque, e numa
+    // origem abaixo de 10.000 pontos os 100 de populacao do nobre ja bastam — era por isso que o
+    // nobre saia pelado. Isto aqui e a protecao de verdade.
+    //
+    // Ela e necessaria porque a aldeia foi conferida VAZIA ate 10 minutos antes, mas o voo leva
+    // horas. Nesse meio tempo pode nascer milicia, pode voltar tropa de um ataque, pode chegar
+    // apoio. Nobre sozinho morre pra qualquer uma dessas e a lealdade nao anda.
+    if (c.escolta == null) c.escolta = ENT_ESCOLTA_PADRAO;
+    c.escolta = Math.max(0, Math.min(5000, parseInt(c.escolta, 10) || 0));
     if (c.intervaloMin == null) c.intervaloMin = ENT_INTERVALO_PADRAO_MIN;
     c.intervaloMin = Math.max(1, Math.min(60, parseInt(c.intervaloMin, 10) || ENT_INTERVALO_PADRAO_MIN));
     if (c.maxCampos == null) c.maxCampos = ENT_CAMPOS_PADRAO;
@@ -13777,21 +13791,34 @@
     return pontos > 0 ? Math.ceil((FAKE_LIMIT_PCT / 100) * pontos) : 0;
   }
 
-  // Completa o comando ate passar do piso de fake. Devolve null quando a origem nao tem tropa de
-  // campo suficiente — melhor nao mandar do que mandar e o jogo recusar.
-  function entMontarComando(avail, piso) {
+  // Monta o comando: 1 nobre + escolta. Duas exigencias, e elas sao DIFERENTES:
+  //
+  //   ESCOLTA (quantas tropas) — pra vencer o que possa aparecer na aldeia durante o voo.
+  //   PISO DE FAKE (quanta populacao) — pra o jogo aceitar o ataque.
+  //
+  // Eu tinha juntado as duas e so enchia ate o piso. Numa origem abaixo de 10.000 pontos o piso
+  // ja e coberto pelos 100 do nobre, entao o laco nao rodava nenhuma vez e o nobre ia sozinho.
+  //
+  // Devolve null quando a origem nao da conta — melhor tentar a proxima do que mandar nobre
+  // desprotegido ou tomar recusa do jogo.
+  function entMontarComando(avail, piso, querEscolta) {
     const cmd = { snob: 1 };
     let pop = ENT_POP_NOBRE;
-    for (let i = 0; i < ENT_ESCOLTA.length && pop < piso; i++) {
+    let escolta = 0;
+    for (let i = 0; i < ENT_ESCOLTA.length; i++) {
+      if (escolta >= querEscolta && pop >= piso) break;
       const u = ENT_ESCOLTA[i];
       const p = POP[u] || 1;
-      const temUnidade = Math.max(0, (avail[u] || 0));
-      if (!temUnidade) continue;
-      const querUnidade = Math.ceil((piso - pop) / p);
-      const usa = Math.min(temUnidade, querUnidade);
-      if (usa > 0) { cmd[u] = usa; pop += usa * p; }
+      const tem = Math.max(0, (avail[u] || 0));
+      if (!tem) continue;
+      const faltaEscolta = Math.max(0, querEscolta - escolta);
+      const faltaPop = Math.max(0, piso - pop);
+      const usa = Math.min(tem, Math.max(faltaEscolta, Math.ceil(faltaPop / p)));
+      if (usa > 0) { cmd[u] = (cmd[u] || 0) + usa; pop += usa * p; escolta += usa; }
     }
-    return pop >= piso ? cmd : null;
+    if (pop < piso) return null;          // o jogo recusaria
+    if (escolta < querEscolta) return null;   // sai desprotegido: tenta outra origem
+    return cmd;
   }
 
   // ===== Tirar o apoio que esta em cima do alvo =====
@@ -14033,8 +14060,8 @@
         if (enviados >= querMandar) break;
         const avail = tropas[String(x.o.vid)] || {};
         const piso = entPisoPop(pontos[String(x.o.vid)] || 0);
-        const cmd = entMontarComando(avail, piso);
-        if (!cmd) continue;   // essa origem não tem escolta pro piso de fake; tenta a próxima
+        const cmd = entMontarComando(avail, piso, c.escolta);
+        if (!cmd) continue;   // não dá a escolta pedida (ou o piso de fake); tenta a próxima
         const descontar = () => {
           avail.snob = Math.max(0, (avail.snob || 0) - 1);
           Object.keys(cmd).forEach((u) => { if (u !== 'snob') avail[u] = Math.max(0, (avail[u] || 0) - cmd[u]); });
@@ -14077,8 +14104,8 @@
       if (!mandou) {
         semOrigem++;
         pushLog('Entrega: ' + v.name + ' está em ' + Math.round(leal) + ' e precisa de ' + querMandar
-          + ' batida(s), mas nenhuma origem com nobre'
-          + ' (e escolta pro piso de fake) dentro de ' + c.maxCampos + ' campos.', 'err', 'entrega');
+          + ' batida(s), mas nenhuma origem dentro de ' + c.maxCampos + ' campos tem nobre MAIS '
+          + c.escolta + ' de escolta. Baixe a escolta ou aumente o alcance.', 'err', 'entrega');
         if (c.reciclar) await entReciclar(v, alvoXY, vilas, ehAlvo, tropas, alvos, porCoord);
       }
     }
@@ -18238,6 +18265,8 @@
             '<span style="font-size:10px;color:#6f6153" title="Nobre anda 35 min por campo. 10 campos = 5h50 de ida. O mundo não deixa passar de 70.">alcance do nobre '
               + '<input id="twmgr-ent-campos" class="twmgr-inp" type="number" min="1" max="70" style="width:52px;font-size:10px;padding:1px"> campos'
               + '<span id="twmgr-ent-voo" style="color:#8a7d6d"></span></span>' +
+            '<span style="font-size:10px;color:#6f6153" title="Tropas de campo que vão JUNTO com o nobre, no mesmo comando. A aldeia é conferida vazia até 10 min antes, mas o voo leva horas: pode nascer milícia, pode voltar tropa de um ataque, pode chegar apoio. Nobre sozinho morre pra qualquer uma dessas e a lealdade não anda. Prioriza bárbaro e cavalaria leve (atacam 40 e 130); lanceiro e espadachim são tropa de defesa e quase não somam ataque.">escolta '
+              + '<input id="twmgr-ent-escolta" class="twmgr-inp" type="number" min="0" max="5000" style="width:56px;font-size:10px;padding:1px"> tropas</span>' +
             '<span style="font-size:10px;color:#6f6153" title="10 min é o ritmo de operação. 1 min serve pra testar — cada ciclo faz leituras, então não deixe em 1 o dia inteiro.">ciclo a cada '
               + '<input id="twmgr-ent-int" class="twmgr-inp" type="number" min="1" max="60" style="width:46px;font-size:10px;padding:1px"> min</span>' +
             '<label style="font-size:10px;color:#b03030;cursor:pointer" title="O limite de nobres é da CONTA. Um nobre encalhado longe ocupa vaga sem alcançar nada. Com isto ligado, quando faltar nobre perto do alvo o módulo forma um aqui — e se o limite estiver cheio, dispensa antes um que não alcança alvo nenhum. Dispensar não devolve o recurso da unidade.">' +
@@ -18719,6 +18748,9 @@
         el.textContent = ' (' + Math.floor(min / 60) + 'h' + String(min % 60).padStart(2, '0') + ' de ida)';
       };
       t.value = e.teto;
+      const es = document.getElementById('twmgr-ent-escolta');
+      if (es) es.value = e.escolta;
+      if (es) es.addEventListener('change', () => { entCfg().escolta = Math.max(0, parseInt(es.value, 10) || 0); es.value = entCfg().escolta; save(); });
       const iv = document.getElementById('twmgr-ent-int');
       if (iv) iv.value = e.intervaloMin;
       // Mudar o intervalo vale AGORA, nao no proximo ciclo: reagenda na hora. Senao, quem baixa

@@ -1028,6 +1028,8 @@
             '<span style="font-size:10px;color:#6f6153" title="Nobre anda 35 min por campo. 10 campos = 5h50 de ida. O mundo não deixa passar de 70.">alcance do nobre '
               + '<input id="twmgr-ent-campos" class="twmgr-inp" type="number" min="1" max="70" style="width:52px;font-size:10px;padding:1px"> campos'
               + '<span id="twmgr-ent-voo" style="color:#8a7d6d"></span></span>' +
+            '<span style="font-size:10px;color:#6f6153" title="Tropas de campo que vão JUNTO com o nobre, no mesmo comando. A aldeia é conferida vazia até 10 min antes, mas o voo leva horas: pode nascer milícia, pode voltar tropa de um ataque, pode chegar apoio. Nobre sozinho morre pra qualquer uma dessas e a lealdade não anda. Prioriza bárbaro e cavalaria leve (atacam 40 e 130); lanceiro e espadachim são tropa de defesa e quase não somam ataque.">escolta '
+              + '<input id="twmgr-ent-escolta" class="twmgr-inp" type="number" min="0" max="5000" style="width:56px;font-size:10px;padding:1px"> tropas</span>' +
             '<span style="font-size:10px;color:#6f6153" title="10 min é o ritmo de operação. 1 min serve pra testar — cada ciclo faz leituras, então não deixe em 1 o dia inteiro.">ciclo a cada '
               + '<input id="twmgr-ent-int" class="twmgr-inp" type="number" min="1" max="60" style="width:46px;font-size:10px;padding:1px"> min</span>' +
             '<label style="font-size:10px;color:#b03030;cursor:pointer" title="O limite de nobres é da CONTA. Um nobre encalhado longe ocupa vaga sem alcançar nada. Com isto ligado, quando faltar nobre perto do alvo o módulo forma um aqui — e se o limite estiver cheio, dispensa antes um que não alcança alvo nenhum. Dispensar não devolve o recurso da unidade.">' +
@@ -1509,6 +1511,9 @@
         el.textContent = ' (' + Math.floor(min / 60) + 'h' + String(min % 60).padStart(2, '0') + ' de ida)';
       };
       t.value = e.teto;
+      const es = document.getElementById('twmgr-ent-escolta');
+      if (es) es.value = e.escolta;
+      if (es) es.addEventListener('change', () => { entCfg().escolta = Math.max(0, parseInt(es.value, 10) || 0); es.value = entCfg().escolta; save(); });
       const iv = document.getElementById('twmgr-ent-int');
       if (iv) iv.value = e.intervaloMin;
       // Mudar o intervalo vale AGORA, nao no proximo ciclo: reagenda na hora. Senao, quem baixa

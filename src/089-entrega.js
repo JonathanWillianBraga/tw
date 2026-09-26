@@ -72,9 +72,14 @@
   // faz leituras (aldeias, tropa propria, tropa presente), entao 1 minuto o dia inteiro e
   // requisicao a toa num modulo cujo trabalho leva horas de voo.
   const ENT_INTERVALO_PADRAO_MIN = 10;
-  // Quem pode ir completando o piso de populacao. So tropa de campo: explorador nao briga e
+  // Quem escolta, em ordem de preferencia. So tropa de campo: explorador nao briga e
   // ariete/catapulta servem pra muralha, nao pra escoltar.
-  const ENT_ESCOLTA = ['spear', 'sword', 'axe', 'light', 'heavy'];
+  //
+  // A ordem e por ATAQUE, nao por o que sobra: barbaro (40) e cavalaria leve (130) resolvem uma
+  // milicia; lanceiro e espadachim sao tropa de defesa e atacam com 10 e 25 — mandar 100
+  // lanceiros de escolta e quase mandar o nobre sozinho.
+  const ENT_ESCOLTA = ['axe', 'light', 'heavy', 'sword', 'spear'];
+  const ENT_ESCOLTA_PADRAO = 100;
 
   function entCfg() {
     const c = (config.entrega = config.entrega || {});
@@ -87,6 +92,15 @@
     // O teto e a unica coisa aqui que o usuario pode estragar sem perceber: acima de 20 a conquista
     // com 1 nobre deixa de ser garantida. Deixo passar (a escolha e dele) mas a tela avisa.
     c.teto = Math.max(1, Math.min(99, parseInt(c.teto, 10) || ENT_TETO_PADRAO));
+    // ESCOLTA. O piso de fake NAO e escolta: ele so garante que o jogo aceite o ataque, e numa
+    // origem abaixo de 10.000 pontos os 100 de populacao do nobre ja bastam — era por isso que o
+    // nobre saia pelado. Isto aqui e a protecao de verdade.
+    //
+    // Ela e necessaria porque a aldeia foi conferida VAZIA ate 10 minutos antes, mas o voo leva
+    // horas. Nesse meio tempo pode nascer milicia, pode voltar tropa de um ataque, pode chegar
+    // apoio. Nobre sozinho morre pra qualquer uma dessas e a lealdade nao anda.
+    if (c.escolta == null) c.escolta = ENT_ESCOLTA_PADRAO;
+    c.escolta = Math.max(0, Math.min(5000, parseInt(c.escolta, 10) || 0));
     if (c.intervaloMin == null) c.intervaloMin = ENT_INTERVALO_PADRAO_MIN;
     c.intervaloMin = Math.max(1, Math.min(60, parseInt(c.intervaloMin, 10) || ENT_INTERVALO_PADRAO_MIN));
     if (c.maxCampos == null) c.maxCampos = ENT_CAMPOS_PADRAO;
@@ -226,21 +240,34 @@
     return pontos > 0 ? Math.ceil((FAKE_LIMIT_PCT / 100) * pontos) : 0;
   }
 
-  // Completa o comando ate passar do piso de fake. Devolve null quando a origem nao tem tropa de
-  // campo suficiente — melhor nao mandar do que mandar e o jogo recusar.
-  function entMontarComando(avail, piso) {
+  // Monta o comando: 1 nobre + escolta. Duas exigencias, e elas sao DIFERENTES:
+  //
+  //   ESCOLTA (quantas tropas) — pra vencer o que possa aparecer na aldeia durante o voo.
+  //   PISO DE FAKE (quanta populacao) — pra o jogo aceitar o ataque.
+  //
+  // Eu tinha juntado as duas e so enchia ate o piso. Numa origem abaixo de 10.000 pontos o piso
+  // ja e coberto pelos 100 do nobre, entao o laco nao rodava nenhuma vez e o nobre ia sozinho.
+  //
+  // Devolve null quando a origem nao da conta — melhor tentar a proxima do que mandar nobre
+  // desprotegido ou tomar recusa do jogo.
+  function entMontarComando(avail, piso, querEscolta) {
     const cmd = { snob: 1 };
     let pop = ENT_POP_NOBRE;
-    for (let i = 0; i < ENT_ESCOLTA.length && pop < piso; i++) {
+    let escolta = 0;
+    for (let i = 0; i < ENT_ESCOLTA.length; i++) {
+      if (escolta >= querEscolta && pop >= piso) break;
       const u = ENT_ESCOLTA[i];
       const p = POP[u] || 1;
-      const temUnidade = Math.max(0, (avail[u] || 0));
-      if (!temUnidade) continue;
-      const querUnidade = Math.ceil((piso - pop) / p);
-      const usa = Math.min(temUnidade, querUnidade);
-      if (usa > 0) { cmd[u] = usa; pop += usa * p; }
+      const tem = Math.max(0, (avail[u] || 0));
+      if (!tem) continue;
+      const faltaEscolta = Math.max(0, querEscolta - escolta);
+      const faltaPop = Math.max(0, piso - pop);
+      const usa = Math.min(tem, Math.max(faltaEscolta, Math.ceil(faltaPop / p)));
+      if (usa > 0) { cmd[u] = (cmd[u] || 0) + usa; pop += usa * p; escolta += usa; }
     }
-    return pop >= piso ? cmd : null;
+    if (pop < piso) return null;          // o jogo recusaria
+    if (escolta < querEscolta) return null;   // sai desprotegido: tenta outra origem
+    return cmd;
   }
 
   // ===== Tirar o apoio que esta em cima do alvo =====
@@ -482,8 +509,8 @@
         if (enviados >= querMandar) break;
         const avail = tropas[String(x.o.vid)] || {};
         const piso = entPisoPop(pontos[String(x.o.vid)] || 0);
-        const cmd = entMontarComando(avail, piso);
-        if (!cmd) continue;   // essa origem não tem escolta pro piso de fake; tenta a próxima
+        const cmd = entMontarComando(avail, piso, c.escolta);
+        if (!cmd) continue;   // não dá a escolta pedida (ou o piso de fake); tenta a próxima
         const descontar = () => {
           avail.snob = Math.max(0, (avail.snob || 0) - 1);
           Object.keys(cmd).forEach((u) => { if (u !== 'snob') avail[u] = Math.max(0, (avail[u] || 0) - cmd[u]); });
@@ -526,8 +553,8 @@
       if (!mandou) {
         semOrigem++;
         pushLog('Entrega: ' + v.name + ' está em ' + Math.round(leal) + ' e precisa de ' + querMandar
-          + ' batida(s), mas nenhuma origem com nobre'
-          + ' (e escolta pro piso de fake) dentro de ' + c.maxCampos + ' campos.', 'err', 'entrega');
+          + ' batida(s), mas nenhuma origem dentro de ' + c.maxCampos + ' campos tem nobre MAIS '
+          + c.escolta + ' de escolta. Baixe a escolta ou aumente o alcance.', 'err', 'entrega');
         if (c.reciclar) await entReciclar(v, alvoXY, vilas, ehAlvo, tropas, alvos, porCoord);
       }
     }

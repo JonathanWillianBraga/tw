@@ -272,6 +272,17 @@
     // outra aldeia que tambem vai ser entregue so empurra o problema, e a tropa vai junto no pacote.
     const ehAlvo = {}; alvos.forEach((cd) => { const v = porCoord[cd]; if (v) ehAlvo[v.vid] = 1; });
 
+    // QUEM AINDA PRECISA DE BATIDA — calculado ANTES do laco, nao lido do estado do ciclo
+    // anterior. E o que decide se vale segurar o nobre de uma aldeia pra usar em outra, e ler do
+    // estado velho errava em dois casos: no primeiro ciclo (estado vazio, nenhuma "precisa") e
+    // depois de mudar a lista. Aqui e de graca — lealdade e conta local, sem requisicao.
+    const precisaBatida = {};
+    alvos.forEach((cd) => {
+      const vv = porCoord[cd];
+      if (!vv) return;
+      precisaBatida[cd] = entLealdade(vv.coord) > c.teto && entVoando(vv.coord) === 0;
+    });
+
     let bateu = 0, esperando = 0, prontas = 0, evacuou = 0, semOrigem = 0, retirou = 0;
 
     for (const coord of alvos) {
@@ -342,11 +353,12 @@
         //
         // Nobre PODE ir como apoio: conferido no jogo pelo passo de confirmacao, sem erro. Eu
         // ia assumir que nao podia.
-        const outroPrecisa = alvos.some((cd) => {
-          if (cd === coord) return false;
-          const e2 = (c.estado || {})[cd];
-          return e2 && (e2.acao === 'bate' || e2.acao === 'espera');
-        });
+        // A PROPRIA ALDEIA NUNCA ENTRA NESTA CONTA, e o motivo e uma regra do jogo, nao uma
+        // escolha: aldeia nao ataca a si mesma. Entao o nobre que esta dentro de um alvo NUNCA
+        // vai poder baixar a lealdade DESSE alvo — ele so serve pra outro. Com UM alvo so na
+        // lista, `outroPrecisa` e sempre falso e o nobre sai como apoio, ficando parado na
+        // vizinha. Isso esta certo: quem bate no alvo e o nobre de outra aldeia.
+        const outroPrecisa = alvos.some((cd) => cd !== coord && precisaBatida[cd]);
         const seguraNobre = nobreProprio > 0 && outroPrecisa;
         const manda = {};
         UNITS.forEach((u) => {
@@ -356,6 +368,13 @@
         if (!Object.keys(manda).length) {
           pushLog('Entrega: ' + v.name + ' só tem o nobre dela em casa — guardei pra bater em outro alvo da lista.', '', 'entrega');
           continue;
+        }
+        // Aviso so quando o nobre esta saindo por falta do que fazer. Uma vez por ciclo, e e
+        // informacao que muda decisao: o usuario pode preferir mandar esse nobre num alvo novo
+        // em vez de estaciona-lo.
+        if (nobreProprio > 0 && !seguraNobre) {
+          pushLog('Entrega: o nobre de ' + v.name + ' vai sair como apoio e ficar parado — ele não pode'
+            + ' bater na própria aldeia, e não há outro alvo na lista precisando dele.', '', 'entrega');
         }
         const dx = entXY(destino.o.coord);
         // sendAttack sinaliza falha LANCANDO; sucesso devolve a duracao (ou null). Testar o

@@ -67,7 +67,11 @@
   // primeira ja responde a pergunta cara (tem slot no limite da conta?) — o resto e so achar uma
   // aldeia com academia, recurso e populacao.
   const ENT_TENTA_FORMAR = 6;
-  const ENT_INTERVALO_MS = 10 * 60 * 1000;
+  // Intervalo em MINUTOS, escolhido pelo usuario. 10 e o padrao de operacao; 1 serve pra testar,
+  // pra nao esperar dez minutos so pra ver se o ciclo girou. Nao e so conveniencia: cada ciclo
+  // faz leituras (aldeias, tropa propria, tropa presente), entao 1 minuto o dia inteiro e
+  // requisicao a toa num modulo cujo trabalho leva horas de voo.
+  const ENT_INTERVALO_PADRAO_MIN = 10;
   // Quem pode ir completando o piso de populacao. So tropa de campo: explorador nao briga e
   // ariete/catapulta servem pra muralha, nao pra escoltar.
   const ENT_ESCOLTA = ['spear', 'sword', 'axe', 'light', 'heavy'];
@@ -83,6 +87,8 @@
     // O teto e a unica coisa aqui que o usuario pode estragar sem perceber: acima de 20 a conquista
     // com 1 nobre deixa de ser garantida. Deixo passar (a escolha e dele) mas a tela avisa.
     c.teto = Math.max(1, Math.min(99, parseInt(c.teto, 10) || ENT_TETO_PADRAO));
+    if (c.intervaloMin == null) c.intervaloMin = ENT_INTERVALO_PADRAO_MIN;
+    c.intervaloMin = Math.max(1, Math.min(60, parseInt(c.intervaloMin, 10) || ENT_INTERVALO_PADRAO_MIN));
     if (c.maxCampos == null) c.maxCampos = ENT_CAMPOS_PADRAO;
     c.maxCampos = Math.max(1, Math.min(ENT_MAX_CAMPOS, parseInt(c.maxCampos, 10) || ENT_CAMPOS_PADRAO));
     // RECICLAR DESTROI NOBRE. Opt-in separado, pela mesma razao que o `permitirDispensar` do
@@ -253,7 +259,7 @@
     catch (e) { pushLog('Entrega: ciclo falhou (' + ((e && e.message) || e) + ').', 'err', 'entrega'); }
     finally {
       _entEmVoo = false;
-      config.entrega.nextAt = Date.now() + ENT_INTERVALO_MS;
+      config.entrega.nextAt = Date.now() + entCfg().intervaloMin * 60000;
       save(); refreshCards('entrega'); entRender(); entAgendar();
     }
   }
@@ -629,7 +635,8 @@
   }
   function entStart() {
     entCfg().ligado = true; config.entrega.nextAt = Date.now() + 2000; save();
-    pushLog('Entrega: ligado — teto de lealdade ' + config.entrega.teto + '.', 'ok', 'entrega');
+    pushLog('Entrega: ligado — teto de lealdade ' + config.entrega.teto
+      + ', ciclo a cada ' + config.entrega.intervaloMin + ' min.', 'ok', 'entrega');
     refreshCards('entrega'); entAgendar();
   }
   function entStop() {

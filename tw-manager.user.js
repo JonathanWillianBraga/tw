@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.271.0
+// @version      11.272.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.271.0';
+  const VERSION = '11.272.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -13618,7 +13618,11 @@
   // primeira ja responde a pergunta cara (tem slot no limite da conta?) — o resto e so achar uma
   // aldeia com academia, recurso e populacao.
   const ENT_TENTA_FORMAR = 6;
-  const ENT_INTERVALO_MS = 10 * 60 * 1000;
+  // Intervalo em MINUTOS, escolhido pelo usuario. 10 e o padrao de operacao; 1 serve pra testar,
+  // pra nao esperar dez minutos so pra ver se o ciclo girou. Nao e so conveniencia: cada ciclo
+  // faz leituras (aldeias, tropa propria, tropa presente), entao 1 minuto o dia inteiro e
+  // requisicao a toa num modulo cujo trabalho leva horas de voo.
+  const ENT_INTERVALO_PADRAO_MIN = 10;
   // Quem pode ir completando o piso de populacao. So tropa de campo: explorador nao briga e
   // ariete/catapulta servem pra muralha, nao pra escoltar.
   const ENT_ESCOLTA = ['spear', 'sword', 'axe', 'light', 'heavy'];
@@ -13634,6 +13638,8 @@
     // O teto e a unica coisa aqui que o usuario pode estragar sem perceber: acima de 20 a conquista
     // com 1 nobre deixa de ser garantida. Deixo passar (a escolha e dele) mas a tela avisa.
     c.teto = Math.max(1, Math.min(99, parseInt(c.teto, 10) || ENT_TETO_PADRAO));
+    if (c.intervaloMin == null) c.intervaloMin = ENT_INTERVALO_PADRAO_MIN;
+    c.intervaloMin = Math.max(1, Math.min(60, parseInt(c.intervaloMin, 10) || ENT_INTERVALO_PADRAO_MIN));
     if (c.maxCampos == null) c.maxCampos = ENT_CAMPOS_PADRAO;
     c.maxCampos = Math.max(1, Math.min(ENT_MAX_CAMPOS, parseInt(c.maxCampos, 10) || ENT_CAMPOS_PADRAO));
     // RECICLAR DESTROI NOBRE. Opt-in separado, pela mesma razao que o `permitirDispensar` do
@@ -13804,7 +13810,7 @@
     catch (e) { pushLog('Entrega: ciclo falhou (' + ((e && e.message) || e) + ').', 'err', 'entrega'); }
     finally {
       _entEmVoo = false;
-      config.entrega.nextAt = Date.now() + ENT_INTERVALO_MS;
+      config.entrega.nextAt = Date.now() + entCfg().intervaloMin * 60000;
       save(); refreshCards('entrega'); entRender(); entAgendar();
     }
   }
@@ -14180,7 +14186,8 @@
   }
   function entStart() {
     entCfg().ligado = true; config.entrega.nextAt = Date.now() + 2000; save();
-    pushLog('Entrega: ligado — teto de lealdade ' + config.entrega.teto + '.', 'ok', 'entrega');
+    pushLog('Entrega: ligado — teto de lealdade ' + config.entrega.teto
+      + ', ciclo a cada ' + config.entrega.intervaloMin + ' min.', 'ok', 'entrega');
     refreshCards('entrega'); entAgendar();
   }
   function entStop() {
@@ -18193,6 +18200,8 @@
             '<span style="font-size:10px;color:#6f6153" title="Nobre anda 35 min por campo. 10 campos = 5h50 de ida. O mundo não deixa passar de 70.">alcance do nobre '
               + '<input id="twmgr-ent-campos" class="twmgr-inp" type="number" min="1" max="70" style="width:52px;font-size:10px;padding:1px"> campos'
               + '<span id="twmgr-ent-voo" style="color:#8a7d6d"></span></span>' +
+            '<span style="font-size:10px;color:#6f6153" title="10 min é o ritmo de operação. 1 min serve pra testar — cada ciclo faz leituras, então não deixe em 1 o dia inteiro.">ciclo a cada '
+              + '<input id="twmgr-ent-int" class="twmgr-inp" type="number" min="1" max="60" style="width:46px;font-size:10px;padding:1px"> min</span>' +
             '<label style="font-size:10px;color:#b03030;cursor:pointer" title="O limite de nobres é da CONTA. Um nobre encalhado longe ocupa vaga sem alcançar nada. Com isto ligado, quando faltar nobre perto do alvo o módulo forma um aqui — e se o limite estiver cheio, dispensa antes um que não alcança alvo nenhum. Dispensar não devolve o recurso da unidade.">' +
               '<input id="twmgr-ent-recicla" type="checkbox"> reciclar nobre distante (forma perto; dispensa o que não alcança)</label>' +
           '</div>' +
@@ -18672,6 +18681,17 @@
         el.textContent = ' (' + Math.floor(min / 60) + 'h' + String(min % 60).padStart(2, '0') + ' de ida)';
       };
       t.value = e.teto;
+      const iv = document.getElementById('twmgr-ent-int');
+      if (iv) iv.value = e.intervaloMin;
+      // Mudar o intervalo vale AGORA, nao no proximo ciclo: reagenda na hora. Senao, quem baixa
+      // de 10 pra 1 pra testar espera os 10 minutos velhos assim mesmo e conclui que nao pegou.
+      if (iv) iv.addEventListener('change', () => {
+        entCfg().intervaloMin = parseInt(iv.value, 10) || 10;
+        iv.value = entCfg().intervaloMin;
+        entCfg().nextAt = Date.now() + entCfg().intervaloMin * 60000;
+        save();
+        if (entCfg().ligado) entAgendar();
+      });
       if (cp) cp.value = e.maxCampos;
       if (rc) rc.checked = !!e.reciclar;
       voo();

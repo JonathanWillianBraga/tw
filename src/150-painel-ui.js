@@ -1028,6 +1028,8 @@
             '<span style="font-size:10px;color:#6f6153" title="Nobre anda 35 min por campo. 10 campos = 5h50 de ida. O mundo não deixa passar de 70.">alcance do nobre '
               + '<input id="twmgr-ent-campos" class="twmgr-inp" type="number" min="1" max="70" style="width:52px;font-size:10px;padding:1px"> campos'
               + '<span id="twmgr-ent-voo" style="color:#8a7d6d"></span></span>' +
+            '<span style="font-size:10px;color:#6f6153" title="10 min é o ritmo de operação. 1 min serve pra testar — cada ciclo faz leituras, então não deixe em 1 o dia inteiro.">ciclo a cada '
+              + '<input id="twmgr-ent-int" class="twmgr-inp" type="number" min="1" max="60" style="width:46px;font-size:10px;padding:1px"> min</span>' +
             '<label style="font-size:10px;color:#b03030;cursor:pointer" title="O limite de nobres é da CONTA. Um nobre encalhado longe ocupa vaga sem alcançar nada. Com isto ligado, quando faltar nobre perto do alvo o módulo forma um aqui — e se o limite estiver cheio, dispensa antes um que não alcança alvo nenhum. Dispensar não devolve o recurso da unidade.">' +
               '<input id="twmgr-ent-recicla" type="checkbox"> reciclar nobre distante (forma perto; dispensa o que não alcança)</label>' +
           '</div>' +
@@ -1507,6 +1509,17 @@
         el.textContent = ' (' + Math.floor(min / 60) + 'h' + String(min % 60).padStart(2, '0') + ' de ida)';
       };
       t.value = e.teto;
+      const iv = document.getElementById('twmgr-ent-int');
+      if (iv) iv.value = e.intervaloMin;
+      // Mudar o intervalo vale AGORA, nao no proximo ciclo: reagenda na hora. Senao, quem baixa
+      // de 10 pra 1 pra testar espera os 10 minutos velhos assim mesmo e conclui que nao pegou.
+      if (iv) iv.addEventListener('change', () => {
+        entCfg().intervaloMin = parseInt(iv.value, 10) || 10;
+        iv.value = entCfg().intervaloMin;
+        entCfg().nextAt = Date.now() + entCfg().intervaloMin * 60000;
+        save();
+        if (entCfg().ligado) entAgendar();
+      });
       if (cp) cp.value = e.maxCampos;
       if (rc) rc.checked = !!e.reciclar;
       voo();

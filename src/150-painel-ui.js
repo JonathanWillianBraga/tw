@@ -1017,7 +1017,7 @@
         modLog('rel') +
       '</div>' +
       '<div id="twmgr-tab-entrega" style="display:none">' +
-        hint('📦 Para <b>passar aldeias suas para outra conta</b>. Mantém a lealdade delas no teto pra a outra conta conquistar com <b>1 nobre só</b>. Um nobre tira de 20 a 35, então o teto seguro é <b>20</b>: em 25 um resultado 20 deixa a aldeia viva em 5 e o nobre se perde. Antes de bater, a aldeia é <b>esvaziada por apoio</b> numa vizinha — nobre que morre na batalha não mexe na lealdade. E nunca bate abaixo de <b>36</b>: 35−35=0 conquistaria a aldeia pra você mesmo. O nobre <b>volta</b> (só some quando conquista de fato), então o mesmo serve várias aldeias em rodízio.') +
+        hint('📦 Para <b>passar aldeias suas para outra conta</b>. Mantém a lealdade delas no teto pra a outra conta conquistar com <b>1 nobre só</b>. Um nobre tira de 20 a 35, então o teto seguro é <b>20</b>: em 25 um resultado 20 deixa a aldeia viva em 5 e o nobre se perde. Antes de bater, a aldeia é <b>esvaziada</b>: a tropa dela vai apoiar uma vizinha, e o apoio que estiver <b>em cima dela</b> é retirado automaticamente — nobre que morre na batalha não mexe na lealdade. Apoio de <b>terceiro</b> o módulo não consegue tirar (só o dono retira) e avisa. E nunca bate abaixo de <b>36</b>: 35−35=0 conquistaria a aldeia pra você mesmo. O nobre <b>volta</b> (só some quando conquista de fato), então o mesmo serve várias aldeias em rodízio.') +
         '<div class="twmgr-card2">' +
           '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">' +
             '<span style="font-size:10px;color:#6f6153">teto de lealdade '

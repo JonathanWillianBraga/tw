@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.265.0
+// @version      11.266.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.265.0';
+  const VERSION = '11.266.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -13647,6 +13647,29 @@
     return pop >= piso ? cmd : null;
   }
 
+  // ===== Tirar o apoio que esta em cima do alvo =====
+  //
+  // Reusa a retirada em bloco do 086-apoios, que resolve o destino inteiro num POST (em vez de um
+  // por origem) e CONFIRMA POR EFEITO — rele a tela e exige que cada item pedido sumiu. Nao vou
+  // reescrever isso aqui: aquela funcao custou quatro versoes pra ficar de pe, entre o gate das
+  // colunas (`set_village_info_checkboxes`, sem o qual a retirada e ignorada em silencio) e a
+  // chave certa do apoio.
+  //
+  // A DIVISAO QUE IMPORTA SAI DE GRACA: a tela do destino so lista apoio MEU. Apoio de aliado nao
+  // aparece la, entao `linhas` vazio com apoio presente significa exatamente uma coisa — o apoio
+  // e de outra pessoa e eu nao posso tirar. Quem tira e o dono; o modulo avisa e para.
+  async function entRetirarApoio(vid, nome) {
+    const est = await apoiosDestinoLer(vid);
+    if (!est.linhas.length) return { meu: false, origens: 0 };
+    const vistoOrg = {}, vistoU = {};
+    est.linhas.forEach((l) => { vistoOrg[l.org] = 1; vistoU[l.u] = 1; });
+    const origens = Object.keys(vistoOrg).map((v) => ({ vid: v }));
+    const unids = Object.keys(vistoU);
+    const atendidas = await apoiosRetirarDestino(vid, origens, unids);
+    return { meu: true, origens: atendidas.length, pedidas: origens.length,
+             tropa: est.linhas.reduce((s, l) => s + l.n, 0) };
+  }
+
   // ===== O ciclo =====
   let entTimer = null;
   let _entEmVoo = false;
@@ -13690,7 +13713,7 @@
     // outra aldeia que tambem vai ser entregue so empurra o problema, e a tropa vai junto no pacote.
     const ehAlvo = {}; alvos.forEach((cd) => { const v = porCoord[cd]; if (v) ehAlvo[v.vid] = 1; });
 
-    let bateu = 0, esperando = 0, prontas = 0, evacuou = 0, semOrigem = 0;
+    let bateu = 0, esperando = 0, prontas = 0, evacuou = 0, semOrigem = 0, retirou = 0;
 
     for (const coord of alvos) {
       const v = porCoord[coord];
@@ -13713,7 +13736,22 @@
       if (d.acao === 'ok') { prontas++; continue; }
       if (d.acao === 'voando') { esperando++; continue; }
       if (d.acao === 'apoio') {
-        pushLog('Entrega: ' + v.name + ' — ' + d.txt + '. Retire o apoio (aba Apoios) pra eu poder bater.', 'err', 'entrega');
+        try {
+          const r = await entRetirarApoio(vid, v.name);
+          if (!r.meu) {
+            // Apoio que nao e meu. Nao da pra tirar: quem manda voltar e o dono.
+            pushLog('Entrega: ' + v.name + ' tem ' + fmtN(apoio) + ' tropa(s) de apoio que NÃO é minha —'
+              + ' só o dono pode retirar. Peça pra ele, ou tire essa aldeia da lista.', 'err', 'entrega');
+            c.estado[v.coord].txt = 'apoio de terceiro — só o dono retira';
+          } else {
+            retirou++;
+            pushLog('Entrega: retirei meu apoio de ' + v.name + ' — ' + fmtN(r.tropa) + ' tropa(s) de '
+              + r.origens + ' aldeia(s) voltando. Bato quando a aldeia estiver vazia.', 'ok', 'entrega');
+            c.estado[v.coord].txt = 'apoio retirado, voltando';
+          }
+        } catch (e) {
+          pushLog('Entrega: não consegui retirar o apoio de ' + v.name + ' (' + ((e && e.message) || e) + ').', 'err', 'entrega');
+        }
         continue;
       }
       if (d.acao === 'espera') {
@@ -13804,6 +13842,7 @@
 
     pushLog('Entrega: ' + prontas + ' na faixa · ' + bateu + ' batida(s) · ' + esperando + ' esperando regenerar'
       + (evacuou ? ' · ' + evacuou + ' esvaziada(s)' : '')
+      + (retirou ? ' · ' + retirou + ' com apoio retirado' : '')
       + (semOrigem ? ' · ' + semOrigem + ' SEM nobre disponível' : '') + '.', 'ok', 'entrega');
     save();
   }
@@ -17944,7 +17983,7 @@
         modLog('rel') +
       '</div>' +
       '<div id="twmgr-tab-entrega" style="display:none">' +
-        hint('📦 Para <b>passar aldeias suas para outra conta</b>. Mantém a lealdade delas no teto pra a outra conta conquistar com <b>1 nobre só</b>. Um nobre tira de 20 a 35, então o teto seguro é <b>20</b>: em 25 um resultado 20 deixa a aldeia viva em 5 e o nobre se perde. Antes de bater, a aldeia é <b>esvaziada por apoio</b> numa vizinha — nobre que morre na batalha não mexe na lealdade. E nunca bate abaixo de <b>36</b>: 35−35=0 conquistaria a aldeia pra você mesmo. O nobre <b>volta</b> (só some quando conquista de fato), então o mesmo serve várias aldeias em rodízio.') +
+        hint('📦 Para <b>passar aldeias suas para outra conta</b>. Mantém a lealdade delas no teto pra a outra conta conquistar com <b>1 nobre só</b>. Um nobre tira de 20 a 35, então o teto seguro é <b>20</b>: em 25 um resultado 20 deixa a aldeia viva em 5 e o nobre se perde. Antes de bater, a aldeia é <b>esvaziada</b>: a tropa dela vai apoiar uma vizinha, e o apoio que estiver <b>em cima dela</b> é retirado automaticamente — nobre que morre na batalha não mexe na lealdade. Apoio de <b>terceiro</b> o módulo não consegue tirar (só o dono retira) e avisa. E nunca bate abaixo de <b>36</b>: 35−35=0 conquistaria a aldeia pra você mesmo. O nobre <b>volta</b> (só some quando conquista de fato), então o mesmo serve várias aldeias em rodízio.') +
         '<div class="twmgr-card2">' +
           '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">' +
             '<span style="font-size:10px;color:#6f6153">teto de lealdade '

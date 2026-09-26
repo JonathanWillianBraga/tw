@@ -184,6 +184,29 @@
     return pop >= piso ? cmd : null;
   }
 
+  // ===== Tirar o apoio que esta em cima do alvo =====
+  //
+  // Reusa a retirada em bloco do 086-apoios, que resolve o destino inteiro num POST (em vez de um
+  // por origem) e CONFIRMA POR EFEITO — rele a tela e exige que cada item pedido sumiu. Nao vou
+  // reescrever isso aqui: aquela funcao custou quatro versoes pra ficar de pe, entre o gate das
+  // colunas (`set_village_info_checkboxes`, sem o qual a retirada e ignorada em silencio) e a
+  // chave certa do apoio.
+  //
+  // A DIVISAO QUE IMPORTA SAI DE GRACA: a tela do destino so lista apoio MEU. Apoio de aliado nao
+  // aparece la, entao `linhas` vazio com apoio presente significa exatamente uma coisa — o apoio
+  // e de outra pessoa e eu nao posso tirar. Quem tira e o dono; o modulo avisa e para.
+  async function entRetirarApoio(vid, nome) {
+    const est = await apoiosDestinoLer(vid);
+    if (!est.linhas.length) return { meu: false, origens: 0 };
+    const vistoOrg = {}, vistoU = {};
+    est.linhas.forEach((l) => { vistoOrg[l.org] = 1; vistoU[l.u] = 1; });
+    const origens = Object.keys(vistoOrg).map((v) => ({ vid: v }));
+    const unids = Object.keys(vistoU);
+    const atendidas = await apoiosRetirarDestino(vid, origens, unids);
+    return { meu: true, origens: atendidas.length, pedidas: origens.length,
+             tropa: est.linhas.reduce((s, l) => s + l.n, 0) };
+  }
+
   // ===== O ciclo =====
   let entTimer = null;
   let _entEmVoo = false;
@@ -227,7 +250,7 @@
     // outra aldeia que tambem vai ser entregue so empurra o problema, e a tropa vai junto no pacote.
     const ehAlvo = {}; alvos.forEach((cd) => { const v = porCoord[cd]; if (v) ehAlvo[v.vid] = 1; });
 
-    let bateu = 0, esperando = 0, prontas = 0, evacuou = 0, semOrigem = 0;
+    let bateu = 0, esperando = 0, prontas = 0, evacuou = 0, semOrigem = 0, retirou = 0;
 
     for (const coord of alvos) {
       const v = porCoord[coord];
@@ -250,7 +273,22 @@
       if (d.acao === 'ok') { prontas++; continue; }
       if (d.acao === 'voando') { esperando++; continue; }
       if (d.acao === 'apoio') {
-        pushLog('Entrega: ' + v.name + ' — ' + d.txt + '. Retire o apoio (aba Apoios) pra eu poder bater.', 'err', 'entrega');
+        try {
+          const r = await entRetirarApoio(vid, v.name);
+          if (!r.meu) {
+            // Apoio que nao e meu. Nao da pra tirar: quem manda voltar e o dono.
+            pushLog('Entrega: ' + v.name + ' tem ' + fmtN(apoio) + ' tropa(s) de apoio que NÃO é minha —'
+              + ' só o dono pode retirar. Peça pra ele, ou tire essa aldeia da lista.', 'err', 'entrega');
+            c.estado[v.coord].txt = 'apoio de terceiro — só o dono retira';
+          } else {
+            retirou++;
+            pushLog('Entrega: retirei meu apoio de ' + v.name + ' — ' + fmtN(r.tropa) + ' tropa(s) de '
+              + r.origens + ' aldeia(s) voltando. Bato quando a aldeia estiver vazia.', 'ok', 'entrega');
+            c.estado[v.coord].txt = 'apoio retirado, voltando';
+          }
+        } catch (e) {
+          pushLog('Entrega: não consegui retirar o apoio de ' + v.name + ' (' + ((e && e.message) || e) + ').', 'err', 'entrega');
+        }
         continue;
       }
       if (d.acao === 'espera') {
@@ -341,6 +379,7 @@
 
     pushLog('Entrega: ' + prontas + ' na faixa · ' + bateu + ' batida(s) · ' + esperando + ' esperando regenerar'
       + (evacuou ? ' · ' + evacuou + ' esvaziada(s)' : '')
+      + (retirou ? ' · ' + retirou + ' com apoio retirado' : '')
       + (semOrigem ? ' · ' + semOrigem + ' SEM nobre disponível' : '') + '.', 'ok', 'entrega');
     save();
   }

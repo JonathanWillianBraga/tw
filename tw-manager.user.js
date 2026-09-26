@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.266.0
+// @version      11.267.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.266.0';
+  const VERSION = '11.267.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -12404,21 +12404,46 @@
     await apoiosPatchColunasDestino(uniao);
 
     try {
-      const p = new URLSearchParams();
-      p.set('village_id', String(destId));
-      Object.keys(precisa).forEach((u) => p.set('checkbox_' + u, 'on'));
-      alvos.forEach((l) => {
-        p.set('withdraw_unit[' + l.away + '][units][' + l.u + ']', String(l.n));
-        p.set('withdraw_unit[' + l.away + '][home][' + l.org + ']', 'on');
-      });
-      p.set('h', CSRF);
-      const r = await fetch('/game.php?village=' + CUR_VID
-        + '&screen=place&action=withdraw_selected_units_village_info&mode=units',
-        { method: 'POST', credentials: 'include', cache: 'no-store',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p.toString() });
-      if (!r.ok) throw new Error('HTTP ' + r.status + ' ao pedir a retirada no destino ' + destId);
-      const eb = new DOMParser().parseFromString(await r.text(), 'text/html').querySelector('.error_box');
-      if (eb) throw new Error('o jogo recusou: ' + (eb.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160));
+      // UM POST NAO COMPORTA UM DESTINO MUITO APOIADO.
+      //
+      // Cada linha manda DOIS campos (`units` e `home`), entao 1.573 linhas viram 3.146 variaveis
+      // num POST so. O servidor para de aceitar variaveis passado um teto (o padrao do PHP e
+      // 1.000) e o resto chega truncado: parte do apoio sai, parte fica, e a confirmacao por
+      // efeito — corretamente — acusa que nao foi aceita.
+      //
+      // Medido numa aldeia real: 1.573 linhas de 143 origens, e a primeira tentativa deixou 280
+      // paradas. E a mesma assinatura da coleta em massa na v11.220.0, pela mesma causa.
+      //
+      // Lote de 250 linhas = ~500 variaveis, com folga. Linha nunca e partida entre dois POSTs:
+      // meio pedido e o tipo de coisa que o servidor aceita e executa errado.
+      const LOTE = 250;
+      const lotes = [];
+      for (let i = 0; i < alvos.length; i += LOTE) lotes.push(alvos.slice(i, i + LOTE));
+
+      for (let k = 0; k < lotes.length; k++) {
+        const grupo = lotes[k];
+        const p = new URLSearchParams();
+        p.set('village_id', String(destId));
+        Object.keys(precisa).forEach((u) => p.set('checkbox_' + u, 'on'));
+        grupo.forEach((l) => {
+          p.set('withdraw_unit[' + l.away + '][units][' + l.u + ']', String(l.n));
+          p.set('withdraw_unit[' + l.away + '][home][' + l.org + ']', 'on');
+        });
+        p.set('h', CSRF);
+        const r = await fetch('/game.php?village=' + CUR_VID
+          + '&screen=place&action=withdraw_selected_units_village_info&mode=units',
+          { method: 'POST', credentials: 'include', cache: 'no-store',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p.toString() });
+        if (!r.ok) throw new Error('HTTP ' + r.status + ' ao pedir a retirada no destino ' + destId
+          + (lotes.length > 1 ? (' (lote ' + (k + 1) + ' de ' + lotes.length + ')') : ''));
+        const eb = new DOMParser().parseFromString(await r.text(), 'text/html').querySelector('.error_box');
+        if (eb) throw new Error('o jogo recusou: ' + (eb.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160));
+        if (lotes.length > 1) {
+          pushLog('Apoios: retirada do destino ' + destId + ' — lote ' + (k + 1) + '/' + lotes.length
+            + ' (' + grupo.length + ' item(ns)) enviado.', '', 'apoios');
+          await sleep(400);
+        }
+      }
 
       // CONFIRMAÇÃO POR EFEITO: relê a tela e exige que cada (apoio, unidade) pedido sumiu.
       await sleep(700);
@@ -12426,9 +12451,9 @@
       const ainda = depois.linhas.filter((l) =>
         alvos.some((a) => a.away === l.away && a.u === l.u));
       if (ainda.length) {
-        throw new Error('o destino ainda mostra ' + ainda.length + ' item(ns) parado(s) ('
-          + ainda.slice(0, 2).map((l) => unitPt(l.u) + ' x' + l.n).join(', ')
-          + ') — a retirada NÃO foi aceita');
+        throw new Error('o destino ainda mostra ' + ainda.length + ' de ' + alvos.length
+          + ' item(ns) parado(s) (' + ainda.slice(0, 2).map((l) => unitPt(l.u) + ' x' + l.n).join(', ')
+          + ') — a retirada NÃO foi aceita' + (lotes.length > 1 ? (' [' + lotes.length + ' lote(s)]') : ''));
       }
       const atendidas = {};
       alvos.forEach((l) => { atendidas[l.org] = 1; });

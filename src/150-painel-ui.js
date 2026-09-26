@@ -338,6 +338,9 @@
     // atualizá-la, então abrir a aba também conta como um momento de conferir — mas só se a
     // leitura já passou do prazo, senão trocar de aba viraria uma requisição por clique.
     if (name === 'noble' && typeof nobleOciososAuto === 'function') nobleOciososAuto();
+    // A tabela da Entrega sai do estado guardado, entao redesenhar e de graca — e sem isto ela
+    // so apareceria depois do primeiro ciclo terminar, que pode demorar 10 min.
+    if (name === 'entrega' && typeof entRender === 'function') entRender();
   }
   // Rotinas que só funcionam com o elemento visível. Chamado por showTab e showSub.
   function aoAparecer() {
@@ -1037,6 +1040,7 @@
             '<span id="twmgr-ent-st" style="font-size:10px;color:#6f6153"></span>' +
           '</div>' +
         '</div>' +
+        '<div id="twmgr-ent-tab" style="margin-top:6px"></div>' +
         modLog('entrega') +
       '</div>' +
       '<div id="twmgr-tab-flags" style="display:none">' +
@@ -1514,10 +1518,11 @@
       a.addEventListener('change', () => {
         const lista = (a.value || '').split(/[^0-9|]+/).map((x) => x.trim()).filter((x) => /^\d{1,3}\|\d{1,3}$/.test(x));
         entCfg().alvos = lista.filter((x, i) => lista.indexOf(x) === i);
-        a.value = entCfg().alvos.join('\n'); save(); st();
+        a.value = entCfg().alvos.join('\n'); save(); st(); entRender();
       });
       document.getElementById('twmgr-ent-start').addEventListener('click', () => { entStart(); st(); });
       document.getElementById('twmgr-ent-stop').addEventListener('click', () => { entStop(); st(); });
+      entRender();
     })();
     renderNobleOciosos();   // só desenha o estado atual; quem dispara a leitura é showTab
     setNobleStatus(config.noble.running);

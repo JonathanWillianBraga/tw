@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.264.0
+// @version      11.265.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.264.0';
+  const VERSION = '11.265.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -865,8 +865,16 @@
 
 
     // Registro de alvo que saiu da lista não serve pra nada e cresceria pra sempre.
+    //
+    // MAS a Entrega (089) também escreve aqui, e as coordenadas dela NÃO estão em
+    // `c.noble.alvos` — são aldeias SUAS. Sem esta ressalva, todo F5 apagava o registro de voo
+    // da Entrega, e um registro apagado faz o ciclo seguinte achar que não há nobre a caminho e
+    // mandar outro. Era a mesma falha de reenvio, entrando por outra porta.
+    const entCoords = (c.entrega && Array.isArray(c.entrega.alvos)) ? c.entrega.alvos : [];
     Object.keys(c.noble.emVoo).forEach((k) => {
-      if (!c.noble.alvos.some((a) => a.coord === k)) delete c.noble.emVoo[k];
+      if (c.noble.alvos.some((a) => a.coord === k)) return;
+      if (entCoords.indexOf(k) >= 0) return;
+      delete c.noble.emVoo[k];
     });
 
     c.noble.autoMax = Math.max(1, Math.min(40, parseInt(c.noble.autoMax, 10) || 8));

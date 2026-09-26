@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.264.0
+// @version      11.265.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.264.0';
+  const VERSION = '11.265.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -865,8 +865,16 @@
 
 
     // Registro de alvo que saiu da lista não serve pra nada e cresceria pra sempre.
+    //
+    // MAS a Entrega (089) também escreve aqui, e as coordenadas dela NÃO estão em
+    // `c.noble.alvos` — são aldeias SUAS. Sem esta ressalva, todo F5 apagava o registro de voo
+    // da Entrega, e um registro apagado faz o ciclo seguinte achar que não há nobre a caminho e
+    // mandar outro. Era a mesma falha de reenvio, entrando por outra porta.
+    const entCoords = (c.entrega && Array.isArray(c.entrega.alvos)) ? c.entrega.alvos : [];
     Object.keys(c.noble.emVoo).forEach((k) => {
-      if (!c.noble.alvos.some((a) => a.coord === k)) delete c.noble.emVoo[k];
+      if (c.noble.alvos.some((a) => a.coord === k)) return;
+      if (entCoords.indexOf(k) >= 0) return;
+      delete c.noble.emVoo[k];
     });
 
     c.noble.autoMax = Math.max(1, Math.min(40, parseInt(c.noble.autoMax, 10) || 8));
@@ -13550,6 +13558,32 @@
     return c;
   }
 
+  // TROPA PRESENTE NA ALDEIA, propria MAIS apoio de fora.
+  //
+  // `type=own_home` (que o resto do script usa) conta so a tropa DA aldeia. Apoio de outra aldeia
+  // — sua ou de aliado — nao aparece ali e defende exatamente igual. Medido na conta: 15 aldeias
+  // com apoio de fora, uma delas com 44.935 tropas em cima de 262 proprias. Mandar nobre numa
+  // dessas e perder o nobre sem mover a lealdade.
+  //
+  // A aba que soma tudo e `type=there` ("Na Aldeia"). Uma requisicao, todas as aldeias.
+  async function entTropaPresente() {
+    const r = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=units&type=there&group=0&page=-1',
+      { credentials: 'include' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+    const out = {};
+    [].forEach.call(doc.querySelectorAll('tr'), (tr) => {
+      if (!tr.querySelector('span.quickedit-vn')) return;
+      const lbl = ((tr.querySelector('span.quickedit-label') || {}).textContent || '').replace(/\s+/g, ' ').trim();
+      const m = lbl.match(/\((\d{1,3}\|\d{1,3})\)/); if (!m) return;
+      const tds = tr.querySelectorAll('td');
+      let soma = 0;
+      for (let i = 2; i <= 12; i++) soma += parseInt((tds[i] || {}).textContent || '0', 10) || 0;
+      out[m[1]] = soma;
+    });
+    return out;
+  }
+
   function entXY(coord) {
     const m = String(coord || '').match(/(\d{1,3})\|(\d{1,3})/);
     return m ? { x: +m[1], y: +m[2] } : null;
@@ -13566,8 +13600,24 @@
   }
 
   // O que fazer com esta aldeia agora. Uma funcao so, pra decisao e tela nunca discordarem.
-  function entDecidir(lealdade, teto) {
+  // UM NOBRE POR VEZ, POR ALVO — e a trava que faltava, e a falta dela era grave.
+  //
+  // O ciclo roda a cada 10 min e o voo leva horas. A lealdade so muda quando o nobre POUSA e o
+  // relatorio e lido, entao, sem esta trava, todo ciclo releria a mesma lealdade alta e mandaria
+  // outro nobre: com 10 campos (5h50 de ida) seriam ~35 nobres no ar contra a mesma aldeia. Os
+  // primeiros pousos derrubariam a lealdade a zero e eu conquistaria a propria aldeia — que e
+  // exatamente o que a janela 36..40 existe pra impedir. A janela protege contra UM tiro; nada
+  // protegia contra trinta.
+  //
+  // Serializar custa pouco: a lealdade regenera ~1/h, entao esperar um pouso nao perde a janela.
+  function entVoando(coord) {
+    try { return (nobleVoos(coord) || []).reduce((s, e) => s + (e.n || 1), 0); } catch (e) { return 0; }
+  }
+
+  function entDecidir(lealdade, teto, voando, apoio) {
+    if (voando > 0) return { acao: 'voando', txt: voando + ' nobre(s) a caminho — espero pousar' };
     if (lealdade <= teto) return { acao: 'ok', txt: 'na faixa' };
+    if (apoio > 0) return { acao: 'apoio', txt: 'tem ' + apoio + ' tropa(s) de APOIO de fora — o nobre morreria' };
     if (lealdade <= ENT_ZONA_MORTA_ATE) {
       return { acao: 'espera', txt: 'zona morta — bater agora pode zerar; espera chegar a ' + ENT_MIN_PRA_BATER };
     }
@@ -13618,7 +13668,7 @@
     finally {
       _entEmVoo = false;
       config.entrega.nextAt = Date.now() + ENT_INTERVALO_MS;
-      save(); refreshCards('entrega'); entAgendar();
+      save(); refreshCards('entrega'); entRender(); entAgendar();
     }
   }
 
@@ -13631,6 +13681,10 @@
     const porCoord = {}; vilas.forEach((v) => { if (v.coord) porCoord[v.coord] = v; });
     const tropas = await getTropaTodasAldeias();
     const pontos = await getVillagePoints();
+    let presente = {};
+    try { presente = await entTropaPresente(); }
+    catch (e) { pushLog('Entrega: não consegui ler a tropa presente nas aldeias (' + ((e && e.message) || e) + ')'
+      + ' — sem isso eu não sei se há apoio de fora, então não bato em ninguém neste ciclo.', 'err', 'entrega'); return; }
 
     // Aldeia que e alvo nao serve de origem nem de destino de apoio: mandar tropa pra dentro de
     // outra aldeia que tambem vai ser entregue so empurra o problema, e a tropa vai junto no pacote.
@@ -13646,9 +13700,22 @@
       const vid = v.vid;
       const alvoXY = entXY(v.coord);
       const leal = entLealdade(v.coord);
-      const d = entDecidir(leal, c.teto);
+      const emCasaTot = UNITS.reduce((s, u) => s + (u[0] === 'snob' ? 0 : ((tropas[String(vid)] || {})[u[0]] || 0)), 0);
+      // Apoio = o que esta NA aldeia menos o que e DELA. Nunca negativo: as duas leituras sao
+      // retratos de momentos diferentes e podem discordar por pouco.
+      const apoio = Math.max(0, (presente[v.coord] || 0) - emCasaTot);
+      const voando = entVoando(v.coord);
+      const d = entDecidir(leal, c.teto, voando, apoio);
+      // O painel le isto; sem gravar, a tabela teria que refazer as requisicoes do ciclo.
+      c.estado = c.estado || {};
+      c.estado[v.coord] = { nome: v.name, leal: leal, voando: voando, apoio: apoio, emCasa: emCasaTot, acao: d.acao, txt: d.txt, at: Date.now() };
 
       if (d.acao === 'ok') { prontas++; continue; }
+      if (d.acao === 'voando') { esperando++; continue; }
+      if (d.acao === 'apoio') {
+        pushLog('Entrega: ' + v.name + ' — ' + d.txt + '. Retire o apoio (aba Apoios) pra eu poder bater.', 'err', 'entrega');
+        continue;
+      }
       if (d.acao === 'espera') {
         esperando++;
         pushLog('Entrega: ' + v.name + ' está em ' + leal + ' — ' + d.txt + '.', '', 'entrega');
@@ -13657,7 +13724,7 @@
 
       // --- 1. o alvo precisa estar VAZIO, senão o nobre morre e a lealdade não anda ---
       const emCasa = tropas[String(vid)] || {};
-      const defensores = UNITS.reduce((s, u) => s + (u[0] === 'snob' ? 0 : (emCasa[u[0]] || 0)), 0);
+      const defensores = emCasaTot;
       if (defensores > 0) {
         const destino = vilas
           .filter((o) => o.vid !== vid && !ehAlvo[o.vid] && o.coord)
@@ -13698,9 +13765,13 @@
           Object.keys(cmd).forEach((u) => { if (u !== 'snob') avail[u] = Math.max(0, (avail[u] || 0) - cmd[u]); });
         };
         try {
-          await sendAttack(x.o.vid, alvoXY.x, alvoXY.y, cmd, 'attack');
+          const dur = await sendAttack(x.o.vid, alvoXY.x, alvoXY.y, cmd, 'attack');
           bateu++; mandou = true;
           descontar();   // o mapa de tropa é um retrato; o mesmo nobre não pode ir duas vezes
+          // REGISTRA O VOO. Sem isto o proximo ciclo nao sabe que ja tem nobre indo e manda outro.
+          // `sendAttack` devolve a duracao em segundos justamente pra isso.
+          nobleRegistraEnvio(v.coord, 1, dur || Math.round(x.d * 35 * 60), x.o.name);
+          if (c.estado && c.estado[v.coord]) { c.estado[v.coord].voando = 1; c.estado[v.coord].acao = 'voando'; }
           const min = Math.round(x.d * 35);
           pushLog('Entrega: nobre de ' + x.o.name + ' → ' + v.name + ' (lealdade ' + leal + ', ' + d.txt
             + ') · ' + x.d.toFixed(1) + ' campos, ' + Math.floor(min / 60) + 'h' + String(min % 60).padStart(2, '0') + '.', 'ok', 'entrega');
@@ -13713,6 +13784,9 @@
           // lealdade. Na duvida, para e deixa o proximo ciclo reler a lealdade.
           if (/^ambiguo:/.test(msg)) {
             mandou = true; descontar();
+            // Registra como se tivesse saido. Se nao saiu, o pior e um ciclo de espera; se saiu e
+            // eu nao registrasse, o proximo ciclo mandaria outro — e e esse o erro caro.
+            nobleRegistraEnvio(v.coord, 1, Math.round(x.d * 35 * 60), x.o.name);
             pushLog('Entrega: ' + x.o.name + ' → ' + v.name + ' — resposta ambígua, não sei se saiu.'
               + ' NÃO vou tentar outra origem: o próximo ciclo relê a lealdade e decide.', 'err', 'entrega');
             break;
@@ -13807,6 +13881,57 @@
     }
     pushLog('Entrega: nenhuma das ' + Math.min(ENT_TENTA_FORMAR, perto.length) + ' aldeias mais perto de '
       + alvo.name + ' conseguiu formar nobre agora.', 'err', 'entrega');
+  }
+
+  // ===== A tabela =====
+  //
+  // Desenha do `c.estado`, gravado pelo ciclo — nao refaz requisicao nenhuma. Enquanto o ciclo
+  // nao rodar uma vez, mostra o que da pra saber sem rede (a lealdade guardada) e diz que o
+  // resto ainda nao foi medido, em vez de inventar zero.
+  const ENT_CORES = { ok: '#2f7a2f', voando: '#5c7aa8', espera: '#b5651d', apoio: '#b03030', bate: '#7a5320' };
+  function entRender() {
+    const box = document.getElementById('twmgr-ent-tab');
+    if (!box) return;
+    const c = entCfg();
+    const alvos = c.alvos || [];
+    if (!alvos.length) { box.innerHTML = '<div class="twmgr-hint">Nenhuma aldeia na lista.</div>'; return; }
+    const est = c.estado || {};
+    const linhas = alvos.map((coord) => {
+      const e = est[coord];
+      if (!e) {
+        return '<tr><td style="padding:3px 4px"><b>' + esc(coord) + '</b></td>'
+          + '<td colspan="4" style="padding:3px 4px;color:#8a7d6d">ainda não medida — roda no próximo ciclo</td></tr>';
+      }
+      const cor = ENT_CORES[e.acao] || '#6f6153';
+      const leal = Math.round(e.leal);
+      // Barra: cheia em 100, e a marca do teto fica visivel pra dar escala ao numero.
+      const pct = Math.max(0, Math.min(100, leal));
+      const corBarra = leal <= c.teto ? '#2f7a2f' : (leal <= 35 ? '#b5651d' : '#b03030');
+      return '<tr>'
+        + '<td style="padding:3px 4px"><b>' + esc(e.nome || coord) + '</b>'
+          + '<div style="font-size:9px;color:#8a7d6d">' + esc(coord) + '</div></td>'
+        + '<td style="padding:3px 4px;width:110px">'
+          + '<div style="display:flex;align-items:center;gap:4px">'
+            + '<b style="color:' + corBarra + ';min-width:22px;text-align:right">' + leal + '</b>'
+            + '<div style="position:relative;flex:1;height:7px;background:#ece4d8;border-radius:3px">'
+              + '<div style="width:' + pct + '%;height:100%;background:' + corBarra + ';border-radius:3px"></div>'
+              + '<div style="position:absolute;left:' + Math.min(100, c.teto) + '%;top:-2px;width:1px;height:11px;background:#5c4423" title="teto ' + c.teto + '"></div>'
+            + '</div>'
+          + '</div></td>'
+        + '<td style="padding:3px 4px;text-align:center">' + (e.voando ? ('<b>' + e.voando + '</b>') : '—') + '</td>'
+        + '<td style="padding:3px 4px;text-align:center">'
+          + (e.apoio ? ('<b style="color:#b03030">' + fmtN(e.apoio) + '</b>') : (e.emCasa ? ('<span style="color:#b5651d">' + fmtN(e.emCasa) + ' própria</span>') : '<span style="color:#2f7a2f">vazia</span>'))
+          + '</td>'
+        + '<td style="padding:3px 4px;color:' + cor + '">' + esc(e.txt || '') + '</td>'
+        + '</tr>';
+    }).join('');
+    box.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:10px">'
+      + '<tr style="color:#8a7d6d;font-size:9px;text-align:left">'
+        + '<th style="padding:2px 4px">aldeia</th><th style="padding:2px 4px">lealdade</th>'
+        + '<th style="padding:2px 4px;text-align:center" title="nobres meus já a caminho desta aldeia">indo</th>'
+        + '<th style="padding:2px 4px;text-align:center" title="tropa dentro da aldeia: apoio de fora impede a batida">tropa</th>'
+        + '<th style="padding:2px 4px">situação</th></tr>'
+      + linhas + '</table>';
   }
 
   function entAgendar() {
@@ -17140,6 +17265,9 @@
     // atualizá-la, então abrir a aba também conta como um momento de conferir — mas só se a
     // leitura já passou do prazo, senão trocar de aba viraria uma requisição por clique.
     if (name === 'noble' && typeof nobleOciososAuto === 'function') nobleOciososAuto();
+    // A tabela da Entrega sai do estado guardado, entao redesenhar e de graca — e sem isto ela
+    // so apareceria depois do primeiro ciclo terminar, que pode demorar 10 min.
+    if (name === 'entrega' && typeof entRender === 'function') entRender();
   }
   // Rotinas que só funcionam com o elemento visível. Chamado por showTab e showSub.
   function aoAparecer() {
@@ -17839,6 +17967,7 @@
             '<span id="twmgr-ent-st" style="font-size:10px;color:#6f6153"></span>' +
           '</div>' +
         '</div>' +
+        '<div id="twmgr-ent-tab" style="margin-top:6px"></div>' +
         modLog('entrega') +
       '</div>' +
       '<div id="twmgr-tab-flags" style="display:none">' +
@@ -18316,10 +18445,11 @@
       a.addEventListener('change', () => {
         const lista = (a.value || '').split(/[^0-9|]+/).map((x) => x.trim()).filter((x) => /^\d{1,3}\|\d{1,3}$/.test(x));
         entCfg().alvos = lista.filter((x, i) => lista.indexOf(x) === i);
-        a.value = entCfg().alvos.join('\n'); save(); st();
+        a.value = entCfg().alvos.join('\n'); save(); st(); entRender();
       });
       document.getElementById('twmgr-ent-start').addEventListener('click', () => { entStart(); st(); });
       document.getElementById('twmgr-ent-stop').addEventListener('click', () => { entStop(); st(); });
+      entRender();
     })();
     renderNobleOciosos();   // só desenha o estado atual; quem dispara a leitura é showTab
     setNobleStatus(config.noble.running);

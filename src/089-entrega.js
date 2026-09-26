@@ -108,15 +108,36 @@
       { credentials: 'include' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+    // QUAL COLUNA E QUAL, PELO ICONE DO CABECALHO — nao por indice fixo.
+    //
+    // Eu tinha somado as colunas 2..12 de uma vez, e duas delas nao sao tropa de campo: NOBRE e
+    // MILICIA. A tropa "propria" com que eu comparava (getTropaTodasAldeias) nao conta nenhuma
+    // das duas, entao a subtracao dava a diferenca como se fosse apoio de terceiro. Sintoma
+    // exato na conta: aldeia com 1 nobre proprio acusada de ter "1 tropa de apoio que NAO e
+    // minha" — e o usuario, certo, disse que so havia tropa da propria aldeia.
+    //
+    // As colunas mudam por mundo (o br143 nao tem arqueiro nem arqueiro a cavalo), entao indice
+    // fixo e uma armadilha esperando a proxima conta. O icone diz a unidade.
+    const col = [];
+    [].forEach.call(doc.querySelectorAll('table th'), (th, i) => {
+      const im = th.querySelector('img');
+      const mm = im && String(im.getAttribute('src') || '').match(/unit_(\w+)\./);
+      if (mm) col.push({ i: i, u: mm[1] });
+    });
     const out = {};
     [].forEach.call(doc.querySelectorAll('tr'), (tr) => {
       if (!tr.querySelector('span.quickedit-vn')) return;
       const lbl = ((tr.querySelector('span.quickedit-label') || {}).textContent || '').replace(/\s+/g, ' ').trim();
       const m = lbl.match(/\((\d{1,3}\|\d{1,3})\)/); if (!m) return;
       const tds = tr.querySelectorAll('td');
-      let soma = 0;
-      for (let i = 2; i <= 12; i++) soma += parseInt((tds[i] || {}).textContent || '0', 10) || 0;
-      out[m[1]] = soma;
+      const r = { campo: 0, nobre: 0, milicia: 0 };
+      col.forEach((c) => {
+        const n = parseInt((tds[c.i] || {}).textContent || '0', 10) || 0;
+        if (c.u === 'snob') r.nobre += n;
+        else if (c.u === 'militia') r.milicia += n;
+        else r.campo += n;
+      });
+      out[m[1]] = r;
     });
     return out;
   }
@@ -151,10 +172,13 @@
     try { return (nobleVoos(coord) || []).reduce((s, e) => s + (e.n || 1), 0); } catch (e) { return 0; }
   }
 
-  function entDecidir(lealdade, teto, voando, apoio) {
+  function entDecidir(lealdade, teto, voando, apoio, milicia) {
     if (voando > 0) return { acao: 'voando', txt: voando + ' nobre(s) a caminho — espero pousar' };
     if (lealdade <= teto) return { acao: 'ok', txt: 'na faixa' };
     if (apoio > 0) return { acao: 'apoio', txt: 'tem ' + apoio + ' tropa(s) de APOIO de fora — o nobre morreria' };
+    // Milicia nao se manda embora: e defesa local, criada na propria aldeia, e some sozinha
+    // quando o prazo dela acaba. Nao da pra esvaziar por apoio nem por ataque — so esperar.
+    if (milicia > 0) return { acao: 'milicia', txt: 'tem ' + milicia + ' de MILÍCIA — ela some sozinha; espero' };
     if (lealdade <= ENT_ZONA_MORTA_ATE) {
       return { acao: 'espera', txt: 'zona morta — bater agora pode zerar; espera chegar a ' + ENT_MIN_PRA_BATER };
     }
@@ -259,17 +283,22 @@
       const alvoXY = entXY(v.coord);
       const leal = entLealdade(v.coord);
       const emCasaTot = UNITS.reduce((s, u) => s + (u[0] === 'snob' ? 0 : ((tropas[String(vid)] || {})[u[0]] || 0)), 0);
-      // Apoio = o que esta NA aldeia menos o que e DELA. Nunca negativo: as duas leituras sao
-      // retratos de momentos diferentes e podem discordar por pouco.
-      const apoio = Math.max(0, (presente[v.coord] || 0) - emCasaTot);
+      const nobreProprio = (tropas[String(vid)] || {}).snob || 0;
+      const pres = presente[v.coord] || { campo: 0, nobre: 0, milicia: 0 };
+      // Apoio = tropa de CAMPO presente menos a de campo que e DELA. Compara igual com igual:
+      // nobre e milicia ficam de fora dos dois lados. Nunca negativo — sao dois retratos de
+      // momentos diferentes e podem discordar por pouco.
+      const apoio = Math.max(0, pres.campo - emCasaTot);
       const voando = entVoando(v.coord);
-      const d = entDecidir(leal, c.teto, voando, apoio);
+      const d = entDecidir(leal, c.teto, voando, apoio, pres.milicia);
       // O painel le isto; sem gravar, a tabela teria que refazer as requisicoes do ciclo.
       c.estado = c.estado || {};
-      c.estado[v.coord] = { nome: v.name, leal: leal, voando: voando, apoio: apoio, emCasa: emCasaTot, acao: d.acao, txt: d.txt, at: Date.now() };
+      c.estado[v.coord] = { nome: v.name, leal: leal, voando: voando, apoio: apoio, emCasa: emCasaTot,
+                            nobre: nobreProprio, milicia: pres.milicia, acao: d.acao, txt: d.txt, at: Date.now() };
 
       if (d.acao === 'ok') { prontas++; continue; }
       if (d.acao === 'voando') { esperando++; continue; }
+      if (d.acao === 'milicia') { esperando++; pushLog('Entrega: ' + v.name + ' — ' + d.txt + '.', '', 'entrega'); continue; }
       if (d.acao === 'apoio') {
         try {
           const r = await entRetirarApoio(vid, v.name);
@@ -297,22 +326,47 @@
 
       // --- 1. o alvo precisa estar VAZIO, senão o nobre morre e a lealdade não anda ---
       const emCasa = tropas[String(vid)] || {};
-      const defensores = emCasaTot;
+      // O nobre da propria aldeia conta como defensor: com ele em casa o ataque perde.
+      const defensores = emCasaTot + nobreProprio;
       if (defensores > 0) {
         const destino = vilas
           .filter((o) => o.vid !== vid && !ehAlvo[o.vid] && o.coord)
           .map((o) => ({ o: o, d: entDist(alvoXY, entXY(o.coord)) }))
           .sort((a, b) => a.d - b.d)[0];
         if (!destino) { pushLog('Entrega: ' + v.name + ' tem tropa em casa e não achei vizinha pra onde apoiar.', 'err', 'entrega'); continue; }
+        // O NOBRE DAQUI FICA, SE OUTRO ALVO AINDA PRECISA DE BATIDA.
+        //
+        // Ele vai embora como ataque num outro alvo (a lista de origens acima ja o enxerga), e
+        // isso e melhor que manda-lo apoiar: o voo faz dois trabalhos em vez de um. So quando
+        // nao ha mais alvo precisando e que ele sai como apoio — ai o objetivo e so esvaziar.
+        //
+        // Nobre PODE ir como apoio: conferido no jogo pelo passo de confirmacao, sem erro. Eu
+        // ia assumir que nao podia.
+        const outroPrecisa = alvos.some((cd) => {
+          if (cd === coord) return false;
+          const e2 = (c.estado || {})[cd];
+          return e2 && (e2.acao === 'bate' || e2.acao === 'espera');
+        });
+        const seguraNobre = nobreProprio > 0 && outroPrecisa;
         const manda = {};
-        UNITS.forEach((u) => { if (u[0] !== 'snob' && (emCasa[u[0]] || 0) > 0) manda[u[0]] = emCasa[u[0]]; });
+        UNITS.forEach((u) => {
+          if (u[0] === 'snob') { if (!seguraNobre && (emCasa.snob || 0) > 0) manda.snob = emCasa.snob; return; }
+          if ((emCasa[u[0]] || 0) > 0) manda[u[0]] = emCasa[u[0]];
+        });
+        if (!Object.keys(manda).length) {
+          pushLog('Entrega: ' + v.name + ' só tem o nobre dela em casa — guardei pra bater em outro alvo da lista.', '', 'entrega');
+          continue;
+        }
         const dx = entXY(destino.o.coord);
         // sendAttack sinaliza falha LANCANDO; sucesso devolve a duracao (ou null). Testar o
         // retorno como se fosse flag daria "nao consegui" em todo envio que deu certo.
         try {
           await sendAttack(vid, dx.x, dx.y, manda, 'support');
           evacuou++;
-          pushLog('Entrega: esvaziei ' + v.name + ' — ' + defensores + ' tropa(s) apoiando ' + destino.o.name + '. O nobre vai no próximo ciclo.', 'ok', 'entrega');
+          const qtd = Object.keys(manda).reduce((s, u) => s + manda[u], 0);
+          pushLog('Entrega: esvaziei ' + v.name + ' — ' + qtd + ' tropa(s) apoiando ' + destino.o.name
+            + (seguraNobre ? ' (o nobre dela ficou, vai bater em outro alvo)' : '')
+            + '. Bato aqui quando estiver vazia.', 'ok', 'entrega');
         } catch (e) {
           pushLog('Entrega: não consegui esvaziar ' + v.name + ' (' + ((e && e.message) || e) + ').', 'err', 'entrega');
         }
@@ -320,8 +374,17 @@
       }
 
       // --- 2. origem: a aldeia MINHA mais perto que tenha nobre em casa ---
+      // ALDEIA DA LISTA TAMBEM SERVE DE ORIGEM — pedido do usuario, e e a jogada certa.
+      //
+      // O nobre que esta dentro de uma aldeia a entregar precisa sair de la de qualquer jeito
+      // (nobre defende, e com defensor o ataque perde e a lealdade nao anda). Manda-lo apoiar
+      // uma vizinha resolve a saida e nao faz mais nada. Manda-lo bater em OUTRO alvo da lista
+      // resolve a saida E baixa a lealdade do outro: o mesmo voo faz dois trabalhos.
+      //
+      // A unica exclusao que sobra e a propria aldeia: o jogo nao deixa uma aldeia atacar a si
+      // mesma (o `try=confirm` nem devolve duracao, ver 084-noblar).
       const cand = vilas
-        .filter((o) => o.vid !== vid && !ehAlvo[o.vid] && o.coord)
+        .filter((o) => o.vid !== vid && o.coord)
         .filter((o) => ((tropas[String(o.vid)] || {}).snob || 0) > 0)
         .map((o) => ({ o: o, d: entDist(alvoXY, entXY(o.coord)) }))
         .filter((x) => x.d <= c.maxCampos)

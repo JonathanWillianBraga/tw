@@ -243,7 +243,11 @@
     if (lockOther()) { entTimer = setTimeout(entTick, 5000); return; }
     if (captchaBlocked()) { entTimer = setTimeout(entTick, 30000); return; }
     claimLock();
-    if (_entEmVoo) { pushLog('Entrega: ciclo anterior ainda rodando — ignorei o disparo.', '', 'entrega'); return; }
+    if (_entEmVoo) { pushLog('Entrega: ciclo anterior ainda rodando — ignorei o disparo.', '', 'entrega'); entAgendar(); return; }
+    // O agendador acorda no maximo de 60 em 60s (pra reagir a mudanca de config), entao quem
+    // guarda o intervalo de verdade e ESTA linha. Sem ela o ciclo rodaria a cada minuto em vez de
+    // a cada dez — mesmo padrao do scavTick.
+    if ((c.nextAt || 0) > Date.now()) { entAgendar(); return; }
     _entEmVoo = true;
     try { await entTickInterno(); }
     catch (e) { pushLog('Entrega: ciclo falhou (' + ((e && e.message) || e) + ').', 'err', 'entrega'); }
@@ -307,7 +311,30 @@
       c.estado[v.coord] = { nome: v.name, leal: leal, voando: voando, apoio: apoio, emCasa: emCasaTot,
                             nobre: nobreProprio, milicia: pres.milicia, acao: d.acao, txt: d.txt, at: Date.now() };
 
-      if (d.acao === 'ok') { prontas++; continue; }
+      if (d.acao === 'ok') {
+        prontas++;
+        // CHEGOU NO TETO: recolhe a tropa que eu mesmo tirei daqui. Pedido do usuario — a tropa
+        // saiu pra o nobre poder vencer, e a partir de agora ficar fora so a deixa ociosa.
+        //
+        // So volta o que ESTA aldeia mandou: `apoiosRetirarDestino` filtra por origem, entao apoio
+        // de outra aldeia parado na mesma vizinha nao e tocado.
+        const ev = (c.estado[v.coord] || {}).evacPara;
+        if (ev) {
+          try {
+            const uu = UNITS.map((u) => u[0]);
+            const volta = await apoiosRetirarDestino(ev, [{ vid: String(vid) }], uu);
+            pushLog('Entrega: ' + v.name + ' chegou em ' + Math.round(leal) + ' (teto ' + c.teto + ') —'
+              + (volta.length ? ' recolhi a tropa que estava em ' + ((c.estado[v.coord] || {}).evacParaNome || ev) + '.'
+                              : ' não achei tropa minha pra recolher lá.'), 'ok', 'entrega');
+            delete c.estado[v.coord].evacPara; delete c.estado[v.coord].evacParaNome;
+            save();
+          } catch (e) {
+            pushLog('Entrega: ' + v.name + ' está no teto, mas não consegui recolher a tropa de '
+              + ((c.estado[v.coord] || {}).evacParaNome || ev) + ' (' + ((e && e.message) || e) + ').', 'err', 'entrega');
+          }
+        }
+        continue;
+      }
       if (d.acao === 'voando') { esperando++; continue; }
       if (d.acao === 'milicia') { esperando++; pushLog('Entrega: ' + v.name + ' — ' + d.txt + '.', '', 'entrega'); continue; }
       if (d.acao === 'apoio') {
@@ -383,6 +410,10 @@
           await sendAttack(vid, dx.x, dx.y, manda, 'support');
           evacuou++;
           const qtd = Object.keys(manda).reduce((s, u) => s + manda[u], 0);
+          // Guarda o destino: e o endereco pra buscar a tropa de volta quando a aldeia chegar no
+          // teto. Sem anotar, so daria pra descobrir relendo a tela de apoios de todas as vizinhas.
+          c.estado[v.coord].evacPara = destino.o.vid;
+          c.estado[v.coord].evacParaNome = destino.o.name;
           pushLog('Entrega: esvaziei ' + v.name + ' — ' + qtd + ' tropa(s) apoiando ' + destino.o.name
             + (seguraNobre ? ' (o nobre dela ficou, vai bater em outro alvo)' : '')
             + '. Bato aqui quando estiver vazia.', 'ok', 'entrega');

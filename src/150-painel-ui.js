@@ -1663,6 +1663,10 @@
     if (config.lock && config.lock.running) { rlog('🔒 Cadeado retomado.', 'lock'); retomar(scheduleLock); }
     if (config.paladin && config.paladin.running) { rlog('Paladino retomado.', 'paladin'); retomar(paladinTick); }
     if (config.obra && config.obra.running) { rlog('🏛️ Obra retomada.', 'obra'); retomar(obraTick); }
+    // A Entrega nascia FORA desta lista, e por isso morria calada em todo F5: `ligado` continuava
+    // marcado, o painel mostrava "ligado", e nenhum ciclo rodava. O sintoma e o pior possivel —
+    // parece que esta funcionando.
+    if (config.entrega && config.entrega.ligado) { rlog('📦 Entrega retomada.', 'entrega'); retomar(entAgendar); }
     closeStaleLiveLogs();   // barra de progresso de ciclo que morreu no reload desta página
     installBotHooks();
     startCaptchaWatcher();

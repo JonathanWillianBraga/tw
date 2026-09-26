@@ -62,7 +62,7 @@ e esquecer de buildar, todo mundo continua recebendo a versão velha.
 
 ### Abas do painel
 
-A barra principal tem **9 abas**. `Muralha` e `Mapa` NÃO são abas: viraram **sub-abas dentro do
+A barra principal tem **14 abas** (a ultima e a Entrega, v11.263.0). Aba nova precisa entrar em TRES lugares: o `tabBtn()` da barra, o `<div id="twmgr-tab-NOME">` e a **lista fixa do `showTab()`** — esquecer a terceira faz o botao acender e o conteudo nunca aparecer. `Muralha` e `Mapa` NÃO são abas: viraram **sub-abas dentro do
 Saque** (v11.16.0) — `subBtn()` monta a barra, `showFarmSub()` troca, e os painéis são
 `#twmgr-sub-farm|wall|map`. O Cadeado vive dentro do Mapa, então foi junto. O indicador de
 atividade fica no botão da sub-aba, e a aba Saque acende se qualquer um dos três estiver rodando.

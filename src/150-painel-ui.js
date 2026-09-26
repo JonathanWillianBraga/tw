@@ -326,7 +326,7 @@
   function showTab(name) {
     // LISTA FIXA: aba nova precisa entrar AQUI também, senão o botão acende e o conteúdo nunca
     // aparece — o div fica em display:none pra sempre. Foi o que aconteceu com 'rel' na v11.192.0.
-    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'paladin', 'etiqueta', 'obra', 'apoios', 'rel', 'flags', 'log'].forEach((n) => {
+    ['scav', 'farm', 'recruit', 'market', 'build', 'research', 'noble', 'paladin', 'etiqueta', 'obra', 'apoios', 'rel', 'flags', 'entrega', 'log'].forEach((n) => {
       const c = document.getElementById('twmgr-tab-' + n); if (c) c.style.display = n === name ? 'block' : 'none';
       const b = document.getElementById('twmgr-btab-' + n); if (b) b.classList.toggle('active', n === name);
     });
@@ -393,7 +393,7 @@
     p.innerHTML =
       '<div id="twmgr-grip" title="arraste pra alargar/estreitar o painel"></div>' +
       '<div id="twmgr-head"><span class="twmgr-title">🎯 TW Manager <span class="twmgr-ver">v' + VERSION + '</span></span><div id="twmgr-head-actions"><span id="twmgr-dot" class="twmgr-dot" title="algum módulo ativo"></span><span id="twmgr-logbtn" title="Log">📜</span><span id="twmgr-upd-btn" title="Verificar / instalar atualização">🔄<span id="twmgr-upd-badge" style="display:none">●</span></span><span id="twmgr-min" title="minimizar / restaurar">–</span></div></div>' +
-      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + tabBtn('apoios', '🛡️', 'Apoios') + tabBtn('rel', '💎', 'Relíquias') + tabBtn('flags', '🚩', 'Bandeiras') + '</div>' +
+      '<div class="twmgr-tabs">' + tabBtn('scav', '⛏️', 'Coletas') + tabBtn('farm', '🐎', 'Saque') + tabBtn('recruit', '🏹', 'Recrutar') + tabBtn('market', '🏪', 'Mercado') + tabBtn('build', '🏗️', 'Construções') + tabBtn('research', '⚗️', 'Pesquisa') + tabBtn('noble', '👑', 'Noblar') + tabBtn('paladin', '🐴', 'Paladino') + tabBtn('etiqueta', '🏷️', 'Etiquetas') + tabBtn('obra', '🏛️', 'Obra') + tabBtn('apoios', '🛡️', 'Apoios') + tabBtn('rel', '💎', 'Relíquias') + tabBtn('flags', '🚩', 'Bandeiras') + tabBtn('entrega', '📦', 'Entrega') + '</div>' +
       // Telas de modelo: overlay DENTRO do painel, nao aba nova. Ficam fora do #twmgr-body pra
       // cobrir o painel inteiro (inclusive a barra de abas) enquanto abertas -- e uma tela cheia
       // de edicao, entao trocar de aba no meio nao faz sentido.
@@ -866,25 +866,6 @@
             '<button id="twmgr-nb-desc-go" class="twmgr-btn" style="padding:5px 12px" title="pede confirmação nomeando cada aldeia antes de agir">▶ Descartar</button>' +
           '</div>' +
           '<div id="twmgr-nb-desc-out" style="margin-top:6px"></div>') +
-        // ENTREGA (089-entrega). Fica na aba Noblar porque gasta o mesmo recurso escasso — nobre —
-        // e concorre pelo mesmo limite de conta que o resto desta aba.
-        sec('Entregar aldeia (baixar a própria lealdade)',
-          '<div style="font-size:9px;color:#8a7d6d;margin-bottom:5px">Mantém a lealdade das aldeias abaixo'
-            + ' listadas <b>no teto</b>, pra outra conta conquistar com <b>1 nobre só</b>. Esvazia a aldeia'
-            + ' por apoio antes de bater (nobre que morre não mexe na lealdade) e nunca bate abaixo de 36,'
-            + ' pra não zerar e conquistar a si mesmo. O nobre <b>volta</b> — o mesmo serve várias aldeias.</div>' +
-          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:5px">' +
-            '<span style="font-size:10px;color:#6f6153">teto de lealdade '
-              + '<input id="twmgr-ent-teto" class="twmgr-inp" type="number" min="1" max="99" style="width:52px;font-size:10px;padding:1px"></span>' +
-            '<span id="twmgr-ent-aviso" style="font-size:9px;color:#b03030"></span>' +
-          '</div>' +
-          '<textarea id="twmgr-ent-alvos" class="twmgr-inp" rows="3" placeholder="471|581, 474|575 — uma por linha ou separadas por vírgula"'
-            + ' style="width:100%;font-size:10px;padding:3px"></textarea>' +
-          '<div style="display:flex;gap:6px;align-items:center;margin-top:5px">' +
-            '<button id="twmgr-ent-start" class="twmgr-btn twmgr-go" style="padding:5px 12px">▶ Ligar</button>' +
-            '<button id="twmgr-ent-stop" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">■ Parar</button>' +
-            '<span id="twmgr-ent-st" style="font-size:10px;color:#6f6153"></span>' +
-          '</div>') +
         sec('Modelos de envio',
           '<div id="twmgr-nb-chips" class="twmgr-chips"></div>' +
           '<div class="twmgr-card2">' +
@@ -1031,6 +1012,25 @@
         '<div class="twmgr-actions"><button id="twmgr-rel-ler" class="twmgr-btn twmgr-ghost" style="width:100%">↻ Analisar</button></div>' +
         '<div id="twmgr-rel-corpo"></div>' +
         modLog('rel') +
+      '</div>' +
+      '<div id="twmgr-tab-entrega" style="display:none">' +
+        hint('📦 Para <b>passar aldeias suas para outra conta</b>. Mantém a lealdade delas no teto pra a outra conta conquistar com <b>1 nobre só</b>. Um nobre tira de 20 a 35, então o teto seguro é <b>20</b>: em 25 um resultado 20 deixa a aldeia viva em 5 e o nobre se perde. Antes de bater, a aldeia é <b>esvaziada por apoio</b> numa vizinha — nobre que morre na batalha não mexe na lealdade. E nunca bate abaixo de <b>36</b>: 35−35=0 conquistaria a aldeia pra você mesmo. O nobre <b>volta</b> (só some quando conquista de fato), então o mesmo serve várias aldeias em rodízio.') +
+        '<div class="twmgr-card2">' +
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">' +
+            '<span style="font-size:10px;color:#6f6153">teto de lealdade '
+              + '<input id="twmgr-ent-teto" class="twmgr-inp" type="number" min="1" max="99" style="width:52px;font-size:10px;padding:1px"></span>' +
+            '<span id="twmgr-ent-aviso" style="font-size:9px;color:#b03030"></span>' +
+          '</div>' +
+          '<div style="font-size:10px;color:#6f6153;margin-bottom:3px">Aldeias a entregar (coordenadas):</div>' +
+          '<textarea id="twmgr-ent-alvos" class="twmgr-inp" rows="5" placeholder="471|581, 474|575 — uma por linha ou separadas por vírgula"'
+            + ' style="width:100%;font-size:10px;padding:3px"></textarea>' +
+          '<div style="display:flex;gap:6px;align-items:center;margin-top:6px">' +
+            '<button id="twmgr-ent-start" class="twmgr-btn twmgr-go" style="padding:5px 12px">▶ Ligar</button>' +
+            '<button id="twmgr-ent-stop" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">■ Parar</button>' +
+            '<span id="twmgr-ent-st" style="font-size:10px;color:#6f6153"></span>' +
+          '</div>' +
+        '</div>' +
+        modLog('entrega') +
       '</div>' +
       '<div id="twmgr-tab-flags" style="display:none">' +
         hint('🚩 Uma aldeia só usa <b>uma</b> bandeira, então a pergunta não é qual bandeira é boa — é <b>qual vai em qual aldeia</b>. Cada uma ganha um preço em recurso/hora: a de <b>Recurso</b> vale <i>% × produção dos três prédios</i> e dura pra sempre; a de <b>Recrutamento</b> vale <i>% × quanta tropa a aldeia consegue produzir</i> e só até a fazenda encher. Daí sai sozinho que fazenda cheia pede Recurso e estábulo bom com espaço pede Recrutamento. <b>Trocar é de graça</b> e a antiga volta pro estoque na hora, mas cada aldeia fica <b>24h</b> sem poder trocar de novo.') +

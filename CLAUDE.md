@@ -102,6 +102,7 @@ Chaves de módulo (`wall`, `map`) seguem valendo em `config`, `refreshCards` e `
 | `075-mercado` `080-edificios` `082-pesquisa` `085-obra` | mercado, **Construções** (rotulado assim na UI), pesquisa do Ferreiro, obra |
 | `076-cunhagem-plano` | projecao da cunhagem (`cpl*`): melhor sede, quanto chega na janela, moedas e nobres — simula ida-e-volta do mercador |
 | `087-nobre-descarte` | descarte de nobre inutil: manda numa barbara perto ou dispensa (`mode=decommission`) |
+| `089-entrega` | entrega de aldeia (`ent*`): mantem a lealdade das SUAS aldeias no teto pra outra conta conquistar com 1 nobre; esvazia por apoio e nunca bate abaixo de 36 |
 | `095-saque-tplB` `100-barbaros-mapa` | saque template B, bárbaros do mapa (o `090-bb`/Cultivo foi aposentado na v11.15.0) |
 | `110-cadeado` `120-etiqueta` | reserva de bárbara, auto-rótulo |
 | `130-captcha` `140-painel-controllers` `150-painel-ui` | captcha, controladores, UI do painel |

@@ -866,6 +866,25 @@
             '<button id="twmgr-nb-desc-go" class="twmgr-btn" style="padding:5px 12px" title="pede confirmação nomeando cada aldeia antes de agir">▶ Descartar</button>' +
           '</div>' +
           '<div id="twmgr-nb-desc-out" style="margin-top:6px"></div>') +
+        // ENTREGA (089-entrega). Fica na aba Noblar porque gasta o mesmo recurso escasso — nobre —
+        // e concorre pelo mesmo limite de conta que o resto desta aba.
+        sec('Entregar aldeia (baixar a própria lealdade)',
+          '<div style="font-size:9px;color:#8a7d6d;margin-bottom:5px">Mantém a lealdade das aldeias abaixo'
+            + ' listadas <b>no teto</b>, pra outra conta conquistar com <b>1 nobre só</b>. Esvazia a aldeia'
+            + ' por apoio antes de bater (nobre que morre não mexe na lealdade) e nunca bate abaixo de 36,'
+            + ' pra não zerar e conquistar a si mesmo. O nobre <b>volta</b> — o mesmo serve várias aldeias.</div>' +
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:5px">' +
+            '<span style="font-size:10px;color:#6f6153">teto de lealdade '
+              + '<input id="twmgr-ent-teto" class="twmgr-inp" type="number" min="1" max="99" style="width:52px;font-size:10px;padding:1px"></span>' +
+            '<span id="twmgr-ent-aviso" style="font-size:9px;color:#b03030"></span>' +
+          '</div>' +
+          '<textarea id="twmgr-ent-alvos" class="twmgr-inp" rows="3" placeholder="471|581, 474|575 — uma por linha ou separadas por vírgula"'
+            + ' style="width:100%;font-size:10px;padding:3px"></textarea>' +
+          '<div style="display:flex;gap:6px;align-items:center;margin-top:5px">' +
+            '<button id="twmgr-ent-start" class="twmgr-btn twmgr-go" style="padding:5px 12px">▶ Ligar</button>' +
+            '<button id="twmgr-ent-stop" class="twmgr-btn twmgr-ghost" style="padding:5px 12px">■ Parar</button>' +
+            '<span id="twmgr-ent-st" style="font-size:10px;color:#6f6153"></span>' +
+          '</div>') +
         sec('Modelos de envio',
           '<div id="twmgr-nb-chips" class="twmgr-chips"></div>' +
           '<div class="twmgr-card2">' +
@@ -1447,6 +1466,37 @@
       p.addEventListener('change', () => { d.permitirDispensar = p.checked; save(); });
       document.getElementById('twmgr-nb-desc-prev').addEventListener('click', nbDescPrever);
       document.getElementById('twmgr-nb-desc-go').addEventListener('click', nbDescExecutar);
+    })();
+    // Entrega (089-entrega).
+    (function () {
+      const e = entCfg();
+      const t = document.getElementById('twmgr-ent-teto');
+      const a = document.getElementById('twmgr-ent-alvos');
+      if (!t || !a) return;
+      const avisa = () => {
+        const el = document.getElementById('twmgr-ent-aviso');
+        // Acima de 20 a conquista com 1 nobre deixa de ser garantida: um nobre tira 20 a 35, entao
+        // de 25 um resultado 20 deixa a aldeia viva em 5. O usuario pode escolher assim mesmo, mas
+        // nao pode escolher sem saber.
+        if (el) el.textContent = entCfg().teto > 20
+          ? ('acima de 20 a conquista com 1 nobre NÃO é garantida (em ' + entCfg().teto + ', dá certo em ' + Math.round(Math.max(0, (36 - entCfg().teto)) / 16 * 100) + '% dos casos)')
+          : '';
+      };
+      const st = () => {
+        const el = document.getElementById('twmgr-ent-st');
+        if (el) el.textContent = entCfg().ligado ? ('ligado · ' + (entCfg().alvos || []).length + ' aldeia(s)') : 'parado';
+      };
+      t.value = e.teto;
+      a.value = (e.alvos || []).join('\n');
+      avisa(); st();
+      t.addEventListener('change', () => { entCfg().teto = parseInt(t.value, 10) || 20; t.value = entCfg().teto; save(); avisa(); });
+      a.addEventListener('change', () => {
+        const lista = (a.value || '').split(/[^0-9|]+/).map((x) => x.trim()).filter((x) => /^\d{1,3}\|\d{1,3}$/.test(x));
+        entCfg().alvos = lista.filter((x, i) => lista.indexOf(x) === i);
+        a.value = entCfg().alvos.join('\n'); save(); st();
+      });
+      document.getElementById('twmgr-ent-start').addEventListener('click', () => { entStart(); st(); });
+      document.getElementById('twmgr-ent-stop').addEventListener('click', () => { entStop(); st(); });
     })();
     renderNobleOciosos();   // só desenha o estado atual; quem dispara a leitura é showTab
     setNobleStatus(config.noble.running);

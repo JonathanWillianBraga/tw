@@ -1021,6 +1021,13 @@
               + '<input id="twmgr-ent-teto" class="twmgr-inp" type="number" min="1" max="99" style="width:52px;font-size:10px;padding:1px"></span>' +
             '<span id="twmgr-ent-aviso" style="font-size:9px;color:#b03030"></span>' +
           '</div>' +
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">' +
+            '<span style="font-size:10px;color:#6f6153" title="Nobre anda 35 min por campo. 10 campos = 5h50 de ida. O mundo não deixa passar de 70.">alcance do nobre '
+              + '<input id="twmgr-ent-campos" class="twmgr-inp" type="number" min="1" max="70" style="width:52px;font-size:10px;padding:1px"> campos'
+              + '<span id="twmgr-ent-voo" style="color:#8a7d6d"></span></span>' +
+            '<label style="font-size:10px;color:#b03030;cursor:pointer" title="O limite de nobres é da CONTA. Um nobre encalhado longe ocupa vaga sem alcançar nada. Com isto ligado, quando faltar nobre perto do alvo o módulo forma um aqui — e se o limite estiver cheio, dispensa antes um que não alcança alvo nenhum. Dispensar não devolve o recurso da unidade.">' +
+              '<input id="twmgr-ent-recicla" type="checkbox"> reciclar nobre distante (forma perto; dispensa o que não alcança)</label>' +
+          '</div>' +
           '<div style="font-size:10px;color:#6f6153;margin-bottom:3px">Aldeias a entregar (coordenadas):</div>' +
           '<textarea id="twmgr-ent-alvos" class="twmgr-inp" rows="5" placeholder="471|581, 474|575 — uma por linha ou separadas por vírgula"'
             + ' style="width:100%;font-size:10px;padding:3px"></textarea>' +
@@ -1486,7 +1493,21 @@
         const el = document.getElementById('twmgr-ent-st');
         if (el) el.textContent = entCfg().ligado ? ('ligado · ' + (entCfg().alvos || []).length + ' aldeia(s)') : 'parado';
       };
+      const cp = document.getElementById('twmgr-ent-campos');
+      const rc = document.getElementById('twmgr-ent-recicla');
+      // Campo mudo nao ajuda: 10 campos nao diz nada, 5h50 de ida diz. Nobre anda 35 min/campo.
+      const voo = () => {
+        const el = document.getElementById('twmgr-ent-voo');
+        if (!el) return;
+        const min = Math.round((entCfg().maxCampos || 0) * 35);
+        el.textContent = ' (' + Math.floor(min / 60) + 'h' + String(min % 60).padStart(2, '0') + ' de ida)';
+      };
       t.value = e.teto;
+      if (cp) cp.value = e.maxCampos;
+      if (rc) rc.checked = !!e.reciclar;
+      voo();
+      if (cp) cp.addEventListener('change', () => { entCfg().maxCampos = parseInt(cp.value, 10) || 10; cp.value = entCfg().maxCampos; save(); voo(); });
+      if (rc) rc.addEventListener('change', () => { entCfg().reciclar = rc.checked; save(); });
       a.value = (e.alvos || []).join('\n');
       avisa(); st();
       t.addEventListener('change', () => { entCfg().teto = parseInt(t.value, 10) || 20; t.value = entCfg().teto; save(); avisa(); });

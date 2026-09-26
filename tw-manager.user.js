@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.263.0
+// @version      11.264.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.263.0';
+  const VERSION = '11.264.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -13513,8 +13513,15 @@
   // Faixas da janela segura. Acima do teto e ate ENT_ZONA_MORTA_ATE a batida pode zerar a aldeia.
   const ENT_ZONA_MORTA_ATE = 35;
   const ENT_MIN_PRA_BATER = 36;
-  // Nobre anda 35 min/campo e o mundo limita o alcance dele (snob.max_dist no config do jogo).
+  // TETO DO MUNDO, lido do config do jogo (`snob.max_dist`): nobre nao voa alem disso, ponto.
+  // O alcance que o usuario escolhe e outra coisa — e quanto tempo de viagem ele acha que vale —
+  // e so pode ser MENOR que este. Nobre anda 35 min/campo, entao 10 campos ja sao 5h50 de ida.
   const ENT_MAX_CAMPOS = 70;
+  const ENT_CAMPOS_PADRAO = 10;
+  // Quantas vizinhas tentar quando for formar nobre perto. Cada tentativa custa requisicao, e a
+  // primeira ja responde a pergunta cara (tem slot no limite da conta?) — o resto e so achar uma
+  // aldeia com academia, recurso e populacao.
+  const ENT_TENTA_FORMAR = 6;
   const ENT_INTERVALO_MS = 10 * 60 * 1000;
   // Quem pode ir completando o piso de populacao. So tropa de campo: explorador nao briga e
   // ariete/catapulta servem pra muralha, nao pra escoltar.
@@ -13531,6 +13538,14 @@
     // O teto e a unica coisa aqui que o usuario pode estragar sem perceber: acima de 20 a conquista
     // com 1 nobre deixa de ser garantida. Deixo passar (a escolha e dele) mas a tela avisa.
     c.teto = Math.max(1, Math.min(99, parseInt(c.teto, 10) || ENT_TETO_PADRAO));
+    if (c.maxCampos == null) c.maxCampos = ENT_CAMPOS_PADRAO;
+    c.maxCampos = Math.max(1, Math.min(ENT_MAX_CAMPOS, parseInt(c.maxCampos, 10) || ENT_CAMPOS_PADRAO));
+    // RECICLAR DESTROI NOBRE. Opt-in separado, pela mesma razao que o `permitirDispensar` do
+    // 087-nobre-descarte e separado: dispensar nao devolve o recurso da unidade. A diferenca e
+    // que la a perda e o fim da historia, e aqui ela compra uma coisa concreta — um slot do
+    // limite da conta pra formar nobre PERTO do alvo, onde ele serve. Mesmo assim nao pode
+    // ligar sozinho.
+    if (c.reciclar == null) c.reciclar = false;
     if (c.nextAt == null) c.nextAt = 0;
     return c;
   }
@@ -13669,7 +13684,7 @@
         .filter((o) => o.vid !== vid && !ehAlvo[o.vid] && o.coord)
         .filter((o) => ((tropas[String(o.vid)] || {}).snob || 0) > 0)
         .map((o) => ({ o: o, d: entDist(alvoXY, entXY(o.coord)) }))
-        .filter((x) => x.d <= ENT_MAX_CAMPOS)
+        .filter((x) => x.d <= c.maxCampos)
         .sort((a, b) => a.d - b.d);
 
       let mandou = false;
@@ -13708,7 +13723,8 @@
       if (!mandou) {
         semOrigem++;
         pushLog('Entrega: ' + v.name + ' está em ' + leal + ' e precisa de batida, mas nenhuma origem com nobre'
-          + ' (e escolta pro piso de fake) dentro de ' + ENT_MAX_CAMPOS + ' campos.', 'err', 'entrega');
+          + ' (e escolta pro piso de fake) dentro de ' + c.maxCampos + ' campos.', 'err', 'entrega');
+        if (c.reciclar) await entReciclar(v, alvoXY, vilas, ehAlvo, tropas, alvos, porCoord);
       }
     }
 
@@ -13716,6 +13732,81 @@
       + (evacuou ? ' · ' + evacuou + ' esvaziada(s)' : '')
       + (semOrigem ? ' · ' + semOrigem + ' SEM nobre disponível' : '') + '.', 'ok', 'entrega');
     save();
+  }
+
+  // ===== Arranjar nobre PERTO: formar, e se o limite estiver cheio, reciclar um distante =====
+  //
+  // O problema e especifico: nao falta nobre na conta, falta nobre PERTO. O limite de nobres e da
+  // CONTA inteira, entao um nobre encalhado do outro lado do mapa impede formar outro aqui — ele
+  // ocupa a vaga sem alcançar nada. Reciclar troca o inutil pelo util.
+  //
+  // A ORDEM IMPORTA: tenta formar PRIMEIRO. Se ha vaga no limite, dispensar seria destruir um
+  // nobre a toa — a vaga ja existia. So quando `podemFormar` e zero e que o descarte compra
+  // alguma coisa.
+  //
+  // NUNCA dispensa nobre que esta no alcance de ALGUM alvo, mesmo que esteja longe DESTE. Ele
+  // serve pro outro alvo no proximo ciclo, e destrui-lo aqui so faria o ciclo seguinte formar de
+  // novo — o mesmo moinho de moeda que o comentario do 084-noblar descreve.
+  async function entReciclar(alvo, alvoXY, vilas, ehAlvo, tropas, alvosCoords, porCoord) {
+    const c = entCfg();
+    const perto = vilas
+      .filter((o) => !ehAlvo[o.vid] && o.coord)
+      .map((o) => ({ o: o, d: entDist(alvoXY, entXY(o.coord)) }))
+      .filter((x) => x.d <= c.maxCampos)
+      .sort((a, b) => a.d - b.d);
+    if (!perto.length) {
+      pushLog('Entrega: ' + alvo.name + ' — não há aldeia sua dentro de ' + c.maxCampos + ' campos pra formar nobre.'
+        + ' Aumente o alcance ou a entrega dessa aldeia não sai.', 'err', 'entrega');
+      return;
+    }
+
+    let est;
+    try { est = await getSnobState(perto[0].o.vid); }
+    catch (e) { pushLog('Entrega: não consegui ler a academia de ' + perto[0].o.name + ' (' + ((e && e.message) || e) + ').', 'err', 'entrega'); return; }
+    const vagas = est && est.podemFormar != null ? est.podemFormar : null;
+
+    if (vagas === 0) {
+      // Limite cheio. Procura o nobre mais INUTIL: o que esta mais longe de TODOS os alvos.
+      const alvosXY = alvosCoords.map((cd) => porCoord[cd]).filter(Boolean).map((v) => entXY(v.coord));
+      const inuteis = vilas
+        .filter((o) => !ehAlvo[o.vid] && o.coord && ((tropas[String(o.vid)] || {}).snob || 0) > 0)
+        .map((o) => ({ o: o, perto: Math.min.apply(null, alvosXY.map((a) => entDist(a, entXY(o.coord)))) }))
+        .filter((x) => x.perto > c.maxCampos)   // no alcance de algum alvo = util, nao se toca
+        .sort((a, b) => b.perto - a.perto);
+      if (!inuteis.length) {
+        pushLog('Entrega: limite de nobres cheio e nenhum nobre fora do alcance pra reciclar —'
+          + ' todos os que você tem servem a algum alvo. Nada a fazer por ' + alvo.name + ' neste ciclo.', '', 'entrega');
+        return;
+      }
+      const vitima = inuteis[0];
+      try {
+        await nbDescDispensar(vitima.o.vid, 1);
+        (tropas[String(vitima.o.vid)] || {}).snob = Math.max(0, ((tropas[String(vitima.o.vid)] || {}).snob || 1) - 1);
+        pushLog('Entrega: dispensei 1 nobre de ' + vitima.o.name + ' (a ' + vitima.perto.toFixed(1)
+          + ' campos do alvo mais próximo — não alcançava nenhum) pra abrir vaga no limite.', 'ok', 'entrega');
+      } catch (e) {
+        pushLog('Entrega: não consegui dispensar o nobre de ' + vitima.o.name + ' (' + ((e && e.message) || e) + ').', 'err', 'entrega');
+        return;
+      }
+    } else if (vagas === null) {
+      pushLog('Entrega: não consegui ler quantos nobres ainda cabem no limite — vou tentar formar assim mesmo.', '', 'entrega');
+    }
+
+    // Forma na mais perto que aceitar. Falta de academia, recurso ou populacao nao interrompe:
+    // segue pra proxima — mesmo criterio do nobleRecrutar.
+    for (let i = 0; i < Math.min(ENT_TENTA_FORMAR, perto.length); i++) {
+      const cand = perto[i];
+      try {
+        await nobleFormar(cand.o.vid);
+        pushLog('Entrega: formando nobre em ' + cand.o.name + ' (' + cand.d.toFixed(1) + ' campos de '
+          + alvo.name + '). Ele bate quando ficar pronto.', 'ok', 'entrega');
+        return;
+      } catch (e) {
+        pushLog('Entrega: ' + cand.o.name + ' não formou (' + ((e && e.message) || e) + ') — tento a próxima.', '', 'entrega');
+      }
+    }
+    pushLog('Entrega: nenhuma das ' + Math.min(ENT_TENTA_FORMAR, perto.length) + ' aldeias mais perto de '
+      + alvo.name + ' conseguiu formar nobre agora.', 'err', 'entrega');
   }
 
   function entAgendar() {
@@ -17732,6 +17823,13 @@
               + '<input id="twmgr-ent-teto" class="twmgr-inp" type="number" min="1" max="99" style="width:52px;font-size:10px;padding:1px"></span>' +
             '<span id="twmgr-ent-aviso" style="font-size:9px;color:#b03030"></span>' +
           '</div>' +
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">' +
+            '<span style="font-size:10px;color:#6f6153" title="Nobre anda 35 min por campo. 10 campos = 5h50 de ida. O mundo não deixa passar de 70.">alcance do nobre '
+              + '<input id="twmgr-ent-campos" class="twmgr-inp" type="number" min="1" max="70" style="width:52px;font-size:10px;padding:1px"> campos'
+              + '<span id="twmgr-ent-voo" style="color:#8a7d6d"></span></span>' +
+            '<label style="font-size:10px;color:#b03030;cursor:pointer" title="O limite de nobres é da CONTA. Um nobre encalhado longe ocupa vaga sem alcançar nada. Com isto ligado, quando faltar nobre perto do alvo o módulo forma um aqui — e se o limite estiver cheio, dispensa antes um que não alcança alvo nenhum. Dispensar não devolve o recurso da unidade.">' +
+              '<input id="twmgr-ent-recicla" type="checkbox"> reciclar nobre distante (forma perto; dispensa o que não alcança)</label>' +
+          '</div>' +
           '<div style="font-size:10px;color:#6f6153;margin-bottom:3px">Aldeias a entregar (coordenadas):</div>' +
           '<textarea id="twmgr-ent-alvos" class="twmgr-inp" rows="5" placeholder="471|581, 474|575 — uma por linha ou separadas por vírgula"'
             + ' style="width:100%;font-size:10px;padding:3px"></textarea>' +
@@ -18197,7 +18295,21 @@
         const el = document.getElementById('twmgr-ent-st');
         if (el) el.textContent = entCfg().ligado ? ('ligado · ' + (entCfg().alvos || []).length + ' aldeia(s)') : 'parado';
       };
+      const cp = document.getElementById('twmgr-ent-campos');
+      const rc = document.getElementById('twmgr-ent-recicla');
+      // Campo mudo nao ajuda: 10 campos nao diz nada, 5h50 de ida diz. Nobre anda 35 min/campo.
+      const voo = () => {
+        const el = document.getElementById('twmgr-ent-voo');
+        if (!el) return;
+        const min = Math.round((entCfg().maxCampos || 0) * 35);
+        el.textContent = ' (' + Math.floor(min / 60) + 'h' + String(min % 60).padStart(2, '0') + ' de ida)';
+      };
       t.value = e.teto;
+      if (cp) cp.value = e.maxCampos;
+      if (rc) rc.checked = !!e.reciclar;
+      voo();
+      if (cp) cp.addEventListener('change', () => { entCfg().maxCampos = parseInt(cp.value, 10) || 10; cp.value = entCfg().maxCampos; save(); voo(); });
+      if (rc) rc.addEventListener('change', () => { entCfg().reciclar = rc.checked; save(); });
       a.value = (e.alvos || []).join('\n');
       avisa(); st();
       t.addEventListener('change', () => { entCfg().teto = parseInt(t.value, 10) || 20; t.value = entCfg().teto; save(); avisa(); });

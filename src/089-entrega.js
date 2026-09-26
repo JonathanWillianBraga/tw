@@ -338,6 +338,31 @@
     // outra aldeia que tambem vai ser entregue so empurra o problema, e a tropa vai junto no pacote.
     const ehAlvo = {}; alvos.forEach((cd) => { const v = porCoord[cd]; if (v) ehAlvo[v.vid] = 1; });
 
+    // LER OS RELATORIOS DOS MEUS ALVOS.
+    //
+    // A lealdade so muda quando o relatorio do ataque e lido — e quem lia era o ciclo do NOBLAR,
+    // filtrando pelos alvos DELE (`querido[destino]`). As coordenadas da Entrega sao aldeias
+    // suas, nunca alvos do Noblar, entao os relatorios nunca eram abertos: a lealdade ficava
+    // congelada no ultimo valor e os voos nunca eram dados como pousados. O modulo entao dizia
+    // "ja tem nobre a caminho" pra sempre e parava de agir. Era o relatado: "os atks ja bateram,
+    // mas ele n ta lendo".
+    //
+    // Reusa a varredura do Noblar passando os MEUS alvos. Nao atrapalha o dele: a funcao descarta
+    // o relatorio que nao e de um alvo pedido ANTES de marcar `vistos`, entao relatorio dele
+    // continua intacto pra quando o ciclo dele rodar.
+    //
+    // So varre quando ha voo registrado: sem nobre no ar nada pousou, e a varredura custa uma
+    // requisicao de lista mais uma por relatorio aberto.
+    if (alvos.some((cd) => entVoando(cd) > 0) && config.noble && config.noble.lerRelatorios !== false) {
+      try {
+        const lidos = await nobleVarrerRelatorios(alvos.map((cd) => ({ coord: cd })));
+        if (lidos) pushLog('Entrega: li ' + lidos + ' relatório(s) — lealdade atualizada.', 'ok', 'entrega');
+      } catch (e) {
+        pushLog('Entrega: não consegui ler os relatórios (' + ((e && e.message) || e) + ')'
+          + ' — sem eles a lealdade não atualiza e o ciclo fica parado esperando pouso.', 'err', 'entrega');
+      }
+    }
+
     // QUEM AINDA PRECISA DE BATIDA — calculado ANTES do laco, nao lido do estado do ciclo
     // anterior. E o que decide se vale segurar o nobre de uma aldeia pra usar em outra, e ler do
     // estado velho errava em dois casos: no primeiro ciclo (estado vazio, nenhuma "precisa") e

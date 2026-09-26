@@ -178,18 +178,47 @@
     try { return (nobleVoos(coord) || []).reduce((s, e) => s + (e.n || 1), 0); } catch (e) { return 0; }
   }
 
+  // QUANTOS NOBRES CABEM AGORA, sem chance de zerar a aldeia.
+  //
+  // O "um por vez" da v11.265.0 era seguro e lento: cada batida gastava um voo inteiro de ida
+  // (horas) pra tirar em media 25 de lealdade. De 100 ate 20 sao 4 batidas, ou seja 4 viagens em
+  // serie. Mas 1 nao era o numero certo — era so o numero obviamente seguro.
+  //
+  // O numero certo sai de duas contas:
+  //
+  //   TETO DE SEGURANCA  floor((lealdade - 1) / 35)
+  //     No pior caso cada nobre tira 35. Mandar N nunca pode levar a lealdade a zero, entao
+  //     35N <= lealdade - 1. De 100 da 2; de 71 da 2; de 36 da 1; de 35 da 0 (a zona morta sai
+  //     daqui sozinha, sem regra separada).
+  //
+  //   QUANTOS FALTAM     ceil((lealdade - teto) / 20)
+  //     No pior caso cada nobre tira 20. Mais que isso e nobre gasto a toa.
+  //
+  // Manda o MENOR dos dois, descontando o que ja esta no ar (a lealdade lida ainda nao conta
+  // esses pousos, entao eles gastam do mesmo orcamento).
+  const ENT_QUEDA_MAX = 35;
+  const ENT_QUEDA_MIN = 20;
+  function entQuantos(lealdade, teto, voando) {
+    if (lealdade <= teto) return 0;
+    const seguro = Math.floor((lealdade - 1) / ENT_QUEDA_MAX);
+    const faltam = Math.ceil((lealdade - teto) / ENT_QUEDA_MIN);
+    return Math.max(0, Math.min(seguro, faltam) - voando);
+  }
+
   function entDecidir(lealdade, teto, voando, apoio, milicia) {
-    if (voando > 0) return { acao: 'voando', txt: voando + ' nobre(s) a caminho — espero pousar' };
     if (lealdade <= teto) return { acao: 'ok', txt: 'na faixa' };
     if (apoio > 0) return { acao: 'apoio', txt: 'tem ' + apoio + ' tropa(s) de APOIO de fora — o nobre morreria' };
     // Milicia nao se manda embora: e defesa local, criada na propria aldeia, e some sozinha
     // quando o prazo dela acaba. Nao da pra esvaziar por apoio nem por ataque — so esperar.
     if (milicia > 0) return { acao: 'milicia', txt: 'tem ' + milicia + ' de MILÍCIA — ela some sozinha; espero' };
-    if (lealdade <= ENT_ZONA_MORTA_ATE) {
-      return { acao: 'espera', txt: 'zona morta — bater agora pode zerar; espera chegar a ' + ENT_MIN_PRA_BATER };
+    const n = entQuantos(lealdade, teto, voando);
+    if (n <= 0) {
+      if (voando > 0) return { acao: 'voando', txt: voando + ' no ar já é o limite seguro — espero pousar' };
+      return { acao: 'espera', txt: 'zona morta — qualquer batida pode zerar; espera chegar a ' + ENT_MIN_PRA_BATER };
     }
-    if (lealdade <= 40) return { acao: 'bate', txt: 'tiro final — cai entre 1 e ' + teto };
-    return { acao: 'bate', txt: 'aproxima' };
+    const sobra = lealdade - n * ENT_QUEDA_MAX;
+    return { acao: 'bate', n: n, txt: n + ' nobre(s) — pior caso deixa ' + sobra
+      + (lealdade - n * ENT_QUEDA_MIN <= teto ? ', melhor caso fecha' : '') };
   }
 
   // Piso de populacao do ataque, pelos pontos da origem.
@@ -446,8 +475,11 @@
         .filter((x) => x.d <= c.maxCampos)
         .sort((a, b) => a.d - b.d);
 
+      const querMandar = d.n || 1;
+      let enviados = 0;
       let mandou = false;
       for (const x of cand) {
+        if (enviados >= querMandar) break;
         const avail = tropas[String(x.o.vid)] || {};
         const piso = entPisoPop(pontos[String(x.o.vid)] || 0);
         const cmd = entMontarComando(avail, piso);
@@ -458,16 +490,17 @@
         };
         try {
           const dur = await sendAttack(x.o.vid, alvoXY.x, alvoXY.y, cmd, 'attack');
-          bateu++; mandou = true;
+          bateu++; mandou = true; enviados++;
           descontar();   // o mapa de tropa é um retrato; o mesmo nobre não pode ir duas vezes
           // REGISTRA O VOO. Sem isto o proximo ciclo nao sabe que ja tem nobre indo e manda outro.
           // `sendAttack` devolve a duracao em segundos justamente pra isso.
           nobleRegistraEnvio(v.coord, 1, dur || Math.round(x.d * 35 * 60), x.o.name);
-          if (c.estado && c.estado[v.coord]) { c.estado[v.coord].voando = 1; c.estado[v.coord].acao = 'voando'; }
+          if (c.estado && c.estado[v.coord]) { c.estado[v.coord].voando = voando + enviados; c.estado[v.coord].acao = 'voando'; }
           const min = Math.round(x.d * 35);
-          pushLog('Entrega: nobre de ' + x.o.name + ' → ' + v.name + ' (lealdade ' + leal + ', ' + d.txt
-            + ') · ' + x.d.toFixed(1) + ' campos, ' + Math.floor(min / 60) + 'h' + String(min % 60).padStart(2, '0') + '.', 'ok', 'entrega');
-          break;
+          pushLog('Entrega: nobre ' + enviados + '/' + querMandar + ' de ' + x.o.name + ' → ' + v.name
+            + ' (lealdade ' + Math.round(leal) + ', ' + d.txt + ') · ' + x.d.toFixed(1) + ' campos, '
+            + Math.floor(min / 60) + 'h' + String(min % 60).padStart(2, '0') + '.', 'ok', 'entrega');
+          continue;   // pode caber mais de um nesta rodada: quem limita e `querMandar`
         } catch (e) {
           const msg = (e && e.message) || String(e);
           // AMBIGUO NAO PODE VIRAR REENVIO. `sendAttack` marca assim a resposta que tanto pode ser
@@ -475,7 +508,7 @@
           // ataque na propria aldeia — e duas batidas seguidas sao exatamente o que pode zerar a
           // lealdade. Na duvida, para e deixa o proximo ciclo reler a lealdade.
           if (/^ambiguo:/.test(msg)) {
-            mandou = true; descontar();
+            mandou = true; enviados++; descontar();
             // Registra como se tivesse saido. Se nao saiu, o pior e um ciclo de espera; se saiu e
             // eu nao registrasse, o proximo ciclo mandaria outro — e e esse o erro caro.
             nobleRegistraEnvio(v.coord, 1, Math.round(x.d * 35 * 60), x.o.name);
@@ -486,9 +519,14 @@
           pushLog('Entrega: ' + x.o.name + ' recusou (' + msg + ') — tento a próxima origem.', '', 'entrega');
         }
       }
+      if (mandou && enviados < querMandar) {
+        pushLog('Entrega: ' + v.name + ' — mandei ' + enviados + ' de ' + querMandar
+          + ' (faltou nobre ou escolta nas origens). O resto vai no próximo ciclo.', '', 'entrega');
+      }
       if (!mandou) {
         semOrigem++;
-        pushLog('Entrega: ' + v.name + ' está em ' + leal + ' e precisa de batida, mas nenhuma origem com nobre'
+        pushLog('Entrega: ' + v.name + ' está em ' + Math.round(leal) + ' e precisa de ' + querMandar
+          + ' batida(s), mas nenhuma origem com nobre'
           + ' (e escolta pro piso de fake) dentro de ' + c.maxCampos + ' campos.', 'err', 'entrega');
         if (c.reciclar) await entReciclar(v, alvoXY, vilas, ehAlvo, tropas, alvos, porCoord);
       }

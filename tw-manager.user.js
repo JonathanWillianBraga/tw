@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.279.0
+// @version      11.280.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.279.0';
+  const VERSION = '11.280.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -13869,6 +13869,39 @@
     return cmd;
   }
 
+  // Custo do nobre, lido da tela da Academia deste mundo (o construtor da tela publica
+  // `next_snob wood:40000, stone:50000, iron:50000`). Serve so pra NAO escolher uma origem que
+  // nao banca — quem da a palavra final continua sendo o jogo, no erro do `nobleFormar`.
+  const ENT_CUSTO_NOBRE = { wood: 40000, stone: 50000, iron: 50000 };
+
+  // Recurso e fazenda livre por coordenada, numa requisicao. Ancorado no bloco de recursos e
+  // andando pelas celulas seguintes (armazem, comerciantes, fazenda) — indice fixo quebraria em
+  // mundo com coluna a mais, que e a armadilha que ja me pegou na leitura da tropa presente.
+  async function entLerRecursos() {
+    const r = await fetch('/game.php?village=' + CUR_VID + '&screen=overview_villages&mode=prod&group=0&page=-1',
+      { credentials: 'include' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+    const num = (s) => parseInt(String(s).replace(/\D/g, ''), 10) || 0;
+    const out = {};
+    [].forEach.call(doc.querySelectorAll('tr'), (tr) => {
+      if (!tr.querySelector('.quickedit-vn[data-id]')) return;
+      const w = tr.querySelector('span.wood'), s = tr.querySelector('span.stone'), i = tr.querySelector('span.iron');
+      if (!w || !s || !i) return;
+      const lbl = tr.querySelector('.quickedit-label');
+      const m = ((lbl && lbl.textContent) || '').match(/(\d{1,3}\|\d{1,3})/);
+      if (!m) return;
+      const tdRes = w.closest('td');
+      const arm = tdRes && tdRes.nextElementSibling;
+      const com = arm && arm.nextElementSibling;
+      const faz = com && com.nextElementSibling;
+      const mf = faz ? (faz.textContent || '').replace(/\s+/g, '').match(/^(\d+)\/(\d+)$/) : null;
+      out[m[1]] = { wood: num(w.textContent), stone: num(s.textContent), iron: num(i.textContent),
+                    fazLivre: mf ? (parseInt(mf[2], 10) - parseInt(mf[1], 10)) : null };
+    });
+    return out;
+  }
+
   // ===== O que cada origem consegue entregar, e QUANDO =====
   //
   // A escolha de origem era "a mais perto que ja tem nobre". Isso ignora a fila: tres nobres numa
@@ -13977,6 +14010,10 @@
     const porCoord = {}; vilas.forEach((v) => { if (v.coord) porCoord[v.coord] = v; });
     const tropas = await getTropaTodasAldeias();
     const pontos = await getVillagePoints();
+    let recursos = null;
+    try { recursos = await entLerRecursos(); }
+    catch (e) { pushLog('Entrega: não li recurso/fazenda das aldeias (' + ((e && e.message) || e) + ')'
+      + ' — vou escolher origem sem conferir se ela banca o nobre.', '', 'entrega'); }
     let presente = {};
     try { presente = await entTropaPresente(); }
     catch (e) { pushLog('Entrega: não consegui ler a tropa presente nas aldeias (' + ((e && e.message) || e) + ')'
@@ -14241,7 +14278,7 @@
         // PLANEJA o que faltou: escolhe onde formar pela CHEGADA (fila + viagem), nao pela
         // distancia. Tambem recruta escolta onde falta, o que roda em paralelo com a Academia.
         if (c.planejar) {
-          try { await entPlanejarFormacao(v, alvoXY, vizinhas, faltam, tropas); }
+          try { await entPlanejarFormacao(v, alvoXY, vizinhas, faltam, tropas, recursos); }
           catch (e) { pushLog('Entrega: falhou ao planejar a formação pra ' + v.name + ' (' + ((e && e.message) || e) + ').', 'err', 'entrega'); }
         }
         if (c.reciclar && !enviados) await entReciclar(v, alvoXY, vilas, ehAlvo, tropas, alvos, porCoord);
@@ -14272,15 +14309,26 @@
   const ENT_ESC_SPEAR_PCT = 0.7;   // a escolta recrutada sai 70% lanceiro / 30% cavalaria leve:
   const ENT_ESC_LIGHT_PCT = 0.3;   // sao as duas mais rapidas de recrutar, que era o pedido.
 
-  async function entPlanejarFormacao(alvo, alvoXY, cand, faltam, tropas) {
+  async function entPlanejarFormacao(alvo, alvoXY, cand, faltam, tropas, recursos) {
     const c = entCfg();
     const vagas = [];
     let limite = null;
+    let naFila = 0;
     const olhar = cand.slice(0, c.olhar);
     for (const x of olhar) {
       const ac = await entLerAcademia(x.o.vid);
       if (!ac || !ac.durMs) continue;                 // sem Academia (ou nao li a duracao)
       if (ac.podemFormar != null) limite = ac.podemFormar;
+      naFila += ac.filaN || 0;
+      // ORIGEM QUE NAO BANCA NAO ENTRA. Sem esta checagem o planejador escolhia pela chegada e so
+      // descobria no erro do jogo ("Nao ha recursos suficientes ou o limite da populacao foi
+      // atingido"), gastando a vaga da rodada com uma aldeia que nunca ia formar.
+      const rc = recursos && recursos[x.o.coord];
+      if (rc) {
+        const semRec = rc.wood < ENT_CUSTO_NOBRE.wood || rc.stone < ENT_CUSTO_NOBRE.stone || rc.iron < ENT_CUSTO_NOBRE.iron;
+        const semPop = rc.fazLivre != null && rc.fazLivre < ENT_POP_NOBRE;
+        if (semRec || semPop) continue;
+      }
       const viagem = x.d * 35 * 60000;
       // k comeca em 1: k=0 (nobre ja pronto) foi tratado antes, no laco de envio.
       for (let k = 1; k <= faltam; k++) {
@@ -14288,6 +14336,22 @@
                      chega: Math.max(Date.now(), ac.fimFila) + k * ac.durMs + viagem });
       }
     }
+
+    // NOBRE QUE JA ESTA NA FILA CONTA. Sem isto o planejador formava de novo a CADA ciclo: a
+    // lealdade so muda quando o nobre pousa, entao `faltam` continuava o mesmo por horas e o
+    // ciclo seguinte encomendava outro. Com o ciclo em 1 min e 6h de voo, isso torra o limite da
+    // conta inteiro em nobres que ninguem pediu.
+    //
+    // A conta e por VIZINHANCA, nao por alvo: um nobre na fila a 3 campos daqui serve este alvo
+    // quando ficar pronto. Se ele tiver sido encomendado pra outro alvo, os dois vao ve-lo e
+    // nenhum dos dois forma — erra pra MENOS, que custa um ciclo de espera em vez de nobre
+    // jogado fora.
+    if (naFila >= faltam) {
+      pushLog('Entrega: ' + alvo.name + ' — já tem ' + naFila + ' nobre(s) na fila por perto'
+        + ' pra ' + faltam + ' que falta(m). Não encomendei mais.', '', 'entrega');
+      return 0;
+    }
+    faltam = faltam - naFila;
     if (!vagas.length) {
       pushLog('Entrega: ' + alvo.name + ' — nenhuma origem com Academia dentro de ' + c.maxCampos + ' campos.', 'err', 'entrega');
       return 0;

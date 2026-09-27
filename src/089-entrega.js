@@ -718,22 +718,6 @@
   // NAO forma alem do que o limite da conta permite (`podemFormar`), e nao forma pra alem do que
   // o alvo precisa AGORA — o teto de seguranca ja limita quantos podem voar juntos, e nobre
   // formado a mais fica ocupando vaga do limite sem ter no que ser usado.
-  // MATAR NOBRE ENCALHADO: mandar ele SOZINHO numa aldeia sua DEFENDIDA.
-  //
-  // Medido na conta: nobre sem escolta contra aldeia propria morre e nao entrega nada — o
-  // relatorio do 011 HAJIME veio com Perdas de 1 nobre, sem linha de lealdade, e a aldeia
-  // continuou em 100. E o comportamento que se quer aqui.
-  //
-  // Mas a morte so e GARANTIDA se a aldeia tiver defesa. Contra aldeia vazia o ataque vence, o
-  // nobre volta e a lealdade DELA cai — foi o proprio usuario que apontou esse tiro pela culatra
-  // no 087. Por isso o piso de defesa, com margem larga de proposito: a leitura de tropa e um
-  // retrato e pode estar velha.
-  const ENT_DEF_MIN = 200;
-  const ENT_DEF_UNITS = ['spear', 'sword', 'archer', 'heavy'];
-  // O explorador NAO briga, entao ele completa o piso de fake sem salvar o nobre. E o mesmo
-  // truque do 087. Pop 2 por explorador.
-  const ENT_POP_SPY = 2;
-
   const ENT_ESC_SPEAR_PCT = 0.7;   // a escolta recrutada sai 70% lanceiro / 30% cavalaria leve:
   const ENT_ESC_LIGHT_PCT = 0.3;   // sao as duas mais rapidas de recrutar, que era o pedido.
 
@@ -825,49 +809,6 @@
   // NUNCA dispensa nobre que esta no alcance de ALGUM alvo, mesmo que esteja longe DESTE. Ele
   // serve pro outro alvo no proximo ciclo, e destrui-lo aqui so faria o ciclo seguinte formar de
   // novo — o mesmo moinho de moeda que o comentario do 084-noblar descreve.
-  // Mata UM nobre da aldeia `orig`, mandando ele sozinho numa aldeia sua defendida.
-  // Devolve o nome da aldeia-sacrificio, ou null.
-  async function entMatarNobre(orig, vilas, ehAlvo, tropas, pontos) {
-    const oXY = entXY(orig.coord);
-    const sac = vilas
-      .filter((v) => v.vid !== orig.vid && v.coord && !ehAlvo[v.vid])
-      .map((v) => {
-        const t = tropas[String(v.vid)] || {};
-        return { v: v, def: ENT_DEF_UNITS.reduce((s, u) => s + (t[u] || 0), 0), d: entDist(oXY, entXY(v.coord)) };
-      })
-      .filter((x) => x.def >= ENT_DEF_MIN)
-      .sort((a, b) => a.d - b.d)[0];
-    if (!sac) {
-      pushLog('Entrega: não achei aldeia sua com ' + ENT_DEF_MIN + '+ de defesa pra sacrificar o nobre de '
-        + orig.name + '. Sem defesa o ataque VENCE e a lealdade dela é que cairia.', 'err', 'entrega');
-      return null;
-    }
-    // Completa o piso de fake com EXPLORADOR, que nao briga — assim o nobre morre do mesmo jeito.
-    const avail = tropas[String(orig.vid)] || {};
-    const piso = entPisoPop(pontos[String(orig.vid)] || 0);
-    const cmd = { snob: 1 };
-    const faltaPop = Math.max(0, piso - ENT_POP_NOBRE);
-    if (faltaPop > 0) {
-      const querSpy = Math.ceil(faltaPop / ENT_POP_SPY);
-      const temSpy = avail.spy || 0;
-      if (temSpy < querSpy) {
-        pushLog('Entrega: ' + orig.name + ' precisa de ' + querSpy + ' explorador(es) pro piso de fake'
-          + ' e tem ' + temSpy + ' — não mandei o nobre morrer lá.', '', 'entrega');
-        return null;
-      }
-      cmd.spy = querSpy;
-    }
-    const sXY = entXY(sac.v.coord);
-    await sendAttack(orig.vid, sXY.x, sXY.y, cmd, 'attack');
-    avail.snob = Math.max(0, (avail.snob || 0) - 1);
-    if (cmd.spy) avail.spy = Math.max(0, (avail.spy || 0) - cmd.spy);
-    const min = Math.round(sac.d * 35);
-    pushLog('Entrega: mandei o nobre de ' + orig.name + ' morrer em ' + sac.v.name + ' ('
-      + sac.def + ' de defesa, ' + sac.d.toFixed(1) + ' campos, ' + Math.floor(min / 60) + 'h'
-      + String(min % 60).padStart(2, '0') + '). A vaga no limite abre quando ele pousar.', 'ok', 'entrega');
-    return sac.v.name;
-  }
-
   async function entReciclar(alvo, alvoXY, vilas, ehAlvo, tropas, alvosCoords, porCoord) {
     const c = entCfg();
     const perto = vilas
@@ -900,21 +841,28 @@
         return;
       }
       const vitima = inuteis[0];
-      pushLog('Entrega: limite de nobres cheio. O nobre de ' + vitima.o.name + ' está a '
-        + vitima.perto.toFixed(1) + ' campos do alvo mais próximo e não alcança nenhum — vou matá-lo'
-        + ' pra abrir vaga.', '', 'entrega');
-      let pontos2 = {};
-      try { pontos2 = await getVillagePoints(); } catch (e) {}
+      // DISPENSAR, e nao mandar o nobre morrer num ataque. Os dois perdem o recurso da unidade
+      // por igual — o comentario do 087 que chama dispensar de "perda pura" nao separa os dois,
+      // porque nobre que morre tambem nao devolve nada. O que separa e a PRESSA, e pressa e o
+      // proposito inteiro do reciclar:
+      //
+      //   dispensar ............ vaga abre AGORA        -> nobre novo pronto em 2h43
+      //   morrer a 3 campos .... vaga abre em 1h45      -> pronto em 4h28
+      //   morrer a 10 campos ... vaga abre em 5h50      -> pronto em 8h33
+      //
+      // E o ataque ainda custa os exploradores que completam o piso de fake (10 numa origem de
+      // 12.000 pontos) e corre o risco de a aldeia-sacrificio estar sem defesa na hora do pouso —
+      // ai o ataque vence e a lealdade DELA cai. Decisao do usuario, com esses numeros na mesa.
       try {
-        const onde = await entMatarNobre(vitima.o, vilas, ehAlvo, tropas, pontos2);
-        if (!onde) return;
+        await nbDescDispensar(vitima.o.vid, 1);
+        (tropas[String(vitima.o.vid)] || {}).snob = Math.max(0, ((tropas[String(vitima.o.vid)] || {}).snob || 1) - 1);
+        pushLog('Entrega: dispensei 1 nobre de ' + vitima.o.name + ' (a ' + vitima.perto.toFixed(1)
+          + ' campos do alvo mais próximo — não alcançava nenhum). A vaga abriu na hora.', 'ok', 'entrega');
       } catch (e) {
-        pushLog('Entrega: não consegui mandar o nobre de ' + vitima.o.name + ' morrer ('
+        pushLog('Entrega: não consegui dispensar o nobre de ' + vitima.o.name + ' ('
           + ((e && e.message) || e) + ').', 'err', 'entrega');
         return;
       }
-      // A vaga so abre no POUSO, entao nao adianta tentar formar agora. O proximo ciclo pega.
-      return;
     } else if (vagas === null) {
       pushLog('Entrega: não consegui ler quantos nobres ainda cabem no limite — vou tentar formar assim mesmo.', '', 'entrega');
     }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.275.0
+// @version      11.276.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.275.0';
+  const VERSION = '11.276.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -13721,11 +13721,39 @@
     return Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
   }
 
-  // Lealdade projetada pra agora, reusando o motor do Noblar (que ja envelhece a leitura pela
-  // regeneracao e trava a extrapolacao quando ha pouso sem relatorio). Sem relatorio nenhum, a
-  // premissa do Noblar vale igual aqui: aldeia nunca batida esta em 100.
+  // LEALDADE LIDA DIRETO DA TELA DA ALDEIA.
+  //
+  // A tela da aldeia (screen=overview) tem um widget com o titulo "Lealdade". O numero so aparece
+  // quando ela esta ABAIXO de 100 — widget sem numero significa 100. Confirmado pelo usuario e
+  // medido na conta: 476|567 = 21, 463|562 = 73, 473|565 = 100, 422|581 = 100.
+  //
+  // Isto substitui a leitura por RELATORIO, que era o desenho anterior e tinha tres problemas:
+  //   - so existia depois de uma batida bem-sucedida (nobre sem escolta nao gera linha nenhuma);
+  //   - dependia do relatorio nao ter sido apagado nem empurrado pra segunda pagina;
+  //   - envelhecia por estimativa de regeneracao em vez de ler o valor de agora.
+  //
+  // Custa uma requisicao por aldeia da lista, por ciclo. Com o ciclo em 10 min e uma lista de
+  // punhado de aldeias, isso e barato — e e o dado que TODA decisao do modulo usa.
+  //
+  // NAO usar `#loyalty` nem regex colado na palavra: nao existe id proprio, e entre o rotulo e o
+  // numero ha markup. Foi assim que eu conclui, errado, que a lealdade nao era legivel.
+  async function entLerLealdade(vid) {
+    const r = await fetch('/game.php?village=' + vid + '&screen=overview', { credentials: 'include', cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+    const rot = Array.prototype.slice.call(doc.querySelectorAll('h4'))
+      .filter((e) => /^\s*Lealdade\s*$/i.test(e.textContent || ''))[0];
+    if (!rot) return 100;   // tela sem o widget: nada indica queda
+    const bloco = rot.closest('div') || rot.parentElement;
+    const m = ((bloco && bloco.textContent) || '').replace(/\s+/g, ' ').match(/Lealdade\s*(-?\d+)/i);
+    return m ? parseInt(m[1], 10) : 100;
+  }
+
+  // Valor lido neste ciclo. Cai pra 100 se a leitura falhou — a premissa mais conservadora, porque
+  // 100 manda bater e bater e o que a trava de seguranca ja limita.
+  let _entLeal = {};
   function entLealdade(coord) {
-    try { return nobleLealdadeAgora(coord); } catch (e) { return 100; }
+    return _entLeal[coord] == null ? 100 : _entLeal[coord];
   }
 
   // O que fazer com esta aldeia agora. Uma funcao so, pra decisao e tela nunca discordarem.
@@ -13739,8 +13767,21 @@
   // protegia contra trinta.
   //
   // Serializar custa pouco: a lealdade regenera ~1/h, entao esperar um pouso nao perde a janela.
+  // Quantos nobres MEUS ainda estao no ar pra este alvo.
+  //
+  // A poda passou a ser por TEMPO em vez de por relatorio. Antes dependia de `nobleVoos`, que so
+  // considera um comando pousado quando aparece relatorio com lealdade — e nobre sem escolta
+  // morre sem gerar essa linha, entao o voo ficava "no ar" pra sempre e o modulo travava.
+  //
+  // Com a lealdade lida direto, o relatorio virou desnecessario: assim que o comando pousa, a
+  // proxima leitura ja mostra o efeito. A folga de 2 min cobre o intervalo entre o pouso e a tela
+  // refletir — e errar pra mais aqui so adia uma batida, enquanto errar pra menos manda nobre
+  // demais.
+  const ENT_POUSO_FOLGA_MS = 120000;
   function entVoando(coord) {
-    try { return (nobleVoos(coord) || []).reduce((s, e) => s + (e.n || 1), 0); } catch (e) { return 0; }
+    const lista = ((config.noble && config.noble.emVoo) || {})[coord] || [];
+    const agora = Date.now();
+    return lista.reduce((s, e) => s + (((e.chega || e.at || 0) + ENT_POUSO_FOLGA_MS > agora) ? (e.n || 1) : 0), 0);
   }
 
   // QUANTOS NOBRES CABEM AGORA, sem chance de zerar a aldeia.
@@ -13889,6 +13930,18 @@
     // outra aldeia que tambem vai ser entregue so empurra o problema, e a tropa vai junto no pacote.
     const ehAlvo = {}; alvos.forEach((cd) => { const v = porCoord[cd]; if (v) ehAlvo[v.vid] = 1; });
 
+    // LEALDADE DE TODOS OS ALVOS, DIRETO DA TELA DE CADA ALDEIA.
+    _entLeal = {};
+    for (const cd of alvos) {
+      const vv = porCoord[cd];
+      if (!vv) continue;
+      try { _entLeal[cd] = await entLerLealdade(vv.vid); }
+      catch (e) {
+        pushLog('Entrega: não consegui ler a lealdade de ' + vv.name + ' (' + ((e && e.message) || e) + ')'
+          + ' — trato como 100 neste ciclo.', 'err', 'entrega');
+      }
+    }
+
     // LER OS RELATORIOS DOS MEUS ALVOS.
     //
     // A lealdade so muda quando o relatorio do ataque e lido — e quem lia era o ciclo do NOBLAR,
@@ -13904,15 +13957,10 @@
     //
     // So varre quando ha voo registrado: sem nobre no ar nada pousou, e a varredura custa uma
     // requisicao de lista mais uma por relatorio aberto.
-    if (alvos.some((cd) => entVoando(cd) > 0) && config.noble && config.noble.lerRelatorios !== false) {
-      try {
-        const lidos = await nobleVarrerRelatorios(alvos.map((cd) => ({ coord: cd })));
-        if (lidos) pushLog('Entrega: li ' + lidos + ' relatório(s) — lealdade atualizada.', 'ok', 'entrega');
-      } catch (e) {
-        pushLog('Entrega: não consegui ler os relatórios (' + ((e && e.message) || e) + ')'
-          + ' — sem eles a lealdade não atualiza e o ciclo fica parado esperando pouso.', 'err', 'entrega');
-      }
-    }
+    // A varredura de relatorio saiu daqui de proposito: ela existia so pra descobrir a lealdade, e
+    // agora a lealdade vem da tela da aldeia. Menos requisicao, e some a dependencia de o
+    // relatorio existir — que nao existe quando o nobre morre sem escolta, justamente o caso em
+    // que o modulo mais precisava saber o que aconteceu.
 
     // QUEM AINDA PRECISA DE BATIDA — calculado ANTES do laco, nao lido do estado do ciclo
     // anterior. E o que decide se vale segurar o nobre de uma aldeia pra usar em outra, e ler do

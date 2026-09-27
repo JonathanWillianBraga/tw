@@ -1032,6 +1032,8 @@
               + '<input id="twmgr-ent-escolta" class="twmgr-inp" type="number" min="0" max="5000" style="width:56px;font-size:10px;padding:1px"> tropas</span>' +
             '<span style="font-size:10px;color:#6f6153" title="10 min é o ritmo de operação. 1 min serve pra testar — cada ciclo faz leituras, então não deixe em 1 o dia inteiro.">ciclo a cada '
               + '<input id="twmgr-ent-int" class="twmgr-inp" type="number" min="1" max="60" style="width:46px;font-size:10px;padding:1px"> min</span>' +
+            '<label style="font-size:10px;color:#6f6153;cursor:pointer" title="Quando faltar nobre pronto, manda FORMAR na origem que entrega mais cedo — comparando fila da academia MAIS viagem, não só distância. Também manda recrutar lanceiro e cavalaria leve na origem que está sem escolta (quartel e estábulo são filas separadas da academia, então isso não atrasa o nobre). Gasta recurso: 40k/50k/50k por nobre.">' +
+              '<input id="twmgr-ent-planejar" type="checkbox"> formar nobre e escolta onde faltar</label>' +
             '<label style="font-size:10px;color:#b03030;cursor:pointer" title="O limite de nobres é da CONTA. Um nobre encalhado longe ocupa vaga sem alcançar nada. Com isto ligado, quando faltar nobre perto do alvo o módulo forma um aqui — e se o limite estiver cheio, dispensa antes um que não alcança alvo nenhum. Dispensar não devolve o recurso da unidade.">' +
               '<input id="twmgr-ent-recicla" type="checkbox"> reciclar nobre distante (forma perto; dispensa o que não alcança)</label>' +
           '</div>' +
@@ -1511,6 +1513,9 @@
         el.textContent = ' (' + Math.floor(min / 60) + 'h' + String(min % 60).padStart(2, '0') + ' de ida)';
       };
       t.value = e.teto;
+      const pl = document.getElementById('twmgr-ent-planejar');
+      if (pl) pl.checked = !!e.planejar;
+      if (pl) pl.addEventListener('change', () => { entCfg().planejar = pl.checked; save(); });
       const es = document.getElementById('twmgr-ent-escolta');
       if (es) es.value = e.escolta;
       if (es) es.addEventListener('change', () => { entCfg().escolta = Math.max(0, parseInt(es.value, 10) || 0); es.value = entCfg().escolta; save(); });

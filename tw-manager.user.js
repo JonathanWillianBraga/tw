@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.276.0
+// @version      11.277.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.276.0';
+  const VERSION = '11.277.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -13662,6 +13662,13 @@
     // limite da conta pra formar nobre PERTO do alvo, onde ele serve. Mesmo assim nao pode
     // ligar sozinho.
     if (c.reciclar == null) c.reciclar = false;
+    // PLANEJAR: quando faltar nobre pronto, mandar FORMAR na origem que entrega mais cedo (fila +
+    // viagem), e recrutar escolta onde falta. Gasta recurso, entao e opt-out explicito.
+    if (c.planejar == null) c.planejar = true;
+    // Quantas origens abrir por alvo quando for planejar. Cada uma custa uma requisicao da
+    // Academia; seis cobre bem a vizinhanca sem virar varredura.
+    if (c.olhar == null) c.olhar = 6;
+    c.olhar = Math.max(2, Math.min(20, parseInt(c.olhar, 10) || 6));
     if (c.nextAt == null) c.nextAt = 0;
     return c;
   }
@@ -13860,6 +13867,55 @@
     if (pop < piso) return null;          // o jogo recusaria
     if (escolta < querEscolta) return null;   // sai desprotegido: tenta outra origem
     return cmd;
+  }
+
+  // ===== O que cada origem consegue entregar, e QUANDO =====
+  //
+  // A escolha de origem era "a mais perto que ja tem nobre". Isso ignora a fila: tres nobres numa
+  // aldeia so saem em serie (2h43 cada), enquanto um nobre em cada uma de tres aldeias sai junto.
+  // Mas o inverso tambem existe: uma aldeia perto com fila de 2 pode entregar antes de uma vazia
+  // que esta 8 campos mais longe. Quem decide e a CHEGADA, nao a distancia nem a fila sozinhas:
+  //
+  //     chegada(origem, k) = max(agora, fim da fila) + k x duracao + distancia x 35min
+  //
+  // k=0 e o nobre que ja esta em casa (sai agora). k>=1 sao os que ainda seriam formados.
+  async function entLerAcademia(vid) {
+    // A DURACAO quase nao muda (depende do Edificio principal), entao vale cache longo. A FILA
+    // muda toda hora e por isso e lida sempre.
+    const cache = cacheLer('ent_dur', 6 * 3600000) || {};
+    let st;
+    try { st = await getSnobState(vid); }
+    catch (e) { return null; }
+    if (!st || !st.hasForm) return null;   // sem Academia
+    let durMs = cache[String(vid)] || 0;
+    if (!durMs) {
+      // A tela mostra a duracao na linha do formulario, no formato h:mm:ss. Medido: 2:43:09 numa
+      // aldeia e 2:51:32 noutra — por isso e lido por aldeia, nao fixado.
+      try {
+        const r = await fetch('/game.php?village=' + vid + '&screen=snob', { credentials: 'include' });
+        const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+        const t = ((doc.querySelector('#content_value') || doc.body).textContent || '').replace(/\s+/g, ' ');
+        const m = t.match(/(\d+):(\d{2}):(\d{2})/);
+        if (m) {
+          durMs = ((+m[1]) * 3600 + (+m[2]) * 60 + (+m[3])) * 1000;
+          cache[String(vid)] = durMs;
+          cacheGravar('ent_dur', cache);
+        }
+      } catch (e) {}
+    }
+    const fila = st.fila || { nobres: 0 };
+    // Fim da fila: o ultimo nobre encomendado fica pronto em `prontoEm` + (n-1) duracoes. O jogo
+    // so publica a hora do PRIMEIRO, entao o resto e a duracao somada.
+    const fim = fila.nobres > 0 && fila.prontoEm
+      ? fila.prontoEm + Math.max(0, fila.nobres - 1) * durMs
+      : Date.now();
+    return {
+      vid: String(vid),
+      durMs: durMs || 0,
+      filaN: fila.nobres || 0,
+      fimFila: fim,
+      podemFormar: (st.moedas && st.moedas.podemFormar != null) ? st.moedas.podemFormar : null,
+    };
   }
 
   // ===== Tirar o apoio que esta em cima do alvo =====
@@ -14119,12 +14175,14 @@
       //
       // A unica exclusao que sobra e a propria aldeia: o jogo nao deixa uma aldeia atacar a si
       // mesma (o `try=confirm` nem devolve duracao, ver 084-noblar).
-      const cand = vilas
+      const vizinhas = vilas
         .filter((o) => o.vid !== vid && o.coord)
-        .filter((o) => ((tropas[String(o.vid)] || {}).snob || 0) > 0)
         .map((o) => ({ o: o, d: entDist(alvoXY, entXY(o.coord)) }))
         .filter((x) => x.d <= c.maxCampos)
         .sort((a, b) => a.d - b.d);
+      // Quem ja tem nobre EM CASA sai neste ciclo. O resto da vizinhanca entra no planejador,
+      // que decide onde FORMAR o que falta.
+      const cand = vizinhas.filter((x) => ((tropas[String(x.o.vid)] || {}).snob || 0) > 0);
 
       const querMandar = d.n || 1;
       let enviados = 0;
@@ -14134,7 +14192,12 @@
         const avail = tropas[String(x.o.vid)] || {};
         const piso = entPisoPop(pontos[String(x.o.vid)] || 0);
         const cmd = entMontarComando(avail, piso, c.escolta);
-        if (!cmd) continue;   // não dá a escolta pedida (ou o piso de fake); tenta a próxima
+        if (!cmd) {
+          // Tem nobre mas nao tem com quem mandar. Recrutar aqui resolve pro proximo ciclo, em
+          // vez de a origem ficar sendo pulada pra sempre.
+          if (c.planejar) await entGarantirEscolta(x.o, tropas);
+          continue;
+        }
         const descontar = () => {
           avail.snob = Math.max(0, (avail.snob || 0) - 1);
           Object.keys(cmd).forEach((u) => { if (u !== 'snob') avail[u] = Math.max(0, (avail[u] || 0) - cmd[u]); });
@@ -14170,16 +14233,18 @@
           pushLog('Entrega: ' + x.o.name + ' recusou (' + msg + ') — tento a próxima origem.', '', 'entrega');
         }
       }
-      if (mandou && enviados < querMandar) {
-        pushLog('Entrega: ' + v.name + ' — mandei ' + enviados + ' de ' + querMandar
-          + ' (faltou nobre ou escolta nas origens). O resto vai no próximo ciclo.', '', 'entrega');
-      }
-      if (!mandou) {
-        semOrigem++;
+      const faltam = querMandar - enviados;
+      if (faltam > 0) {
+        if (!enviados) semOrigem++;
         pushLog('Entrega: ' + v.name + ' está em ' + Math.round(leal) + ' e precisa de ' + querMandar
-          + ' batida(s), mas nenhuma origem dentro de ' + c.maxCampos + ' campos tem nobre MAIS '
-          + c.escolta + ' de escolta. Baixe a escolta ou aumente o alcance.', 'err', 'entrega');
-        if (c.reciclar) await entReciclar(v, alvoXY, vilas, ehAlvo, tropas, alvos, porCoord);
+          + ' batida(s) — ' + enviados + ' saiu(ram) agora, faltam ' + faltam + '.', '', 'entrega');
+        // PLANEJA o que faltou: escolhe onde formar pela CHEGADA (fila + viagem), nao pela
+        // distancia. Tambem recruta escolta onde falta, o que roda em paralelo com a Academia.
+        if (c.planejar) {
+          try { await entPlanejarFormacao(v, alvoXY, vizinhas, faltam, tropas); }
+          catch (e) { pushLog('Entrega: falhou ao planejar a formação pra ' + v.name + ' (' + ((e && e.message) || e) + ').', 'err', 'entrega'); }
+        }
+        if (c.reciclar && !enviados) await entReciclar(v, alvoXY, vilas, ehAlvo, tropas, alvos, porCoord);
       }
     }
 
@@ -14188,6 +14253,98 @@
       + (retirou ? ' · ' + retirou + ' com apoio retirado' : '')
       + (semOrigem ? ' · ' + semOrigem + ' SEM nobre disponível' : '') + '.', 'ok', 'entrega');
     save();
+  }
+
+  // ===== PLANEJADOR: onde formar o que falta, pela CHEGADA =====
+  //
+  // Chamado quando o alvo precisa de N batidas e nao ha N nobres prontos no alcance. Em vez de
+  // formar "na mais perto", compara a chegada real de cada vaga possivel:
+  //
+  //     chegada(origem, k) = max(agora, fim da fila da origem) + k x duracao + distancia x 35min
+  //
+  // Isso resolve os dois casos que o usuario descreveu, com a mesma conta:
+  //   - tres aldeias perto, uma vaga cada, saem em paralelo e ganham de tres na mesma aldeia;
+  //   - mas se as "perto" estiverem todas com fila, a longe vazia pode chegar antes.
+  //
+  // NAO forma alem do que o limite da conta permite (`podemFormar`), e nao forma pra alem do que
+  // o alvo precisa AGORA — o teto de seguranca ja limita quantos podem voar juntos, e nobre
+  // formado a mais fica ocupando vaga do limite sem ter no que ser usado.
+  const ENT_ESC_SPEAR_PCT = 0.7;   // a escolta recrutada sai 70% lanceiro / 30% cavalaria leve:
+  const ENT_ESC_LIGHT_PCT = 0.3;   // sao as duas mais rapidas de recrutar, que era o pedido.
+
+  async function entPlanejarFormacao(alvo, alvoXY, cand, faltam, tropas) {
+    const c = entCfg();
+    const vagas = [];
+    let limite = null;
+    const olhar = cand.slice(0, c.olhar);
+    for (const x of olhar) {
+      const ac = await entLerAcademia(x.o.vid);
+      if (!ac || !ac.durMs) continue;                 // sem Academia (ou nao li a duracao)
+      if (ac.podemFormar != null) limite = ac.podemFormar;
+      const viagem = x.d * 35 * 60000;
+      // k comeca em 1: k=0 (nobre ja pronto) foi tratado antes, no laco de envio.
+      for (let k = 1; k <= faltam; k++) {
+        vagas.push({ o: x.o, d: x.d, k: k, ac: ac,
+                     chega: Math.max(Date.now(), ac.fimFila) + k * ac.durMs + viagem });
+      }
+    }
+    if (!vagas.length) {
+      pushLog('Entrega: ' + alvo.name + ' — nenhuma origem com Academia dentro de ' + c.maxCampos + ' campos.', 'err', 'entrega');
+      return 0;
+    }
+    vagas.sort((a, b) => a.chega - b.chega);
+
+    // O limite de nobres e da CONTA: nao adianta escolher bem se nao ha vaga pra formar.
+    if (limite === 0) {
+      pushLog('Entrega: ' + alvo.name + ' precisa de ' + faltam + ' nobre(s), mas o limite da conta'
+        + ' está cheio. Ligue "reciclar nobre distante" ou dispense algum pela aba Noblar.', 'err', 'entrega');
+      return 0;
+    }
+    const teto = limite == null ? faltam : Math.min(faltam, limite);
+    const porOrigem = {};
+    let formados = 0;
+    for (const vg of vagas) {
+      if (formados >= teto) break;
+      const jaNesta = porOrigem[vg.o.vid] || 0;
+      if (vg.k !== jaNesta + 1) continue;             // respeita a ordem da fila daquela origem
+      try {
+        await nobleFormar(vg.o.vid);
+        porOrigem[vg.o.vid] = jaNesta + 1;
+        formados++;
+        const min = Math.round((vg.chega - Date.now()) / 60000);
+        pushLog('Entrega: formando nobre em ' + vg.o.name + ' pra ' + alvo.name
+          + ' — ' + vg.d.toFixed(1) + ' campos, fila ' + vg.ac.filaN + ', chega em '
+          + Math.floor(min / 60) + 'h' + String(min % 60).padStart(2, '0') + '.', 'ok', 'entrega');
+        await entGarantirEscolta(vg.o, tropas);
+      } catch (e) {
+        pushLog('Entrega: ' + vg.o.name + ' não formou (' + ((e && e.message) || e) + ').', '', 'entrega');
+      }
+    }
+    if (!formados) pushLog('Entrega: ' + alvo.name + ' — não consegui formar nobre em nenhuma origem.', 'err', 'entrega');
+    return formados;
+  }
+
+  // A escolta e recrutada no QUARTEL e no ESTABULO, que sao filas SEPARADAS da Academia — entao
+  // isso roda em paralelo com o nobre e nao atrasa nada. Lanceiro e cavalaria leve sao as duas
+  // mais rapidas, que era o pedido do usuario; o lanceiro soma pouco ataque (10 contra 130 da CL),
+  // mas o papel aqui e volume barato contra uma aldeia que deve estar vazia.
+  async function entGarantirEscolta(origem, tropas) {
+    const c = entCfg();
+    const avail = tropas[String(origem.vid)] || {};
+    const tem = ENT_ESCOLTA.reduce((s, u) => s + (avail[u] || 0), 0);
+    const falta = c.escolta - tem;
+    if (falta <= 0) return;
+    const pedido = {
+      spear: Math.ceil(falta * ENT_ESC_SPEAR_PCT),
+      light: Math.ceil(falta * ENT_ESC_LIGHT_PCT),
+    };
+    try {
+      await sendRecruit(origem.vid, pedido);
+      pushLog('Entrega: ' + origem.name + ' está sem escolta (' + tem + ' de ' + c.escolta + ') —'
+        + ' mandei recrutar ' + pedido.spear + ' lanceiro e ' + pedido.light + ' cavalaria leve.', 'ok', 'entrega');
+    } catch (e) {
+      pushLog('Entrega: ' + origem.name + ' não recrutou escolta (' + ((e && e.message) || e) + ').', '', 'entrega');
+    }
   }
 
   // ===== Arranjar nobre PERTO: formar, e se o limite estiver cheio, reciclar um distante =====
@@ -18342,6 +18499,8 @@
               + '<input id="twmgr-ent-escolta" class="twmgr-inp" type="number" min="0" max="5000" style="width:56px;font-size:10px;padding:1px"> tropas</span>' +
             '<span style="font-size:10px;color:#6f6153" title="10 min é o ritmo de operação. 1 min serve pra testar — cada ciclo faz leituras, então não deixe em 1 o dia inteiro.">ciclo a cada '
               + '<input id="twmgr-ent-int" class="twmgr-inp" type="number" min="1" max="60" style="width:46px;font-size:10px;padding:1px"> min</span>' +
+            '<label style="font-size:10px;color:#6f6153;cursor:pointer" title="Quando faltar nobre pronto, manda FORMAR na origem que entrega mais cedo — comparando fila da academia MAIS viagem, não só distância. Também manda recrutar lanceiro e cavalaria leve na origem que está sem escolta (quartel e estábulo são filas separadas da academia, então isso não atrasa o nobre). Gasta recurso: 40k/50k/50k por nobre.">' +
+              '<input id="twmgr-ent-planejar" type="checkbox"> formar nobre e escolta onde faltar</label>' +
             '<label style="font-size:10px;color:#b03030;cursor:pointer" title="O limite de nobres é da CONTA. Um nobre encalhado longe ocupa vaga sem alcançar nada. Com isto ligado, quando faltar nobre perto do alvo o módulo forma um aqui — e se o limite estiver cheio, dispensa antes um que não alcança alvo nenhum. Dispensar não devolve o recurso da unidade.">' +
               '<input id="twmgr-ent-recicla" type="checkbox"> reciclar nobre distante (forma perto; dispensa o que não alcança)</label>' +
           '</div>' +
@@ -18821,6 +18980,9 @@
         el.textContent = ' (' + Math.floor(min / 60) + 'h' + String(min % 60).padStart(2, '0') + ' de ida)';
       };
       t.value = e.teto;
+      const pl = document.getElementById('twmgr-ent-planejar');
+      if (pl) pl.checked = !!e.planejar;
+      if (pl) pl.addEventListener('change', () => { entCfg().planejar = pl.checked; save(); });
       const es = document.getElementById('twmgr-ent-escolta');
       if (es) es.value = e.escolta;
       if (es) es.addEventListener('change', () => { entCfg().escolta = Math.max(0, parseInt(es.value, 10) || 0); es.value = entCfg().escolta; save(); });

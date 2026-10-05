@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.280.0
+// @version      11.281.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.280.0';
+  const VERSION = '11.281.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -13786,9 +13786,17 @@
   // demais.
   const ENT_POUSO_FOLGA_MS = 120000;
   function entVoando(coord) {
-    const lista = ((config.noble && config.noble.emVoo) || {})[coord] || [];
+    const emVoo = (config.noble && config.noble.emVoo) || null;
+    if (!emVoo) return 0;
+    const lista = emVoo[coord] || [];
     const agora = Date.now();
-    return lista.reduce((s, e) => s + (((e.chega || e.at || 0) + ENT_POUSO_FOLGA_MS > agora) ? (e.n || 1) : 0), 0);
+    // PODA. Registro de voo nunca era removido: so era IGNORADO por ser velho. A lista crescia
+    // a cada batida, pra sempre, dentro do config que vai inteiro pro backup.
+    const vivos = lista.filter((e) => (e.chega || e.at || 0) + 48 * 3600000 > agora);
+    if (vivos.length !== lista.length) {
+      if (vivos.length) emVoo[coord] = vivos; else delete emVoo[coord];
+    }
+    return vivos.reduce((s, e) => s + (((e.chega || e.at || 0) + ENT_POUSO_FOLGA_MS > agora) ? (e.n || 1) : 0), 0);
   }
 
   // QUANTOS NOBRES CABEM AGORA, sem chance de zerar a aldeia.
@@ -14008,7 +14016,11 @@
 
     const vilas = await getAllVillages();
     const porCoord = {}; vilas.forEach((v) => { if (v.coord) porCoord[v.coord] = v; });
-    const tropas = await getTropaTodasAldeias();
+    // LEITURA FRESCA, de proposito. `getTropaTodasAldeias()` tem cache de 45s, e a conta do apoio
+    // e uma SUBTRACAO entre esta leitura e a de `type=there` (que e sempre fresca). Com as duas em
+    // momentos diferentes, tropa que chegou no meio aparece como "apoio de terceiro" e o modulo
+    // recusa bater numa aldeia que esta limpa. Uma requisicao a mais vale a conta certa.
+    const tropas = await getTropaTodasAldeias(true);
     const pontos = await getVillagePoints();
     let recursos = null;
     try { recursos = await entLerRecursos(); }
@@ -14087,8 +14099,13 @@
       const d = entDecidir(leal, c.teto, voando, apoio, pres.milicia);
       // O painel le isto; sem gravar, a tabela teria que refazer as requisicoes do ciclo.
       c.estado = c.estado || {};
-      c.estado[v.coord] = { nome: v.name, leal: leal, voando: voando, apoio: apoio, emCasa: emCasaTot,
-                            nobre: nobreProprio, milicia: pres.milicia, acao: d.acao, txt: d.txt, at: Date.now() };
+      // MERGE, nao substituicao. Escrever o objeto inteiro aqui apagava `evacPara` — o endereco
+      // de onde a tropa evacuada foi parar — logo ANTES de o ramo 'ok' tentar le-lo. Resultado: a
+      // tropa saia pra apoiar a vizinha e NUNCA voltava, em nenhuma aldeia, nunca. O ramo que
+      // recolhe existia desde a v11.271.0 e nao rodou uma vez sequer.
+      const ant = c.estado[v.coord] || {};
+      c.estado[v.coord] = Object.assign({}, ant, { nome: v.name, leal: leal, voando: voando, apoio: apoio,
+        emCasa: emCasaTot, nobre: nobreProprio, milicia: pres.milicia, acao: d.acao, txt: d.txt, at: Date.now() });
 
       if (d.acao === 'ok') {
         prontas++;
@@ -14392,12 +14409,24 @@
   // isso roda em paralelo com o nobre e nao atrasa nada. Lanceiro e cavalaria leve sao as duas
   // mais rapidas, que era o pedido do usuario; o lanceiro soma pouco ataque (10 contra 130 da CL),
   // mas o papel aqui e volume barato contra uma aldeia que deve estar vazia.
+  // Quanto tempo esperar antes de pedir escolta de novo na MESMA aldeia.
+  //
+  // Sem isto o pedido se repetia a cada ciclo: `tem` conta tropa EM CASA, e tropa na fila do
+  // quartel nao esta em casa — entao a aldeia parecia continuar sem escolta ate a ultima unidade
+  // ficar pronta. Com o ciclo em 10 min, era um pedido de ~100 unidades a cada 10 min, em toda
+  // origem com nobre e sem tropa. Mesma familia do defeito que a v11.280.0 consertou pros nobres;
+  // eu arrumei um e deixei o outro.
+  const ENT_ESCOLTA_ESPERA_MS = 60 * 60000;
   async function entGarantirEscolta(origem, tropas) {
     const c = entCfg();
     const avail = tropas[String(origem.vid)] || {};
     const tem = ENT_ESCOLTA.reduce((s, u) => s + (avail[u] || 0), 0);
     const falta = c.escolta - tem;
     if (falta <= 0) return;
+    c.escoltaPedida = c.escoltaPedida || {};
+    const ultimo = c.escoltaPedida[String(origem.vid)] || 0;
+    if (Date.now() - ultimo < ENT_ESCOLTA_ESPERA_MS) return;
+    c.escoltaPedida[String(origem.vid)] = Date.now();
     const pedido = {
       spear: Math.ceil(falta * ENT_ESC_SPEAR_PCT),
       light: Math.ceil(falta * ENT_ESC_LIGHT_PCT),

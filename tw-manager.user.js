@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tribal Wars Manager
 // @namespace    tw-manager
-// @version      11.281.0
+// @version      11.282.0
 // @description  Auto-ATK + Coleta + Saque + Recrutar + Fakes + Bárbaros do Mapa (multi-alvo/origem, chegada em horário marcado).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -177,7 +177,7 @@
   const UPDATE_URL = 'https://raw.githubusercontent.com/JonathanWillianBraga/tw/main/tw-manager.user.js';
   let updateInfo = { checked: false, hasUpdate: false, remoteVersion: '' };
   const WORLD = window.game_data.world || 'w';
-  const VERSION = '11.281.0';
+  const VERSION = '11.282.0';
 
   // ===== SESSÃO DE TUTORIA (modo de férias) =====
   //
@@ -15626,6 +15626,61 @@
   //   grupo   : grupo de aldeias a priorizar (id do jogo) — pesa mais na conta
   //   pesoGrupo: quanto a aldeia do grupo vale a mais
   //   objetivo: 'valor' (pondera pela tropa que existe na aldeia) ou 'aldeias' (conta cabeca)
+  // ===== CAPTURA DO MOVIMENTO (temporario, pra destravar o "aplicar") =====
+  //
+  // O modulo nunca equipou nada porque o endereco de equipar/remover nao esta no DOM: o botao
+  // `#remove_relic_button` tem href vazio, nao ha form, nao ha handler jQuery, e nao ha
+  // `ajaxaction` na pagina. Tentei de fora (interceptar no navegador, ler o log de rede, baixar
+  // o RelicSystem.js do CDN) e nenhuma funcionou — a remocao e NAVEGACAO, o rastreio de rede so
+  // grava depois de ligado, e o CDN bloqueia leitura cruzada.
+  //
+  // Mas o script roda DENTRO da aba do jogo, que e o unico lugar onde o movimento acontece de
+  // verdade. Entao quem captura e ele: liga-se o gancho, faz-se UM movimento a mao, e o log
+  // mostra o que saiu. Cobre os quatro caminhos possiveis, porque eu nao sei qual o jogo usa:
+  //   fetch · XMLHttpRequest · WebSocket.send (a tela abre socket.io na 8080) · sendBeacon
+  //
+  // Nao fica ligado sozinho: e um botao, e so vale ate a proxima recarga da pagina.
+  let _relCapOn = false;
+  function relCapturar() {
+    if (_relCapOn) { pushLog('Relíquias: a captura já está ligada — faça o movimento.', '', 'rel'); return; }
+    _relCapOn = true;
+    const mostra = (via, metodo, url, corpo) => {
+      const u = String(url || '');
+      if (!/relic/i.test(u) && !/relic/i.test(String(corpo || ''))) return;
+      pushLog('🎣 CAPTURADO [' + via + '] ' + metodo + ' ' + u.replace(/^https?:\/\/[^/]+/, '')
+        + (corpo ? (' · corpo: ' + String(corpo).slice(0, 300)) : ''), 'ok', 'rel');
+    };
+    try {
+      const of = window.fetch;
+      window.fetch = function (u, o) {
+        mostra('fetch', (o && o.method) || 'GET', (u && u.url) || u, o && o.body);
+        return of.apply(this, arguments);
+      };
+      const ox = XMLHttpRequest.prototype.open, os = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function (m, u) { this.__m = m; this.__u = u; return ox.apply(this, arguments); };
+      XMLHttpRequest.prototype.send = function (b) { mostra('xhr', this.__m, this.__u, b); return os.apply(this, arguments); };
+      if (window.WebSocket) {
+        const ows = WebSocket.prototype.send;
+        WebSocket.prototype.send = function (d) { mostra('ws', 'SEND', (this && this.url) || 'ws', d); return ows.apply(this, arguments); };
+      }
+      if (navigator.sendBeacon) {
+        const ob = navigator.sendBeacon.bind(navigator);
+        navigator.sendBeacon = function (u, d) { mostra('beacon', 'POST', u, d); return ob(u, d); };
+      }
+      // Navegacao tambem conta: a remocao trocou de pagina em vez de fazer ajax.
+      document.addEventListener('submit', (e) => {
+        const f = e.target;
+        if (f && /relic/i.test((f.getAttribute('action') || '') + ' ' + (location.search || ''))) {
+          mostra('form', f.getAttribute('method') || 'GET', f.getAttribute('action'), new URLSearchParams(new FormData(f)).toString());
+        }
+      }, true);
+      pushLog('🎣 Relíquias: captura LIGADA. Agora equipe ou remova UMA relíquia, nesta aba.'
+        + ' O que o jogo enviar aparece aqui. Vale só até você recarregar a página.', 'ok', 'rel');
+    } catch (e) {
+      pushLog('Relíquias: não consegui ligar a captura (' + ((e && e.message) || e) + ').', 'err', 'rel');
+    }
+  }
+
   function relCfg() {
     const c = (config.rel = config.rel || {});
     if (!c.usar) c.usar = {};
@@ -15950,6 +16005,9 @@
             + '<b>' + esc(r.name || '') + '</b>'
             + '<span style="color:#b5651d">' + esc(relMotivoBloqueio(r) || 'indisponivel') + '</span></label>').join('')
       + '</div>'
+      + '<button id="twmgr-rel-cap" class="twmgr-btn twmgr-ghost" style="width:100%;margin-top:6px;padding:3px"'
+        + ' title="Liga um gancho que mostra no log o que o jogo envia ao equipar ou remover. Serve pra descobrir o endereco e destravar o aplicar automatico.">'
+        + '🎣 Capturar o proximo movimento</button>'
       + '<button id="twmgr-rel-propor" class="twmgr-btn twmgr-go" style="width:100%;margin-top:6px;padding:3px">'
         + '🎯 Propor localizacao</button>'
       + '</div>';
@@ -15997,6 +16055,8 @@
       (_relDados ? _relDados.inv.filter(relDisponivel) : []).forEach((r) => { cc.usar[r.id] = 1; });
       save(); relRecalcular();
     };
+    const cap = document.getElementById('twmgr-rel-cap');
+    if (cap) cap.onclick = relCapturar;
     const propor = document.getElementById('twmgr-rel-propor');
     if (propor) propor.onclick = () => { _relPropos = true; relRecalcular(); };
     const nenhuma = document.getElementById('twmgr-rel-nenhuma');
